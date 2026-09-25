@@ -1,62 +1,82 @@
 # Session Summary: claude-sessions
 
-**Date:** 2026-09-25, about 09:15 to 13:05 Bucharest time
-**Duration:** about four hours over four conversations, each started by a rotation: the one that merged the fact ledger and wrote the previous summary, 465be02e (real-key rescore), c5408bd8 (two merges and a rotate-skill fix) and d03d1e48 (this one). The session itself has run since 2026-02-07. The previous summary, covering 09-24 up to the fact-ledger merge, is in git history at d521ae6c; older days are in `.cs/README.md` and the narrative archive.
+**Date:** 2026-09-25, about 09:15 to 16:30 Bucharest time
+**Duration:** about seven hours across six conversations, each one started by a rotation. The session itself has run since 2026-02-07. Earlier days are recorded in `.cs/README.md`, the narrative archive, and previous versions of this file in git (the 09-24 summary is at d521ae6c).
 
 ## Objective
 
-The morning had two threads. The first was to test the claim behind the fact-ledger handoff spec merged overnight: does it help a real successor, or only a quiz? The second was a run of small fixes that surfaced while working: the rotate prune, a slow `/clear`, a scope-prompt timeout, the pending-handoff prompt, a false doctor warning, and a CHANGELOG line that overstated a result.
+The day had three threads:
+
+1. Test the fact-ledger handoff spec merged overnight: does it help a real successor, or only a quiz?
+2. Fix the small defects that turned up during the work.
+3. Ship everything as cs v2026.9.22.
 
 ## Environment
 
-- Repo: the cs dev checkout at `~/.claude-sessions/claude-sessions`, main branch, Claude Code 2.1.281 and 2.1.282.
-- Test suites run on the `ghost` host through `remote-tests.sh`; CI macOS is the only bash 3.2 judge.
-- Eval harness: `.cs/research/handoff-eval/` (gitignored). Answer keys live in `~/.cache/handoff-eval/`, out of the scoring conversation's reach. All model calls run on the subscription.
-- A peer Claude session named `claude` exchanged messages about the rotate skill. Alex asked for the second exchange.
+- The cs dev checkout at `~/.claude-sessions/claude-sessions`, on the main branch, running Claude Code 2.1.281 and 2.1.282.
+- Full suites run on the `ghost` host through `remote-tests.sh`. CI's macOS lane is the only real bash 3.2 judge.
+- The eval harness lives in `.cs/research/handoff-eval/` and is gitignored. Its answer keys are kept outside the scoring conversation's reach.
+- A peer Claude session named `claude` sent two requests about the rotate skill.
 
 ## Key Discoveries
 
-- **The fact ledger's +20 does not survive real questions.** For each eval source, the conversation that actually picked up the handoff served as ground truth: every fact it had to look up, re-derive or got wrong became a question. Rescoring the stored handoffs against those keys gave candidate A +0.21 points over the old spec, with a noise threshold of 6.62. The +20.25 came from quiz keys a goldsmith wrote. The held-out source's real-key controls turned out defective (3 to 4 of 10 handoffs voided), so that number measures nothing until they are rebuilt. A stays in the skill: it costs about 8 KB per handoff and does no measured harm.
-- **Do not rerun the eval loop now.** Real-key noise is 6 to 10 points on three sources, and the successor reports so far name operational slips (a dirty worktree, a grep that hid an error) rather than missing facts. The plan is field data: code the next five successor reports by failure kind (#679).
-- **Slow `/clear` was cs, not Claude Code.** SessionEnd rebuilt `~/.claude-sessions/index.md` with about six forks per session, 138 sessions, 8 to 27 s. One awk pass does it in 0.15 s with byte-identical output.
-- **The scope-prompt timeout died before the hook's own clock started.** A killed run left no trace line at all, so the time went to library load or process start on a loaded machine (opendirectoryd at 80% CPU). The hook now writes a launch mark with builtins before loading anything, and its registration went from 5 s to 10 s.
-- **The doctor's "autosave may be broken" warning was a false positive since 2026-07-23.** Doctor looked for the snapshot ref of the launch conversation (`CS_CLAUDE_SESSION_ID`, stale after the first `/clear`), while the autosave hook writes under the live id, and SessionEnd deletes the old ref on `/clear`. As a result, every session that had rotated warned whenever its tree was dirty. Two Codex rounds widened the fix:
-  - `.cs/local/state` holds only the lead's id, so doctor would have judged a teammate by the lead's ref. The caller's own id is `$CLAUDE_CODE_SESSION_ID`, which Claude Code sets in the Bash tool.
-  - With the warning gone, nothing checked that settings.json registers the hook at all. A registration now counts only if its matcher covers both Write and Edit and the command is the hook itself.
-- **The peer's rotate-skill section had no failure behind it.** The request for a "long-running operation" section came from reading another project's template, not from a rotation that went wrong. Alex and the peer agreed to hold it. #679 gained two codes to watch for:
-  - a successor acting on a newer commit than its operation started from
-  - goal drift across chained rotations, where scope Alex dropped reads as current a few handoffs later
+- **The fact ledger's +20 points do not survive real questions.** Scoring used the facts that each handoff's real successor had to look up or re-derive. On those keys, candidate A was +0.21 points against a noise threshold of 6.62. The +20.25 came from quiz keys. The field check (#679) then coded five real successor reports: wrong 1, lookups 0.4 per rotation, and no failure kind beyond that. A blind Fable coder reached the same verdict. So A stays in the skill, and the eval loop is not rerun.
+- **A slow `/clear` was cs, not Claude Code.** On every SessionEnd, cs rebuilt the sessions index with about six forks per session, which took 8 to 27 s over 138 sessions. A single awk pass now does it in 0.15 s and writes the same bytes.
+- **Doctor's "autosave may be broken" warning had been a false positive since 2026-07-23.** Doctor checked the launch conversation's shadow ref, and `/clear` deletes that ref. Two Codex rounds widened the fix:
+  - Doctor now judges the caller's own id.
+  - It warns only when settings.json does not register the hook on Write and Edit.
+- **The narrative rotation never committed in this repo.** git exits 1 on a plain `add` of any path under an ignored directory, even a tracked one, although it still stages the file. So `cs -narrative rotate` wrote the rotation but never committed it. Both paths are now force-added, and only when the narrative is tracked.
+- **Running a suite under `/bin/bash` is not the same as CI's macOS lane.** Tests that start a hook with `bash "$HOOK"` look `bash` up on PATH and get Homebrew's bash 5. The launch mark depended on `$EPOCHREALTIME`, which bash 3.2 lacks, so on stock macOS it wrote nothing, and its test would have failed on the release push. The Fable range review caught it. It reproduced with a PATH shim that points `bash` at `/bin/bash`. This is now recorded in memory.
+- **Neither of the peer's rotate-skill requests had a failing rotation behind it.** Both are held as #679 codes instead of spec changes.
 
 ## Changes Made
 
-All merged locally to main and installed, each behind a full ghost gate (68/68). Nothing pushed.
+**Fixes merged to main during the day:**
+- **Rotate prune:** deletes only handoffs that git tracks.
+- **Sessions index on SessionEnd:** rebuilt with one awk pass.
+- **Scope-prompt hook:** writes a launch mark before loading its library, and its timeout went from 5 s to 10 s.
+- **Pending-handoff prompt:** lists one answer per row.
+- **Rotate skill:** a Next Step that needs a clean worktree now says to commit the handoff first.
+- **Doctor autosave row:** the fix described above.
+- **Narrative rotation:** commits under an ignored `.cs/` (81abfa0b, b6e49f4e, merged 89c39390).
 
-- **Rotate prune** (16c7acd, merged 334edd6): deletes only a handoff git tracks. A gitignored, untracked handoff was the only copy of itself.
-- **SessionEnd index** (98e9a14, merged ca20677): one awk pass, 26.9 s to 0.15 s measured under load.
-- **Scope-prompt launch mark** (be8b0ca, 17f11be, merged e7aafe4): trace line before the library load; 10 s registration.
-- **Pending-handoff prompt** (3f98ffc, 7896ce2, merged 854b1f9): one answer per row, keys first. The "(from another checkout)" label printed its escape code as text and now prints dim.
-- **Rotate skill** (c2d273c, merged 6f5a1b7): a Next Step that needs a clean worktree says to commit the consumed handoff first, since session start dirties it.
-- **CHANGELOG** (0a31a5e): the fact-ledger line reports the real-key result instead of "20 points".
-- **Doctor autosave row** (5857a0e, 8e2f10d, 44e1427, merged 0cdf38a): checks the caller's own ref, reports "no snapshot for this conversation yet" when there is none, and warns when `settings.json` does not register the hook for Write and Edit.
-- **Housekeeping:** Alex approved removing the throwaway `measure-wake` session. Task #680 closed and #679 widened.
+**Release v2026.9.22** (f37b8e7c):
+- **Review folds (3a0b8101):**
+  - The launch mark falls back to one `date +%s` fork on bash 3.2.
+  - Doctor's jq filter tolerates an invalid matcher on another hook entry.
+  - `tests/test_lib.sh` unsets the inherited conversation ids.
+- **Docs (5fac0b11):** 29 drift items across the README, hooks, session-layout and statusline docs. Examples: the rotation wake after `/clear`, `/queue` and `/cs-update` in the slash-command list, and the Fable window's 50% threshold.
+- **Gates:** CI 6/6 green on the release commit, tag cut with `--target` on the full SHA, release workflow green with 12 signed assets, installed locally with `cs -update`, doctor drift OK.
 
-## Key Files and Outputs
+## Key Files & Outputs
 
-- `lib/60-doctor.sh` (`_doctor_check_shadow_ref`), `tests/test_doctor.sh`: five shadow-ref tests, each seen red first.
-- `hooks/session-end.sh` (index rebuild), `hooks/scope-prompt.sh` (launch mark), `install.sh.in` (10 s registration).
-- `lib/75-launch.sh` (`_resume_menu_row`), `skills/rotate/SKILL.md` (prune rule, clean-worktree sentence), `tests/test_rotation.sh`.
-- `CHANGELOG.md` `## Unreleased`: every change above plus the fact-ledger line.
-- `.cs/handoffs/2026-09-25-*.md`: three handoffs with successor reports.
-- Machine-local, gitignored: `harness.py --keys`, `~/.cache/handoff-eval/keys-real/`, runs 20260925T101240, 102548 and 103600, and `.cs/research/handoff-field-log.md` with the #679 decision rule.
+- `hooks/scope-prompt.sh`: the launch mark and its bash 3.2 fallback.
+- `lib/60-doctor.sh`: `_doctor_check_shadow_ref`, including the registration check.
+- `lib/51-narrative.sh`: the rotation commit.
+- `hooks/session-end.sh`: the index rebuild.
+- `lib/75-launch.sh`: `_resume_menu_row`.
+- `skills/rotate/SKILL.md`: the prune rule and the clean-worktree step.
+- `tests/test_doctor.sh`, `tests/test_lib.sh`, `tests/test_narrative_rotate.sh`, `tests/test_rotation.sh`: the tests behind these fixes.
+- `README.md`, `docs/hooks.md`, `docs/session-layout.md`, `docs/statusline.md`, `CHANGELOG.md` (`## 2026.9.22`).
+- `.cs/handoffs/2026-09-25-*.md`: five handoffs, each with its successor report.
+- Machine-local and gitignored: `.cs/research/handoff-field-log.md` (the #679 coding and its KEEP verdict) and the real-key eval runs.
 
 ## Outcome
 
-Everything Alex asked for is on main and installed: six fixes plus the CHANGELOG correction. The eval question has an honest answer: the fact ledger is not worse, and nothing has shown it to be better. The next evidence comes from real rotations rather than another loop. The only doctor warning left is the non-cs status line from the iterm-agents-sidebar bridge, which predates this work.
+Every thread is closed:
+- The fact ledger stays, on field evidence rather than the quiz number.
+- #679 is closed as KEEP.
+- cs v2026.9.22 is published and installed.
+- main matches origin except for this wrap's session files.
 
 ## Notes for Future Reference
 
-- main is 91 commits ahead of origin. v2026.9.22 waits on Alex's go to push. The release pattern: push the release commit, then tag only after its CI is green, with `--target <full sha>`.
-- #679 is due after five fact-ledger rotations or on 2026-10-15. It codes each successor report by kind: phase, stop condition, failure policy, moving-ref state and goal drift. Check the claude-council chain for goal drift. If a kind shows up, the fix is one line in the rotate skill, not a new section.
-- `$CLAUDE_CODE_SESSION_ID` is the caller's id in the main conversation. Nobody has verified the same holds for teammates and subagents; if it differs, doctor says "no snapshot yet" there rather than warning falsely.
-- A `codex:codex-rescue` job that outlives the agent's 120 s window comes back as an early return. Fetch the verdict with `codex-companion.mjs status` then `result task-<id>` (memory `project_codex_readonly_no_probes`).
-- Slips this morning, all caught: suites run locally against the ghost-only rule (three times), and a `git switch | tail` that hid a refusal and launched a gate on the wrong branch.
+- **Deferred from the release review:**
+  - The README objective parser now exists in three copies. `session-start` still forks `sed` once per session on every start, the same cost the SessionEnd fix removed.
+  - `_resume_menu_row` duplicates `_lock_menu_row`.
+  - The launch mark repeats `_now_ms`'s arithmetic.
+  - The rotation kick's retry bound is a count, not a deadline.
+- **Unverified:** that `$CLAUDE_CODE_SESSION_ID` is the caller's own id inside teammates and subagents.
+- **Discoverability:** `/queue` has no in-product tip. Users find it through the release notes pane, the `/` menu or the README. cs-hint was the only tip surface, and it was removed.
+- **Release shape** (it worked again today): no content push before the notes are approved, then push the release commit, poll CI keyed on its SHA, and tag only after every job is green.
+- **Suite rule:** full suites run on ghost, never locally. The morning broke this three times. Afternoon runs were single touched suites only.
