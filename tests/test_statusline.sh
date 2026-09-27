@@ -7,7 +7,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/test_lib.sh"
 
 SL="$SCRIPT_DIR/../bin/cs-statusline"
-CS_BIN="${CS_BIN:-$SCRIPT_DIR/../bin/cs}"
+# Every cs launch exports CS_BIN (the installed cs), so a run from inside a cs
+# session inherits one: this suite tests the checkout's cs, and setup() unsets
+# every exported CS_* variable, which would leave CS_BIN unbound. Drop the
+# inherited export before assigning, so the assignment stays shell-local.
+unset CS_BIN
+CS_BIN="$SCRIPT_DIR/../bin/cs"
 
 # The docs' example statusline JSON, verbatim values (session_name "my-session",
 # ctx 8%, Opus/high, 5h 23.5, wk 41.2, cost 0.01234, non-git current_dir).
