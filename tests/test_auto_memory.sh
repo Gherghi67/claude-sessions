@@ -484,6 +484,26 @@ test_pre_open_not_executable_is_refused() {
     assert_file_not_exists "$TEST_TMPDIR/launched" "claude must not launch" || return 1
 }
 
+# .cs/local/ is gitignored, but `git add -f` can still commit a file there, and
+# a clone then checks it out. A committed pre-open would run code from whoever
+# wrote the repo, so cs refuses one git tracks.
+test_pre_open_tracked_by_git_is_refused() {
+    "$CS_BIN" vt <<< "" >/dev/null 2>&1 || true
+    _write_pre_open vt "touch \"$TEST_TMPDIR/pre-open-ran\""
+    git -C "$CS_SESSIONS_ROOT/vt" add -f .cs/local/pre-open
+    git -C "$CS_SESSIONS_ROOT/vt" commit -q -m "track pre-open"
+    _make_launch_sentinel
+
+    local out rc=0
+    out=$("$CS_BIN" vt <<< "" 2>&1) || rc=$?
+
+    assert_eq "1" "$rc" "cs should exit 1" || return 1
+    assert_eq "Error: .cs/local/ is tracked in git (per-actor state must stay local). Fix with: git -C \"$CS_SESSIONS_ROOT/vt\" rm -r --cached .cs/local && git commit -m 'stop tracking .cs/local'" \
+        "$out" "cs should refuse a committed .cs/local before running anything in it" || return 1
+    assert_file_not_exists "$TEST_TMPDIR/pre-open-ran" "the committed pre-open must not run" || return 1
+    assert_file_not_exists "$TEST_TMPDIR/launched" "claude must not launch" || return 1
+}
+
 test_pre_open_success_without_mount_still_refuses() {
     _make_vaulted_session vt
     local meta="$CS_SESSIONS_ROOT/vt/.cs"
@@ -538,6 +558,7 @@ run_test test_unmounted_storage_refuses_open
 run_test test_pre_open_mounts_then_session_opens
 run_test test_pre_open_failure_aborts_open
 run_test test_pre_open_not_executable_is_refused
+run_test test_pre_open_tracked_by_git_is_refused
 run_test test_pre_open_success_without_mount_still_refuses
 
 report_results
