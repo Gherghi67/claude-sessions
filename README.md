@@ -357,7 +357,8 @@ leaving Claude Code, and runs at once even while Claude is mid-turn; `/queue`
 alone prints `cs -queue list` and, when tasks are pending and the queue is not
 already running, asks whether to start them. Start arms the queue (and starts
 a turn if Claude is idle, so the first task arrives); Not yet waits, as the
-Stop hook's own "Not yet" does. It comes from the `cs` mod, so
+Stop hook's own "Not yet" does; Compact compacts the conversation first, then
+starts the queue as Start does. It comes from the `cs` mod, so
 `CS_NO_FUNCTION_HOOKS=1` withholds it.
 
 In the session picker (`cs` with no argument), the right pane shows a

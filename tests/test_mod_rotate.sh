@@ -138,7 +138,7 @@ test_mod_validate_inventories_the_hooks_and_calls() {
     assert_output_contains "$out" "hooks: session.start, command.run{command=queue}, turn.complete, prompt.submit, command.run{command=clear}, turn.start, ui.render{component=AbovePrompt}, ui.render{component=Pane}" "all eight hooks inventoried" || return 1
     assert_output_not_contains "$out" '$.prompt.fill' "nothing fills the composer any more" || return 1
     assert_output_contains "$out" 'env reads: CS_BIN, CS_ROTATE_BUTTON_CTX, CS_ROTATE_FORCE_CTX, CS_STATUSLINE_CTX_WARN, CS_TERM_BG_RGB, CS_TERM_THEME' "the cs path, the two thresholds, the bar's warn band, the measured background and the theme are read from the environment" || return 1
-    assert_output_contains "$out" '$.process.run, $.prompt.submit (via offerToStart), $.session.cwd' "/queue runs cs from its own hook and its start offer, which alone submits a prompt; nothing else runs a process" || return 1
+    assert_output_contains "$out" '$.process.run, $.prompt.submit (via offerToStart), $.session.compact (via offerToStart), $.session.cwd' "/queue runs cs from its own hook and its start offer, which alone submits a prompt and compacts; nothing else runs a process" || return 1
     assert_output_contains "$out" '$.command.run (via askToWrap, clearAndContinue, rotate)' "the keys run their commands, and nothing else runs one" || return 1
     assert_output_contains "$out" '$.clock.after (via forceRotation, startCountdown), $.clock.every (via startCountdown)' "the forced /rotate and the pane's open are one-shot timers and the grace a ticker, nowhere else" || return 1
     assert_output_contains "$out" '$.ui.ask (via askToWrap, offerToStart)' "the wrap key and the /queue start offer ask through the engine's own dialog" || return 1
