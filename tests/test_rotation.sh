@@ -427,6 +427,18 @@ test_rotate_skill_governs_what_goes_into_the_handoff() {
     # at hot context. Redaction has to survive that pressure.
     assert_file_contains "$skill" "Re-read the finished body" \
         "redaction must be re-checked after the body is written" || return 1
+    # A handoff kept a user's body stats out as "personal data" yet quoted
+    # their pain history verbatim in USER, while the plan holding the same
+    # detail stayed untracked on purpose. Not identifying, still sensitive,
+    # and the verbatim rule pulled it in.
+    assert_file_contains "$skill" "sensitive personal detail" \
+        "redaction covers sensitive personal detail, not only identifying data" || return 1
+    assert_file_contains "$skill" "Redaction outranks every rule" \
+        "neither the verbatim ledger nor Next Step's inline rule may override redaction" || return 1
+    # A handoff's Next Step listed the question that gated all its work as the
+    # fifth bullet, after the steps it blocked.
+    assert_file_contains "$skill" "the blocker opens Next Step" \
+        "a blocker must lead Next Step, ahead of the steps it gates" || return 1
 }
 
 test_rotate_skill_reads_parent_from_state_not_the_launch_env() {
