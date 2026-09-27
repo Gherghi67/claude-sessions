@@ -6,7 +6,7 @@ import { test, expect, beforeEach } from 'bun:test'
 ;(globalThis as any).h = (type: any, props: any, ...children: any[]) => ({ type, props: props ?? {}, children })
 ;(globalThis as any).Fragment = 'Fragment'
 
-import { register, DEFAULT_PERCENT, GRACE_SECONDS, PREVIEW_PANE, WRAP_QUESTION, WRAP_YES, MARKDOWN_LIMIT, nextStep, surfaceColor, isUnconsumed } from '../hooks/register.tsx'
+import { register, DEFAULT_PERCENT, GRACE_SECONDS, PREVIEW_PANE, WRAP_QUESTION, WRAP_YES, QUEUE_START, QUEUE_KICK, MARKDOWN_LIMIT, nextStep, surfaceColor, isUnconsumed } from '../hooks/register.tsx'
 
 type Hook = ($: any, e: any, next: (e: any) => Promise<any>) => Promise<any>
 const hooks: Record<string, Hook> = {}
@@ -35,6 +35,10 @@ let answer: string | Error
 // What `$.process.run` was asked to run, and what it answers with (or rejects with).
 let runs: { argv: string[]; init: any }[]
 let runResult: { exitCode: number; stdout: string; stderr: string } | Error
+// Answers for the next runs in order, ahead of runResult; empty means runResult answers.
+let nextRuns: ({ exitCode: number; stdout: string; stderr: string } | Error)[]
+// What `$.prompt.submit` was handed.
+let submitted: any[]
 let commands: any[]
 const timer = (kind: 'after' | 'every') => (ms: number, fn: () => void) => {
   const t = { ms, fn, kind, cancelled: false }
@@ -48,7 +52,10 @@ const $ = {
     cwd: async () => '/work',
     id: async () => sessionId,
   },
-  prompt: { fill: async (args: any) => { filled.push(args); return { isFilled: true } } },
+  prompt: {
+    fill: async (args: any) => { filled.push(args); return { isFilled: true } },
+    submit: async (args: any) => { submitted.push(args); return {} },
+  },
   command: {
     run: async (args: any) => { ran.push(args); return { text: '' } },
     register: async (spec: any) => { commands.push(spec); return { command: spec.name } },
@@ -56,8 +63,9 @@ const $ = {
   process: {
     run: async (argv: string[], init: any) => {
       runs.push({ argv, init })
-      if (runResult instanceof Error) throw runResult
-      return runResult
+      const r = nextRuns.length > 0 ? nextRuns.shift()! : runResult
+      if (r instanceof Error) throw r
+      return r
     },
   },
   ui: {
@@ -95,7 +103,7 @@ beforeEach(() => {
   for (const k of Object.keys(hooks)) delete hooks[k]
   percent = undefined; filled = []; ran = []; written = {}; existing = new Set(['/work/.cs/local'])
   timers = []; invalidated = []; toasts = []; asks = []; answer = WRAP_YES; panes = []
-  runs = []; runResult = { exitCode: 0, stdout: '', stderr: '' }; commands = []
+  runs = []; runResult = { exitCode: 0, stdout: '', stderr: '' }; nextRuns = []; submitted = []; commands = []
   // The default fixture is the lead conversation of a cs session.
   sessionId = 'uuid-lead'
   envVars = {}
@@ -1122,6 +1130,8 @@ test('/queue with a task runs cs -queue add with the task as one argument and sa
   const r = await queue('fix the flaky "rotate" test; then rerun it')
   expect(runs.map(x => x.argv)).toEqual([['/opt/cs/bin/cs', '-queue', 'add', 'fix the flaky "rotate" test; then rerun it']])
   expect(r).toEqual({ text: 'Queued: fix the flaky "rotate" test; then rerun it' })
+  await settle()
+  expect(asks).toEqual([])
 })
 
 test('/queue with no task, or only spaces, prints cs -queue list', async () => {
@@ -1130,6 +1140,104 @@ test('/queue with no task, or only spaces, prints cs -queue list', async () => {
   expect(await queue('')).toEqual({ text: 'Pending:\n  1. first\n  2. second' })
   expect(await queue('   ')).toEqual({ text: 'Pending:\n  1. first\n  2. second' })
   expect(runs.map(x => x.argv)).toEqual([['/opt/cs/bin/cs', '-queue', 'list'], ['/opt/cs/bin/cs', '-queue', 'list']])
+})
+
+// The offer is made after the listing is back on screen, so the person reads
+// the tasks before answering; the drain itself belongs to the Stop hook.
+const settle = () => new Promise(r => setTimeout(r, 0))
+const LISTED = { exitCode: 0, stdout: 'Pending (2)\n  1. first\n  2. second\n\nDone (1)\n  - shipped\n', stderr: '' }
+
+test('/queue with pending tasks offers to start them; Start while idle arms the queue and starts a turn', async () => {
+  envVars.CS_BIN = '/opt/cs/bin/cs'
+  runResult = LISTED
+  answer = QUEUE_START
+  expect(await queue('')).toEqual({ text: 'Pending (2)\n  1. first\n  2. second\n\nDone (1)\n  - shipped' })
+  await settle()
+  expect(asks).toEqual([{ question: 'Start the 2 queued tasks now?', options: { header: 'Queue', options: [QUEUE_START, 'Not yet'] } }])
+  expect(runs.map(x => x.argv)).toEqual([['/opt/cs/bin/cs', '-queue', 'list'], ['/opt/cs/bin/cs', '-queue', 'start']])
+  expect(submitted).toEqual([{ text: QUEUE_KICK }])
+})
+
+// A turn already running reaches a stop on its own, where the Stop hook hands
+// over the first task; a prompt sent now would wait out the whole drain.
+test('Start while a turn is running arms the queue and sends no prompt', async () => {
+  envVars.CS_BIN = '/opt/cs/bin/cs'
+  runResult = LISTED
+  answer = QUEUE_START
+  await band({ isWorking: true })
+  await queue('')
+  await settle()
+  expect(runs.map(x => x.argv[2])).toEqual(['list', 'start'])
+  expect(submitted).toEqual([])
+})
+
+// Not yet is the Stop hook's own "Not yet": it holds that offer back for a
+// while instead of asking again at the next turn end.
+test('Not yet defers the queue and sends no prompt', async () => {
+  envVars.CS_BIN = '/opt/cs/bin/cs'
+  runResult = LISTED
+  answer = 'Not yet'
+  await queue('')
+  await settle()
+  expect(runs.map(x => x.argv[2])).toEqual(['list', 'defer'])
+  expect(submitted).toEqual([])
+})
+
+test('a queue already armed or draining is listed without an offer', async () => {
+  envVars.CS_BIN = '/opt/cs/bin/cs'
+  runResult = LISTED
+  for (const state of ['armed\n', 'draining\n']) {
+    files['/work/.cs/local/queue.state'] = state
+    await queue('')
+    await settle()
+  }
+  expect(asks).toEqual([])
+  expect(runs.map(x => x.argv[2])).toEqual(['list', 'list'])
+})
+
+test('an empty queue is listed without an offer', async () => {
+  envVars.CS_BIN = '/opt/cs/bin/cs'
+  runResult = { exitCode: 0, stdout: 'Queue is empty.\n\nDone (1)\n  - shipped\n', stderr: '' }
+  await queue('')
+  await settle()
+  expect(asks).toEqual([])
+})
+
+test('a start cs refuses, or one that cannot run, says so and sends no prompt', async () => {
+  envVars.CS_BIN = '/opt/cs/bin/cs'
+  answer = QUEUE_START
+  nextRuns = [LISTED, { exitCode: 1, stdout: '', stderr: 'Error: the queue is locked\n' }, LISTED, new Error('spawn ENOENT')]
+  await queue('')
+  await settle()
+  await queue('')
+  await settle()
+  expect(toasts).toEqual(['cs: cs -queue start exited 1: Error: the queue is locked', 'cs: cs -queue start did not run: spawn ENOENT'])
+  expect(submitted).toEqual([])
+})
+
+test('a prompt the engine refuses is shown, not dropped', async () => {
+  envVars.CS_BIN = '/opt/cs/bin/cs'
+  runResult = LISTED
+  answer = QUEUE_START
+  $.prompt.submit = async () => { throw new Error('session closed') }
+  try {
+    await queue('')
+    await settle()
+  } finally {
+    $.prompt.submit = async (args: any) => { submitted.push(args); return {} }
+  }
+  expect(toasts).toEqual(['cs: the queue is armed, but its first turn did not start: session closed'])
+})
+
+test('a dismissed offer runs nothing more', async () => {
+  envVars.CS_BIN = '/opt/cs/bin/cs'
+  runResult = LISTED
+  answer = new Error('dismissed')
+  await queue('')
+  await settle()
+  expect(runs.map(x => x.argv[2])).toEqual(['list'])
+  expect(submitted).toEqual([])
+  expect(toasts).toEqual([])
 })
 
 test('a refused add prints the exit code and cs\'s own stderr, verbatim', async () => {

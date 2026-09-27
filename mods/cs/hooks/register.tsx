@@ -139,12 +139,21 @@ export const MARKDOWN_LIMIT = 10000
 export const WRAP_QUESTION = 'Run /wrap for this session?'
 export const WRAP_YES = 'Yes, wrap up'
 
+// Bare /queue's offer, and the prompt a Start sends when no turn is running.
+// `cs -queue start` only arms the queue: the Stop hook hands over each task as
+// a turn ends, so an idle session needs one turn to reach that first stop.
+export const QUEUE_START = 'Start'
+export const QUEUE_KICK = 'The cs walk-away queue is started. Reply with one short line saying so, then stop: the cs Stop hook hands you each queued task in turn.'
+
 // The countdown: seconds left, its ticker, and what the band last saw. Module
 // state survives a /clear (measured), so every path that ends the countdown
 // cancels the ticker; a reload of the mod drops it with its timers.
 let left: number | undefined
 let ticker: { cancel: () => void } | undefined
 let bandIdle = false
+// Whether a turn was running when the band last drew: a queue started then
+// reaches its first stop without a prompt from the mod.
+let turnRunning = false
 // The preview's lines while its pane is open, and whether this load has shown it.
 let preview: Step | undefined
 let previewShown = false
@@ -168,7 +177,7 @@ let registered = false
 
 export function register(on: On) {
   // A (re)load has no countdown: the engine cancelled the old one's timers.
-  left = undefined; ticker = undefined; bandIdle = false; preview = undefined; previewShown = false; adopted = undefined; clearSeen = false; birth = undefined; startPercent = undefined; registered = false
+  left = undefined; ticker = undefined; bandIdle = false; turnRunning = false; preview = undefined; previewShown = false; adopted = undefined; clearSeen = false; birth = undefined; startPercent = undefined; registered = false
   on('session.start', async ($, e, next) => {
     if (!registered) {
       registered = true
@@ -204,7 +213,10 @@ export function register(on: On) {
       const tail = result.stderr.split('\n').filter(l => l.trim() !== '').slice(-5).join('\n')
       return { text: tail === '' ? `${what} exited ${result.exitCode}.` : `${what} exited ${result.exitCode}.\n${tail}` }
     }
-    return { text: task === '' ? result.stdout.trimEnd() : `Queued: ${task}` }
+    if (task !== '') return { text: `Queued: ${task}` }
+    const pending = /^Pending \((\d+)\)$/m.exec(result.stdout)
+    if (pending && !(await queueRunning($))) void offerToStart($, bin, Number(pending[1]))
+    return { text: result.stdout.trimEnd() }
   })
 
   // The end of a turn is the one moment a rotation can be started for the
@@ -250,6 +262,7 @@ export function register(on: On) {
     // the birth is settled here: a later /resume is not mistaken for it.
     noteConversation(await $.session.id())
     // A survey owns the band; a running turn cannot be rotated out of.
+    turnRunning = e.props.isWorking
     bandIdle = !e.props.hasSurvey && !e.props.isWorking
     if (!bandIdle) return drawn
     const armed = await handoffArmed($)
@@ -602,6 +615,46 @@ async function askToWrap($: EngineInterface) {
     await $.command.run({ command: 'wrap', args: '' })
   } catch (err) {
     $.ui.toast(`cs: /wrap did not run: ${String(err)}`)
+  }
+}
+
+// An armed or draining queue is already on its way; only bin/cs and the Stop
+// hook write the file, and no file is an idle queue.
+async function queueRunning($: EngineInterface): Promise<boolean> {
+  const path = `${await $.session.cwd()}/.cs/local/queue.state`
+  if (!(await $.fs.exists(path))) return false
+  const state = (await $.fs.read(path)).trim()
+  return state === 'armed' || state === 'draining'
+}
+
+// Asked after bare /queue has printed the list, so the tasks are on screen
+// when the question is. Start arms the queue; Not yet defers it the way the
+// Stop hook's own offer does, so that offer does not ask again straight away.
+async function offerToStart($: EngineInterface, bin: string, count: number) {
+  let answer: string
+  try {
+    answer = await $.ui.ask(`Start the ${count} queued ${count === 1 ? 'task' : 'tasks'} now?`, { header: 'Queue', options: [QUEUE_START, 'Not yet'] })
+  } catch {
+    return // dismissed, or a `-p` run with nobody to ask
+  }
+  const verb = answer === QUEUE_START ? 'start' : 'defer'
+  let result: { exitCode: number; stdout: string; stderr: string }
+  try {
+    result = await $.process.run([bin, '-queue', verb])
+  } catch (err) {
+    $.ui.toast(`cs: cs -queue ${verb} did not run: ${String(err instanceof Error ? err.message : err)}`)
+    return
+  }
+  if (result.exitCode !== 0) {
+    const tail = result.stderr.split('\n').filter(l => l.trim() !== '').slice(-1)[0] ?? ''
+    $.ui.toast(`cs: cs -queue ${verb} exited ${result.exitCode}${tail === '' ? '' : `: ${tail}`}`)
+    return
+  }
+  if (verb !== 'start' || turnRunning) return
+  try {
+    await $.prompt.submit({ text: QUEUE_KICK })
+  } catch (err) {
+    $.ui.toast(`cs: the queue is armed, but its first turn did not start: ${String(err instanceof Error ? err.message : err)}`)
   }
 }
 
