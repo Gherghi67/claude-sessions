@@ -389,8 +389,10 @@ history keeps every file the pass removes. The conversation keeps running;
 nothing has ended yet.
 
 Because the handoff is committed and becomes the next conversation's opening
-prompt, the skill redacts credentials and personal data out of it (name the
-secret's purpose and its `cs -secrets get` key instead), references
+prompt, the skill redacts credentials, identifying data and sensitive
+personal detail such as health notes out of it (name the secret's purpose
+and its `cs -secrets get` key instead, and point at where the detail lives),
+leads Next Step with anything that is waiting on you, references
 committed work by path rather than re-summarising it, and keeps what you
 said close to your own words while condensing its own reasoning.
 

@@ -67,7 +67,8 @@ one-key rotation it exists for.
    memory keeps whichever facts happen to be vivid. So the first thing you
    do is not writing: go back over the conversation from its first message
    to its last, in order, and at every user message and every tool result
-   copy out each item below that it contains. Copy, do not paraphrase: the
+   copy out each item below that it contains, except detail the Redact rule
+   below names, which enters the ledger as a pointer. Copy, do not paraphrase: the
    successor will quote your ledger back as an answer, and a number
    rounded or an error reworded is a wrong answer.
 
@@ -102,7 +103,12 @@ one-key rotation it exists for.
    not be the thing it finds last. It carries every fact its first action
    needs, inline: the exact command, path, host, branch or flag, even when
    the same fact is in a committed file, an older handoff or memory, because
-   the successor acts on it without looking anything up. An action that
+   the successor acts on it without looking anything up. When the first
+   action cannot start until the user answers, decides or supplies
+   something, the blocker opens Next Step: the question to ask and the
+   options already on the table, ahead of the steps it gates, and those
+   steps written as branches on the answer, not a list to run through. A
+   blocker listed after those steps reads as one more step. An action that
    starts work (a test run, a build, a merge, a deploy) first says how to
    tell whether it is already done or still running, and what to do in each
    case. An action that needs a clean worktree (a branch switch, a merge, a
@@ -139,13 +145,23 @@ one-key rotation it exists for.
    Four rules govern the body, all following from where it goes: step 4
    commits it, and the next conversation reads it as its opening prompt.
 
-   - **Redact.** API keys, tokens, passwords and personally identifying
-     information stay out of the file, including out of the verbatim
-     ledger. `.cs/handoffs/` is tracked, so writing one here publishes it;
+   - **Redact.** API keys, tokens, passwords, personally identifying
+     information, anything the session deliberately left untracked for
+     privacy, and other sensitive personal detail (such as health, medical,
+     body measurements or finances) stay out of the file, including out of
+     the verbatim ledger. Redaction outranks every rule that pulls detail
+     in: the verbatim ledger, the USER bullet and Next Step's inline rule.
+     Quote the user's ruling and replace the sensitive part with a pointer
+     to where it lives ("pain history: in the untracked `.cs/plan.md`"). A
+     first action that needs the redacted detail says to read it from that
+     path first, and if the file is absent on this machine, to ask the user
+     before proceeding as if there were no constraint.
+     `.cs/handoffs/` is tracked, so writing one here publishes it;
      credentials live in `cs -secrets`. Name the secret's purpose instead:
      "the deploy token, in `cs -secrets get DEPLOY_TOKEN`".
-     Re-read the finished body before step 4 commits it: an exact reading is where a
-     secret hides.
+     Re-read the finished body before step 4 commits it, for secrets and
+     for the detail this rule names: an exact reading is where a secret
+     hides, and a verbatim quote is where personal detail does.
    - **Reference committed work; restate what a successor cannot recover.**
      Work captured in a commit, spec, plan, diff or narrative gets a path and
      a one-line pointer in sections 4-9, never a re-summary. The ledger is
@@ -174,7 +190,8 @@ one-key rotation it exists for.
    step 6, because pass two quotes files and code, and a secret can sit in
    either.
 5. Append the second pass with Edit or `cat >>`, never Write.
-6. Second commit for the appended body. Re-read it for secrets first.
+6. Second commit for the appended body. Re-read it for secrets and the
+   detail the Redact rule names first.
 
    The handoff's CONTENT is now safe: two commits, nothing left to lose. It
    is not yet armed — that is deliberate, see step 9.
