@@ -64,6 +64,36 @@ _harden_session_meta() {  # session_dir
     return 0
 }
 
+# A session can prepare itself before cs opens it, such as mounting the
+# encrypted volume its memory lives on. The command lives in .cs/local/, which
+# is never committed, so a cloned or synced session cannot make cs run code.
+# It runs in the session directory on the user's terminal (a password prompt
+# needs the TTY), and any non-zero exit aborts the open.
+_run_pre_open() {  # session_name, session_dir
+    local hook="$2/.cs/local/pre-open" rc=0
+    [ -e "$hook" ] || return 0
+    # `git add -f` can still commit into the ignored .cs/local/; refuse before
+    # running anything a clone could have delivered.
+    cs_assert_local_untracked "$2"
+    [ -x "$hook" ] || error "$1: .cs/local/pre-open is not executable; chmod +x it, or remove it."
+    (cd "$2" && "$hook") || rc=$?
+    [ "$rc" -eq 0 ] || error "$1: .cs/local/pre-open exited $rc; not opening the session."
+}
+
+# A session can keep .cs/memory and .cs/plans on an encrypted volume by making
+# them symlinks into its mountpoint. Unmounted, the links dangle: `test -d` is
+# false through them, so migrate would mkdir through them and abort on a raw
+# mkdir error. Refuse by name instead, before anything writes there.
+_refuse_unmounted_meta() {  # session_name, session_dir
+    local sub link target
+    for sub in memory plans; do
+        link="$2/.cs/$sub"
+        [ -L "$link" ] && [ ! -e "$link" ] || continue
+        target=$(readlink "$link")
+        error "$1: .cs/$sub points at $target, which is missing (encrypted storage not mounted?). Mount it, then reopen."
+    done
+}
+
 # Create session directory structure
 create_session_structure() {
     local session_dir="$1"

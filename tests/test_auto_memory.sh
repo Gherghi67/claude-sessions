@@ -393,6 +393,134 @@ EOF
 }
 
 # ============================================================================
+# Encrypted storage: .cs/memory and .cs/plans as symlinks into a mountpoint
+# ============================================================================
+
+# A session whose memory and plans live on an encrypted volume mounted at
+# .cs/vault-mnt, the layout session `rel` uses. Unmounting removes the
+# mountpoint, which leaves both symlinks dangling.
+_make_vaulted_session() {  # name
+    local meta="$CS_SESSIONS_ROOT/$1/.cs"
+    "$CS_BIN" "$1" <<< "" >/dev/null 2>&1 || true
+    mkdir -p "$meta/vault-mnt"
+    mv "$meta/memory" "$meta/vault-mnt/memory"
+    mv "$meta/plans" "$meta/vault-mnt/plans"
+    ln -s "$meta/vault-mnt/memory" "$meta/memory"
+    ln -s "$meta/vault-mnt/plans" "$meta/plans"
+}
+
+# Records each launch, so a test can tell a refusal from a launch.
+_make_launch_sentinel() {
+    printf '#!/bin/bash\necho launched >> "%s"\n' "$TEST_TMPDIR/launched" > "$TEST_TMPDIR/claude"
+    chmod +x "$TEST_TMPDIR/claude"
+    export CLAUDE_CODE_BIN="$TEST_TMPDIR/claude"
+}
+
+test_unmounted_storage_refuses_open() {
+    _make_vaulted_session vt
+    local meta="$CS_SESSIONS_ROOT/vt/.cs"
+    mv "$meta/vault-mnt" "$TEST_TMPDIR/unmounted"
+    _make_launch_sentinel
+
+    local out rc=0
+    out=$("$CS_BIN" vt <<< "" 2>&1) || rc=$?
+
+    assert_eq "1" "$rc" "cs should exit 1" || return 1
+    assert_eq "Error: vt: .cs/memory points at $meta/vault-mnt/memory, which is missing (encrypted storage not mounted?). Mount it, then reopen." \
+        "$out" "cs should name the dangling link and nothing else" || return 1
+    assert_file_not_exists "$TEST_TMPDIR/launched" "claude must not launch" || return 1
+    assert_not_exists "$meta/vault-mnt" "nothing may be created where the volume mounts" || return 1
+}
+
+# Writes .cs/local/pre-open with the given body and makes it executable.
+_write_pre_open() {  # session, body
+    local hook="$CS_SESSIONS_ROOT/$1/.cs/local/pre-open"
+    printf '#!/bin/bash\n%s\n' "$2" > "$hook"
+    chmod +x "$hook"
+}
+
+test_pre_open_mounts_then_session_opens() {
+    _make_vaulted_session vt
+    local meta="$CS_SESSIONS_ROOT/vt/.cs"
+    mv "$meta/vault-mnt" "$TEST_TMPDIR/unmounted"
+    _write_pre_open vt "pwd -P > \"$TEST_TMPDIR/pre-open-cwd\"; mv \"$TEST_TMPDIR/unmounted\" .cs/vault-mnt"
+    _make_launch_sentinel
+
+    local rc=0
+    "$CS_BIN" vt <<< "" >/dev/null 2>&1 || rc=$?
+
+    assert_eq "0" "$rc" "cs should open once pre-open mounted the storage" || return 1
+    assert_eq "launched" "$(cat "$TEST_TMPDIR/launched" 2>/dev/null)" "claude should launch once" || return 1
+    assert_eq "$(cd "$CS_SESSIONS_ROOT/vt" && pwd -P)" "$(cat "$TEST_TMPDIR/pre-open-cwd")" \
+        "pre-open should run in the session directory" || return 1
+}
+
+test_pre_open_failure_aborts_open() {
+    "$CS_BIN" vt <<< "" >/dev/null 2>&1 || true
+    _write_pre_open vt "exit 3"
+    _make_launch_sentinel
+
+    local out rc=0
+    out=$("$CS_BIN" vt <<< "" 2>&1) || rc=$?
+
+    assert_eq "1" "$rc" "cs should exit 1" || return 1
+    assert_eq "Error: vt: .cs/local/pre-open exited 3; not opening the session." "$out" \
+        "cs should name the failed pre-open and its status" || return 1
+    assert_file_not_exists "$TEST_TMPDIR/launched" "claude must not launch" || return 1
+}
+
+test_pre_open_not_executable_is_refused() {
+    "$CS_BIN" vt <<< "" >/dev/null 2>&1 || true
+    _write_pre_open vt "exit 0"
+    chmod -x "$CS_SESSIONS_ROOT/vt/.cs/local/pre-open"
+    _make_launch_sentinel
+
+    local out rc=0
+    out=$("$CS_BIN" vt <<< "" 2>&1) || rc=$?
+
+    assert_eq "1" "$rc" "cs should exit 1" || return 1
+    assert_eq "Error: vt: .cs/local/pre-open is not executable; chmod +x it, or remove it." "$out" \
+        "cs should refuse a pre-open it cannot run rather than skip it" || return 1
+    assert_file_not_exists "$TEST_TMPDIR/launched" "claude must not launch" || return 1
+}
+
+# .cs/local/ is gitignored, but `git add -f` can still commit a file there, and
+# a clone then checks it out. A committed pre-open would run code from whoever
+# wrote the repo, so cs refuses one git tracks.
+test_pre_open_tracked_by_git_is_refused() {
+    "$CS_BIN" vt <<< "" >/dev/null 2>&1 || true
+    _write_pre_open vt "touch \"$TEST_TMPDIR/pre-open-ran\""
+    git -C "$CS_SESSIONS_ROOT/vt" add -f .cs/local/pre-open
+    git -C "$CS_SESSIONS_ROOT/vt" commit -q -m "track pre-open"
+    _make_launch_sentinel
+
+    local out rc=0
+    out=$("$CS_BIN" vt <<< "" 2>&1) || rc=$?
+
+    assert_eq "1" "$rc" "cs should exit 1" || return 1
+    assert_eq "Error: .cs/local/ is tracked in git (per-actor state must stay local). Fix with: git -C \"$CS_SESSIONS_ROOT/vt\" rm -r --cached .cs/local && git commit -m 'stop tracking .cs/local'" \
+        "$out" "cs should refuse a committed .cs/local before running anything in it" || return 1
+    assert_file_not_exists "$TEST_TMPDIR/pre-open-ran" "the committed pre-open must not run" || return 1
+    assert_file_not_exists "$TEST_TMPDIR/launched" "claude must not launch" || return 1
+}
+
+test_pre_open_success_without_mount_still_refuses() {
+    _make_vaulted_session vt
+    local meta="$CS_SESSIONS_ROOT/vt/.cs"
+    mv "$meta/vault-mnt" "$TEST_TMPDIR/unmounted"
+    _write_pre_open vt "exit 0"
+    _make_launch_sentinel
+
+    local out rc=0
+    out=$("$CS_BIN" vt <<< "" 2>&1) || rc=$?
+
+    assert_eq "1" "$rc" "cs should exit 1" || return 1
+    assert_eq "Error: vt: .cs/memory points at $meta/vault-mnt/memory, which is missing (encrypted storage not mounted?). Mount it, then reopen." \
+        "$out" "the dangling-link refusal should still fire" || return 1
+    assert_file_not_exists "$TEST_TMPDIR/launched" "claude must not launch" || return 1
+}
+
+# ============================================================================
 # Runner
 # ============================================================================
 
@@ -424,5 +552,13 @@ run_test test_narrative_pointer_idempotent_readd
 run_test test_resume_folds_discoveries_into_narrative
 run_test test_discoveries_fold_header_uses_git_date
 run_test test_resume_folds_compact_when_discoveries_header_only
+
+# Encrypted storage
+run_test test_unmounted_storage_refuses_open
+run_test test_pre_open_mounts_then_session_opens
+run_test test_pre_open_failure_aborts_open
+run_test test_pre_open_not_executable_is_refused
+run_test test_pre_open_tracked_by_git_is_refused
+run_test test_pre_open_success_without_mount_still_refuses
 
 report_results

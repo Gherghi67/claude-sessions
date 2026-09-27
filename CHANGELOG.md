@@ -4,6 +4,14 @@ All notable changes to cs are documented here. Release notes are also available 
 
 <!-- New entries group changes under Keep-a-Changelog headings (Added / Changed / Removed / Fixes / Docs), or Features / Performance where those fit the release. -->
 
+## Unreleased
+
+### Added
+- An executable `.cs/local/pre-open` in a session runs before `cs <name>` opens it, from the session directory on your terminal, and a non-zero exit aborts the open. A session that keeps `.cs/memory` and `.cs/plans` on an encrypted volume can mount it there, password prompt included. The file lives in `.cs/local/`, which is never committed, so a cloned session cannot make `cs` run code.
+
+### Fixes
+- Opening a session whose `.cs/memory` or `.cs/plans` is a symlink into an unmounted encrypted volume failed with two bare `mkdir: ... No such file or directory` lines. `cs` now names the link and its missing target and says to mount it. It still creates nothing in their place.
+
 ## 2026.9.22
 
 ### Added
