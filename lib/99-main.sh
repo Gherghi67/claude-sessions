@@ -443,6 +443,7 @@ main() {
             git commit -q -m "Initial session structure" 2>/dev/null || true
         )
     else
+        _refuse_unmounted_meta "$session_name" "$session_dir"
         migrate_session "$session_dir"
     fi
 

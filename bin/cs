@@ -3108,6 +3108,20 @@ _harden_session_meta() {  # session_dir
     return 0
 }
 
+# A session can keep .cs/memory and .cs/plans on an encrypted volume by making
+# them symlinks into its mountpoint. Unmounted, the links dangle: `test -d` is
+# false through them, so migrate would mkdir through them and abort on a raw
+# mkdir error. Refuse by name instead, before anything writes there.
+_refuse_unmounted_meta() {  # session_name, session_dir
+    local sub link target
+    for sub in memory plans; do
+        link="$2/.cs/$sub"
+        [ -L "$link" ] && [ ! -e "$link" ] || continue
+        target=$(readlink "$link")
+        error "$1: .cs/$sub points at $target, which is missing (encrypted storage not mounted?). Mount it, then reopen."
+    done
+}
+
 # Create session directory structure
 create_session_structure() {
     local session_dir="$1"
@@ -9078,6 +9092,7 @@ main() {
             git commit -q -m "Initial session structure" 2>/dev/null || true
         )
     else
+        _refuse_unmounted_meta "$session_name" "$session_dir"
         migrate_session "$session_dir"
     fi
 

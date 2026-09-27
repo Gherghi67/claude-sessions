@@ -393,6 +393,46 @@ EOF
 }
 
 # ============================================================================
+# Encrypted storage: .cs/memory and .cs/plans as symlinks into a mountpoint
+# ============================================================================
+
+# A session whose memory and plans live on an encrypted volume mounted at
+# .cs/vault-mnt, the layout session `rel` uses. Unmounting removes the
+# mountpoint, which leaves both symlinks dangling.
+_make_vaulted_session() {  # name
+    local meta="$CS_SESSIONS_ROOT/$1/.cs"
+    "$CS_BIN" "$1" <<< "" >/dev/null 2>&1 || true
+    mkdir -p "$meta/vault-mnt"
+    mv "$meta/memory" "$meta/vault-mnt/memory"
+    mv "$meta/plans" "$meta/vault-mnt/plans"
+    ln -s "$meta/vault-mnt/memory" "$meta/memory"
+    ln -s "$meta/vault-mnt/plans" "$meta/plans"
+}
+
+# Records each launch, so a test can tell a refusal from a launch.
+_make_launch_sentinel() {
+    printf '#!/bin/bash\necho launched >> "%s"\n' "$TEST_TMPDIR/launched" > "$TEST_TMPDIR/claude"
+    chmod +x "$TEST_TMPDIR/claude"
+    export CLAUDE_CODE_BIN="$TEST_TMPDIR/claude"
+}
+
+test_unmounted_storage_refuses_open() {
+    _make_vaulted_session vt
+    local meta="$CS_SESSIONS_ROOT/vt/.cs"
+    mv "$meta/vault-mnt" "$TEST_TMPDIR/unmounted"
+    _make_launch_sentinel
+
+    local out rc=0
+    out=$("$CS_BIN" vt <<< "" 2>&1) || rc=$?
+
+    assert_eq "1" "$rc" "cs should exit 1" || return 1
+    assert_eq "Error: vt: .cs/memory points at $meta/vault-mnt/memory, which is missing (encrypted storage not mounted?). Mount it, then reopen." \
+        "$out" "cs should name the dangling link and nothing else" || return 1
+    assert_file_not_exists "$TEST_TMPDIR/launched" "claude must not launch" || return 1
+    assert_not_exists "$meta/vault-mnt" "nothing may be created where the volume mounts" || return 1
+}
+
+# ============================================================================
 # Runner
 # ============================================================================
 
@@ -424,5 +464,8 @@ run_test test_narrative_pointer_idempotent_readd
 run_test test_resume_folds_discoveries_into_narrative
 run_test test_discoveries_fold_header_uses_git_date
 run_test test_resume_folds_compact_when_discoveries_header_only
+
+# Encrypted storage
+run_test test_unmounted_storage_refuses_open
 
 report_results
