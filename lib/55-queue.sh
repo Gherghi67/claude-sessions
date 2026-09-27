@@ -124,18 +124,23 @@ _queue_len() {  # qdir
 # counts and _queue_rm indexes, so the number shown here is the number that
 # deletes. Filtering blank files here (they cannot occur: both writers trim and
 # reject empties) would renumber the list out of step with rm.
+# The sections are separated by a blank line: /queue shows this through Claude
+# Code's markdown renderer, which otherwise reads the Done heading as part of
+# the last pending item.
 _queue_list() {  # qdir
-    local qdir="$1" f n=0 text
+    local qdir="$1" f n=0 text len done_len
+    len=$(_queue_len "$qdir")
     for f in "$qdir/queue"/*; do
         [ -f "$f" ] || continue
         n=$((n + 1))
-        [ "$n" -eq 1 ] && echo "Pending:"
+        [ "$n" -eq 1 ] && echo "Pending ($len)"
         text=$(<"$f")
         printf '  %d. %s\n' "$n" "${text//$'\n'/ }"
     done
     [ "$n" -gt 0 ] || echo "Queue is empty."
     if [ -s "$qdir/queue.done" ]; then
-        echo "Done:"
+        done_len=$(awk 'NF{ c++ } END{ print c+0 }' "$qdir/queue.done")
+        printf '\nDone (%d)\n' "$done_len"
         awk 'NF{ printf "  - %s\n", $0 }' "$qdir/queue.done"
     fi
 }
