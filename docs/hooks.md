@@ -474,6 +474,12 @@ in flight instead of waiting for it to end. `/queue <task>` runs
 `cs -queue add "<task>"` through `$.process.run` by the path the launch
 exports in `CS_BIN` (no shell; the claude process's `PATH` is not the
 launching shell's), and `/queue` alone runs `cs -queue list` and prints it.
+When the list has a `Pending (N)` heading and `.cs/local/queue.state` is not
+`armed` or `draining`, the mod then asks through `$.ui.ask` whether to start
+them. Start runs `cs -queue start`, and when the last band render saw no turn
+running it also sends one `$.prompt.submit`, since the Stop hook hands over
+each task only as a turn ends; Not yet runs `cs -queue defer`; a dismissed
+dialog runs nothing. A refused start or prompt shows as a toast.
 The child inherits the claude process's environment, so the
 `CLAUDE_SESSION_META_DIR` the launch exported picks the session's queue. A
 refused task (empty, or more than one line) prints cs's exit code and the end
