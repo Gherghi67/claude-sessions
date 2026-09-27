@@ -143,6 +143,7 @@ export const WRAP_YES = 'Yes, wrap up'
 // `cs -queue start` only arms the queue: the Stop hook hands over each task as
 // a turn ends, so an idle session needs one turn to reach that first stop.
 export const QUEUE_START = 'Start'
+export const QUEUE_COMPACT = 'Compact'
 export const QUEUE_KICK = 'The cs walk-away queue is started. Reply with one short line saying so, then stop: the cs Stop hook hands you each queued task in turn.'
 
 // The countdown: seconds left, its ticker, and what the band last saw. Module
@@ -630,14 +631,29 @@ async function queueRunning($: EngineInterface): Promise<boolean> {
 // Asked after bare /queue has printed the list, so the tasks are on screen
 // when the question is. Start arms the queue; Not yet defers it the way the
 // Stop hook's own offer does, so that offer does not ask again straight away.
+// Compact compacts the conversation first, then starts as Start does; a
+// compaction that does not happen leaves the queue unarmed.
 async function offerToStart($: EngineInterface, bin: string, count: number) {
   let answer: string
   try {
-    answer = await $.ui.ask(`Start the ${count} queued ${count === 1 ? 'task' : 'tasks'} now?`, { header: 'Queue', options: [QUEUE_START, 'Not yet'] })
+    answer = await $.ui.ask(`Start the ${count} queued ${count === 1 ? 'task' : 'tasks'} now?`, { header: 'Queue', options: [QUEUE_START, 'Not yet', QUEUE_COMPACT] })
   } catch {
     return // dismissed, or a `-p` run with nobody to ask
   }
-  const verb = answer === QUEUE_START ? 'start' : 'defer'
+  if (answer === QUEUE_COMPACT) {
+    let reason: string | undefined
+    try {
+      const compacted = await $.session.compact()
+      reason = 'skip' in compacted ? compacted.skip : undefined
+    } catch (err) {
+      reason = String(err instanceof Error ? err.message : err)
+    }
+    if (reason !== undefined) {
+      $.ui.toast(`cs: the conversation was not compacted (${reason}); the queue is not started`)
+      return
+    }
+  }
+  const verb = answer === QUEUE_START || answer === QUEUE_COMPACT ? 'start' : 'defer'
   let result: { exitCode: number; stdout: string; stderr: string }
   try {
     result = await $.process.run([bin, '-queue', verb])

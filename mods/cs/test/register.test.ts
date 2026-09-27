@@ -6,7 +6,7 @@ import { test, expect, beforeEach } from 'bun:test'
 ;(globalThis as any).h = (type: any, props: any, ...children: any[]) => ({ type, props: props ?? {}, children })
 ;(globalThis as any).Fragment = 'Fragment'
 
-import { register, DEFAULT_PERCENT, GRACE_SECONDS, PREVIEW_PANE, WRAP_QUESTION, WRAP_YES, QUEUE_START, QUEUE_KICK, MARKDOWN_LIMIT, nextStep, surfaceColor, isUnconsumed } from '../hooks/register.tsx'
+import { register, DEFAULT_PERCENT, GRACE_SECONDS, PREVIEW_PANE, WRAP_QUESTION, WRAP_YES, QUEUE_START, QUEUE_COMPACT, QUEUE_KICK, MARKDOWN_LIMIT, nextStep, surfaceColor, isUnconsumed } from '../hooks/register.tsx'
 
 type Hook = ($: any, e: any, next: (e: any) => Promise<any>) => Promise<any>
 const hooks: Record<string, Hook> = {}
@@ -39,6 +39,9 @@ let runResult: { exitCode: number; stdout: string; stderr: string } | Error
 let nextRuns: ({ exitCode: number; stdout: string; stderr: string } | Error)[]
 // What `$.prompt.submit` was handed.
 let submitted: any[]
+// How many process runs had happened when `$.session.compact` was called, and what it answers with (or rejects with).
+let compactedAt: number[]
+let compactResult: any
 let commands: any[]
 const timer = (kind: 'after' | 'every') => (ms: number, fn: () => void) => {
   const t = { ms, fn, kind, cancelled: false }
@@ -51,6 +54,11 @@ const $ = {
     usage: async () => ({ context: { percent } }),
     cwd: async () => '/work',
     id: async () => sessionId,
+    compact: async () => {
+      compactedAt.push(runs.length)
+      if (compactResult instanceof Error) throw compactResult
+      return compactResult
+    },
   },
   prompt: {
     fill: async (args: any) => { filled.push(args); return { isFilled: true } },
@@ -104,6 +112,7 @@ beforeEach(() => {
   percent = undefined; filled = []; ran = []; written = {}; existing = new Set(['/work/.cs/local'])
   timers = []; invalidated = []; toasts = []; asks = []; answer = WRAP_YES; panes = []
   runs = []; runResult = { exitCode: 0, stdout: '', stderr: '' }; nextRuns = []; submitted = []; commands = []
+  compactedAt = []; compactResult = { messages: [] }
   // The default fixture is the lead conversation of a cs session.
   sessionId = 'uuid-lead'
   envVars = {}
@@ -1153,7 +1162,7 @@ test('/queue with pending tasks offers to start them; Start while idle arms the 
   answer = QUEUE_START
   expect(await queue('')).toEqual({ text: 'Pending (2)\n  1. first\n  2. second\n\nDone (1)\n  - shipped' })
   await settle()
-  expect(asks).toEqual([{ question: 'Start the 2 queued tasks now?', options: { header: 'Queue', options: [QUEUE_START, 'Not yet'] } }])
+  expect(asks).toEqual([{ question: 'Start the 2 queued tasks now?', options: { header: 'Queue', options: [QUEUE_START, 'Not yet', QUEUE_COMPACT] } }])
   expect(runs.map(x => x.argv)).toEqual([['/opt/cs/bin/cs', '-queue', 'list'], ['/opt/cs/bin/cs', '-queue', 'start']])
   expect(submitted).toEqual([{ text: QUEUE_KICK }])
 })
@@ -1227,6 +1236,46 @@ test('a prompt the engine refuses is shown, not dropped', async () => {
     $.prompt.submit = async (args: any) => { submitted.push(args); return {} }
   }
   expect(toasts).toEqual(['cs: the queue is armed, but its first turn did not start: session closed'])
+})
+
+// Compact frees the context the drain will need first: the conversation is
+// compacted before the queue is armed, so a compaction that does not happen
+// leaves the queue exactly as it was.
+test('Compact compacts the conversation, then arms the queue and starts a turn', async () => {
+  envVars.CS_BIN = '/opt/cs/bin/cs'
+  runResult = LISTED
+  answer = QUEUE_COMPACT
+  await queue('')
+  await settle()
+  expect(compactedAt).toEqual([1])
+  expect(runs.map(x => x.argv[2])).toEqual(['list', 'start'])
+  expect(submitted).toEqual([{ text: QUEUE_KICK }])
+  expect(toasts).toEqual([])
+})
+
+test('a compaction a hook vetoes leaves the queue unarmed and says why', async () => {
+  envVars.CS_BIN = '/opt/cs/bin/cs'
+  runResult = LISTED
+  answer = QUEUE_COMPACT
+  compactResult = { skip: 'a PreCompact hook blocked it' }
+  await queue('')
+  await settle()
+  expect(runs.map(x => x.argv[2])).toEqual(['list'])
+  expect(submitted).toEqual([])
+  expect(toasts).toEqual(['cs: the conversation was not compacted (a PreCompact hook blocked it); the queue is not started'])
+})
+
+// The engine refuses a compaction while a turn runs.
+test('a compaction the engine refuses leaves the queue unarmed and says so', async () => {
+  envVars.CS_BIN = '/opt/cs/bin/cs'
+  runResult = LISTED
+  answer = QUEUE_COMPACT
+  compactResult = new Error('a turn is running')
+  await queue('')
+  await settle()
+  expect(runs.map(x => x.argv[2])).toEqual(['list'])
+  expect(submitted).toEqual([])
+  expect(toasts).toEqual(['cs: the conversation was not compacted (a turn is running); the queue is not started'])
 })
 
 test('a dismissed offer runs nothing more', async () => {
