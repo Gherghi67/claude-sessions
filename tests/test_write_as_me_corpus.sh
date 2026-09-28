@@ -295,6 +295,39 @@ test_human_prompt_sources_kept() {
     done
 }
 
+# cs launches claude with a kick as its positional prompt, and Claude Code
+# stamps that record promptSource "typed". The fixtures copy the kick texts
+# built in lib/40-state.sh (rotation handoff) and lib/75-launch.sh (spawn);
+# the pins below fail when either wording moves without the filter.
+test_cs_launch_kicks_dropped() {
+    local f; f="$(proj_file projA)"
+    add_msg "$f" "Continue from the pending rotation handoff: read .cs/handoffs/2026-09-28-x.md first." \
+        "2026-07-01T10:00:00Z" '{"promptSource": "typed"}'
+    add_msg "$f" "Spawned by lead-session. Your walk-away queue is armed with 2 task(s); begin. Send results with: cs -msg lead-session -k result \"...\"" \
+        "2026-07-01T10:00:01Z" '{"promptSource": "typed"}'
+    add_msg "$f" "Your brief is .cs/brief.md: read it first. Then begin." \
+        "2026-07-01T10:00:02Z" '{"promptSource": "typed"}'
+    add_msg "$f" "Continue from where we stopped and spawned by hand, the retry fix" \
+        "2026-07-01T10:00:03Z" '{"promptSource": "typed"}'
+    run_build > /dev/null || { echo "  FAIL: build exited non-zero"; return 1; }
+    if grep -q -e "pending rotation handoff" -e "Send results with" -e "brief is .cs/brief.md" "$(corpus_path)"; then
+        echo "  FAIL: a cs launch kick reached the corpus"; return 1
+    fi
+    assert_file_contains "$(corpus_path)" "3 machine-authored" \
+        "stats should count the launch kicks as machine-authored" || return 1
+    assert_file_contains "$(corpus_path)" "Continue from where we stopped" \
+        "a typed message sharing the opening words must be kept" || return 1
+    assert_file_contains "$SCRIPT_DIR/../lib/40-state.sh" \
+        'handoff_arg="Continue from the pending rotation handoff: read .cs/handoffs/' \
+        "rotation kick wording moved; update the corpus filter" || return 1
+    assert_file_contains "$SCRIPT_DIR/../lib/75-launch.sh" \
+        'spawn_kick="Spawned by $_spawner. $_work Send results with: cs -msg ' \
+        "spawn kick wording moved; update the corpus filter" || return 1
+    assert_file_contains "$SCRIPT_DIR/../lib/75-launch.sh" \
+        '_work="Your brief is .cs/brief.md: read it first."' \
+        "brief kick wording moved; update the corpus filter" || return 1
+}
+
 # The deny-list matched `sk-` with a hyphen and a 40+ run of [A-Za-z0-9+/=],
 # which let every one of these through. Each entry is a real token family.
 #
@@ -520,6 +553,7 @@ run_test test_voice_dir_permissions
 run_test test_corrupt_line_skipped_not_fatal
 run_test test_machine_prompt_sources_dropped
 run_test test_human_prompt_sources_kept
+run_test test_cs_launch_kicks_dropped
 run_test test_token_families_redacted
 run_test test_url_userinfo_and_bearer_redacted
 run_test test_anthropic_key_shape_redacted
