@@ -66,7 +66,8 @@ _harden_session_meta() {  # session_dir
 
 # A session can prepare itself before cs opens it, such as mounting the
 # encrypted volume its memory lives on. The command lives in .cs/local/, which
-# is never committed, so a cloned or synced session cannot make cs run code.
+# is never committed, so a cloned session cannot make cs run code (a file sync
+# copies it like any other file).
 # It runs in the session directory on the user's terminal (a password prompt
 # needs the TTY), and any non-zero exit aborts the open.
 _run_pre_open() {  # session_name, session_dir
