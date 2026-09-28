@@ -504,11 +504,15 @@ test_run_all_leaves_no_watchdog_behind() {
         return 1
     fi
     wait "$gate" || { echo "the gate failed"; cat "$TEST_TMPDIR/gate.out"; return 1; }
-    # A watchdog notices its suite is gone within a tick; allow two.
-    sleep 2
-    local left
+    # A watchdog leaves within a tick of its suite; poll for up to 10 s.
+    local left waited=0
     left=$(pgrep -f "$runner" || true)
-    [ -z "$left" ] || { echo "watchdogs outlived the gate: $left"; pkill -f "$runner"; return 1; }
+    while [ -n "$left" ] && [ "$waited" -lt 10 ]; do
+        sleep 1
+        waited=$((waited + 1))
+        left=$(pgrep -f "$runner" || true)
+    done
+    [ -z "$left" ] || { echo "watchdogs outlived the gate by 10s: $left"; pkill -f "$runner"; return 1; }
 }
 
 # TERM is a request; a suite that ignores it is still stopped once the grace

@@ -256,7 +256,7 @@ run_suite() {  # index
     # date twice and basename three times per suite for values bash has. Both
     # SECONDS readings come from the same clock date +%s reads, and SECONDS is
     # inherited by a lane subshell rather than reset.
-    local k="$1" name t0 secs mark pid watchdog
+    local k="$1" name t0 secs mark pid
     name="${selected[$k]##*/}"
     t0=$SECONDS
     # The suite runs in the background and is waited on, never in the
@@ -270,25 +270,22 @@ run_suite() {  # index
     fi
     pid=$!
     printf '%s\n' "$pid" > "$logdir/$k.pid"
-    # The watchdog ticks once a second and leaves as soon as the suite is
-    # gone, so a watchdog that run_suite never got to stop (the gate killed
-    # mid-launch) outlives its suite by a second, not by the cap. Each tick's
-    # sleep runs in the background under a wait, so the TERM trap fires at
-    # once and takes the sleep with it. Past the cap, if the suite is still
-    # there, it marks the timeout and stops the suite's whole process tree:
+    # The watchdog ticks once a second and leaves on its own as soon as the
+    # suite is gone, whether the suite finished or the gate stopped it.
+    # Nothing ever signals it, so it never runs a handler: a subshell starts
+    # with the runner's INT/TERM and EXIT traps, which remove the log
+    # directory and the lock. Past the cap, if the suite is still there, it
+    # marks the timeout and stops the suite's whole process tree:
     # a hung suite is usually waiting on a grandchild (a test subshell, cs,
     # tmux) that would outlive it. TERM first, KILL for whatever is left
     # after a grace, since a suite can ignore TERM. Pids, not the group, for
-    # the reason _stop_everything gives. Its pid file sits beside the
-    # suite's, so an interrupted gate stops it with the rest. It writes
-    # nothing and its output goes nowhere, so nothing it starts can hold
-    # open the pipe a caller reads the gate's output from.
+    # the reason _stop_everything gives. It writes nothing and its output
+    # goes nowhere, so nothing it starts can hold open the pipe a caller
+    # reads the gate's output from.
     (
-        trap 'kill $(jobs -p) 2>/dev/null; exit 0' TERM
         deadline=$((SECONDS + suite_timeout))
         while [ "$SECONDS" -lt "$deadline" ]; do
-            sleep 1 &
-            wait $!
+            sleep 1
             kill -0 "$pid" 2>/dev/null || exit 0
         done
         : > "$logdir/$k.timeout"
@@ -296,17 +293,12 @@ run_suite() {  # index
         kill -TERM $tree 2>/dev/null
         grace=$((SECONDS + 5))
         while [ "$SECONDS" -lt "$grace" ] && kill -0 $tree 2>/dev/null; do
-            sleep 1 &
-            wait $!
+            sleep 1
         done
         kill -KILL $tree 2>/dev/null
     ) > /dev/null 2>&1 &
-    watchdog=$!
-    printf '%s\n' "$watchdog" > "$logdir/$k.watchdog.pid"
     wait "$pid" || : > "$logdir/$k.fail"
-    kill -TERM "$watchdog" 2>/dev/null
-    wait "$watchdog" 2>/dev/null
-    rm -f "$logdir/$k.pid" "$logdir/$k.watchdog.pid"
+    rm -f "$logdir/$k.pid"
     # A timeout is a failure whatever the suite's exit: stopping the child it
     # was waiting on can let the suite finish with a clean status.
     if [ -f "$logdir/$k.timeout" ]; then
