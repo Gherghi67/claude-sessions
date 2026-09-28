@@ -101,7 +101,14 @@ while IFS= read -r f; do
         # predates the stamp, so it defaults to keeping the message.
         | ((.promptSource // "typed")
            | . as $src
-           | ["typed", "queued", "suggestion_accepted"] | index($src) | not) as $machine
+           | ["typed", "queued", "suggestion_accepted"] | index($src) | not) as $src_machine
+        # cs hands claude a kick as its launch prompt, which Claude Code stamps
+        # "typed". Patterns mirror handoff_arg (lib/40-state.sh) and spawn_kick
+        # (lib/75-launch.sh); test_cs_launch_kicks_dropped pins both wordings.
+        | ($src_machine
+           or ($t | test("^Continue from the pending rotation handoff: read \\.cs/handoffs/"))
+           or ($t | test("^Spawned by .* Send results with: cs -msg "))
+           or ($t | test("^Your (brief is \\.cs/brief\\.md: read it first\\.|walk-away queue is armed with [0-9]+ task)"))) as $machine
         | (if ($t | length) == 0 then "not-typed"
            elif $machine then "machine"
            elif ($t | startswith("Caveat:")) then "sentinel"
