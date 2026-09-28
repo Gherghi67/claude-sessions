@@ -510,6 +510,24 @@ test_rotate_never_force_adds_into_an_ignored_cs() {
     assert_file_contains "$LIVE" "section 8$" "the rotation itself still ran" || return 1
 }
 
+# Ignoring only the archive directory is the other way into an ignored path.
+# Committing the trimmed live file without its chunk would drop the archived
+# sections from git, so nothing is committed, and the warning names the path
+# that is actually ignored rather than advising to untrack all of .cs/.
+test_rotate_names_an_ignored_archive_directory() {
+    _make_narrative "$LIVE" 10 500
+    printf '.cs/narrative-archive/\n' > "$SESSION_DIR/.gitignore"
+    (cd "$SESSION_DIR" && git init -q -b main && git config user.email alice@example.com && git config user.name alice \
+        && git add -- .gitignore .cs/memory/narrative.alice.md && git commit -q -m init)
+    local before output after
+    before=$(git -C "$SESSION_DIR" rev-list --count HEAD)
+    output=$("$CS_BIN" -narrative rotate 2>&1) || return 1
+    after=$(git -C "$SESSION_DIR" rev-list --count HEAD)
+    assert_eq "$before" "$after" "no commit when the archive chunk is ignored" || return 1
+    assert_output_contains "$output" "is gitignored here" "the warning says which path is ignored" || return 1
+    assert_output_not_contains "$output" "git rm -r --cached .cs" "untracking .cs/ is not the fix here" || return 1
+}
+
 test_rotate_outside_git_still_rotates() {
     _make_narrative "$LIVE" 10 500
     "$CS_BIN" -narrative rotate > /dev/null 2>&1 || return 1
@@ -830,6 +848,7 @@ run_test test_rotate_commits_only_its_own_two_files
 run_test test_rotate_names_the_merge_state_when_the_commit_is_refused
 run_test test_rotate_skips_the_commit_when_cs_is_ignored
 run_test test_rotate_never_force_adds_into_an_ignored_cs
+run_test test_rotate_names_an_ignored_archive_directory
 run_test test_rotate_outside_git_still_rotates
 run_test test_rotate_appends_a_timeline_event
 run_test test_rotate_does_not_splice_onto_a_torn_timeline

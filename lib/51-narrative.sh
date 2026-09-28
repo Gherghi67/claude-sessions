@@ -138,8 +138,14 @@ rotate_narrative() {
             || git -C "$session_dir" check-ignore -q --no-index -- "$chunk"; }; then
         # Tracked under an ignored tree means something once ran `git add -f`.
         # Committing here would need another force-add, which is how session
-        # notes reach a public repo, so cs leaves both paths alone.
-        warn "rotation written but not committed: .cs/memory/narrative.$actor.md is tracked although .cs/ is gitignored here. Untrack it with: git rm -r --cached .cs"
+        # notes reach a public repo, so cs leaves both paths alone. Committing
+        # the live file without its ignored chunk would drop the archived
+        # sections from git, so that case commits nothing either.
+        if git -C "$session_dir" check-ignore -q --no-index -- "$live"; then
+            warn "rotation written but not committed: .cs/memory/narrative.$actor.md is tracked although .cs/ is gitignored here. Untrack it with: git rm -r --cached .cs"
+        else
+            warn "rotation written but not committed: $chunk_rel is gitignored here, and cs never force-adds an ignored path. Commit .cs/memory/narrative.$actor.md and the archive together by hand, or stop ignoring the archive"
+        fi
     elif git -C "$session_dir" rev-parse --git-dir >/dev/null 2>&1 \
         && git -C "$session_dir" ls-files --error-unmatch -- "$live" >/dev/null 2>&1; then
         # The commit carries an explicit pathspec: rotation runs inside the
