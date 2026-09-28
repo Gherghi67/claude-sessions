@@ -272,9 +272,10 @@ run_suite() {  # index
     printf '%s\n' "$pid" > "$logdir/$k.pid"
     # The watchdog ticks once a second and leaves on its own as soon as the
     # suite is gone, whether the suite finished or the gate stopped it.
-    # Nothing ever signals it, so it never runs a handler: a subshell starts
-    # with the runner's INT/TERM and EXIT traps, which remove the log
-    # directory and the lock. Past the cap, if the suite is still there, it
+    # A ( ) subshell drops the runner's caught traps, so its exit runs no
+    # cleanup; nothing signals it either, so the runner's INT/TERM handler,
+    # which removes the log directory and the lock, has no moment right
+    # after the fork to run in it. Past the cap, if the suite is still there, it
     # marks the timeout and stops the suite's whole process tree:
     # a hung suite is usually waiting on a grandchild (a test subshell, cs,
     # tmux) that would outlive it. TERM first, KILL for whatever is left
