@@ -66,6 +66,10 @@ The full gate takes minutes. Most of the time you do not want it.
 | Red/green loop on one file | that file's suite alone, roughly a second or two |
 | About to commit | `bash tests/run_all.sh --changed` |
 | About to merge, or cutting a release | `bash tests/run_all.sh` |
+| About to push a shell change | `bash tests/lint_shell.sh` (the shellcheck lane CI runs; the suites never run it) |
+
+`tests/lint_shell.sh` fails on any shellcheck error, and on a warning count that differs from
+`.shellcheck-warnings`. When you fix warnings, lower that number in the same commit.
 
 `--changed` reads the working tree against `HEAD` plus untracked files and runs
 only the suites whose text names a changed path (a changed suite runs itself).
