@@ -260,6 +260,69 @@ test_set_reads_value_from_file_redirect() {
     assert_eq "sk_from_file" "$value" "Should store the value from a redirected file" || return 1
 }
 
+# A value copied out of a redacted transcript or a config template is a mask,
+# not a secret. Storing it would overwrite a working secret with junk and fail
+# only much later, at whatever reads it. Each is refused by name and never
+# reaches the store; a real value that merely contains asterisks is kept.
+test_set_refuses_placeholder_values() {
+    local p out rc
+    for p in '[REDACTED: stored in keychain as api_key]' '***' '********' '<redacted>' 'YOUR_API_KEY'; do
+        rc=0
+        out=$(printf '%s' "$p" | "$CS_SECRETS_BIN" set api_key 2>&1) || rc=$?
+        assert_eq "1" "$rc" "set refuses the placeholder '$p'" || return 1
+        assert_eq "Error: Refusing to store api_key: its value '$p' is a placeholder, not a secret. Pass the real value on stdin." \
+            "$out" "the refusal names the secret and the placeholder" || return 1
+        assert_output_not_contains "$("$CS_SECRETS_BIN" list 2>&1)" "api_key" \
+            "a refused placeholder never reaches the store" || return 1
+    done
+    printf 'p***word' | "$CS_SECRETS_BIN" set api_key >/dev/null 2>&1 || return 1
+    assert_eq "p***word" "$("$CS_SECRETS_BIN" get api_key 2>&1)" \
+        "a real value containing asterisks is stored" || return 1
+}
+
+# Typed at a terminal, the value must not echo: it would sit on screen, in the
+# terminal's scrollback and in any recording of the pane. Driven through a real
+# pty. The value is written only once the terminal's ECHO flag is off, so a
+# prompt that never disables echo shows the value and fails, while one that
+# does can never race the write.
+test_set_on_a_tty_does_not_echo_the_value() {
+    local out
+    out=$(python3 - "$CS_SECRETS_BIN" <<'PY' 2>&1
+import os, pty, select, sys, termios, time
+pid, fd = pty.fork()
+if pid == 0:
+    os.execv(sys.argv[1], [sys.argv[1], "set", "api_key"])
+seen = b""
+def drain(until):
+    global seen
+    while time.time() < until:
+        r, _, _ = select.select([fd], [], [], 0.1)
+        if r:
+            try:
+                chunk = os.read(fd, 1024)
+            except OSError:
+                return
+            if not chunk:
+                return
+            seen += chunk
+deadline = time.time() + 10
+while b"Enter value" not in seen and time.time() < deadline:
+    drain(time.time() + 0.1)
+deadline = time.time() + 5
+while time.time() < deadline and termios.tcgetattr(fd)[3] & termios.ECHO:
+    drain(time.time() + 0.05)
+os.write(fd, b"sk_typed_7f3a\n")
+drain(time.time() + 5)
+os.waitpid(pid, 0)
+sys.stdout.write(seen.decode("utf-8", "replace"))
+PY
+)
+    assert_output_contains "$out" "Enter value for api_key" "the prompt is shown" || return 1
+    assert_output_not_contains "$out" "sk_typed_7f3a" "the typed value is not echoed" || return 1
+    assert_eq "sk_typed_7f3a" "$("$CS_SECRETS_BIN" get api_key 2>&1)" \
+        "the typed value is stored" || return 1
+}
+
 test_store_with_special_chars() {
     "$CS_SECRETS_BIN" set token 'abc!@#$%^&*()_+' 2>&1
     local value
@@ -1457,6 +1520,8 @@ run_test test_backend_wsl_defaults_encrypted_not_keychain
 run_test test_store_and_get
 run_test test_set_reads_value_from_stdin
 run_test test_set_reads_value_from_file_redirect
+run_test test_set_refuses_placeholder_values
+run_test test_set_on_a_tty_does_not_echo_the_value
 run_test test_store_with_spaces_in_value
 run_test test_store_with_special_chars
 run_test test_store_overwrites_existing
