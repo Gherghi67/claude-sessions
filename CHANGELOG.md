@@ -13,6 +13,7 @@ All notable changes to cs are documented here. Release notes are also available 
 
 ### Changed
 - CI's shellcheck lane holds warnings to the count in `.shellcheck-warnings` (129). A change that adds a warning fails, and so does one that removes a warning without lowering the number. `bash tests/lint_shell.sh` runs the same check locally.
+- `tests/run_all.sh` stops a suite that runs past 600 seconds, together with its child processes, and counts it as failed. Before, a hung suite held the gate until someone killed it. `CS_TEST_SUITE_TIMEOUT` sets the cap.
 - cs no longer force-adds anything into a `.cs/` the repo ignores. `cs -narrative rotate` with a narrative that git tracks under an ignored `.cs/` still rotates, but commits nothing and says to run `git rm -r --cached .cs`. The rotate skill checks each path with `git check-ignore` before staging it and skips the commit for an ignored handoff instead of running `git add -f`. Both force-adds put session notes into public repos that meant to keep `.cs/` private. This reverses the 2026.9.22 fix that committed such a narrative.
 
 ### Fixes

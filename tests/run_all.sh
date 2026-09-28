@@ -78,6 +78,15 @@ else
     jobs_n="$(detect_jobs)"
 fi
 
+# How long one suite may run before the gate stops it. Nothing else bounds a
+# hung suite: `wait` has no timeout and macOS ships no `timeout`, so a suite
+# stuck on a child that never returns holds the whole gate until someone
+# notices. The slowest suite takes about 200 s on a loaded box; the default
+# leaves three times that. CS_TEST_SUITE_TIMEOUT overrides, in seconds.
+suite_timeout="${CS_TEST_SUITE_TIMEOUT:-600}"
+case "$suite_timeout" in ''|*[!0-9]*) echo "invalid CS_TEST_SUITE_TIMEOUT='$suite_timeout' (want a positive number of seconds)" >&2; exit 2 ;; esac
+[ "$suite_timeout" -ge 1 ] || { echo "invalid CS_TEST_SUITE_TIMEOUT='$suite_timeout' (want a positive number of seconds)" >&2; exit 2; }
+
 # Select this shard's suites, in glob order.
 selected=()
 idx=-1
@@ -232,12 +241,22 @@ donefile="$logdir/done"
 parallel=""
 [ "$jobs_n" -gt 1 ] && [ "$total" -gt 1 ] && parallel=1
 
+# A process and everything below it, deepest first. pgrep -P lists direct
+# children on macOS and Linux alike.
+_descendants() {  # pid
+    local child
+    for child in $(pgrep -P "$1" 2>/dev/null); do
+        _descendants "$child"
+    done
+    printf '%s\n' "$1"
+}
+
 run_suite() {  # index
     # SECONDS and ${x##*/} are builtins: a gate of 63 suites otherwise forks
     # date twice and basename three times per suite for values bash has. Both
     # SECONDS readings come from the same clock date +%s reads, and SECONDS is
     # inherited by a lane subshell rather than reset.
-    local k="$1" name t0 secs mark pid
+    local k="$1" name t0 secs mark pid watchdog
     name="${selected[$k]##*/}"
     t0=$SECONDS
     # The suite runs in the background and is waited on, never in the
@@ -251,8 +270,49 @@ run_suite() {  # index
     fi
     pid=$!
     printf '%s\n' "$pid" > "$logdir/$k.pid"
+    # The watchdog ticks once a second and leaves as soon as the suite is
+    # gone, so a watchdog that run_suite never got to stop (the gate killed
+    # mid-launch) outlives its suite by a second, not by the cap. Each tick's
+    # sleep runs in the background under a wait, so the TERM trap fires at
+    # once and takes the sleep with it. Past the cap, if the suite is still
+    # there, it marks the timeout and stops the suite's whole process tree:
+    # a hung suite is usually waiting on a grandchild (a test subshell, cs,
+    # tmux) that would outlive it. TERM first, KILL for whatever is left
+    # after a grace, since a suite can ignore TERM. Pids, not the group, for
+    # the reason _stop_everything gives. Its pid file sits beside the
+    # suite's, so an interrupted gate stops it with the rest. It writes
+    # nothing and its output goes nowhere, so nothing it starts can hold
+    # open the pipe a caller reads the gate's output from.
+    (
+        trap 'kill $(jobs -p) 2>/dev/null; exit 0' TERM
+        deadline=$((SECONDS + suite_timeout))
+        while [ "$SECONDS" -lt "$deadline" ]; do
+            sleep 1 &
+            wait $!
+            kill -0 "$pid" 2>/dev/null || exit 0
+        done
+        : > "$logdir/$k.timeout"
+        tree=$(_descendants "$pid")
+        kill -TERM $tree 2>/dev/null
+        grace=$((SECONDS + 5))
+        while [ "$SECONDS" -lt "$grace" ] && kill -0 $tree 2>/dev/null; do
+            sleep 1 &
+            wait $!
+        done
+        kill -KILL $tree 2>/dev/null
+    ) > /dev/null 2>&1 &
+    watchdog=$!
+    printf '%s\n' "$watchdog" > "$logdir/$k.watchdog.pid"
     wait "$pid" || : > "$logdir/$k.fail"
-    rm -f "$logdir/$k.pid"
+    kill -TERM "$watchdog" 2>/dev/null
+    wait "$watchdog" 2>/dev/null
+    rm -f "$logdir/$k.pid" "$logdir/$k.watchdog.pid"
+    # A timeout is a failure whatever the suite's exit: stopping the child it
+    # was waiting on can let the suite finish with a clean status.
+    if [ -f "$logdir/$k.timeout" ]; then
+        : > "$logdir/$k.fail"
+        printf '%s: timed out after %ss (CS_TEST_SUITE_TIMEOUT)\n' "$name" "$suite_timeout" >&2
+    fi
     secs=$((SECONDS - t0))
     printf '%s\n' "$secs" > "$logdir/$k.secs"
     printf '%s\n' "$k" >> "$donefile"
