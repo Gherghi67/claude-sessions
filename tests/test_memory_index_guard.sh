@@ -182,6 +182,41 @@ test_check_fails_on_an_unindexed_bucket_entry() {
         "a file outside the four buckets is not an entry" || return 1
 }
 
+# A fresh session has no MEMORY.md until Claude Code writes the first entry,
+# so the first sweep snapshots nothing and must still reach a passing check.
+test_first_sweep_snapshots_an_absent_index_as_empty() {
+    _guard_session
+    rm "$INDEX"
+    local out rc=0
+    out=$(_guard snapshot 2>&1) || rc=$?
+    assert_eq 0 "$rc" "snapshot with no MEMORY.md yet must succeed: $out" || return 1
+    [ -f "$SESSION/.cs/local/memory-index.snapshot" ] && [ ! -s "$SESSION/.cs/local/memory-index.snapshot" ] \
+        || { echo "  FAIL: the snapshot of an absent index must be an empty file"; return 1; }
+    : > "$SESSION/.cs/memory/project_first.md"
+    printf '%s\n' '- [First](project_first.md): the first entry' > "$INDEX"
+    rc=0
+    out=$(_guard check 2>&1) || rc=$?
+    assert_eq 0 "$rc" "a first sweep that indexes its entry must pass: $out" || return 1
+    : > "$SESSION/.cs/memory/project_second.md"
+    rc=0
+    out=$(_guard check 2>&1) || rc=$?
+    assert_eq 1 "$rc" "a first sweep still fails on an unindexed entry" || return 1
+    assert_output_contains "$out" "unindexed: project_second.md" \
+        "check must name the entry with no pointer" || return 1
+}
+
+# An absent index is only a fresh session inside a session root; anywhere else
+# snapshot must refuse rather than record an empty index.
+test_snapshot_outside_a_session_root_is_an_error() {
+    mkdir -p "$TEST_TMPDIR/elsewhere"
+    local out rc=0
+    out=$( cd "$TEST_TMPDIR/elsewhere" && bash "$GUARD" snapshot 2>&1 ) || rc=$?
+    assert_eq 2 "$rc" "snapshot outside a session root must fail" || return 1
+    assert_output_contains "$out" "no .cs/memory here; run from the session root" \
+        "the error must name the missing directory" || return 1
+    [ ! -e "$TEST_TMPDIR/elsewhere/.cs" ] || { echo "  FAIL: snapshot must not create .cs outside a session root"; return 1; }
+}
+
 test_check_with_an_unreadable_snapshot_is_an_error() {
     [ "$(id -u)" -ne 0 ] || return 77
     _guard_session
@@ -208,6 +243,8 @@ run_test test_unknown_subcommand_prints_usage
 run_test test_check_passes_when_a_supporting_link_is_dropped
 run_test test_check_fails_when_two_pointers_are_merged
 run_test test_check_fails_on_an_unindexed_bucket_entry
+run_test test_first_sweep_snapshots_an_absent_index_as_empty
+run_test test_snapshot_outside_a_session_root_is_an_error
 run_test test_check_with_an_unreadable_snapshot_is_an_error
 
 report_results
