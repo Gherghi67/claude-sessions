@@ -804,9 +804,9 @@ Expected: `test result: ok. 199 passed`, `Finished` with no errors.
 - [ ] **Step 4: Manual verification in the real binary**
 
 ```bash
-SB=/private/tmp/claude-501/-Users-alex-geana--claude-sessions-claude-sessions/748c731f-6174-4cf5-a1b3-cd2e6d154994/scratchpad
+SB=/private/tmp/claude-501/-Users-jane-doe--claude-sessions-claude-sessions/748c731f-6174-4cf5-a1b3-cd2e6d154994/scratchpad
 ROOT=$SB/fakeroot   # created earlier: a 'demo' session with a 161-char task
-cd /Users/alex.geana/.claude-sessions/claude-sessions
+cd /Users/jane.doe/.claude-sessions/claude-sessions
 timeout 30 python3 $SB/pty_capture.py tui/target/release/cs-tui 40 100 2.0 2>/dev/null | tr -d '\000' | grep -A6 'To-Do'
 ```
 Expected: the long task shows on one line ending in `…`; no wrapped tail; the input row is padded one column.
@@ -827,7 +827,7 @@ Claude-Session: https://claude.ai/code/session_01Qe7Uj3F9GtceQU2EQNRU9X"
 - [ ] **Step 1: Full gate**
 
 ```bash
-cd /Users/alex.geana/.claude-sessions/claude-sessions
+cd /Users/jane.doe/.claude-sessions/claude-sessions
 (cd tui && cargo test 2>&1 | grep 'test result')
 bash tests/run_all.sh 2>&1 | tail -1
 ```

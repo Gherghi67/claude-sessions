@@ -22,12 +22,12 @@ _whoami_in() {
 test_actor_slug_from_git_email() {
     local project_dir="$TEST_TMPDIR/proj"
     mkdir -p "$project_dir"
-    ( cd "$project_dir" && git init -q && git config user.email "Alex.Geana@Example.com" && git config user.name "Alex Geana" )
+    ( cd "$project_dir" && git init -q && git config user.email "Jane.Doe@Example.com" && git config user.name "Jane Doe" )
     ( cd "$project_dir" && "$CS_BIN" -adopt s1 >/dev/null 2>&1 )
 
     local out
     out=$(_whoami_in "$project_dir")
-    assert_output_contains "$out" "alex-geana-example-com" "slug should derive from normalized git email" || return 1
+    assert_output_contains "$out" "jane-doe-example-com" "slug should derive from normalized git email" || return 1
 }
 
 test_actor_slug_env_override_wins() {
