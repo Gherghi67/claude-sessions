@@ -241,6 +241,16 @@ donefile="$logdir/done"
 parallel=""
 [ "$jobs_n" -gt 1 ] && [ "$total" -gt 1 ] && parallel=1
 
+# A process and everything below it, deepest first. pgrep -P lists direct
+# children on macOS and Linux alike.
+_descendants() {  # pid
+    local child
+    for child in $(pgrep -P "$1" 2>/dev/null); do
+        _descendants "$child"
+    done
+    printf '%s\n' "$1"
+}
+
 run_suite() {  # index
     # SECONDS and ${x##*/} are builtins: a gate of 63 suites otherwise forks
     # date twice and basename three times per suite for values bash has. Both
@@ -260,22 +270,36 @@ run_suite() {  # index
     fi
     pid=$!
     printf '%s\n' "$pid" > "$logdir/$k.pid"
-    # The watchdog sleeps in the background and waits, so its TERM trap runs
-    # the moment run_suite stops it, and the trap takes the sleep down too
-    # instead of leaving it to run out the cap. Past the cap it stops the
-    # suite's children, then the suite: a hung suite is usually waiting on a
-    # child, and the child would outlive the suite. Pids, not the group, for
-    # the reason _stop_everything gives. Its pid file sits beside the suite's,
-    # so an interrupted gate stops it with the rest. It writes nothing, and
-    # its output goes nowhere, so a sleep that ever outlived it could not hold
-    # open the pipe a caller is reading the gate's output from.
+    # The watchdog ticks once a second and leaves as soon as the suite is
+    # gone, so a watchdog that run_suite never got to stop (the gate killed
+    # mid-launch) outlives its suite by a second, not by the cap. Each tick's
+    # sleep runs in the background under a wait, so the TERM trap fires at
+    # once and takes the sleep with it. Past the cap, if the suite is still
+    # there, it marks the timeout and stops the suite's whole process tree:
+    # a hung suite is usually waiting on a grandchild (a test subshell, cs,
+    # tmux) that would outlive it. TERM first, KILL for whatever is left
+    # after a grace, since a suite can ignore TERM. Pids, not the group, for
+    # the reason _stop_everything gives. Its pid file sits beside the
+    # suite's, so an interrupted gate stops it with the rest. It writes
+    # nothing and its output goes nowhere, so nothing it starts can hold
+    # open the pipe a caller reads the gate's output from.
     (
         trap 'kill $(jobs -p) 2>/dev/null; exit 0' TERM
-        sleep "$suite_timeout" &
-        wait
+        deadline=$((SECONDS + suite_timeout))
+        while [ "$SECONDS" -lt "$deadline" ]; do
+            sleep 1 &
+            wait $!
+            kill -0 "$pid" 2>/dev/null || exit 0
+        done
         : > "$logdir/$k.timeout"
-        pkill -TERM -P "$pid" 2>/dev/null
-        kill -TERM "$pid" 2>/dev/null
+        tree=$(_descendants "$pid")
+        kill -TERM $tree 2>/dev/null
+        grace=$((SECONDS + 5))
+        while [ "$SECONDS" -lt "$grace" ] && kill -0 $tree 2>/dev/null; do
+            sleep 1 &
+            wait $!
+        done
+        kill -KILL $tree 2>/dev/null
     ) > /dev/null 2>&1 &
     watchdog=$!
     printf '%s\n' "$watchdog" > "$logdir/$k.watchdog.pid"

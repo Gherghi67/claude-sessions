@@ -59,15 +59,17 @@ fake_cores() {  # count
 }
 
 
-# Turn fake suite N into one that never finishes on its own: it starts a long
-# sleep, records the sleep's pid where the test can check it afterwards, and
-# waits on it, the way a suite hangs on a child that never returns.
-make_suite_hang() {  # n
+# Turn fake suite N into one that never finishes on its own: it waits on a
+# helper shell that waits on a long sleep, the way a suite hangs on a
+# grandchild (test subshell, cs, tmux) that never returns. The sleep's pid is
+# recorded where the test can check it afterwards. With "ignore-term" the
+# suite also ignores TERM.
+make_suite_hang() {  # n, [ignore-term]
     local name="test_fake$1.sh"
     {
         printf '#!/usr/bin/env bash\n'
-        printf 'sleep 40 &\n'
-        printf 'printf "%%s\\n" "$!" > "%s/hung.pid"\n' "$TEST_TMPDIR"
+        [ "${2:-}" = ignore-term ] && printf "trap '' TERM\n"
+        printf 'bash -c '"'"'sleep 40 & printf "%%s\\n" "$!" > "%s/hung.pid"; wait'"'"' &\n' "$TEST_TMPDIR"
         printf 'wait\n'
     } > "$SUITE_DIR/$name"
 }
@@ -483,7 +485,12 @@ test_run_all_stops_a_suite_past_the_time_cap_in_serial_mode() {
 # not hang the suite for two hours.
 test_run_all_leaves_no_watchdog_behind() {
     make_suite_dir 4
-    CS_TEST_SUITE_TIMEOUT=7771 CS_TEST_JOBS=2 CS_TEST_SUITE_DIR="$SUITE_DIR" bash "$RUN_ALL" > "$TEST_TMPDIR/gate.out" 2>&1 &
+    # A private copy of the runner: a watchdog is a subshell of it, so its
+    # command line carries this path and no other gate's does.
+    local runner="$TEST_TMPDIR/runner/run_all.sh"
+    mkdir -p "${runner%/*}"
+    cp "$RUN_ALL" "$runner"
+    CS_TEST_SUITE_TIMEOUT=7771 CS_TEST_JOBS=2 CS_TEST_SUITE_DIR="$SUITE_DIR" bash "$runner" > "$TEST_TMPDIR/gate.out" 2>&1 &
     local gate=$! waited=0
     while kill -0 "$gate" 2>/dev/null && [ "$waited" -lt 30 ]; do
         sleep 1
@@ -492,14 +499,31 @@ test_run_all_leaves_no_watchdog_behind() {
     if kill -0 "$gate" 2>/dev/null; then
         kill -TERM "$gate"
         wait "$gate" 2>/dev/null
-        pkill -f 'sleep 7771'
+        pkill -f "$runner"
         echo "the gate did not finish within 30s of 4 instant suites"
         return 1
     fi
     wait "$gate" || { echo "the gate failed"; cat "$TEST_TMPDIR/gate.out"; return 1; }
+    # A watchdog notices its suite is gone within a tick; allow two.
+    sleep 2
     local left
-    left=$(pgrep -f 'sleep 7771' || true)
-    [ -z "$left" ] || { echo "watchdog sleeps outlived the gate: $left"; kill $left; return 1; }
+    left=$(pgrep -f "$runner" || true)
+    [ -z "$left" ] || { echo "watchdogs outlived the gate: $left"; pkill -f "$runner"; return 1; }
+}
+
+# TERM is a request; a suite that ignores it is still stopped once the grace
+# after the cap runs out.
+test_run_all_kills_a_suite_that_ignores_term() {
+    make_suite_dir 2
+    make_suite_hang 1 ignore-term
+    local out rc=0 t0=$SECONDS
+    out=$(CS_TEST_SUITE_TIMEOUT=2 CS_TEST_JOBS=2 CS_TEST_SUITE_DIR="$SUITE_DIR" bash "$RUN_ALL" 2>&1) || rc=$?
+    [ "$rc" -eq 1 ] || { echo "expected exit 1, got $rc"; printf '%s\n' "$out"; return 1; }
+    [ $((SECONDS - t0)) -lt 30 ] || { echo "the gate waited on a TERM-proof suite for $((SECONDS - t0))s"; return 1; }
+    grep -q 'test_fake1.sh: timed out after 2s' <<< "$out" || { echo "not named as timed out"; printf '%s\n' "$out"; return 1; }
+    local hung
+    hung=$(cat "$TEST_TMPDIR/hung.pid")
+    ! kill -0 "$hung" 2>/dev/null || { echo "the suite's grandchild $hung is still running"; kill "$hung"; return 1; }
 }
 
 test_run_all_rejects_a_malformed_time_cap() {
@@ -558,6 +582,7 @@ run_test test_run_all_changed_unions_several_paths
 run_test test_run_all_stops_a_suite_past_the_time_cap
 run_test test_run_all_stops_a_suite_past_the_time_cap_in_serial_mode
 run_test test_run_all_leaves_no_watchdog_behind
+run_test test_run_all_kills_a_suite_that_ignores_term
 run_test test_run_all_rejects_a_malformed_time_cap
 
 report_results
