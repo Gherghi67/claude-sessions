@@ -63,15 +63,13 @@ jobs:
             "shellcheck-${SHELLCHECK_VERSION}/shellcheck"
           shellcheck --version
 
-      # Every tracked script plus the assembled binaries, which carry no .sh.
-      # Gated at error severity: that floor is green today; the ~110 warnings
-      # are a separate cleanup, and a gate that starts red is a gate nobody
-      # reads. .shellcheckrc declares the shell for the lib/ fragments and
-      # excludes the test harness's deliberate subshells.
+      # Errors fail outright. Warnings are held to the count in
+      # .shellcheck-warnings: a rise fails, and so does a fall until the
+      # baseline is lowered with it, so the count only ever shrinks.
+      # .shellcheckrc declares the shell for the lib/ fragments and excludes
+      # the test harness's deliberate subshells.
       - name: Lint shell scripts
-        run: |
-          { git ls-files '*.sh'; printf '%s\n' bin/cs bin/cs-secrets bin/cs-statusline bin/cs-subagent-statusline; } \
-            | xargs shellcheck -S error
+        run: bash tests/lint_shell.sh
 
   rust:
     strategy:
