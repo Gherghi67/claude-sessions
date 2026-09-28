@@ -10,6 +10,9 @@ All notable changes to cs are documented here. Release notes are also available 
 - The dialog bare `/queue` opens has a third answer, Compact: it compacts the conversation, then starts the queue as Start does. When the compaction does not happen (a hook vetoes it, or a turn is running), the queue stays unarmed and a notice says why.
 - An executable `.cs/local/pre-open` in a session runs before `cs <name>` opens it, from the session directory on your terminal, and a non-zero exit aborts the open. A session that keeps `.cs/memory` and `.cs/plans` on an encrypted volume can mount it there, password prompt included. The file lives in `.cs/local/`, which is never committed, so a cloned session cannot make `cs` run code.
 
+### Changed
+- cs no longer force-adds anything into a `.cs/` the repo ignores. `cs -narrative rotate` with a narrative that git tracks under an ignored `.cs/` still rotates, but commits nothing and says to run `git rm -r --cached .cs`. The rotate skill checks each path with `git check-ignore` before staging it and skips the commit for an ignored handoff instead of running `git add -f`. Both force-adds put session notes into public repos that meant to keep `.cs/` private. This reverses the 2026.9.22 fix that committed such a narrative.
+
 ### Fixes
 - Opening a session whose `.cs/memory` or `.cs/plans` is a symlink into an unmounted encrypted volume failed with two bare `mkdir: ... No such file or directory` lines. `cs` now names the link and its missing target and says to mount it. It still creates nothing in their place.
 
