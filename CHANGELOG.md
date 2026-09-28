@@ -4,7 +4,7 @@ All notable changes to cs are documented here. Release notes are also available 
 
 <!-- New entries group changes under Keep-a-Changelog headings (Added / Changed / Removed / Fixes / Docs), or Features / Performance where those fit the release. -->
 
-## Unreleased
+## 2026.9.23
 
 ### Added
 - The dialog bare `/queue` opens has a third answer, Compact: it compacts the conversation, then starts the queue as Start does. When the compaction does not happen (a hook vetoes it, or a turn is running), the queue stays unarmed and a notice says why.
@@ -22,6 +22,9 @@ All notable changes to cs are documented here. Release notes are also available 
 - The `/write-as-me` corpus kept the prompts cs types when it opens a session: the rotation handoff pointer and the `cs -spawn` kick. Claude Code records them as typed messages, so the voice profile learned them as your writing. The corpus build now drops them and counts them as machine-authored.
 - The session log and the timeline recorded every conversation end as `user_exit`. The SessionEnd hook read a `source` field that Claude Code never sends there; it now reads `reason`, so a `/clear`, a `/resume`, a logout and a normal exit are told apart.
 - Opening a session whose `.cs/memory` or `.cs/plans` is a symlink into an unmounted encrypted volume failed with two bare `mkdir: ... No such file or directory` lines. `cs` now names the link and its missing target and says to mount it. It still creates nothing in their place.
+
+### Upgrade note for clones of this repo
+- `.cs/` and `.skillopt-sleep/` are no longer tracked. A pull on another clone of this repository removes them from its worktree, so copy them aside first. `git archive abd27bb3 .cs | tar -x` restores `.cs`.
 
 ## 2026.9.22
 
