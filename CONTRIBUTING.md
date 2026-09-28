@@ -74,7 +74,9 @@ The full gate takes minutes. Most of the time you do not want it.
 | About to push a shell change | `bash tests/lint_shell.sh` (the shellcheck lane CI runs; the suites never run it) |
 
 `tests/lint_shell.sh` fails on any shellcheck error, and on a warning count that differs from
-`.shellcheck-warnings`. When you fix warnings, lower that number in the same commit.
+`.shellcheck-warnings`. The count is measured with the shellcheck version CI pins in
+`.github/workflows/test.yml` (v0.11.0); another version can count differently. When you fix
+warnings, lower that number in the same commit.
 
 `--changed` reads the working tree against `HEAD` plus untracked files and runs
 only the suites whose text names a changed path (a changed suite runs itself).

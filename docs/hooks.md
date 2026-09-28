@@ -291,7 +291,7 @@ A run that overruns the hook's timeout leaves a trail that stops mid-run, which 
 
 Ships in `hooks/` and deploys alongside the hooks as a library, never registered against an event. `/sweep` runs it from the session root to check its own rewrites of `.cs/memory/MEMORY.md`:
 
-- `snapshot` copies `MEMORY.md` to `.cs/local/memory-index.snapshot`, before the sweep edits anything.
+- `snapshot` copies `MEMORY.md` to `.cs/local/memory-index.snapshot`, before the sweep edits anything. Claude Code writes `MEMORY.md` with the first memory entry, so in a session that has none yet it records an empty snapshot; outside a session root (no `.cs/memory`) it exits 2.
 - `check` exits 1 and names each problem when a pointer in the snapshot is gone, when an entry in the four memory buckets (`user_`, `feedback_`, `project_`, `reference_`) has no pointer, or when the file is over the 24400-byte budget. A pointer is a line opening with `- [title](file)`; a link later on that line is supporting text. It always prints the size against the budget. With no snapshot, an unreadable one, or no `MEMORY.md` it exits 2, so a skipped snapshot never passes as a clean rewrite. The bucket check covers entries written after the snapshot and a second sweep that snapshotted an index the first had already damaged; the snapshot itself is one per session, so two concurrent sweeps share it.
 - `restore` copies the snapshot back byte for byte.
 
