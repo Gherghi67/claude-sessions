@@ -78,6 +78,15 @@ else
     jobs_n="$(detect_jobs)"
 fi
 
+# How long one suite may run before the gate stops it. Nothing else bounds a
+# hung suite: `wait` has no timeout and macOS ships no `timeout`, so a suite
+# stuck on a child that never returns holds the whole gate until someone
+# notices. The slowest suite takes about 200 s on a loaded box; the default
+# leaves three times that. CS_TEST_SUITE_TIMEOUT overrides, in seconds.
+suite_timeout="${CS_TEST_SUITE_TIMEOUT:-600}"
+case "$suite_timeout" in ''|*[!0-9]*) echo "invalid CS_TEST_SUITE_TIMEOUT='$suite_timeout' (want a positive number of seconds)" >&2; exit 2 ;; esac
+[ "$suite_timeout" -ge 1 ] || { echo "invalid CS_TEST_SUITE_TIMEOUT='$suite_timeout' (want a positive number of seconds)" >&2; exit 2; }
+
 # Select this shard's suites, in glob order.
 selected=()
 idx=-1
@@ -237,7 +246,7 @@ run_suite() {  # index
     # date twice and basename three times per suite for values bash has. Both
     # SECONDS readings come from the same clock date +%s reads, and SECONDS is
     # inherited by a lane subshell rather than reset.
-    local k="$1" name t0 secs mark pid
+    local k="$1" name t0 secs mark pid watchdog
     name="${selected[$k]##*/}"
     t0=$SECONDS
     # The suite runs in the background and is waited on, never in the
@@ -251,8 +260,35 @@ run_suite() {  # index
     fi
     pid=$!
     printf '%s\n' "$pid" > "$logdir/$k.pid"
+    # The watchdog sleeps in the background and waits, so its TERM trap runs
+    # the moment run_suite stops it, and the trap takes the sleep down too
+    # instead of leaving it to run out the cap. Past the cap it stops the
+    # suite's children, then the suite: a hung suite is usually waiting on a
+    # child, and the child would outlive the suite. Pids, not the group, for
+    # the reason _stop_everything gives. Its pid file sits beside the suite's,
+    # so an interrupted gate stops it with the rest. It writes nothing, and
+    # its output goes nowhere, so a sleep that ever outlived it could not hold
+    # open the pipe a caller is reading the gate's output from.
+    (
+        trap 'kill $(jobs -p) 2>/dev/null; exit 0' TERM
+        sleep "$suite_timeout" &
+        wait
+        : > "$logdir/$k.timeout"
+        pkill -TERM -P "$pid" 2>/dev/null
+        kill -TERM "$pid" 2>/dev/null
+    ) > /dev/null 2>&1 &
+    watchdog=$!
+    printf '%s\n' "$watchdog" > "$logdir/$k.watchdog.pid"
     wait "$pid" || : > "$logdir/$k.fail"
-    rm -f "$logdir/$k.pid"
+    kill -TERM "$watchdog" 2>/dev/null
+    wait "$watchdog" 2>/dev/null
+    rm -f "$logdir/$k.pid" "$logdir/$k.watchdog.pid"
+    # A timeout is a failure whatever the suite's exit: stopping the child it
+    # was waiting on can let the suite finish with a clean status.
+    if [ -f "$logdir/$k.timeout" ]; then
+        : > "$logdir/$k.fail"
+        printf '%s: timed out after %ss (CS_TEST_SUITE_TIMEOUT)\n' "$name" "$suite_timeout" >&2
+    fi
     secs=$((SECONDS - t0))
     printf '%s\n' "$secs" > "$logdir/$k.secs"
     printf '%s\n' "$k" >> "$donefile"

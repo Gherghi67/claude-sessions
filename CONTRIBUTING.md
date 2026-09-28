@@ -57,6 +57,11 @@ leaves the machine usable while it runs. One gate per checkout: a second
 `run_all.sh` started while one is running refuses with the holder's pid and
 exits 3 (`tests/.run_all.lock`; a lock whose pid is dead is taken over).
 
+The gate stops a suite that runs past 600 seconds, along with its child
+processes, counts it as failed and names it in a `timed out after 600s` line;
+the other suites still run. The slowest suite takes about 200 seconds on a loaded machine.
+`CS_TEST_SUITE_TIMEOUT` sets the cap in seconds.
+
 ### Which tests to run, and when
 
 The full gate takes minutes. Most of the time you do not want it.

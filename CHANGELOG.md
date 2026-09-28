@@ -11,6 +11,7 @@ All notable changes to cs are documented here. Release notes are also available 
 - An executable `.cs/local/pre-open` in a session runs before `cs <name>` opens it, from the session directory on your terminal, and a non-zero exit aborts the open. A session that keeps `.cs/memory` and `.cs/plans` on an encrypted volume can mount it there, password prompt included. The file lives in `.cs/local/`, which is never committed, so a cloned session cannot make `cs` run code.
 
 ### Changed
+- `tests/run_all.sh` stops a suite that runs past 600 seconds, together with its child processes, and counts it as failed. Before, a hung suite held the gate until someone killed it. `CS_TEST_SUITE_TIMEOUT` sets the cap.
 - cs no longer force-adds anything into a `.cs/` the repo ignores. `cs -narrative rotate` with a narrative that git tracks under an ignored `.cs/` still rotates, but commits nothing and says to run `git rm -r --cached .cs`. The rotate skill checks each path with `git check-ignore` before staging it and skips the commit for an ignored handoff instead of running `git add -f`. Both force-adds put session notes into public repos that meant to keep `.cs/` private. This reverses the 2026.9.22 fix that committed such a narrative.
 
 ### Fixes
