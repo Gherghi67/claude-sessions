@@ -441,6 +441,17 @@ test_rotate_skill_governs_what_goes_into_the_handoff() {
         "a blocker must lead Next Step, ahead of the steps it gates" || return 1
 }
 
+test_rotate_skill_never_force_adds_an_ignored_handoff() {
+    local skill="$SCRIPT_DIR/../skills/rotate/SKILL.md"
+    # A plain `git add` of a handoff under an ignored .cs/ exits 1, and
+    # rotations answered that with `git add -f`, publishing every handoff in
+    # a public repo that meant to keep .cs/ private.
+    assert_file_contains "$skill" "check-ignore -q --no-index" \
+        "the skill must test whether a path is ignored before staging it" || return 1
+    assert_file_contains "$skill" "Never \`git add -f\`" \
+        "the skill must forbid force-adding an ignored path" || return 1
+}
+
 test_rotate_skill_reads_parent_from_state_not_the_launch_env() {
     # CS_CLAUDE_SESSION_ID is the LAUNCH uuid: exported once per cs process
     # (lib/75-launch.sh) and never refreshed, on purpose — session-start.sh
@@ -465,6 +476,7 @@ test_rotate_skill_reads_parent_from_state_not_the_launch_env() {
 }
 
 run_test test_rotate_skill_exists_with_frontmatter
+run_test test_rotate_skill_never_force_adds_an_ignored_handoff
 run_test test_rotate_skill_has_a_home_for_rejected_alternatives
 run_test test_rotate_skill_has_a_home_for_conversation_only_facts
 run_test test_rotate_skill_keeps_successor_reports

@@ -189,12 +189,20 @@ one-key rotation it exists for.
    secrets first (the Redact rule above) — the same re-read runs again before
    step 6, because pass two quotes files and code, and a secret can sit in
    either.
-5. Append the second pass with Edit or `cat >>`, never Write.
-6. Second commit for the appended body. Re-read it for secrets and the
-   detail the Redact rule names first.
 
-   The handoff's CONTENT is now safe: two commits, nothing left to lose. It
-   is not yet armed — that is deliberate, see step 9.
+   Before staging any path in steps 4, 6 or 8, run
+   `git check-ignore -q --no-index -- <path>`, one path per call (`-q` takes
+   only one). Exit 0 means the repo ignores it; a repo that ignores `.cs/`
+   does so to keep session notes out of a public repo. Never `git add -f`
+   an ignored path, even when a plain `git add` fails on it: skip that commit,
+   leave the file on disk, and say so in your reply. The handoff still works
+   uncommitted; step 9 arms it by basename.
+5. Append the second pass with Edit or `cat >>`, never Write.
+6. Second commit for the appended body, unless step 4 found the handoff
+   ignored. Re-read it for secrets and the detail the Redact rule names first.
+
+   Once both commits land, the handoff's CONTENT is safe: nothing left to
+   lose. It is not yet armed — that is deliberate, see step 9.
 7. Retire this machine's leftovers: for every OTHER file in `.cs/handoffs/`
    whose frontmatter still says `status: unconsumed`, flip that one
    frontmatter line to `status: superseded` — but only when its `parent:`
@@ -242,7 +250,7 @@ one-key rotation it exists for.
 8. Commit the supersedings, every consumed handoff whose uncommitted change
    is a `## Successor report` appended by the conversation that took it
    over, and any tracked session state, like narratives. Stage those paths
-   by name.
+   by name, skipping every ignored one (the step 4 check).
 9. Arm it, LAST: write its basename (no path) to `.cs/local/pending-handoff`.
    Machine-local state — never commit it.
 
