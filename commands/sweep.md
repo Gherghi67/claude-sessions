@@ -66,8 +66,8 @@ bash ~/.claude/hooks/cs/memory-index-guard.sh snapshot
      | sort -rn | awk -F'\t' '$1>200' | cut -c1-120                # every over-long pointer, with its text
    ```
 
-   `check` exits 1 when the file is over the budget or when a link that was in the snapshot is gone,
-   and names each one. The budget is bytes and lives in the script.
+   `check` exits 1 when the file is over the budget, when a pointer that was in the snapshot is gone,
+   or when a bucket entry has no pointer, and names each one. The budget is bytes and lives in the script.
 
    The FILE size is the hard constraint — that is what truncates. The 200 figure is only a heuristic
    for finding candidates: a longer pointer is fine if it carries a rule that would be unsafe to drop,

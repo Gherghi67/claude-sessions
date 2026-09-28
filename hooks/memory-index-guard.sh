@@ -15,9 +15,16 @@ _die() {  # message
     exit 2
 }
 
-# The link targets of every pointer line, one per line, sorted for comm.
-_links() {  # file
-    { grep -oE '\]\([^)]+\)' "$1" || true; } | sed 's/^](//; s/)$//' | LC_ALL=C sort -u
+# The target of every pointer, one per line, sorted for comm. A pointer is a
+# line opening with `- [title](target)`; a link later on the line is
+# supporting text, not a pointer. grep exits 1 on no match and 2 on a read
+# error, and only the first is an empty index.
+_pointers() {  # file
+    local lines rc=0
+    lines=$(grep -E '^- \[[^]]*\]\([^)]+\)' "$1") || rc=$?
+    [ "$rc" -le 1 ] || _die "cannot read $1"
+    [ -n "$lines" ] || return 0
+    printf '%s\n' "$lines" | sed -E 's/^- \[[^]]*\]\(([^)]+)\).*/\1/' | LC_ALL=C sort -u
 }
 
 _need_index() {
@@ -28,6 +35,7 @@ _need_index() {
 # report that as a clean rewrite.
 _need_snapshot() {
     [ -f "$SNAPSHOT" ] || _die "no snapshot at $SNAPSHOT; run snapshot before editing MEMORY.md"
+    [ -r "$SNAPSHOT" ] || _die "cannot read $SNAPSHOT"
 }
 
 case "${1:-}" in
@@ -41,9 +49,22 @@ case "${1:-}" in
         _need_index
         _need_snapshot
         status=0
-        removed=$(LC_ALL=C comm -23 <(_links "$SNAPSHOT") <(_links "$INDEX"))
+        before=$(_pointers "$SNAPSHOT")
+        after=$(_pointers "$INDEX")
+        removed=$(LC_ALL=C comm -23 <(printf '%s\n' "$before") <(printf '%s\n' "$after") | sed '/^$/d')
         if [ -n "$removed" ]; then
             printf '%s\n' "$removed" | sed 's/^/removed: /'
+            status=1
+        fi
+        # An entry this sweep wrote after the snapshot is in no snapshot, so
+        # the entries on disk are checked too: each needs a pointer.
+        entries=$(cd .cs/memory && for f in user_*.md feedback_*.md project_*.md reference_*.md; do
+            [ -f "$f" ] || continue
+            printf '%s\n' "$f"
+        done | LC_ALL=C sort)
+        unindexed=$(LC_ALL=C comm -23 <(printf '%s\n' "$entries") <(printf '%s\n' "$after") | sed '/^$/d')
+        if [ -n "$unindexed" ]; then
+            printf '%s\n' "$unindexed" | sed 's/^/unindexed: /'
             status=1
         fi
         size=$(wc -c < "$INDEX" | tr -d ' ')

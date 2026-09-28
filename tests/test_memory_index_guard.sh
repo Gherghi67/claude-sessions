@@ -141,6 +141,60 @@ test_unknown_subcommand_prints_usage() {
         "the error must list the subcommands" || return 1
 }
 
+# A pointer is its first link; a link inside its summary is supporting text.
+test_check_passes_when_a_supporting_link_is_dropped() {
+    _guard_session
+    printf '%s\n' '- [Gamma](project_gamma.md): see [vendor docs](https://example.com/docs)' >> "$INDEX"
+    _guard snapshot > /dev/null || return 1
+    sed -i.bak 's|: see \[vendor docs\](https://example.com/docs)|: vendor configuration|' "$INDEX"
+    grep -q 'vendor configuration' "$INDEX" || { echo "  FAIL: fixture edit did not land"; return 1; }
+    local out rc=0
+    out=$(_guard check 2>&1) || rc=$?
+    assert_eq 0 "$rc" "dropping a supporting link keeps every pointer: $out" || return 1
+}
+
+# Merging two pointers into one is forbidden even when the merged line still
+# mentions the other entry's file.
+test_check_fails_when_two_pointers_are_merged() {
+    _guard_session
+    _guard snapshot > /dev/null || return 1
+    printf '%s\n' '- [Beta fact](project_beta.md): Tuesdays; see [Alpha](feedback_alpha.md)' > "$INDEX"
+    local out rc=0
+    out=$(_guard check 2>&1) || rc=$?
+    assert_eq 1 "$rc" "a merged pointer must fail" || return 1
+    assert_output_contains "$out" "removed: feedback_alpha.md" \
+        "check must name the pointer the merge removed" || return 1
+}
+
+# Every entry in a memory bucket needs a pointer, including one this sweep
+# wrote after the snapshot: an unindexed entry is never read again.
+test_check_fails_on_an_unindexed_bucket_entry() {
+    _guard_session
+    _guard snapshot > /dev/null || return 1
+    : > "$SESSION/.cs/memory/project_delta.md"
+    : > "$SESSION/.cs/memory/notes.md"
+    local out rc=0
+    out=$(_guard check 2>&1) || rc=$?
+    assert_eq 1 "$rc" "a bucket entry with no pointer must fail" || return 1
+    assert_output_contains "$out" "unindexed: project_delta.md" \
+        "check must name the entry with no pointer" || return 1
+    assert_output_not_contains "$out" "notes.md" \
+        "a file outside the four buckets is not an entry" || return 1
+}
+
+test_check_with_an_unreadable_snapshot_is_an_error() {
+    [ "$(id -u)" -ne 0 ] || return 77
+    _guard_session
+    _guard snapshot > /dev/null || return 1
+    chmod 000 "$SESSION/.cs/local/memory-index.snapshot"
+    local out rc=0
+    out=$(_guard check 2>&1) || rc=$?
+    chmod 600 "$SESSION/.cs/local/memory-index.snapshot"
+    assert_eq 2 "$rc" "an unreadable snapshot must not read as an empty one" || return 1
+    assert_output_contains "$out" "cannot read .cs/local/memory-index.snapshot" \
+        "the error must name the snapshot" || return 1
+}
+
 run_test test_check_fails_when_a_link_is_removed
 run_test test_check_passes_a_rewrite_that_keeps_every_link_at_the_budget
 run_test test_check_counts_bytes_not_characters
@@ -150,5 +204,10 @@ run_test test_check_fails_over_the_byte_budget
 run_test test_restore_puts_back_the_snapshot_byte_for_byte
 run_test test_restore_without_a_snapshot_leaves_the_index_alone
 run_test test_unknown_subcommand_prints_usage
+
+run_test test_check_passes_when_a_supporting_link_is_dropped
+run_test test_check_fails_when_two_pointers_are_merged
+run_test test_check_fails_on_an_unindexed_bucket_entry
+run_test test_check_with_an_unreadable_snapshot_is_an_error
 
 report_results
