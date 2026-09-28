@@ -53,6 +53,9 @@ cs -secrets get API_KEY
 # Store a secret manually (value read from stdin, never argv)
 printf '%s' "secret-value" | cs -secrets set my_secret
 
+# At a terminal, set prompts for the value without echoing it
+cs -secrets set my_secret
+
 # Delete a secret
 cs -secrets rm API_KEY
 
@@ -67,6 +70,8 @@ eval "$(cs -secrets export)"
 # Use with a specific session
 cs -secrets --session my-session list
 ```
+
+`set` refuses a value that is a placeholder rather than a secret: anything starting with `[REDACTED:`, a run of asterisks, `<redacted>`, or `YOUR_API_KEY`. Storing one would replace a working secret with junk that breaks whatever reads it later.
 
 ### No session name?
 
