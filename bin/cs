@@ -69,10 +69,12 @@ CS_HOOKS=(
 # Files under hooks/ that the hooks source, or that cs points other tools at,
 # rather than files Claude Code invokes as hooks. Deployed and removed alongside
 # the hooks, never registered against an event. The prompt-rewriter scripts are
-# reached through $EDITOR, not through any hook event.
+# reached through $EDITOR, not through any hook event; memory-index-guard.sh is
+# run by the /sweep command.
 CS_HOOK_LIBS=(
     cs-resolve.sh
     cs-shared.sh
+    memory-index-guard.sh
     prompt-rewriter.sh
     prompt-rewriter-model.sh
     prompt-rewriter-vendor.sh

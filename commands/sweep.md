@@ -17,6 +17,13 @@ Both are written in parallel from the conversation — narrative is not the upst
 
 ## Steps
 
+Before anything else, from the session root, snapshot the index so step 5 can check this sweep's
+rewrites against it:
+
+```sh
+bash ~/.claude/hooks/cs/memory-index-guard.sh snapshot
+```
+
 1. **Review the conversation in your context.** Look at what the user has said and what was decided or learned across this whole session — not just the most recent turn.
 
 2. **For each of the four memory categories** (`user`, `feedback`, `project`, `reference`), ask: is there a durable fact in this conversation that meets ALL three bars?
@@ -54,10 +61,13 @@ Both are written in parallel from the conversation — narrative is not the upst
    actor may have pushed it over — check:
 
    ```sh
-   wc -c < .cs/memory/MEMORY.md                                    # budget ~24400 BYTES
+   bash ~/.claude/hooks/cs/memory-index-guard.sh check             # size against the byte budget
    awk '/^- \[/{print length($0)"\t"$0}' .cs/memory/MEMORY.md \
      | sort -rn | awk -F'\t' '$1>200' | cut -c1-120                # every over-long pointer, with its text
    ```
+
+   `check` exits 1 when the file is over the budget, when a pointer that was in the snapshot is gone,
+   or when a bucket entry has no pointer, and names each one. The budget is bytes and lives in the script.
 
    The FILE size is the hard constraint — that is what truncates. The 200 figure is only a heuristic
    for finding candidates: a longer pointer is fine if it carries a rule that would be unsafe to drop,
@@ -79,7 +89,11 @@ Both are written in parallel from the conversation — narrative is not the upst
    one — an unindexed entry is never read again. If compression alone cannot fit the budget, say so and
    ask; do not resolve it by dropping entries.
 
-   **After rewriting, verify twice.** Re-run `wc -c` to confirm the file still fits, and re-read each
+   Put a removed pointer back by rewriting it. If the index is past repair, run
+   `bash ~/.claude/hooks/cs/memory-index-guard.sh restore` to return it to the snapshot, then redo this
+   sweep's pointer edits. Never finish a sweep with `check` failing.
+
+   **After rewriting, verify twice.** Re-run `check` to confirm the file still fits and every link survived, and re-read each
    rewritten pointer against its topic file. Syntactic health is not semantic health: a shortened line
    can be perfectly formed and still have dropped an authorization boundary ("nothing is ever pushed"),
    a precondition ("only after exact existence is established"), or an exception ("not only security
