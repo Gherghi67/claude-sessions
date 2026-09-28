@@ -60,7 +60,7 @@ and come back the moment they are opened.
 
 `$session_dir/.cs/archived`, a TRACKED one-line file:
 
-    archived: 2026-07-15 by alex-geana-erepubliklabs-com
+    archived: 2026-07-15 by jane-doe-example-com
 
 Date from the local clock at the moment of archiving, actor from
 `cs_actor_slug` (lib/40-state.sh:129). Presence alone means archived — any

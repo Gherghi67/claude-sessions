@@ -22,7 +22,7 @@ work. Delivery works whether or not B is currently live.
 One message = one JSON line, appended to the recipient's inbox:
 
 ```json
-{"id":"1752849000-4711-18342","ts":1752849000,"from":"claude-sessions","actor":"alex-geana-erepubliklabs-com","kind":"text","body":"...","ref":null}
+{"id":"1752849000-4711-18342","ts":1752849000,"from":"claude-sessions","actor":"jane-doe-example-com","kind":"text","body":"...","ref":null}
 ```
 
 - `id`: `<epoch>-<pid>-<RANDOM>` (bash 3.2 built-ins only).
