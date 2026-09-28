@@ -71,6 +71,11 @@ jobs:
       - name: Lint shell scripts
         run: bash tests/lint_shell.sh
 
+      # The lint's own tests skip wherever shellcheck is missing; this job has
+      # the pinned one, so they always run here.
+      - name: Test the shell lint
+        run: bash tests/test_lint_shell.sh
+
   rust:
     strategy:
       fail-fast: false

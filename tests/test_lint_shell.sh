@@ -74,14 +74,20 @@ test_an_error_level_finding_fails() {
         "the failure must come from the error gate" || return 1
 }
 
+# A number past bash's integer range makes both comparisons error out and
+# fall through to the pass line, so it is refused like any other bad value.
 test_a_baseline_that_is_not_a_number_is_an_error() {
     command -v shellcheck > /dev/null || return 77
-    _lint_repo "about 110"
-    local out rc=0
-    out=$(_lint 2>&1) || rc=$?
-    assert_eq 2 "$rc" "a non-numeric baseline must not be compared" || return 1
-    assert_output_contains "$out" ".shellcheck-warnings must hold a whole number, found 'about 110'" \
-        "the error must quote the bad baseline" || return 1
+    local bad out rc
+    for bad in "about 110" "99999999999999999999"; do
+        _lint_repo "$bad"
+        rc=0
+        out=$(_lint 2>&1) || rc=$?
+        assert_eq 2 "$rc" "baseline '$bad' must not be compared" || return 1
+        assert_output_contains "$out" ".shellcheck-warnings must hold a whole number of at most 9 digits, found '$bad'" \
+            "the error must quote the bad baseline" || return 1
+        rm -rf "$REPO"
+    done
 }
 
 run_test test_rising_warnings_fail

@@ -14,15 +14,19 @@ _die() {  # message
 command -v shellcheck > /dev/null || _die "shellcheck is not installed"
 [ -f "$BASELINE_FILE" ] || _die "no $BASELINE_FILE here; run from the repo root"
 baseline=$(cat "$BASELINE_FILE")
+# Nine digits bound the value well inside bash's integer range: past it, the
+# comparisons below error out and neither fires, which would read as a pass.
 case "$baseline" in
-    '' | *[!0-9]*) _die "$BASELINE_FILE must hold a whole number, found '$baseline'" ;;
+    '' | *[!0-9]* | ??????????*) _die "$BASELINE_FILE must hold a whole number of at most 9 digits, found '$baseline'" ;;
 esac
 
-# Every tracked script plus the assembled binaries, which carry no .sh.
-files=()
-while IFS= read -r f; do
+# Every tracked script plus the assembled binaries, which carry no .sh. NUL
+# separated, because git quotes a path holding a quote or a control character
+# and the quoted form names no file.
+files=(bin/cs bin/cs-secrets bin/cs-statusline bin/cs-subagent-statusline)
+while IFS= read -r -d '' f; do
     files+=("$f")
-done < <(git ls-files '*.sh'; printf '%s\n' bin/cs bin/cs-secrets bin/cs-statusline bin/cs-subagent-statusline)
+done < <(git ls-files -z '*.sh')
 
 if ! shellcheck -S error "${files[@]}"; then
     echo "lint_shell: shellcheck found errors (above)" >&2
