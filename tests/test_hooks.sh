@@ -1885,7 +1885,7 @@ test_session_end_appends_to_timeline() {
     local timeline="$CLAUDE_SESSION_META_DIR/timeline.jsonl"
     rm -f "$timeline"
 
-    echo '{"session_id":"abc","source":"user_exit"}' | bash "$HOOKS_DIR/session-end.sh"
+    echo '{"session_id":"abc","reason":"prompt_input_exit"}' | bash "$HOOKS_DIR/session-end.sh"
 
     assert_exists "$timeline" "timeline.jsonl should be created on end" || return 1
     if ! jq -e '. | select(.event == "ended")' "$timeline" > /dev/null 2>&1; then
@@ -1963,10 +1963,27 @@ test_session_end_generates_index_with_many_changes() {
         echo "content $i" > "$CLAUDE_SESSION_DIR/file_$i.txt"
     done
 
-    echo '{"session_id":"test-123","source":"user_exit"}' | bash "$HOOKS_DIR/session-end.sh"
+    echo '{"session_id":"test-123","reason":"prompt_input_exit"}' | bash "$HOOKS_DIR/session-end.sh"
 
     assert_exists "$CS_SESSIONS_ROOT/index.md" \
         "index.md should be generated even with 6+ uncommitted files" || { index_teardown; return 1; }
+
+    index_teardown
+}
+
+# SessionEnd carries why the conversation ended in `reason` (clear, resume,
+# logout, prompt_input_exit, other). The log and the timeline record that
+# value, so a /clear is told apart from quitting.
+test_session_end_records_the_end_reason() {
+    index_setup
+
+    echo '{"session_id":"test-123","reason":"clear"}' | bash "$HOOKS_DIR/session-end.sh"
+
+    assert_file_contains "$CLAUDE_SESSION_META_DIR/local/session.log" "Session ended (source: clear, ID: test-123)" \
+        "the log names the reason Claude Code sent" || { index_teardown; return 1; }
+    local recorded
+    recorded=$(jq -r 'select(.event == "ended") | .source' "$CLAUDE_SESSION_META_DIR/timeline.jsonl")
+    assert_eq "clear" "$recorded" "the timeline records the same reason" || { index_teardown; return 1; }
 
     index_teardown
 }
@@ -2199,6 +2216,7 @@ run_test test_timeline_subagent_skipped
 # Session end: updated timestamp
 run_test test_session_end_never_stamps_readme
 run_test test_session_end_generates_index_with_many_changes
+run_test test_session_end_records_the_end_reason
 run_test test_session_end_leaves_legacy_updated_line_alone
 
 # ============================================================================
@@ -2651,7 +2669,7 @@ test_session_end_does_not_splice_onto_a_torn_timeline() {
     jsonl_tail_is_torn "$CLAUDE_SESSION_META_DIR/timeline.jsonl" \
         || { echo "  FAIL: fixture is terminated; the splice cannot happen"; session_start_teardown; return 1; }
 
-    echo '{"session_id":"3333","source":"user_exit"}' \
+    echo '{"session_id":"3333","reason":"prompt_input_exit"}' \
         | bash "$HOOKS_DIR/session-end.sh" >/dev/null 2>&1 || true
 
     local events
@@ -2692,7 +2710,7 @@ test_torn_partial_record_costs_only_itself() {
     jsonl_tail_is_torn "$CLAUDE_SESSION_META_DIR/timeline.jsonl" \
         || { echo "  FAIL: fixture is terminated"; session_start_teardown; return 1; }
 
-    echo '{"session_id":"3333","source":"user_exit"}' \
+    echo '{"session_id":"3333","reason":"prompt_input_exit"}' \
         | bash "$HOOKS_DIR/session-end.sh" >/dev/null 2>&1 || true
 
     local events

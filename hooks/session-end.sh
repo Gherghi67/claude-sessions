@@ -15,7 +15,9 @@ fi
 
 # Extract session information
 SESSION_ID=$(echo "$INPUT" | jq -r '.session_id')
-SOURCE=$(echo "$INPUT" | jq -r '.source // "user_exit"')
+# SessionEnd names why the conversation ended in `reason`: clear, resume,
+# logout, prompt_input_exit or other. "missing" marks a payload without one.
+END_REASON=$(echo "$INPUT" | jq -r '.reason // "missing"')
 
 # Test before sourcing rather than catching a failed source with ||: under
 # bash 3.2, cs's floor, a `.` of a missing file kills a non-interactive shell
@@ -81,7 +83,7 @@ fi
 # append into a missing dir cannot abort this hook (and its cleanup) under set -e.
 mkdir -p "$META_DIR/local" 2>/dev/null || true
 echo "" >> "$META_DIR/local/session.log"
-echo "$(date '+%Y-%m-%d %H:%M:%S') - Session ended (source: $SOURCE, ID: $SESSION_ID)" >> "$META_DIR/local/session.log"
+echo "$(date '+%Y-%m-%d %H:%M:%S') - Session ended (source: $END_REASON, ID: $SESSION_ID)" >> "$META_DIR/local/session.log"
 
 # Append structured event to timeline.jsonl
 TIMELINE_FILE="$META_DIR/timeline.jsonl"
@@ -89,7 +91,7 @@ TIMELINE_BRANCH=$(git -C "$SESSION_DIR" branch --show-current 2>/dev/null || ech
 _cs_terminate_jsonl "$TIMELINE_FILE" 2>/dev/null || true
 { jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
        --arg event "ended" \
-       --arg source "$SOURCE" \
+       --arg source "$END_REASON" \
        --arg session_id "$SESSION_ID" \
        --arg branch "$TIMELINE_BRANCH" \
        '{ts: $ts, event: $event, source: $source, session_id: $session_id, branch: $branch}' \
