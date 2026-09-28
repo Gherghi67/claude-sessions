@@ -99,6 +99,18 @@ test_wrap_references_deployed_commands() {
         "repo-relative paths are dead pointers at runtime" || return 1
 }
 
+# The guard ships as a hook library, so sweep must call it at its deployed path,
+# and must take the snapshot that check and restore compare against.
+test_sweep_runs_the_memory_index_guard() {
+    local sub
+    for sub in snapshot check restore; do
+        assert_file_contains "$COMMANDS_DIR/sweep.md" "bash ~/.claude/hooks/cs/memory-index-guard.sh $sub" \
+            "sweep.md must run the deployed guard's $sub" || return 1
+    done
+    assert_file_contains "$SCRIPT_DIR/../lib/01-manifests.sh" "^    memory-index-guard.sh$" \
+        "the guard must ship with the hooks for that path to exist" || return 1
+}
+
 test_wrap_does_not_duplicate_memory_bars() {
     assert_file_contains "$COMMANDS_DIR/sweep.md" "three months" \
         "sweep.md owns the three-bar discipline" || return 1
@@ -420,6 +432,7 @@ run_test test_sweep_routes_discovered_constraints
 run_test test_sweep_updates_memory_index
 run_test test_wrap_family_pinned_to_opus
 run_test test_wrap_references_deployed_commands
+run_test test_sweep_runs_the_memory_index_guard
 run_test test_wrap_does_not_duplicate_memory_bars
 run_test test_wrap_does_not_duplicate_summary_skeleton
 run_test test_scoring_threshold_owned_by_skill

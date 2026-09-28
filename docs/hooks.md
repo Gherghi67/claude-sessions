@@ -287,6 +287,16 @@ A run the deadline below stops early ends `budget=1500`, `skip`, `exit` instead 
 
 A run that overruns the hook's timeout leaves a trail that stops mid-run, which names the stage it hung on — the only evidence such a run ever produces, since it never reaches an exit where it could write a summary. A trail ending anywhere but `exit` or `emit` marks a killed run. Before anything that can stall (the library parse-check, its source, the session resolve), a run in a cs-launched session writes a `launch` line carrying absolute epoch milliseconds, so a run killed before the trace opens still leaves that one line: `launch` with no `start` after it means the process started and stalled in its first forks, and no `launch` at all means it never ran. The line needs an existing `.cs/local/` and creates nothing itself. It reads `$EPOCHREALTIME` without a fork; bash 3.2 has no builtin epoch clock, so there one `date` fork supplies whole seconds, and a `date` that stalls leaves no line. The rest of the trace reads the clock through shell builtins only (`$EPOCHREALTIME`, or `$SECONDS` on bash 3.2), so it adds no forks to a hook already under suspicion for running slow. The file is machine-local — which machine was slow is half the finding — and one run in 64 trims it to its last 2000 lines. Opt-out per-session: `export CS_SCOPE_TRACE_DISABLE=1`.
 
+## memory-index-guard.sh (not a hook — run by `/sweep`)
+
+Ships in `hooks/` and deploys alongside the hooks as a library, never registered against an event. `/sweep` runs it from the session root to check its own rewrites of `.cs/memory/MEMORY.md`:
+
+- `snapshot` copies `MEMORY.md` to `.cs/local/memory-index.snapshot`, before the sweep edits anything.
+- `check` exits 1 when a link target in the snapshot is missing from the current file, or when the file is over the 24400-byte budget, and names each problem. It always prints the size against the budget. With no snapshot or no `MEMORY.md` it exits 2, so a skipped snapshot never passes as a clean rewrite.
+- `restore` copies the snapshot back byte for byte.
+
+`check` never restores on its own. A sweep that pushes the file over budget by adding a pointer has to compress other pointers, and an automatic restore would throw the new pointer away, leaving its entry unindexed.
+
 ## cs (not a hook script — a Claude Code mod)
 
 `mods/cs/` is a Claude Code function-hooks plugin: TypeScript that runs
