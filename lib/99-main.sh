@@ -399,6 +399,8 @@ main() {
             confirm_clean_worktree_base "$base_dir" "$wt_base"
             session_dir=$(create_worktree_session "$base_dir" "$wt_base" "$wt_task")
         else
+            # A worktree of an encrypted session carries its vault links too.
+            _refuse_unmounted_meta "$session_name" "$session_dir"
             # The backfill a base session gets from migrate_session, which the
             # worktree path below deliberately skips: an older worktree, or one
             # from a clone, still arrives at the umask's mode.

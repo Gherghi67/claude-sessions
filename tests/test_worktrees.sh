@@ -76,6 +76,24 @@ test_worktree_create_tracked_mode() {
     [ "$base_uuid" != "$wt_uuid" ] || { echo "  FAIL: worktree must get its own UUID"; return 1; }
 }
 
+# A worktree of an encrypted session carries the same vault links; opening it
+# while the vault is locked refuses by name, as the base does, before
+# anything writes through the dangling links.
+test_worktree_open_refuses_a_locked_vault() {
+    create_test_session_with_git "myproj" > /dev/null
+    cs_launch "myproj@fix-auth"
+    local wt="$CS_SESSIONS_ROOT/myproj@fix-auth" out rc=0
+    rm -rf "$wt/.cs/memory"
+    ln -s "$TEST_TMPDIR/unmounted/memory" "$wt/.cs/memory"
+    printf '#!/bin/bash\necho launched >> "%s"\n' "$TEST_TMPDIR/launched" > "$TEST_TMPDIR/claude"
+    chmod +x "$TEST_TMPDIR/claude"
+    out=$(CLAUDE_CODE_BIN="$TEST_TMPDIR/claude" "$CS_BIN" "myproj@fix-auth" < /dev/null 2>&1) || rc=$?
+    assert_eq "1" "$rc" "the open refuses" || return 1
+    assert_eq "Error: myproj@fix-auth: .cs/memory points at $TEST_TMPDIR/unmounted/memory, which is missing (encrypted storage not mounted?). Mount it, then reopen." \
+        "$out" "names the dangling link" || return 1
+    assert_not_exists "$TEST_TMPDIR/launched" "claude never starts" || return 1
+}
+
 test_worktree_create_refuses_dirty_base() {
     local base_dir
     base_dir=$(create_test_session_with_git "myproj")
@@ -695,6 +713,7 @@ run_test test_worktree_name_rejects_bad_task_half
 run_test test_plain_names_still_work
 run_test test_worktree_create_tracked_mode
 run_test test_worktree_create_refuses_dirty_base
+run_test test_worktree_open_refuses_a_locked_vault
 run_test test_worktree_create_reuses_existing_branch
 run_test test_worktree_create_ignored_mode_bootstraps_cs
 run_test test_ignored_mode_worktree_starts_with_nothing_untracked

@@ -635,8 +635,10 @@ EOF
         # An encrypted session keeps its handoffs and the marker in its vault;
         # the open has already refused a locked one.
         local pending_handoff="" _hf _handoff_dir _marker_dir
-        _handoff_dir=$(cs_handoff_dir "$session_dir/.cs")
-        _marker_dir=$(cs_private_dir "$session_dir/.cs")
+        _handoff_dir=$(cs_handoff_dir "$session_dir/.cs") \
+            || error "$session_name: .cs/private dangles after the open checked it (vault unmounted mid-launch?). Mount it, then reopen."
+        _marker_dir=$(cs_private_dir "$session_dir/.cs") \
+            || error "$session_name: .cs/private dangles after the open checked it (vault unmounted mid-launch?). Mount it, then reopen."
         for _hf in "$_handoff_dir"/*.md; do
             [ -f "$_hf" ] || continue
             _handoff_is_unconsumed "$_hf" || continue
