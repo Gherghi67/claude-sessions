@@ -652,6 +652,9 @@ fn render_table(app: &mut App, frame: &mut Frame, area: Rect, preview_open: bool
                 ]));
             }
 
+            if s.vault.is_some() {
+                name_spans.push(Span::styled(format!(" {}", app.lock_marker), Style::default().fg(p.comment)));
+            }
             name_lines.push(Line::from(name_spans));
 
             // Add preview lines when expanded
@@ -1627,6 +1630,11 @@ fn render_preview_pane(app: &App, frame: &mut Frame, area: Rect) {
     if !session.tags.is_empty() {
         meta.push(("tags", session.tags.join(", "), p.mut_, None));
     }
+    match session.vault {
+        Some(crate::session::Vault::Locked) => meta.push(("vault", "locked".into(), p.red, None)),
+        Some(crate::session::Vault::Unlocked) => meta.push(("vault", "unlocked".into(), p.ink, None)),
+        None => {}
+    }
     let cached_preview = app.preview_cache.get(&session.name);
     if let Some(preview) = cached_preview {
         meta.push((
@@ -2175,6 +2183,7 @@ mod tests {
             git_repo: None,
             tags: Vec::new(),
             archived: false,
+            vault: None,
         }]
     }
 
@@ -2197,6 +2206,7 @@ mod tests {
                 git_repo: None,
                 tags: Vec::new(),
                 archived: false,
+                vault: None,
             },
             Session {
                 name: "recent".into(),
@@ -2212,6 +2222,7 @@ mod tests {
                 git_repo: None,
                 tags: Vec::new(),
                 archived: false,
+                vault: None,
             },
         ]
     }
@@ -3650,6 +3661,7 @@ mod tests {
                 git_repo: None,
                 tags: Vec::new(),
                 archived: false,
+                vault: None,
             });
         }
         let mut app = App::new(sessions);
@@ -4086,6 +4098,33 @@ mod tests {
     }
 
     #[test]
+    fn an_encrypted_session_shows_its_marker_on_the_row_and_its_vault_in_the_preview() {
+        let mut app = preview_test_app();
+        app.lock_marker = "enc";
+        app.sessions[0].vault = Some(crate::session::Vault::Locked);
+        let text = render_wide(&mut app);
+        let name = app.sessions[0].name.clone();
+        assert!(text.contains(&format!("{name} enc")), "row must carry the marker after the name:\n{text}");
+        assert!(
+            text.lines().any(|l| l.contains("vault") && l.contains("locked")),
+            "preview must name the vault state:\n{text}"
+        );
+
+        app.sessions[0].vault = Some(crate::session::Vault::Unlocked);
+        let text = render_wide(&mut app);
+        assert!(text.lines().any(|l| l.contains("vault") && l.contains("unlocked")), "{text}");
+    }
+
+    #[test]
+    fn a_session_without_a_vault_shows_neither_marker_nor_vault_row() {
+        let mut app = preview_test_app();
+        app.lock_marker = "enc";
+        let text = render_wide(&mut app);
+        assert!(!text.contains(" enc"), "no marker on a plain session:\n{text}");
+        assert!(!text.contains("vault"), "no vault row on a plain session:\n{text}");
+    }
+
+    #[test]
     fn preview_state_row_carries_the_advertised_agent_status() {
         let mut app = preview_test_app();
         app.sessions[0].liveness = Liveness::Locked(4242);
@@ -4202,6 +4241,7 @@ mod tests {
             git_repo: None,
             tags: Vec::new(),
             archived: true,
+            vault: None,
         });
         v
     }

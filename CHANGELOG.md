@@ -6,6 +6,9 @@ All notable changes to cs are documented here. Release notes are also available 
 
 ## Unreleased
 
+### Added
+- The `encrypted` tag marks a session that keeps its notes in an encrypted volume. The picker draws a lock after its name and adds a `vault` line to the preview, `locked` or `unlocked` by whether `.cs/memory` resolves; the status line draws the same lock after the session name. The lock is a Nerd Font glyph behind the same font answer as the capsule ends (`cs -statusline caps`), with `enc` until the machine has answered yes. Set it with `cs <name> -tag add encrypted`.
+
 ### Changed
 - `cs -rm` names the files and folders in a session that cs did not create (anything beside `.cs/`, `.claude/`, the git files and the two `CLAUDE` files) before it asks to remove the session. `--force` refuses such a session and lists them; add `--delete-files` to remove it anyway. A worktree session (`base@task`) gets the same check for the files git does not track there, untracked or ignored, since those have no copy on the branch. An adopted session still loses only its link. The picker's delete confirm lists the same files, for one session or a marked batch, and does not open when the list cannot be read. Tab completion offers `--force` and `--delete-files` after `cs -rm`.
 

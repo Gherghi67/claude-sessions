@@ -3508,6 +3508,37 @@ test_effort_max_is_a_gradient_across_its_letters() {
     assert_output_contains "$out" "✦ Opus max" "plain mode keeps the word whole" || return 1
 }
 
+tag_session() {  # name tags
+    local readme="$CS_SESSIONS_ROOT/$1/.cs/README.md"
+    printf -- '---\ncreated: 2026-06-11\ntags: [%s]\n---\n# %s\n' "$2" "$1" > "$readme"
+}
+
+test_encrypted_session_shows_a_lock_after_its_name() {
+    export NO_COLOR=1 CS_STATUSLINE_CAPS=1 CLAUDE_SESSION_NAME="vsess"
+    make_cs_session "vsess" 1024 blue
+    tag_session vsess 'home, "encrypted"'
+    local out; out=$(run_sl '{"session_name":"vsess","workspace":{"current_dir":"/none"}}')
+    assert_output_contains "$out" $'vsess \xef\x80\xa3' "Nerd Font lock follows the name when caps are on" || return 1
+}
+
+test_encrypted_lock_falls_back_to_text_without_the_patched_font() {
+    export NO_COLOR=1 CS_STATUSLINE_CAPS=0 CLAUDE_SESSION_NAME="vsess"
+    make_cs_session "vsess" 1024 blue
+    tag_session vsess 'encrypted'
+    local out; out=$(run_sl '{"session_name":"vsess","workspace":{"current_dir":"/none"}}')
+    assert_output_contains "$out" "vsess enc" "text marker when the font is unconfirmed" || return 1
+    assert_output_not_contains "$out" $'\xef\x80\xa3' "no private-use glyph without consent" || return 1
+}
+
+test_untagged_or_lookalike_tag_shows_no_lock() {
+    export NO_COLOR=1 CS_STATUSLINE_CAPS=0 CLAUDE_SESSION_NAME="vsess"
+    make_cs_session "vsess" 1024 blue
+    tag_session vsess 'encrypted-later, notencrypted'
+    local out; out=$(run_sl '{"session_name":"vsess","workspace":{"current_dir":"/none"}}')
+    assert_output_not_contains "$out" "enc " "a tag that only contains the word is not the marker" || return 1
+    assert_output_contains "$out" "vsess" "the name still renders" || return 1
+}
+
 test_notes_and_mail_are_amber_ink_after_the_session() {
     export COLORTERM=truecolor
     export CS_TERM_BG_RGB="253;246;227"
@@ -3543,6 +3574,9 @@ run_test test_crit_text_pulses_white_and_critshade
 run_test test_effort_takes_claude_codes_effort_colours
 run_test test_effort_max_is_a_gradient_across_its_letters
 run_test test_notes_and_mail_are_amber_ink_after_the_session
+run_test test_encrypted_session_shows_a_lock_after_its_name
+run_test test_encrypted_lock_falls_back_to_text_without_the_patched_font
+run_test test_untagged_or_lookalike_tag_shows_no_lock
 
 # ============================================================================
 # Limits: hidden until hot, tightest first, at most two, fable folded in

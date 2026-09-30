@@ -453,6 +453,9 @@ pub struct App {
     /// Lines the delete confirm shows for files beyond cs's own that the
     /// removal would take, read when the confirm opens (never in render).
     pub delete_warnings: Vec<String>,
+    /// Drawn beside a session tagged encrypted; resolved once at start from
+    /// the machine's font consent.
+    pub lock_marker: &'static str,
     /// Fuzzy match indices per session index (for highlighting matched chars in names).
     pub fuzzy_indices: HashMap<usize, Vec<usize>>,
     /// Worktree rows (`base@task`) currently attached under their base in
@@ -616,6 +619,7 @@ impl App {
             visible_sort_columns: Vec::new(),
             delete_countdown_start: None,
             delete_warnings: Vec::new(),
+            lock_marker: session::lock_marker(),
             fuzzy_indices: HashMap::new(),
             attached_worktrees: HashSet::new(),
             revealed_secret: None,
@@ -2551,6 +2555,7 @@ mod tests {
                 git_repo: Some("hex/alpha".into()),
                 tags: Vec::new(),
                 archived: false,
+                vault: None,
             },
             Session {
                 name: "beta".into(),
@@ -2566,6 +2571,7 @@ mod tests {
                 git_repo: Some("hex/beta".into()),
                 tags: Vec::new(),
                 archived: false,
+                vault: None,
             },
             Session {
                 name: "gamma".into(),
@@ -2581,6 +2587,7 @@ mod tests {
                 git_repo: None,
                 tags: Vec::new(),
                 archived: false,
+                vault: None,
             },
         ]
     }
@@ -2873,6 +2880,7 @@ mod tests {
             git_repo: None,
             tags: tags.iter().map(|t| t.to_string()).collect(),
             archived: false,
+            vault: None,
         }
     }
 
@@ -2891,6 +2899,7 @@ mod tests {
             git_repo: None,
             tags: Vec::new(),
             archived: true,
+            vault: None,
         }
     }
 
@@ -3073,6 +3082,7 @@ mod tests {
             git_repo: None,
             tags: Vec::new(),
             archived: false,
+            vault: None,
         };
         // Insertion order deliberately differs from recency order.
         let app = App::new(vec![
@@ -4879,6 +4889,7 @@ mod tests {
             git_repo: None,
             tags: Vec::new(),
             archived: false,
+            vault: None,
         };
         vec![
             session("today-a", 0),
