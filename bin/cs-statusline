@@ -580,6 +580,7 @@ ICON_MAIL=$'\xe2\x9c\x89 '      # U+2709 envelope (unread cross-session mail)
 ICON_LOGO=$'\xe2\x9c\xb3'       # U+2733 eight-spoked asterisk (Claude mark)
 ICON_PANE=$'\xe2\x97\xab '      # U+25EB square with vertical bisect (tmux pane)
 ICON_FABLE=$'\xe2\x9c\xa7 '     # U+2727 white four-pointed star (model-scoped limit)
+ICON_LOCK=$'\xef\x80\xa3'       # U+F023 Nerd Font lock (encrypted session; needs the caps consent)
 
 # --- stdin -----------------------------------------------------------------
 
@@ -1710,6 +1711,48 @@ _seg_session() {
         name="${dir##*/}"
     fi
     _add "${name}" identity ink bold space
+    _session_encrypted "$name" || return 0
+    # The lock is a private-use glyph, so it waits on the same font consent as
+    # the capsule caps; unconfirmed fonts get a word instead of a box.
+    if _caps_wanted; then
+        _add "$ICON_LOCK" identity ink2 "" space
+    else
+        _add "enc" identity ink2 "" space
+    fi
+}
+
+# True when the session's README frontmatter lists the `encrypted` tag, the
+# marker a session carries when it keeps its notes in an encrypted volume.
+# Reads the flow-style `tags: [a, b]` line the TUI and `cs -tag` share,
+# in-process; the item must be `encrypted` exactly, quoted or not.
+_session_encrypted() {  # session_name
+    local readme="$SESSIONS_ROOT/$1/.cs/README.md" line n=0 item
+    [ -f "$readme" ] && [ -r "$readme" ] || return 1
+    while IFS= read -r line || [ -n "$line" ]; do
+        n=$((n + 1))
+        if [ "$n" -eq 1 ]; then
+            [ "$line" = "---" ] || return 1
+            continue
+        fi
+        [ "$line" = "---" ] && return 1
+        case "$line" in
+            tags:*) ;;
+            *) continue ;;
+        esac
+        line="${line#tags:}"
+        line="${line#*[}"
+        line="${line%]*}"
+        while [ -n "$line" ]; do
+            item="${line%%,*}"
+            case "$line" in *,*) line="${line#*,}" ;; *) line="" ;; esac
+            item="${item#"${item%%[![:space:]]*}"}"
+            item="${item%"${item##*[![:space:]]}"}"
+            item="${item#\"}"; item="${item%\"}"
+            [ "$item" = "encrypted" ] && return 0
+        done
+        return 1
+    done < "$readme"
+    return 1
 }
 
 # Count of queued tasks for the current session (one file per task in
