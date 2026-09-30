@@ -425,6 +425,25 @@ _remove_one_session() {
         error "Session '$session_name' is live (pid $(read_lock_pid "$session_dir/.cs")); use --force to remove anyway"
     fi
 
+    # An encrypted session mounts its vault inside the session directory by
+    # convention, and rm -rf recurses into a mount: removing the session would
+    # delete what the vault holds. A link that resolves into this directory
+    # means the vault is mounted here, so refuse, --force or not. An adopted
+    # session loses only its link below, so it is exempt.
+    if [ ! -L "$session_dir" ]; then
+        local sub link real_dir real_target
+        real_dir=$(cd "$session_dir" && pwd -P)
+        for sub in memory plans claude-config private; do
+            link="$session_dir/.cs/$sub"
+            [ -L "$link" ] || continue
+            real_target=$(cd "$link" 2>/dev/null && pwd -P) || continue
+            case "$real_target" in
+                "$real_dir"/*)
+                    error "Session '$session_name' has encrypted storage mounted inside it: .cs/$sub points at $(readlink "$link"). Removing the session would delete what the vault holds; unmount it, then retry." ;;
+            esac
+        done
+    fi
+
     # Every confirmation below reads from stdin; a script piping input through
     # a non-tty without --force used to hit a `read` that failed silently and
     # exited 1 with no explanation. Refuse loudly, before any mutation, unless
