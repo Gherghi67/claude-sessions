@@ -1971,6 +1971,51 @@ test_session_end_generates_index_with_many_changes() {
     index_teardown
 }
 
+# An encrypted session keeps its cs files behind .cs/private, a link into its
+# vault. Every hook that writes the session log writes it there, and none
+# writes a plaintext copy into .cs/local.
+test_lifecycle_hooks_log_into_the_private_dir() {
+    index_setup
+    rm "$CLAUDE_SESSION_META_DIR/local/session.log"
+    mkdir -p "$TEST_TMPDIR/vault/private"
+    ln -s "$TEST_TMPDIR/vault/private" "$CLAUDE_SESSION_META_DIR/private"
+
+    echo '{"session_id":"test-123","source":"startup","cwd":"'"$CLAUDE_SESSION_DIR"'","hook_event_name":"SessionStart"}' \
+        | bash "$HOOKS_DIR/session-start.sh" >/dev/null 2>&1
+    echo '{"tool_name":"Bash","error":"Command failed with exit code 1"}' \
+        | bash "$HOOKS_DIR/tool-failure-logger.sh"
+    echo '{"session_id":"test-123","reason":"clear"}' | bash "$HOOKS_DIR/session-end.sh" >/dev/null 2>&1
+
+    local log="$TEST_TMPDIR/vault/private/session.log"
+    assert_file_contains "$log" "Session started (source: startup, ID: test-123)" \
+        "session-start should log into the private dir" || { index_teardown; return 1; }
+    assert_file_contains "$log" "Tool failure: Bash" \
+        "tool-failure-logger should log into the private dir" || { index_teardown; return 1; }
+    assert_file_contains "$log" "Session ended (source: clear, ID: test-123)" \
+        "session-end should log into the private dir" || { index_teardown; return 1; }
+    assert_file_not_exists "$CLAUDE_SESSION_META_DIR/local/session.log" \
+        "nothing may be logged in plaintext" || { index_teardown; return 1; }
+    index_teardown
+}
+
+# A locked vault leaves the link dangling: the hooks still run, and write no
+# log anywhere.
+test_lifecycle_hooks_log_nothing_while_locked() {
+    index_setup
+    rm "$CLAUDE_SESSION_META_DIR/local/session.log"
+    ln -s "$TEST_TMPDIR/unmounted/private" "$CLAUDE_SESSION_META_DIR/private"
+
+    echo '{"tool_name":"Bash","error":"Command failed with exit code 1"}' \
+        | bash "$HOOKS_DIR/tool-failure-logger.sh"
+    echo '{"session_id":"test-123","reason":"clear"}' | bash "$HOOKS_DIR/session-end.sh" >/dev/null 2>&1
+
+    assert_file_not_exists "$CLAUDE_SESSION_META_DIR/local/session.log" \
+        "nothing may be logged in plaintext" || { index_teardown; return 1; }
+    assert_not_exists "$TEST_TMPDIR/unmounted" "nothing may be created where the vault mounts" \
+        || { index_teardown; return 1; }
+    index_teardown
+}
+
 # SessionEnd carries why the conversation ended in `reason` (clear, resume,
 # logout, prompt_input_exit, other). The log and the timeline record that
 # value, so a /clear is told apart from quitting.
@@ -2081,6 +2126,8 @@ run_test test_subagent_context_points_to_secret_store
 
 # Tool failure logger
 run_test test_failure_logged_to_session_log
+run_test test_lifecycle_hooks_log_into_the_private_dir
+run_test test_lifecycle_hooks_log_nothing_while_locked
 run_test test_failure_log_has_timestamp
 run_test test_failure_truncates_long_errors
 run_test test_failure_handles_huge_multiline_error

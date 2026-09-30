@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ABOUTME: PostToolUseFailure hook that logs failed tool calls for debugging
-# ABOUTME: Writes tool name, error, and timestamp to .cs/local/session.log
+# ABOUTME: Writes tool name, error, and timestamp to the session log (.cs/local or .cs/private)
 
 set -euo pipefail
 
@@ -13,6 +13,9 @@ INPUT=$(cat)
 # before its own decline, silently. When the library is absent the fallback
 # is the env-only check this guard replaced, so the hook behaves as it used to.
 _cs_lib="$(dirname "$0")/cs-resolve.sh"
+# cs-shared.sh is build.sh's copy of lib/02-shared.sh: it names the directory
+# the log lives in. Same guard, same reasons.
+_cs_shared="$(dirname "$0")/cs-shared.sh"
 # shellcheck source=cs-resolve.sh
 # Parse-check before sourcing: a truncated or corrupt library is readable,
 # and sourcing it aborts the hook at the syntax error, before the fallback
@@ -26,11 +29,18 @@ _cs_lib="$(dirname "$0")/cs-resolve.sh"
 case $- in *e*) _cs_had_e=1 ;; *) _cs_had_e=0 ;; esac
 set +e
 [ -r "$_cs_lib" ] && "${BASH:-/bin/bash}" -n "$_cs_lib" 2>/dev/null && . "$_cs_lib"
+# shellcheck source=cs-shared.sh
+[ -r "$_cs_shared" ] && "${BASH:-/bin/bash}" -n "$_cs_shared" 2>/dev/null && . "$_cs_shared"
 if [ "$_cs_had_e" = 1 ]; then set -e; fi
 if ! command -v cs_resolve_session >/dev/null 2>&1; then
     cs_resolve_session() {
         [ -n "${CLAUDE_SESSION_NAME:-}" ] && [ -n "${CLAUDE_SESSION_DIR:-}" ]
     }
+fi
+# Without the library there is no telling whether the session keeps its log in
+# a vault, so nothing is logged rather than risk writing it in plaintext.
+if ! command -v cs_private_dir >/dev/null 2>&1; then
+    cs_private_dir() { return 1; }
 fi
 # Only run in cs sessions
 cs_resolve_session "$INPUT" || exit 0
@@ -42,10 +52,9 @@ if [ -z "$SESSION_DIR" ] || [ ! -d "$SESSION_DIR" ]; then
     exit 0
 fi
 
-LOG_FILE="$META_DIR/local/session.log"
-if [ ! -d "$(dirname "$LOG_FILE")" ]; then
-    exit 0
-fi
+LOG_DIR=$(cs_private_dir "$META_DIR") || exit 0
+[ -d "$LOG_DIR" ] || exit 0
+LOG_FILE="$LOG_DIR/session.log"
 
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // "unknown"')
 ERROR=$(echo "$INPUT" | jq -r '.error // "no error message"')

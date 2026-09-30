@@ -44,6 +44,11 @@ set +e
 # shellcheck source=cs-shared.sh
 [ -r "$_cs_shared" ] && "${BASH:-/bin/bash}" -n "$_cs_shared" 2>/dev/null && . "$_cs_shared"
 if [ "$_cs_had_e" = 1 ]; then set -e; fi
+# Without the library there is no telling whether the session keeps its log in
+# a vault, so nothing is logged rather than risk writing it in plaintext.
+if ! command -v cs_private_dir >/dev/null 2>&1; then
+    cs_private_dir() { return 1; }
+fi
 if ! command -v cs_resolve_session >/dev/null 2>&1; then
     cs_resolve_session() {
         [ -n "${CLAUDE_SESSION_NAME:-}" ] && [ -n "${CLAUDE_SESSION_DIR:-}" ]
@@ -129,10 +134,13 @@ fi
 # Log session start. Ensure the machine-local dir exists first: it is gitignored,
 # so a freshly-cloned session has none until cs creates it, and an unguarded
 # append into a missing dir would abort this hook under set -e.
+# An encrypted session logs into its vault; while the vault is locked the log
+# goes nowhere, never into .cs/local.
 mkdir -p "$META_DIR/local" 2>/dev/null || true
-echo "$(date '+%Y-%m-%d %H:%M:%S') - Session started (source: $SOURCE, ID: $SESSION_ID)" >> "$META_DIR/local/session.log"
-echo "  Working directory: $CWD" >> "$META_DIR/local/session.log"
-echo "" >> "$META_DIR/local/session.log"
+if _log_dir=$(cs_private_dir "$META_DIR"); then SESSION_LOG="$_log_dir/session.log"; else SESSION_LOG=/dev/null; fi
+echo "$(date '+%Y-%m-%d %H:%M:%S') - Session started (source: $SOURCE, ID: $SESSION_ID)" >> "$SESSION_LOG"
+echo "  Working directory: $CWD" >> "$SESSION_LOG"
+echo "" >> "$SESSION_LOG"
 
 
 # Auto-pull and crash recovery only on fresh start or resume
@@ -255,7 +263,7 @@ if git -C "$SESSION_DIR" rev-parse --git-dir >/dev/null 2>&1; then
                 CRASH_CONTEXT="${CRASH_HEAD} WARNING: ${CRASH_WHY} A blanket restore would overwrite committed work with a divergent snapshot, so it is NOT offered. Inspect and restore per file, e.g.: git -C \"$SESSION_DIR\" diff HEAD $SHADOW_REF -- <file> then git -C \"$SESSION_DIR\" checkout $SHADOW_REF -- <file>\nTo discard the snapshot once reviewed, run: git -C \"$SESSION_DIR\" update-ref -d $SHADOW_REF"
             fi
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] Crash recovery: found ${CRASH_FILE_COUNT} unsaved file(s), awaiting user decision" \
-                >> "$META_DIR/local/session.log"
+                >> "$SESSION_LOG"
         else
             # No actual changes — just clean up the orphaned ref
             git -C "$SESSION_DIR" update-ref -d "$SHADOW_REF" 2>/dev/null || true
@@ -412,7 +420,7 @@ if [ "$IS_LEAD" = 1 ] && [[ "$SESSION_ID" =~ $UUID_RE ]]; then
     RECORDED_UUID=$(awk '/^claude_session_id:/ { print $2; exit }' "$STATE_FILE" 2>/dev/null || true)
     if [ "$RECORDED_UUID" != "$SESSION_ID" ]; then
         local_state_set claude_session_id "$SESSION_ID"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') - Rebound claude_session_id: ${RECORDED_UUID:-none} -> $SESSION_ID" >> "$META_DIR/local/session.log"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Rebound claude_session_id: ${RECORDED_UUID:-none} -> $SESSION_ID" >> "$SESSION_LOG"
         # Named literally: TIMELINE_FILE is not assigned until further down.
         _cs_terminate_jsonl "$META_DIR/timeline.jsonl" 2>/dev/null || true
         # Durable lineage: a UUID change the launch path did not pre-record.
@@ -566,7 +574,7 @@ if [ "$SOURCE" = "resume" ] && git -C "$SESSION_DIR" rev-parse --git-dir >/dev/n
     DYNAMIC=""
 
     # Time since last session activity
-    LAST_LOG_TIME=$(tail -1 "$META_DIR/local/session.log" 2>/dev/null | grep -oE '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}' | head -1 || true)
+    LAST_LOG_TIME=$(tail -1 "$SESSION_LOG" 2>/dev/null | grep -oE '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}' | head -1 || true)
     if [ -n "$LAST_LOG_TIME" ]; then
         DYNAMIC="${DYNAMIC}Last activity: ${LAST_LOG_TIME}${_NL}"
     fi
@@ -662,7 +670,9 @@ NUMSTAT
         SIBLINGS=""
         SIBLING_COUNT=0
         seen_siblings=""
-        # Sort sibling sessions by session.log mtime (most recent first)
+        # Sort sibling sessions by session.log mtime (most recent first). An
+        # encrypted session logs into .cs/private and so is never listed: its
+        # objective must not reach another session's conversation.
         while IFS= read -r log_file; do
             sibling_dir=$(dirname "$(dirname "$(dirname "$log_file")")")
             [ -d "$sibling_dir/.cs" ] || continue
