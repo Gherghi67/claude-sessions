@@ -69,7 +69,7 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] Tool failure: $TOOL_NAME - $ERROR_SHORT" >>
 # (Stop hook); absent or non-numeric reads as 0. Best-effort — this hook
 # stays silent and non-blocking no matter what.
 {
-    FAILS_FILE="$META_DIR/local/failures"
+    FAILS_FILE="$LOG_DIR/failures"
     CUR=$(cat "$FAILS_FILE" 2>/dev/null | tr -d '[:space:]')
     case "$CUR" in ''|*[!0-9]*) CUR=0;; esac
     printf '%s\n' $((CUR + 1)) > "$FAILS_FILE.tmp" && mv "$FAILS_FILE.tmp" "$FAILS_FILE"

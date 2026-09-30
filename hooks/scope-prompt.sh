@@ -404,13 +404,14 @@ _build_mail_digest() {  # cs files dir: .cs/local, or .cs/private in an encrypte
 DIGEST=""
 DIGEST_PENDING=""
 MAIL_DIGEST=""
-if [ -n "${CLAUDE_SESSION_META_DIR:-}" ]; then
-    _build_digest "$CLAUDE_SESSION_META_DIR/local"
-    # The mailbox sits with the session's other cs files; a locked vault has
-    # no readable mail to digest.
-    if _mail_base=$(cs_private_dir "$CLAUDE_SESSION_META_DIR"); then
-        _build_mail_digest "$_mail_base"
-    fi
+# The queue inbox and the mailbox sit with the session's other cs files
+# (behind .cs/private in an encrypted session); a locked vault has nothing
+# readable to digest, and DIGEST_DIR stays empty so no cursor is written.
+DIGEST_DIR=""
+if [ -n "${CLAUDE_SESSION_META_DIR:-}" ] \
+    && DIGEST_DIR=$(cs_private_dir "$CLAUDE_SESSION_META_DIR"); then
+    _build_digest "$DIGEST_DIR"
+    _build_mail_digest "$DIGEST_DIR"
 fi
 if [ -n "$MAIL_DIGEST" ]; then
     DIGEST="${DIGEST:+$DIGEST
@@ -447,7 +448,7 @@ _digest_exit() {
     # An emission that failed left the digest and the note unheard; the cursor
     # and the stamp wait for the next prompt to carry them.
     if [ "$_emitted" -eq 0 ]; then
-        _commit_digest "${CLAUDE_SESSION_META_DIR:-}/local"
+        _commit_digest "$DIGEST_DIR"
         _commit_date_stamp "${CLAUDE_SESSION_META_DIR:-}/local"
     fi
     _trace exit
@@ -719,7 +720,7 @@ fi
 _emitted=0
 _emit_context "$DATE_NOTE" "$DIGEST" "$CLARIFY" "$BLOCK" || _emitted=$?
 if [ "$_emitted" -eq 0 ]; then
-    _commit_digest "${CLAUDE_SESSION_META_DIR:-}/local"
+    _commit_digest "$DIGEST_DIR"
     _commit_date_stamp "${CLAUDE_SESSION_META_DIR:-}/local"
 fi
 _trace emit

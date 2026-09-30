@@ -1700,4 +1700,17 @@ run_test test_idle_wake_fires_for_vault_mail_by_either_path
 run_test test_cwd_change_arms_the_vault_maildir
 run_test test_locked_session_mail_hooks_write_nothing
 
+# The task a sender mails into an encrypted session's vault queue is the one
+# that session's drain hands over: writer and reader agree on the vault.
+test_task_mailed_to_an_encrypted_session_is_drained() {
+    _make_private receiver
+    "$CS_BIN" -msg receiver -k task "sealed walkaway task" >/dev/null 2>&1 || return 1
+    rcv -queue start >/dev/null 2>&1 || return 1
+    local out; out=$(wake)
+    assert_output_contains "$out" "sealed walkaway task" "the drain hands over the vault's task" || return 1
+    assert_not_exists "$(RCV_META)/local/queue.state" "no plaintext queue state" || return 1
+}
+
+run_test test_task_mailed_to_an_encrypted_session_is_drained
+
 report_results

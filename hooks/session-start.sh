@@ -924,7 +924,10 @@ fi
 # Queue inbox digest (surface-once; same recipe as scope-prompt.sh).
 DIGEST=""
 DIGEST_PENDING=""
-_build_digest "$META_DIR/local"
+# The inbox sits behind .cs/private in an encrypted session; a locked vault has
+# nothing readable, and DIGEST_DIR stays empty so no cursor is written.
+DIGEST_DIR=""
+if DIGEST_DIR=$(cs_private_dir "$META_DIR"); then _build_digest "$DIGEST_DIR"; else DIGEST_DIR=""; fi
 if [ -n "$DIGEST" ]; then
     CONTEXT="${CONTEXT}
 
@@ -1013,7 +1016,7 @@ jq -n --arg context "$CONTEXT" --arg watch "$MAIL_WATCH" --arg kick "$ROTATION_K
 }
 + (if $sysmsg == "" then {} else {systemMessage: $sysmsg} end)'
 
-_commit_digest "$META_DIR/local"
+_commit_digest "$DIGEST_DIR"
 
 # The context block above told the conversation today's date. Record which day
 # this conversation heard, one file per conversation, so scope-prompt.sh can say
