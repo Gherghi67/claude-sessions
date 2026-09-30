@@ -603,6 +603,99 @@ test_unmounted_claude_config_refuses_open() {
     assert_file_not_exists "$TEST_TMPDIR/launched" "claude must not launch with its config unmounted" || return 1
 }
 
+# Opens vt, with its config in the vault, from a shell with no config variables.
+_open_vaulted_config_session() {
+    _make_vaulted_session vt
+    _make_vaulted_config vt
+    _make_launch_sentinel
+    env -u CLAUDE_CONFIG_DIR -u CLAUDE_SECURESTORAGE_CONFIG_DIR "$CS_BIN" vt <<< "" >/dev/null 2>&1
+}
+
+# The vault config shares the user's settings, instructions and extensions with
+# ~/.claude, so an encrypted session runs with the same hooks, skills and plugins.
+test_claude_config_links_the_shared_config() {
+    mkdir -p "$HOME/.claude/skills/demo"
+    printf '{"model":"base"}\n' > "$HOME/.claude/settings.json"
+
+    local rc=0
+    _open_vaulted_config_session || rc=$?
+
+    local config="$CS_SESSIONS_ROOT/vt/.cs/claude-config"
+    assert_eq "0" "$rc" "cs should open the session" || return 1
+    assert_eq "$HOME/.claude/settings.json" "$(readlink "$config/settings.json")" \
+        "settings.json should link to the shell's config" || return 1
+    assert_eq "$HOME/.claude/skills" "$(readlink "$config/skills")" \
+        "skills should link to the shell's config" || return 1
+}
+
+# Under a non-default profile the shared config is that profile's.
+test_claude_config_links_the_shell_profile_config() {
+    mkdir -p "$HOME/.claude" "$TEST_TMPDIR/profile-b"
+    printf '{"model":"home"}\n' > "$HOME/.claude/settings.json"
+    printf '{"model":"profile-b"}\n' > "$TEST_TMPDIR/profile-b/settings.json"
+    _make_vaulted_session vt
+    _make_vaulted_config vt
+    _make_launch_sentinel
+
+    env -u CLAUDE_SECURESTORAGE_CONFIG_DIR CLAUDE_CONFIG_DIR="$TEST_TMPDIR/profile-b" \
+        "$CS_BIN" vt <<< "" >/dev/null 2>&1 || true
+
+    assert_eq "$TEST_TMPDIR/profile-b/settings.json" \
+        "$(readlink "$CS_SESSIONS_ROOT/vt/.cs/claude-config/settings.json")" \
+        "settings.json should link to the profile's config, not ~/.claude" || return 1
+}
+
+# A link to an entry the shell's config lacks would dangle.
+test_claude_config_skips_what_the_shell_config_lacks() {
+    mkdir -p "$HOME/.claude"
+    printf '{}\n' > "$HOME/.claude/settings.json"
+
+    _open_vaulted_config_session || true
+
+    local config="$CS_SESSIONS_ROOT/vt/.cs/claude-config"
+    assert_eq "settings.json" "$(ls -A "$config")" \
+        "only the entry the shell's config has should be linked" || return 1
+}
+
+# The session may keep its own settings, or a link it made by hand; and a
+# second launch finds its own links already there.
+test_claude_config_keeps_its_own_entries() {
+    mkdir -p "$HOME/.claude/skills"
+    printf '{"model":"base"}\n' > "$HOME/.claude/settings.json"
+    printf '{}\n' > "$HOME/.claude/keybindings.json"
+    _make_vaulted_session vt
+    _make_vaulted_config vt
+    local config="$CS_SESSIONS_ROOT/vt/.cs/claude-config"
+    printf '{"model":"own"}\n' > "$config/settings.json"
+    ln -s "$TEST_TMPDIR/gone" "$config/keybindings.json"
+    _make_launch_sentinel
+
+    local rc1=0 rc2=0
+    env -u CLAUDE_CONFIG_DIR -u CLAUDE_SECURESTORAGE_CONFIG_DIR "$CS_BIN" vt <<< "" >/dev/null 2>&1 || rc1=$?
+    env -u CLAUDE_CONFIG_DIR -u CLAUDE_SECURESTORAGE_CONFIG_DIR "$CS_BIN" vt <<< "" >/dev/null 2>&1 || rc2=$?
+
+    assert_eq "0 0" "$rc1 $rc2" "both launches should open the session" || return 1
+    assert_eq "launched
+launched" "$(cat "$TEST_TMPDIR/launched")" "claude should launch twice" || return 1
+    assert_eq '{"model":"own"}' "$(cat "$config/settings.json")" \
+        "the session's own settings should be kept" || return 1
+    assert_eq "$TEST_TMPDIR/gone" "$(readlink "$config/keybindings.json")" \
+        "a link the session already has should be kept" || return 1
+}
+
+# What Claude Code writes about conversations is the leak the vault closes;
+# linking it back to ~/.claude would reopen it.
+test_claude_config_never_links_conversation_state() {
+    mkdir -p "$HOME/.claude/projects" "$HOME/.claude/backups" "$HOME/.claude/todos"
+    printf '{}\n' > "$HOME/.claude/history.jsonl"
+
+    _open_vaulted_config_session || true
+
+    local config="$CS_SESSIONS_ROOT/vt/.cs/claude-config"
+    assert_eq "" "$(ls -A "$config")" \
+        "no conversation state should be shared with the shell's config" || return 1
+}
+
 # ============================================================================
 # Runner
 # ============================================================================
@@ -647,5 +740,10 @@ run_test test_claude_config_link_moves_claude_code_into_the_vault
 run_test test_unmounted_claude_config_refuses_open
 run_test test_session_without_claude_config_drops_an_inherited_vault_config
 run_test test_claude_config_link_keeps_the_shell_profile_login
+run_test test_claude_config_links_the_shared_config
+run_test test_claude_config_links_the_shell_profile_config
+run_test test_claude_config_skips_what_the_shell_config_lacks
+run_test test_claude_config_keeps_its_own_entries
+run_test test_claude_config_never_links_conversation_state
 
 report_results

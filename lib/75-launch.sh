@@ -143,8 +143,25 @@ _export_session_claude_config() {  # session_dir
             ;;
     esac
     [ -e "$config" ] || return 0
+    _link_shared_claude_config "$config" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
     export CLAUDE_SECURESTORAGE_CONFIG_DIR="${CLAUDE_SECURESTORAGE_CONFIG_DIR-${CLAUDE_CONFIG_DIR-}}"
     export CLAUDE_CONFIG_DIR="$config"
+}
+
+# The session's config dir shares the shell's settings, instructions and
+# extensions by symlink, so hooks, skills and plugins behave as they do
+# anywhere else. Only these names are shared: everything else Claude Code
+# writes (projects/, history.jsonl, backups/, todos/) is born in the session's
+# config dir and stays behind the vault. An entry already there is the
+# session's own and is left alone.
+_link_shared_claude_config() {  # session_config_dir, shell_config_dir
+    local name
+    for name in settings.json settings.local.json CLAUDE.md AGENTS.md rules skills \
+        commands agents hooks plugins output-styles keybindings.json vale; do
+        [ -e "$2/$name" ] || continue
+        [ -e "$1/$name" ] || [ -L "$1/$name" ] && continue
+        ln -s "$2/$name" "$1/$name" || error "could not link $1/$name to $2/$name."
+    done
 }
 
 # One row of the pending-handoff answers: the key, a padded label, and a dim
