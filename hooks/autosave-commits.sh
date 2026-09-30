@@ -132,8 +132,21 @@ autosave_to_shadow_ref() {
         TEMP_INDEX=$(mktemp "${TMPDIR:-/tmp}/cs-autosave.XXXXXX")
         cp "$GIT_DIR/index" "$TEMP_INDEX"
 
-        # Stage all current files in the temporary index
-        GIT_INDEX_FILE="$TEMP_INDEX" git add -A 2>/dev/null || { rm -f "$TEMP_INDEX"; exit 0; }
+        # Stage all current files in the temporary index, except an encrypted
+        # session's mounted volume: its blobs would land in plaintext
+        # .git/objects, pinned by the autosave ref. The ignore entry for
+        # .cs/vault-mnt/ is not enough, since older and adopted sessions lack
+        # it, so the conventional mount and every link target inside this
+        # tree are excluded here. An exclude cannot drop a path the index
+        # already tracks; a freshly mounted volume is untracked.
+        excludes=(':(exclude).cs/vault-mnt')
+        top=$(pwd -P)
+        for sub in memory plans claude-config private; do
+            [ -L "$META_DIR/$sub" ] || continue
+            target=$(cd "$META_DIR/$sub" 2>/dev/null && pwd -P) || continue
+            case "$target" in "$top"/*) excludes+=(":(exclude)${target#"$top"/}") ;; esac
+        done
+        GIT_INDEX_FILE="$TEMP_INDEX" git add -A -- ':/' "${excludes[@]}" 2>/dev/null || { rm -f "$TEMP_INDEX"; exit 0; }
 
         # Write tree object from temporary index
         tree=$(GIT_INDEX_FILE="$TEMP_INDEX" git write-tree 2>/dev/null) || { rm -f "$TEMP_INDEX"; exit 0; }
