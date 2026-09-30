@@ -7702,6 +7702,9 @@ _export_session_claude_config() {  # session_dir
     esac
     [ -e "$config" ] || return 0
     _link_shared_claude_config "$config" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+    # Claude Code keeps .claude.json beside the config dir by default, inside it
+    # when CLAUDE_CONFIG_DIR is set.
+    _seed_session_claude_json "$config" "${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"
     export CLAUDE_SECURESTORAGE_CONFIG_DIR="${CLAUDE_SECURESTORAGE_CONFIG_DIR-${CLAUDE_CONFIG_DIR-}}"
     export CLAUDE_CONFIG_DIR="$config"
 }
@@ -7720,6 +7723,23 @@ _link_shared_claude_config() {  # session_config_dir, shell_config_dir
         [ -e "$1/$name" ] || [ -L "$1/$name" ] && continue
         ln -s "$2/$name" "$1/$name" || error "could not link $1/$name to $2/$name."
     done
+}
+
+# The session's .claude.json starts once as a copy of the shell's, so the
+# login's onboarding and preferences carry over, with every project's record
+# dropped: each keeps that project's last prompt in plaintext. From then on it
+# is the session's own. jq exits 0 on an empty file and prints nothing, so -e
+# is what turns an empty or unreadable source into a refusal.
+_seed_session_claude_json() {  # session_config_dir, shell_claude_json
+    local dest="$1/.claude.json" tmp
+    [ -e "$dest" ] || [ -L "$dest" ] && return 0
+    [ -e "$2" ] || return 0
+    tmp=$(mktemp "$1/.claude.json.XXXXXX") || error "could not create a temporary file in $1."
+    if ! jq -e '.projects = {}' "$2" > "$tmp" 2>/dev/null; then
+        rm -f "$tmp"
+        error "$2 is not a JSON object cs can copy into $1; fix it, then reopen."
+    fi
+    mv "$tmp" "$dest" || { rm -f "$tmp"; error "could not write $dest."; }
 }
 
 # One row of the pending-handoff answers: the key, a padded label, and a dim

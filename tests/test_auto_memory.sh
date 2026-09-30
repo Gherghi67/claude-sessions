@@ -696,6 +696,78 @@ test_claude_config_never_links_conversation_state() {
         "no conversation state should be shared with the shell's config" || return 1
 }
 
+# The vault's .claude.json starts as a copy of the shell's, so onboarding and
+# preferences carry over, minus every project's record: each one keeps that
+# project's last prompt in plaintext.
+test_claude_config_seeds_claude_json_without_projects() {
+    printf '%s\n' '{"hasCompletedOnboarding":true,"projects":{"/p":{"lastSessionFirstPrompt":"private words"}}}' \
+        > "$HOME/.claude.json"
+
+    local rc=0
+    _open_vaulted_config_session || rc=$?
+
+    local seeded="$CS_SESSIONS_ROOT/vt/.cs/claude-config/.claude.json"
+    assert_eq "0" "$rc" "cs should open the session" || return 1
+    assert_eq '{"hasCompletedOnboarding":true,"projects":{}}' "$(jq -c . "$seeded")" \
+        "the copy should keep the settings and drop every project" || return 1
+    assert_eq "$seeded" "$(find "$seeded" -perm 600)" "the copy should be readable by its owner only" || return 1
+}
+
+# Claude Code keeps .claude.json in $HOME by default, but inside the config dir
+# when CLAUDE_CONFIG_DIR is set; the copy comes from wherever the shell's is.
+test_claude_config_seeds_the_shell_profile_claude_json() {
+    mkdir -p "$TEST_TMPDIR/profile-b"
+    printf '{"from":"home"}\n' > "$HOME/.claude.json"
+    printf '{"from":"profile-b"}\n' > "$TEST_TMPDIR/profile-b/.claude.json"
+    _make_vaulted_session vt
+    _make_vaulted_config vt
+    _make_launch_sentinel
+
+    env -u CLAUDE_SECURESTORAGE_CONFIG_DIR CLAUDE_CONFIG_DIR="$TEST_TMPDIR/profile-b" \
+        "$CS_BIN" vt <<< "" >/dev/null 2>&1 || true
+
+    assert_eq '{"from":"profile-b","projects":{}}' \
+        "$(jq -c . "$CS_SESSIONS_ROOT/vt/.cs/claude-config/.claude.json")" \
+        "the copy should come from the profile's .claude.json" || return 1
+}
+
+# After the first launch the session's .claude.json is Claude Code's to write.
+test_claude_config_seeds_claude_json_once() {
+    printf '{"from":"home"}\n' > "$HOME/.claude.json"
+    _open_vaulted_config_session || true
+    local seeded="$CS_SESSIONS_ROOT/vt/.cs/claude-config/.claude.json"
+    printf '{"from":"session"}\n' > "$seeded"
+
+    env -u CLAUDE_CONFIG_DIR -u CLAUDE_SECURESTORAGE_CONFIG_DIR "$CS_BIN" vt <<< "" >/dev/null 2>&1 || true
+
+    assert_eq '{"from":"session"}' "$(jq -c . "$seeded")" \
+        "a second launch should keep the session's own .claude.json" || return 1
+}
+
+# Without a readable copy Claude Code would start the session as a fresh
+# install; an empty file is the case jq alone lets through.
+test_claude_config_refuses_an_unreadable_claude_json() {
+    _make_vaulted_session vt
+    _make_vaulted_config vt
+    _make_launch_sentinel
+    local content out rc
+    for content in '{"projects": {,}' ''; do
+        printf '%s' "$content" > "$HOME/.claude.json"
+
+        rc=0
+        out=$(env -u CLAUDE_CONFIG_DIR -u CLAUDE_SECURESTORAGE_CONFIG_DIR "$CS_BIN" vt <<< "" 2>&1) || rc=$?
+
+        assert_eq "1" "$rc" "cs should exit 1 for '$content'" || return 1
+        # The line before it is the stale-lock notice the fixture's own
+        # creating launch leaves behind.
+        assert_eq "Error: $HOME/.claude.json is not a JSON object cs can copy into $CS_SESSIONS_ROOT/vt/.cs/claude-config; fix it, then reopen." \
+            "$(tail -n 1 <<< "$out")" "cs should name the source it cannot copy" || return 1
+        assert_file_not_exists "$TEST_TMPDIR/launched" "claude must not launch" || return 1
+        assert_eq "" "$(ls -A "$CS_SESSIONS_ROOT/vt/.cs/claude-config")" \
+            "nothing should be left in the session's config" || return 1
+    done
+}
+
 # ============================================================================
 # Runner
 # ============================================================================
@@ -745,5 +817,9 @@ run_test test_claude_config_links_the_shell_profile_config
 run_test test_claude_config_skips_what_the_shell_config_lacks
 run_test test_claude_config_keeps_its_own_entries
 run_test test_claude_config_never_links_conversation_state
+run_test test_claude_config_seeds_claude_json_without_projects
+run_test test_claude_config_seeds_the_shell_profile_claude_json
+run_test test_claude_config_seeds_claude_json_once
+run_test test_claude_config_refuses_an_unreadable_claude_json
 
 report_results
