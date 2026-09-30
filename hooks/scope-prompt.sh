@@ -15,9 +15,17 @@ set -uo pipefail
 # 3.2 has no builtin epoch clock, so there one `date` fork supplies whole seconds;
 # a `date` that stalls leaves no mark, which reads the same as a hook that never
 # started.
-_launch_local="${CLAUDE_SESSION_META_DIR:-${CLAUDE_SESSION_DIR:-}/.cs}/local"
+# An encrypted session traces into .cs/private and, while that is locked, not
+# at all: cs_private_dir's rule, spelled out here because the library is not
+# sourced yet.
+_launch_meta="${CLAUDE_SESSION_META_DIR:-${CLAUDE_SESSION_DIR:-}/.cs}"
+_launch_local="$_launch_meta/local"
+_launch_trace_dir="$_launch_local"
+if [ -L "$_launch_meta/private" ] || [ -e "$_launch_meta/private" ]; then
+    _launch_trace_dir="$_launch_meta/private"
+fi
 if [ "${CS_SCOPE_TRACE_DISABLE:-}" != "1" ] && [ -n "${CLAUDE_SESSION_DIR:-}" ] \
-    && [ -d "$_launch_local" ] && [ ! -f "$_launch_local/disabled" ]; then
+    && [ -d "$_launch_local" ] && [ -d "$_launch_trace_dir" ] && [ ! -f "$_launch_local/disabled" ]; then
     _launch_ms=""
     case "${EPOCHREALTIME:-}" in
         *[.,]*)
@@ -35,7 +43,7 @@ if [ "${CS_SCOPE_TRACE_DISABLE:-}" != "1" ] && [ -n "${CLAUDE_SESSION_DIR:-}" ] 
     esac
     if [ -n "$_launch_ms" ]; then
         { printf '%s %s launch\n' "$$" "$_launch_ms" \
-            >> "$_launch_local/scope-prompt.trace"; } 2>/dev/null || true
+            >> "$_launch_trace_dir/scope-prompt.trace"; } 2>/dev/null || true
     fi
 fi
 
@@ -47,6 +55,9 @@ fi
 # before its own decline, silently. When the library is absent the fallback
 # is the env-only check this guard replaced, so the hook behaves as it used to.
 _cs_lib="$(dirname "$0")/cs-resolve.sh"
+# cs-shared.sh is build.sh's copy of lib/02-shared.sh: it names the directory
+# the trace lives in. Same guard, same reasons.
+_cs_shared="$(dirname "$0")/cs-shared.sh"
 # shellcheck source=cs-resolve.sh
 # Parse-check before sourcing: a truncated or corrupt library is readable,
 # and sourcing it aborts the hook at the syntax error, before the fallback
@@ -60,7 +71,14 @@ _cs_lib="$(dirname "$0")/cs-resolve.sh"
 case $- in *e*) _cs_had_e=1 ;; *) _cs_had_e=0 ;; esac
 set +e
 [ -r "$_cs_lib" ] && "${BASH:-/bin/bash}" -n "$_cs_lib" 2>/dev/null && . "$_cs_lib"
+# shellcheck source=cs-shared.sh
+[ -r "$_cs_shared" ] && "${BASH:-/bin/bash}" -n "$_cs_shared" 2>/dev/null && . "$_cs_shared"
 if [ "$_cs_had_e" = 1 ]; then set -e; fi
+# Without the library there is no telling whether the session keeps its trace
+# in a vault, so nothing is traced rather than risk writing it in plaintext.
+if ! command -v cs_private_dir >/dev/null 2>&1; then
+    cs_private_dir() { return 1; }
+fi
 if ! command -v cs_resolve_session >/dev/null 2>&1; then
     cs_resolve_session() {
         [ -n "${CLAUDE_SESSION_NAME:-}" ] && [ -n "${CLAUDE_SESSION_DIR:-}" ]
@@ -140,7 +158,9 @@ _T0=$_MS
 # block's place, and it is empty on every run that reaches the scan.
 SKIP_NOTE=""
 
-_trace_open "${CLAUDE_SESSION_META_DIR:-}/local"
+if [ -n "${CLAUDE_SESSION_META_DIR:-}" ] && _trace_dir=$(cs_private_dir "$CLAUDE_SESSION_META_DIR"); then
+    _trace_open "$_trace_dir"
+fi
 
 # The user is back: drop the statusline's finished-blink marker before any
 # other gate (slash commands and short prompts clear it too).
