@@ -317,8 +317,10 @@ exist.
 Each worktree is a full cs session (own conversation, color, crash
 recovery, task list) that shares the base session's secrets.
 
-cs never commits for you: retirement refuses dirty checkouts and tells you
-what to commit, and creating a feature from a base with uncommitted changes asks
+cs never commits for you: retirement refuses dirty checkouts and untracked
+files and tells you what to commit. Git-ignored files in the worktree (build
+output, local secrets) are not checked and go with it, so keep anything you
+need that git ignores outside a feature worktree. Creating a feature from a base with uncommitted changes asks
 before branching from the last commit (interactive sessions) or refuses
 (scripts). Abandon a feature with `cs -rm myproj@fix-auth`. Repos that
 gitignore `.cs/` get a per-worktree `.cs/` whose records are fused into the
