@@ -152,7 +152,8 @@ Claude Code to exit and unmounts the volume, unless the session reopened in
 the meantime. The unmount is never forced: if something still holds the
 volume, it stays mounted, and the next open unmounts it and asks for the
 password. A second conversation opened while the session runs joins the
-mounted volume without asking.
+mounted volume without asking. An open that stops before Claude Code starts
+(a refusal, or a cancelled prompt) unmounts the volume it mounted.
 
 `cs -encrypt` refuses, before it writes anything, when:
 
