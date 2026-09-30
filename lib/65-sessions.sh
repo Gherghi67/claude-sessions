@@ -277,8 +277,10 @@ list_sessions() {
         local created="-"
         local modified="-"
 
-        local log_file="$session_dir/.cs/local/session.log"
-        # Fall back to older locations for unmigrated sessions
+        local log_file="$session_dir/.cs/private/session.log"
+        # An encrypted session keeps its log behind .cs/private; every other
+        # one in .cs/local. Fall back to older locations for unmigrated sessions
+        [ ! -f "$log_file" ] && log_file="$session_dir/.cs/local/session.log"
         [ ! -f "$log_file" ] && log_file="$session_dir/.cs/logs/session.log"
         [ ! -f "$log_file" ] && log_file="$session_dir/logs/session.log"
         if [ -f "$log_file" ]; then

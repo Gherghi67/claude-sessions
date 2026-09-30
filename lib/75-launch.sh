@@ -23,7 +23,8 @@ _handoff_is_unconsumed() {  # handoff_file
 # show, not a filter: the pick deliberately still offers a handoff from
 # elsewhere, because continuing one on another machine is a working flow.
 _handoff_is_local() {  # handoff_file, session_dir
-    local log="$2/.cs/local/session.log" parent
+    local log parent
+    log="$(cs_private_dir "$2/.cs")/session.log" || return 1
     [ -f "$log" ] || return 1
     parent=$(awk '
         NR==1 { if ($0 != "---") exit; next }

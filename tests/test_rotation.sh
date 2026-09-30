@@ -889,6 +889,25 @@ test_offer_leaves_a_local_handoff_unlabelled() {
         "a handoff this checkout wrote carries no foreign label" || return 1
 }
 
+# An encrypted session keeps its log behind .cs/private; the provenance check
+# reads it there, so the session's own handoff is not labelled foreign.
+test_offer_reads_provenance_from_the_private_log() {
+    _rot_session "rot-private"
+    local dir="$CS_SESSIONS_ROOT/rot-private"
+    _seed_handoff "$dir" "2026-07-16-mine.md" "unconsumed"
+    mkdir -p "$TEST_TMPDIR/vault/private"
+    mv "$dir/.cs/local/session.log" "$TEST_TMPDIR/vault/private/session.log"
+    ln -s "$TEST_TMPDIR/vault/private" "$dir/.cs/private"
+    printf '%s - Session started (source: startup, ID: %s)\n' \
+        "2026-07-16 10:00:00" "$UUID_A" >> "$TEST_TMPDIR/vault/private/session.log"
+    local output
+    output=$("$CS_BIN" rot-private <<< "n" 2>&1) || true
+    assert_output_contains "$output" "Rotation handoff pending" \
+        "the offer is still made for a local handoff" || return 1
+    assert_output_not_contains "$output" "another checkout" \
+        "a handoff this checkout wrote carries no foreign label" || return 1
+}
+
 test_discard_answer_dismisses_pending_handoff() {
     _rot_session "rot-d"
     local dir="$CS_SESSIONS_ROOT/rot-d"
@@ -1029,6 +1048,7 @@ run_test test_consumed_handoffs_do_not_trigger_prompt
 run_test test_newest_of_multiple_handoffs_wins
 run_test test_offer_labels_a_handoff_from_another_checkout
 run_test test_offer_leaves_a_local_handoff_unlabelled
+run_test test_offer_reads_provenance_from_the_private_log
 run_test test_a_logged_command_naming_a_uuid_is_not_provenance
 run_test test_a_trailing_carriage_return_still_reads_as_local
 run_test test_armed_marker_outranks_a_later_sorting_orphan

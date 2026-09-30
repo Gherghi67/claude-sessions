@@ -2359,11 +2359,15 @@ fuse_session_records() {
     # Worktrees never run migrate_session, so a task branch created before the
     # log moved to .cs/local/ still keeps its audit trail at .cs/logs/; fuse
     # whichever the worktree has into the base's machine-local log.
-    local srclog
+    # An encrypted base keeps its log behind .cs/private; a locked one cannot
+    # take the log, and .cs/local must not take it in plaintext instead.
+    local srclog dstlog
     for srclog in "$src/local/session.log" "$src/logs/session.log"; do
         if [ -f "$srclog" ]; then
-            mkdir -p "$dst/local"
-            { echo ""; cat "$srclog"; } >> "$dst/local/session.log"
+            dstlog=$(cs_private_dir "$dst") \
+                || error "cannot fuse the worktree's log: $dst/private is locked. Mount it, then retry."
+            mkdir -p "$dstlog"
+            { echo ""; cat "$srclog"; } >> "$dstlog/session.log"
             break
         fi
     done
@@ -6945,8 +6949,10 @@ list_sessions() {
         local created="-"
         local modified="-"
 
-        local log_file="$session_dir/.cs/local/session.log"
-        # Fall back to older locations for unmigrated sessions
+        local log_file="$session_dir/.cs/private/session.log"
+        # An encrypted session keeps its log behind .cs/private; every other
+        # one in .cs/local. Fall back to older locations for unmigrated sessions
+        [ ! -f "$log_file" ] && log_file="$session_dir/.cs/local/session.log"
         [ ! -f "$log_file" ] && log_file="$session_dir/.cs/logs/session.log"
         [ ! -f "$log_file" ] && log_file="$session_dir/logs/session.log"
         if [ -f "$log_file" ]; then
@@ -7615,7 +7621,8 @@ _handoff_is_unconsumed() {  # handoff_file
 # show, not a filter: the pick deliberately still offers a handoff from
 # elsewhere, because continuing one on another machine is a working flow.
 _handoff_is_local() {  # handoff_file, session_dir
-    local log="$2/.cs/local/session.log" parent
+    local log parent
+    log="$(cs_private_dir "$2/.cs")/session.log" || return 1
     [ -f "$log" ] || return 1
     parent=$(awk '
         NR==1 { if ($0 != "---") exit; next }

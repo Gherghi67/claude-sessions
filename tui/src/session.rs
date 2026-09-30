@@ -699,9 +699,12 @@ fn read_session(path: &Path, secret_counts: &HashMap<String, u32>) -> Session {
 }
 
 fn find_log_file(session_dir: &Path) -> Option<PathBuf> {
-    // Machine-local is the current home; the older .cs/logs/ and flat logs/
-    // locations are kept as fallbacks for sessions not yet migrated.
+    // An encrypted session keeps its log behind .cs/private (a link into its
+    // vault, unreadable while locked); machine-local is every other session's
+    // home; the older .cs/logs/ and flat logs/ locations are kept as fallbacks
+    // for sessions not yet migrated.
     for candidate in [
+        ".cs/private/session.log",
         ".cs/local/session.log",
         ".cs/logs/session.log",
         "logs/session.log",
@@ -1635,6 +1638,24 @@ mod tests {
     #[test]
     fn truncate_repo_one_char_is_ellipsis() {
         assert_eq!(truncate_repo("erp/firstborn-server", 1), "\u{2026}");
+    }
+
+    // An encrypted session keeps its log behind .cs/private, a link into its
+    // vault; the picker's created date comes from there.
+    #[test]
+    fn find_log_file_reads_the_private_log() {
+        let dir = std::env::temp_dir().join(format!("cs-test-private-log-{}", std::process::id()));
+        let vault = dir.join("vault/private");
+        fs::create_dir_all(&vault).unwrap();
+        fs::create_dir_all(dir.join("vt/.cs")).unwrap();
+        std::os::unix::fs::symlink(&vault, dir.join("vt/.cs/private")).unwrap();
+        fs::write(vault.join("session.log"), "Claude Code Session Log\nSession: vt\nStarted: 2026-03-04 05:06:00\n").unwrap();
+
+        let log = find_log_file(&dir.join("vt"));
+
+        assert_eq!(log, Some(dir.join("vt/.cs/private/session.log")));
+        assert_eq!(parse_created(&log.unwrap()), Some("2026-03-04 05:06".to_string()));
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
