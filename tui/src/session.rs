@@ -474,9 +474,17 @@ pub mod test_root {
     }
 }
 
-/// Directory holding a session's per-machine queue files (`.cs/local`).
+/// Directory holding a session's cs content files (queue, mailbox): `.cs/private`
+/// in an encrypted session, a link into its vault that reads as empty while it
+/// dangles (the vault locked), else `.cs/local`. cs_private_dir's rule.
+fn cs_files_dir(meta_dir: &Path) -> PathBuf {
+    let private = meta_dir.join("private");
+    if private.symlink_metadata().is_ok() { private } else { meta_dir.join("local") }
+}
+
+/// Directory holding a session's queue files.
 pub fn queue_dir(name: &str) -> PathBuf {
-    sessions_root().join(name).join(".cs").join("local")
+    cs_files_dir(&sessions_root().join(name).join(".cs"))
 }
 
 /// True while the session's queue drain is live: cs's Stop hook writes
@@ -660,7 +668,7 @@ fn read_session(path: &Path, secret_counts: &HashMap<String, u32>) -> Session {
         None => Liveness::Dormant,
     };
     let secrets_count = secret_counts.get(&name).copied().unwrap_or(0);
-    let queue_depth = queue_task_files_in(&meta_dir.join("local/queue")).len() as u32;
+    let queue_depth = queue_task_files_in(&cs_files_dir(&meta_dir).join("queue")).len() as u32;
     let unread_mail = unread_mail_count(&meta_dir);
     let has_git = is_git_checkout(path);
     let git_repo = if has_git {
@@ -1071,12 +1079,9 @@ fn remove_worktree_session(root: &Path, name: &str, path: &Path) -> std::io::Res
 /// what it prints into `cur/`), matching the shell reader and the statusline.
 /// Only `*.json` files count — a `.DS_Store`, a staging leftover or a
 /// subdirectory would otherwise badge a phantom unread that never clears.
-/// An encrypted session keeps its mailbox behind `.cs/private`, a link into its
-/// vault; while that link dangles (the vault locked) the read fails and counts 0.
+/// A locked vault's read fails and counts 0.
 fn unread_mail_count(meta_dir: &Path) -> u32 {
-    let private = meta_dir.join("private");
-    let base = if private.symlink_metadata().is_ok() { private } else { meta_dir.join("local") };
-    fs::read_dir(base.join("mail/new"))
+    fs::read_dir(cs_files_dir(meta_dir).join("mail/new"))
         .map(|entries| {
             entries
                 .flatten()
@@ -1579,6 +1584,29 @@ mod tests {
             1,
             "only new/*.json files count as unread"
         );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // An encrypted session keeps its queue behind .cs/private: the scan's
+    // depth, the notes panel and the editor all read it there, and a locked
+    // vault reads as an empty queue.
+    #[test]
+    fn queue_reads_the_private_dir() {
+        let dir = std::env::temp_dir().join(format!("cs-queue-private-{}", std::process::id()));
+        let vault = dir.join("vault/private");
+        fs::create_dir_all(vault.join("queue")).unwrap();
+        fs::create_dir_all(dir.join("root/vt/.cs/local")).unwrap();
+        std::os::unix::fs::symlink(&vault, dir.join("root/vt/.cs/private")).unwrap();
+        fs::write(vault.join("queue/0000000001-a"), "sealed task\n").unwrap();
+        fs::write(vault.join("queue.state"), "draining\n").unwrap();
+        let _root = test_root::scoped(dir.join("root"));
+        assert_eq!(queue_dir("vt"), dir.join("root/vt/.cs/private"));
+        assert_eq!(read_queue("vt"), vec!["sealed task".to_string()]);
+        assert!(queue_active("vt"));
+        let scanned = scan_sessions_in(&dir.join("root"));
+        assert_eq!(scanned.iter().find(|s| s.name == "vt").map(|s| s.queue_depth), Some(1));
+        fs::rename(dir.join("vault"), dir.join("unmounted")).unwrap();
+        assert!(read_queue("vt").is_empty());
         fs::remove_dir_all(&dir).unwrap();
     }
 

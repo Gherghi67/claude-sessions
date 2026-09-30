@@ -1204,6 +1204,16 @@ test('a queue already armed or draining is listed without an offer', async () =>
   expect(runs.map(x => x.argv[2])).toEqual(['list', 'list'])
 })
 
+test('an encrypted session\'s queue state is read behind .cs/private', async () => {
+  envVars.CS_BIN = '/opt/cs/bin/cs'
+  runResult = LISTED
+  files['/work/.cs/private/queue.state'] = 'draining\n'
+  await queue('')
+  await settle()
+  expect(asks).toEqual([])
+  expect(runs.map(x => x.argv[2])).toEqual(['list'])
+})
+
 test('an empty queue is listed without an offer', async () => {
   envVars.CS_BIN = '/opt/cs/bin/cs'
   runResult = { exitCode: 0, stdout: 'Queue is empty.\n\nDone (1)\n  - shipped\n', stderr: '' }

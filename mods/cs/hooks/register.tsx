@@ -621,11 +621,21 @@ async function askToWrap($: EngineInterface) {
 
 // An armed or draining queue is already on its way; only bin/cs and the Stop
 // hook write the file, and no file is an idle queue.
+// An encrypted session keeps its queue behind .cs/private (a link into its
+// vault), every other session in .cs/local. A file that cannot be read (absent,
+// or behind a locked vault) says nothing about the queue.
 async function queueRunning($: EngineInterface): Promise<boolean> {
-  const path = `${await $.session.cwd()}/.cs/local/queue.state`
-  if (!(await $.fs.exists(path))) return false
-  const state = (await $.fs.read(path)).trim()
-  return state === 'armed' || state === 'draining'
+  const cwd = await $.session.cwd()
+  for (const dir of ['private', 'local']) {
+    let state: string
+    try {
+      state = (await $.fs.read(`${cwd}/.cs/${dir}/queue.state`)).trim()
+    } catch {
+      continue
+    }
+    return state === 'armed' || state === 'draining'
+  }
+  return false
 }
 
 // Asked after bare /queue has printed the list, so the tasks are on screen
