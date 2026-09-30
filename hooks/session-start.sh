@@ -439,13 +439,18 @@ if [ "$IS_LEAD" = 1 ] && [[ "$SESSION_ID" =~ $UUID_RE ]]; then
         # (/clear) and carries the handoff name; otherwise it is one cs
         # discovered — CC's context-limit fork, or a manual resume of a
         # different conversation. Shape shared with bin/cs's _timeline_rotated.
+        # An encrypted session's handoff name is its topic: the plaintext
+        # timeline records that a handoff rotated, never which.
+        _public_handoff="$ROTATION_HANDOFF"
+        [ "$HANDOFF_REL" = ".cs/handoffs" ] || _public_handoff=""
         { jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
                --arg from "${RECORDED_UUID:-}" \
                --arg to "$SESSION_ID" \
                --arg handoff "$ROTATION_HANDOFF" \
+               --arg name "$_public_handoff" \
                '{ts: $ts, event: "rotated", from: $from, to: $to,
                  reason: (if $handoff == "" then "rebind" else "handoff" end)}
-                + (if $handoff == "" then {} else {handoff: $handoff} end)' \
+                + (if $name == "" then {} else {handoff: $name} end)' \
             >> "$META_DIR/timeline.jsonl"; } 2>/dev/null || true
         # Follow the autosave ref to the new UUID so a future crash of this
         # (continued) conversation is recoverable under its live identity. A

@@ -3028,7 +3028,14 @@ _exec_fresh_rebind() {
     local new_uuid
     new_uuid=$(_alloc_uuid)
     _set_local_state "$session_dir/.cs/local/state" claude_session_id "$new_uuid"
-    _timeline_rotated "$session_dir" "$old_uuid" "$new_uuid" "$reason" "$handoff"
+    # An encrypted session's handoff name is its topic, so it stays out of
+    # the plaintext timeline and out of claude's argv (visible to ps and in a
+    # terminal title); the SessionStart hook names the file from the vault.
+    local public_handoff="$handoff"
+    if [ -L "$session_dir/.cs/private" ] || [ -e "$session_dir/.cs/private" ]; then
+        public_handoff=""
+    fi
+    _timeline_rotated "$session_dir" "$old_uuid" "$new_uuid" "$reason" "$public_handoff"
     local session_color
     session_color=$(_read_local_state "$session_dir/.cs/local/state" claude_session_color)
     local color_arg=""
@@ -3041,15 +3048,11 @@ _exec_fresh_rebind() {
     # outranks a spawn kick, which outranks the handoff, which outranks the
     # color re-apply; all four ride claude's single prompt slot, so a displaced
     # color returns on the next open.
-    # An encrypted session's kick names no file: claude's argv is visible to
-    # ps and in a terminal title, and the handoff's name is its topic.
     local handoff_arg=""
-    if [ -n "$handoff" ]; then
-        if [ -L "$session_dir/.cs/private" ] || [ -e "$session_dir/.cs/private" ]; then
-            handoff_arg="Continue from the pending rotation handoff."
-        else
-            handoff_arg="Continue from the pending rotation handoff: read .cs/handoffs/$handoff first."
-        fi
+    if [ -n "$public_handoff" ]; then
+        handoff_arg="Continue from the pending rotation handoff: read .cs/handoffs/$handoff first."
+    elif [ -n "$handoff" ]; then
+        handoff_arg="Continue from the pending rotation handoff."
     fi
     local launch_prompt="${merge_kick:-${spawn_kick:-${handoff_arg:-$color_arg}}}"
     export CS_CLAUDE_SESSION_ID="$new_uuid"

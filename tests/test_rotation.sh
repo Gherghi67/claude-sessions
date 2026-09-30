@@ -2376,6 +2376,11 @@ test_encrypted_rotate_answer_arms_the_private_marker() {
         "the launch still kicks the fresh conversation" || return 1
     assert_output_not_contains "$args" "secret-topic" \
         "claude's argv never carries the handoff's name" || return 1
+    local ev
+    ev=$(jq -c 'select(.event == "rotated")' "$dir/.cs/timeline.jsonl" 2>/dev/null | tail -1)
+    assert_output_contains "$ev" '"reason":"handoff"' "the rotation is still recorded" || return 1
+    assert_output_not_contains "$ev" "secret-topic" \
+        "the plaintext timeline never carries the handoff's name" || return 1
 }
 
 test_encrypted_discard_retires_the_vault_handoff() {
@@ -2420,6 +2425,24 @@ test_encrypted_pending_handoff_is_consumed_in_the_vault() {
     [ ! -f "$vault/pending-handoff" ] || { echo "  FAIL: the vault's marker must be removed"; return 1; }
 }
 
+test_encrypted_clear_rotation_keeps_the_handoff_name_out_of_the_timeline() {
+    _rot_hook_session "rot-enc-label"
+    local vault="$TEST_TMPDIR/vault-label/private"
+    mkdir -p "$vault"
+    ln -s "$vault" "$CLAUDE_SESSION_META_DIR/private"
+    _seed_handoff "$TEST_TMPDIR/vault-label/stage" "2026-07-16-secret-topic.md" "unconsumed"
+    mkdir -p "$vault/handoffs"
+    mv "$TEST_TMPDIR/vault-label/stage/.cs/handoffs/2026-07-16-secret-topic.md" "$vault/handoffs/"
+    printf '%s\n' "2026-07-16-secret-topic.md" > "$vault/pending-handoff"
+    printf 'claude_session_id: %s\n' "$UUID_A" > "$CLAUDE_SESSION_META_DIR/local/state"
+    _start_hook "$UUID_B" clear >/dev/null || return 1
+    local ev
+    ev=$(_timeline | jq -c 'select(.event == "rotated")' 2>/dev/null | tail -1)
+    assert_output_contains "$ev" '"reason":"handoff"' "clear rotation is a handoff" || return 1
+    assert_output_not_contains "$ev" "secret-topic" \
+        "the plaintext timeline never carries the handoff's name" || return 1
+}
+
 test_locked_encrypted_session_consumes_no_handoff() {
     _rot_hook_session "rot-enc-locked"
     ln -s "$TEST_TMPDIR/unmounted/private" "$CLAUDE_SESSION_META_DIR/private"
@@ -2446,6 +2469,7 @@ run_test test_encrypted_rotate_answer_arms_the_private_marker
 run_test test_encrypted_discard_retires_the_vault_handoff
 run_test test_encrypted_session_with_plaintext_handoffs_refuses_to_open
 run_test test_encrypted_pending_handoff_is_consumed_in_the_vault
+run_test test_encrypted_clear_rotation_keeps_the_handoff_name_out_of_the_timeline
 run_test test_locked_encrypted_session_consumes_no_handoff
 run_test test_rotate_skill_routes_an_encrypted_session_into_the_vault
 

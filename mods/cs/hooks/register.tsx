@@ -509,14 +509,21 @@ async function handoffArmed($: EngineInterface): Promise<boolean> {
 
 // The armed handoff's text, read under the rule above; undefined when unarmed.
 // Each marker names a handoff in its own store only: the vault's marker never
-// arms from the plaintext store, nor the reverse.
+// arms from the plaintext store, nor the reverse. The marker is read rather
+// than probed for, as queueRunning does: a read follows the .cs/private link
+// the way the hook's own does, and a marker that cannot be read (absent, or
+// behind a locked vault) arms nothing.
 async function armedHandoff($: EngineInterface): Promise<string | undefined> {
   const cwd = await $.session.cwd()
   for (const [marker, store] of [[PRIVATE_MARKER, PRIVATE_HANDOFFS], [MARKER, HANDOFFS]]) {
-    if (!(await $.fs.exists(`${cwd}/${marker}`))) continue
+    let name: string
     try {
-      const name = (await $.fs.read(`${cwd}/${marker}`)).trim()
-      if (name === '' || /[/\\]/.test(name)) return undefined
+      name = (await $.fs.read(`${cwd}/${marker}`)).trim()
+    } catch {
+      continue
+    }
+    if (name === '' || /[/\\]/.test(name)) return undefined
+    try {
       const text = await $.fs.read(`${cwd}/${store}/${name}`)
       return isUnconsumed(text) ? text : undefined
     } catch {
