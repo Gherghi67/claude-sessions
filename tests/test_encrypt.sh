@@ -19,6 +19,8 @@ EOF
 #!/bin/sh
 echo "$*" >> "$FAKE_HDIUTIL_LOG"
 [ "$1" = "${FAKE_HDIUTIL_FAIL:-}" ] && { echo "hdiutil: $1 failed - stub" >&2; exit 1; }
+# The verb named in $FAKE_HDIUTIL_SLOW takes 3 s and logs "<verb>-done" once it finishes.
+if [ "$1" = "${FAKE_HDIUTIL_SLOW:-}" ]; then sleep 3; echo "$1-done" >> "$FAKE_HDIUTIL_LOG"; fi
 # With $FAKE_LOCK_WATCH set, create records whether that lock names a live pid.
 if [ "$1" = "create" ] && [ -n "${FAKE_LOCK_WATCH:-}" ]; then
     p=$(cat "$FAKE_LOCK_WATCH" 2>/dev/null)
@@ -343,6 +345,38 @@ test_pre_open_joins_a_mount_held_by_a_running_session() {
     assert_eq "" "$(cat "$FAKE_HDIUTIL_LOG")" "no prompt, no hdiutil call" || return 1
 }
 
+# /clear used to drop the lock while claude ran on; the holder list still names it.
+test_pre_open_joins_a_mount_whose_holder_is_alive_without_a_lock() {
+    _encrypted_session enc || return 1
+    sleep 300 &
+    local holder=$! rc=0
+    echo "$holder" > "$CS_SESSIONS_ROOT/enc/.cs/local/vault-holders"
+    _pre_open enc FAKE_MOUNTED=1 CS_ASSUME_TTY=1 >/dev/null 2>&1 || rc=$?
+    kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+    assert_eq "0" "$rc" "exit 0" || return 1
+    assert_eq "" "$(cat "$FAKE_HDIUTIL_LOG")" "joined: no detach, no prompt" || return 1
+}
+
+# A reopen that kills the waiter must also stop the detach the waiter started,
+# or that detach lands on the volume the reopen just attached.
+test_pre_open_stops_a_waiter_detach_in_flight() {
+    _encrypted_session enc || return 1
+    sleep 0.1 &
+    local claude=$!
+    wait "$claude" 2>/dev/null
+    FAKE_HDIUTIL_SLOW=detach _end_conversation enc prompt_input_exit "$claude" "$claude"
+    local f="$CS_SESSIONS_ROOT/enc/.cs/local/vault-detach.pid" i=0
+    while [ ! -s "$f" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+    [ -s "$f" ] || { echo "  FAIL: the waiter recorded no detach child"; return 1; }
+    local rc=0
+    _pre_open enc FAKE_MOUNTED=1 CS_ASSUME_TTY=1 >/dev/null 2>&1 || rc=$?
+    sleep 3.5
+    assert_eq "0" "$rc" "reopen asks again" || return 1
+    assert_eq "detach $FAKE_MNT
+detach $FAKE_MNT
+attach -nobrowse -mountpoint $FAKE_MNT $(_vault_path enc)" "$(cat "$FAKE_HDIUTIL_LOG")" "the waiter's detach never finished" || return 1
+}
+
 test_pre_open_detaches_a_leftover_mount_and_asks_again() {
     _encrypted_session enc || return 1
     sleep 300 &
@@ -425,13 +459,48 @@ test_open_cancelled_at_a_prompt_detaches_the_vault_it_mounted() {
 detach $FAKE_MNT" "$(cat "$FAKE_HDIUTIL_LOG")" "attach, then detach on the way out" || return 1
 }
 
-test_open_that_reaches_claude_keeps_the_vault_mounted() {
+test_open_that_stops_leaves_a_vault_another_holder_keeps() {
+    _encrypted_session enc || return 1
+    : > "$TEST_TMPDIR/mounted"
+    sleep 300 &
+    local holder=$! rc=0
+    echo "$holder" > "$CS_SESSIONS_ROOT/enc/.cs/local/vault-holders"
+    echo "plaintext" > "$CS_SESSIONS_ROOT/enc/.cs/local/session.log"
+    _open enc >/dev/null 2>&1 || rc=$?
+    kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+    assert_eq "1" "$rc" "the open stops" || return 1
+    assert_eq "" "$(cat "$FAKE_HDIUTIL_LOG")" "joined the holder's mount, never detached it" || return 1
+}
+
+# A claude that copies the hdiutil log as it stood while it ran.
+_claude_snapshot() {
+    local c="$TEST_TMPDIR/claude-snap"
+    printf '#!/bin/sh\ncp "$FAKE_HDIUTIL_LOG" "%s"\nexit 0\n' "$TEST_TMPDIR/during" > "$c"
+    chmod +x "$c"
+    printf '%s' "$c"
+}
+
+# Resuming, cs runs claude as its child: the vault stays mounted while claude
+# runs, and cs, its last holder, detaches it once claude exits.
+test_open_resuming_keeps_the_vault_while_claude_runs() {
     _encrypted_session enc || return 1
     local out rc=0
-    out=$(_open enc "y
+    out=$(CLAUDE_CODE_BIN="$(_claude_snapshot)" _open enc "y
 " 2>&1) || rc=$?
     assert_eq "0" "$rc" "the open reaches claude: $out" || return 1
-    assert_eq "attach -nobrowse -mountpoint $FAKE_MNT $(_vault_path enc)" "$(cat "$FAKE_HDIUTIL_LOG")" "no detach once claude runs" || return 1
+    assert_eq "attach -nobrowse -mountpoint $FAKE_MNT $(_vault_path enc)" "$(cat "$TEST_TMPDIR/during" 2>/dev/null)" "mounted, no detach while claude runs" || return 1
+    assert_eq "attach -nobrowse -mountpoint $FAKE_MNT $(_vault_path enc)
+detach $FAKE_MNT" "$(cat "$FAKE_HDIUTIL_LOG")" "detached after claude exits" || return 1
+}
+
+# Fresh, cs execs claude: cs is gone, and the SessionEnd waiter owns the detach.
+test_open_fresh_leaves_the_detach_to_the_waiter() {
+    _encrypted_session enc || return 1
+    local out rc=0
+    out=$(CLAUDE_CODE_BIN="$(_claude_snapshot)" _open enc "n
+" 2>&1) || rc=$?
+    assert_eq "0" "$rc" "the open reaches claude: $out" || return 1
+    assert_eq "attach -nobrowse -mountpoint $FAKE_MNT $(_vault_path enc)" "$(cat "$FAKE_HDIUTIL_LOG")" "no detach from cs" || return 1
 }
 
 # SessionEnd leaves a waiter that detaches the vault once the lead claude
@@ -520,6 +589,20 @@ test_session_end_waiter_spares_a_reopened_session() {
     assert_eq "" "$(cat "$FAKE_HDIUTIL_LOG")" "the new conversation keeps its mount" || return 1
 }
 
+test_session_end_waiter_spares_a_vault_a_holder_keeps() {
+    _encrypted_session enc || return 1
+    sleep 300 &
+    local holder=$!
+    echo "$holder" > "$CS_SESSIONS_ROOT/enc/.cs/local/vault-holders"
+    sleep 0.1 &
+    local claude=$!
+    wait "$claude" 2>/dev/null
+    _end_conversation enc prompt_input_exit "$claude" "$claude"
+    _waiter_gone enc || { kill "$holder"; echo "  FAIL: waiter still running"; return 1; }
+    kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+    assert_eq "" "$(cat "$FAKE_HDIUTIL_LOG")" "no detach while a holder lives" || return 1
+}
+
 test_session_end_waiter_leaves_a_busy_vault_mounted() {
     _encrypted_session enc || return 1
     sleep 300 &
@@ -548,6 +631,8 @@ run_test test_encrypt_stops_when_create_fails
 run_test test_encrypt_stops_when_attach_fails
 run_test test_encrypt_stops_on_a_failed_move_and_names_what_moved
 run_test test_pre_open_joins_a_mount_held_by_a_running_session
+run_test test_pre_open_joins_a_mount_whose_holder_is_alive_without_a_lock
+run_test test_pre_open_stops_a_waiter_detach_in_flight
 run_test test_pre_open_detaches_a_leftover_mount_and_asks_again
 run_test test_pre_open_refuses_a_leftover_mount_that_will_not_detach
 run_test test_pre_open_refuses_without_a_terminal
@@ -555,10 +640,13 @@ run_test test_pre_open_attaches_with_a_prompt
 run_test test_open_that_stops_detaches_the_vault_it_mounted
 run_test test_open_that_stops_leaves_a_running_session_vault_mounted
 run_test test_open_cancelled_at_a_prompt_detaches_the_vault_it_mounted
-run_test test_open_that_reaches_claude_keeps_the_vault_mounted
+run_test test_open_that_stops_leaves_a_vault_another_holder_keeps
+run_test test_open_resuming_keeps_the_vault_while_claude_runs
+run_test test_open_fresh_leaves_the_detach_to_the_waiter
 run_test test_session_end_detaches_after_the_lead_exits
 run_test test_session_end_leaves_the_vault_for_clear_resume_and_non_leads
 run_test test_session_end_ignores_a_session_cs_did_not_encrypt
 run_test test_session_end_waiter_spares_a_reopened_session
+run_test test_session_end_waiter_spares_a_vault_a_holder_keeps
 run_test test_session_end_waiter_leaves_a_busy_vault_mounted
 report_results

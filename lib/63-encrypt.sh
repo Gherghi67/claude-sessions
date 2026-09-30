@@ -88,19 +88,29 @@ _encrypt_write_pre_open() {  # meta_dir, container
 mkdir -p .cs/vault-mnt
 mnt=$(cd .cs/vault-mnt && pwd -P)
 mounted() { mount | grep -F " on $mnt (" >/dev/null; }
-lock_alive() {
+alive() { case "$1" in ''|*[!0-9]*) return 1 ;; esac; kill -0 "$1" 2>/dev/null; }
+lock_alive() { alive "$(tr -d '[:space:]' < .cs/session.lock 2>/dev/null || true)"; }
+holder_alive() {
     local pid
-    pid=$(tr -d '[:space:]' < .cs/session.lock 2>/dev/null) || return 1
-    case "$pid" in ''|*[!0-9]*) return 1 ;; esac
-    kill -0 "$pid" 2>/dev/null
+    [ -f .cs/local/vault-holders ] || return 1
+    while read -r pid; do
+        alive "$pid" && return 0
+    done < .cs/local/vault-holders
+    return 1
 }
 if mounted; then
-    lock_alive && exit 0
-    if [ -f .cs/local/vault-waiter.pid ]; then
-        kill "$(cat .cs/local/vault-waiter.pid)" 2>/dev/null || true
-        rm -f .cs/local/vault-waiter.pid
-    fi
-    if ! hdiutil detach "$mnt"; then
+    { lock_alive || holder_alive; } && exit 0
+    # A leftover from a conversation that ended. Stop its waiter, and the
+    # detach the waiter may have started, before touching the volume.
+    for f in vault-waiter.pid vault-detach.pid; do
+        pid=$(cat ".cs/local/$f" 2>/dev/null || true)
+        alive "$pid" || continue
+        kill "$pid" 2>/dev/null || true
+        i=0
+        while alive "$pid" && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+    done
+    rm -f .cs/local/vault-waiter.pid .cs/local/vault-detach.pid .cs/local/vault-holders
+    if mounted && ! hdiutil detach "$mnt"; then
         echo "cs: the vault is still mounted from a conversation that ended, and it would not detach. Close whatever holds it, run: hdiutil detach $mnt" >&2
         exit 1
     fi
@@ -115,26 +125,55 @@ EOF
     chmod +x "$hook"
 }
 
-# The mountpoint of a vault this cs run's pre-open mounted. An open that stops
-# before exec'ing claude (a refusal, or a cancelled prompt) detaches it on the
-# way out; exec replaces cs and drops the EXIT trap, so claude keeps it.
-CS_OPENED_VAULT_MNT=""
+# .cs/local/vault-holders lists the pids whose life keeps the vault mounted:
+# every cs run whose pre-open attached or joined it. exec keeps the pid, so a
+# claude that replaced its cs stays a holder; a cs that ends without exec
+# (a refusal, a cancelled prompt, or claude run as its child) leaves, and
+# detaches the vault if it was the last live holder.
+CS_OPENED_VAULT_META=""
+
+_vault_live_holder_besides() {  # meta_dir, pid -> true if another listed holder is alive
+    local pid
+    [ -f "$1/local/vault-holders" ] || return 1
+    while read -r pid; do
+        [ "$pid" = "$2" ] && continue
+        case "$pid" in ''|*[!0-9]*) continue ;; esac
+        kill -0 "$pid" 2>/dev/null && return 0
+    done < "$1/local/vault-holders"
+    return 1
+}
+
+_vault_mountpoint_if_mounted() {  # meta_dir -> prints the mountpoint, or fails
+    local mnt
+    mnt=$(cd "$1/vault-mnt" 2>/dev/null && pwd -P) || return 1
+    mount | grep -F " on $mnt (" >/dev/null || return 1
+    printf '%s\n' "$mnt"
+}
 
 _arm_vault_detach() {  # session_dir
-    local meta="$1/.cs" mnt
+    local meta="$1/.cs"
     [ -f "$meta/local/vault" ] || return 0
-    # pre-open joined the mount a running conversation holds; not ours to detach.
-    session_is_live "$meta" && return 0
-    mnt=$(cd "$meta/vault-mnt" 2>/dev/null && pwd -P) || return 0
-    mount | grep -F " on $mnt (" >/dev/null || return 0
-    CS_OPENED_VAULT_MNT="$mnt"
+    _vault_mountpoint_if_mounted "$meta" >/dev/null || return 0
+    echo "$$" >> "$meta/local/vault-holders"
+    CS_OPENED_VAULT_META="$meta"
     trap _detach_opened_vault EXIT
 }
 
 _detach_opened_vault() {
-    [ -n "$CS_OPENED_VAULT_MNT" ] || return 0
-    hdiutil detach "$CS_OPENED_VAULT_MNT" >/dev/null 2>&1 \
-        || warn "The vault is still mounted at $CS_OPENED_VAULT_MNT; the next open detaches it, or run: hdiutil detach $CS_OPENED_VAULT_MNT"
+    local meta="$CS_OPENED_VAULT_META" mnt lock rest
+    [ -n "$meta" ] || return 0
+    if [ -f "$meta/local/vault-holders" ]; then
+        rest=$(grep -vx "$$" "$meta/local/vault-holders" || true)
+        printf '%s\n' "$rest" | grep . > "$meta/local/vault-holders.tmp" || true
+        mv -f "$meta/local/vault-holders.tmp" "$meta/local/vault-holders"
+    fi
+    _vault_live_holder_besides "$meta" "$$" && return 0
+    lock=$(read_lock_pid "$meta")
+    [ -n "$lock" ] && [ "$lock" != "$$" ] && kill -0 "$lock" 2>/dev/null && return 0
+    mnt=$(_vault_mountpoint_if_mounted "$meta") || return 0
+    hdiutil detach "$mnt" >/dev/null 2>&1 && return 0
+    _vault_mountpoint_if_mounted "$meta" >/dev/null || return 0
+    warn "The vault is still mounted at $mnt; the next open detaches it, or run: hdiutil detach $mnt"
 }
 
 run_encrypt() {

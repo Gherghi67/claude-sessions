@@ -771,8 +771,6 @@ EOF
         # Try continuing previous conversation
         SECONDS=0
         local rc=0
-        # Once claude runs, the SessionEnd waiter owns the vault detach.
-        CS_OPENED_VAULT_MNT=""
         # shellcheck disable=SC2086
         $CLAUDE_CODE_BIN --name "$session_name" $continue_flag ${launch_prompt:+"$launch_prompt"} || rc=$?
         if [ $rc -ne 0 ] && [ $SECONDS -lt 3 ]; then
