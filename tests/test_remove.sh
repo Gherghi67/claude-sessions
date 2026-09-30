@@ -156,6 +156,46 @@ test_remove_force_skips_the_prompt() {
     [ ! -d "$CS_SESSIONS_ROOT/n2" ] || { echo "  FAIL: --force did not remove the session"; return 1; }
 }
 
+test_remove_force_refuses_when_session_holds_files_cs_did_not_create() {
+    local dir
+    dir=$(create_test_session f1)
+    mkdir "$dir/journal.sparsebundle"
+    echo keep > "$dir/start"
+    local out rc=0
+    out=$("$CS_BIN" -rm f1 --force </dev/null 2>&1) || rc=$?
+    [ "$rc" -ne 0 ] || { echo "  FAIL: --force removed a session holding foreign files"; return 1; }
+    assert_output_contains "$out" "journal.sparsebundle, start" "refusal names the foreign entries" || return 1
+    assert_output_contains "$out" "--delete-files" "refusal names the override" || return 1
+    assert_dir "$dir/journal.sparsebundle" "foreign entry must survive the refusal" || return 1
+}
+
+test_remove_force_with_delete_files_removes_foreign_files() {
+    local dir
+    dir=$(create_test_session f2)
+    mkdir "$dir/journal.sparsebundle"
+    "$CS_BIN" -rm f2 --force --delete-files </dev/null >/dev/null 2>&1 || return 1
+    assert_not_exists "$dir" "session with foreign files should be gone" || return 1
+}
+
+test_remove_force_ignores_cs_owned_entries_and_ds_store() {
+    local dir
+    dir=$(create_test_session f3)
+    mkdir -p "$dir/.claude" "$dir/.git"
+    touch "$dir/.gitignore" "$dir/.gitattributes" "$dir/CLAUDE.local.md" "$dir/.DS_Store"
+    "$CS_BIN" -rm f3 --force </dev/null >/dev/null 2>&1 || return 1
+    assert_not_exists "$dir" "a session holding only cs-owned entries should still go under --force" || return 1
+}
+
+test_remove_confirm_lists_foreign_entries() {
+    local dir
+    dir=$(create_test_session f4)
+    touch "$dir/notes.txt"
+    local out
+    out=$(printf 'n\n' | CS_ASSUME_TTY=1 "$CS_BIN" -rm f4 2>&1) || return 1
+    assert_output_contains "$out" "Also deletes files cs did not create: notes.txt" "confirm lists the foreign entry" || return 1
+    assert_dir "$dir" "declined session must survive" || return 1
+}
+
 test_remove_force_on_adopted_removes_only_the_link() {
     local project_dir="$TEST_TMPDIR/adopted-project"
     mkdir -p "$project_dir"
@@ -179,6 +219,10 @@ run_test test_remove_no_name_errors
 run_test test_remove_unknown_name_fails_fast
 run_test test_remove_noninteractive_without_force_errors_loudly
 run_test test_remove_force_skips_the_prompt
+run_test test_remove_force_refuses_when_session_holds_files_cs_did_not_create
+run_test test_remove_force_with_delete_files_removes_foreign_files
+run_test test_remove_force_ignores_cs_owned_entries_and_ds_store
+run_test test_remove_confirm_lists_foreign_entries
 run_test test_remove_force_on_adopted_removes_only_the_link
 
 report_results

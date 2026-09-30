@@ -343,13 +343,14 @@ list_sessions() {
 # All names are validated before anything is deleted: an empty name would
 # resolve to the sessions root itself and rm -rf every session.
 remove_session() {
-    local force="" arg _name
+    local force="" delete_files="" arg _name
     local names
     names=()
     for arg in "$@"; do
         case "$arg" in
             --force|-f) force="true" ;;
-            -*) error "Unknown remove option: $arg. Usage: cs -remove <session-name>... [--force]" ;;
+            --delete-files) delete_files="true" ;;
+            -*) error "Unknown remove option: $arg. Usage: cs -remove <session-name>... [--force [--delete-files]]" ;;
             *)
                 [ -n "$arg" ] || error "Usage: cs -remove <session-name>... [--force] (empty session name)"
                 names+=("$arg") ;;
@@ -357,13 +358,30 @@ remove_session() {
     done
     [ "${#names[@]}" -ge 1 ] || error "Usage: cs -remove <session-name>... [--force]"
     for _name in "${names[@]}"; do
-        _remove_one_session "$_name" "$force"
+        _remove_one_session "$_name" "$force" "$delete_files"
     done
+}
+
+# Top-level entries of a session root that cs did not put there, as one
+# comma-separated line (empty when there are none). cs owns .cs/, .claude/,
+# the session git files and the two CLAUDE files; .DS_Store is Finder's.
+_session_foreign_entries() {  # session_dir
+    local dir="$1" entry name out=""
+    for entry in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
+        [ -e "$entry" ] || [ -L "$entry" ] || continue
+        name="${entry##*/}"
+        case "$name" in
+            .cs|.claude|.git|.gitignore|.gitattributes|CLAUDE.md|CLAUDE.local.md|.DS_Store) continue ;;
+        esac
+        out="${out:+$out, }$name"
+    done
+    printf '%s' "$out"
 }
 
 _remove_one_session() {
     local session_name="$1"
     local force="${2:-}"
+    local delete_files="${3:-}"
     [ -n "$session_name" ] || error "Refusing to remove an empty session name"
 
     # Reject path traversal before any filesystem action: '.'/'..' and any
@@ -430,6 +448,17 @@ _remove_one_session() {
             ;;
     esac
 
+    # A cs-created root is also the user's workspace: rm -rf takes whatever
+    # they put beside cs's own files (an encrypted image, a checkout). Name
+    # those in the confirm, and make --force ask for them by name.
+    local foreign=""
+    if [ ! -L "$session_dir" ]; then
+        foreign=$(_session_foreign_entries "$session_dir")
+    fi
+    if [ -n "$foreign" ] && [ -n "$force" ] && [ -z "$delete_files" ]; then
+        error "Session '$session_name' holds files cs did not create: $foreign. Add --delete-files to remove them with --force"
+    fi
+
     # Confirm deletion
     local confirm
     if [ -n "$force" ]; then
@@ -439,6 +468,9 @@ _remove_one_session() {
         target="$(_resolve_symlink_dir "$session_dir")"
         read -r -p $'\033[0;31mRemove adopted session '"'$session_name'"$'? (removes symlink only, project at '"$target"$' is preserved) [y/N] \033[0m' confirm
     else
+        # read -p only shows its prompt on a terminal; the list must reach
+        # the user even when the answer is piped in.
+        [ -z "$foreign" ] || printf '%bAlso deletes files cs did not create: %s%b\n' "$RED" "$foreign" "$NC" >&2
         read -r -p $'\033[0;31mRemove session '"'$session_name'"$'? [y/N] \033[0m' confirm
     fi
     if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
