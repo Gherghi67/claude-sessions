@@ -1630,4 +1630,74 @@ run_test test_migration_converts_lines_landing_in_migrating_file
 run_test test_migration_reads_unterminated_final_line
 run_test test_migration_runs_on_worktree_open
 
+# --- mail hooks in an encrypted session ------------------------------------
+# The digest, the wakes and the watch all read the mailbox cs -msg writes, so
+# in an encrypted session they follow it into the vault, and none of them may
+# recreate .cs/local/mail beside it: that is plaintext the open refuses.
+
+test_digest_inlines_vault_mail() {
+    _make_private receiver
+    "$CS_BIN" -msg receiver "sealed digest words" >/dev/null 2>&1 || return 1
+    local out; out=$(_prompt_as_receiver "hello") || return 1
+    assert_output_contains "$out" "sealed digest words" "vault mail inlined" || return 1
+    assert_not_exists "$(MAILDIR)" "no plaintext mailbox created" || return 1
+}
+
+test_typed_prompt_clears_the_vault_wake_budget() {
+    _make_private receiver
+    mkdir -p "$(PRIV_MAILDIR receiver)"
+    printf '3\n' > "$(PRIV_MAILDIR receiver)/wakes"
+    _prompt_as_receiver "hello" >/dev/null || return 1
+    assert_not_exists "$(PRIV_MAILDIR receiver)/wakes" "a typed prompt resets the vault's budget" || return 1
+}
+
+test_stop_wake_reads_vault_mail() {
+    _make_private receiver
+    "$CS_BIN" -msg receiver "sealed wake" >/dev/null 2>&1 || return 1
+    local out; out=$(wake)
+    assert_output_contains "$out" "Unread cross-session mail" "vault mail wakes the stop" || return 1
+    assert_file_exists "$(PRIV_MAILDIR receiver)/woke" "the wake is recorded in the vault" || return 1
+    assert_not_exists "$(MAILDIR)" "no plaintext mailbox created" || return 1
+}
+
+test_idle_wake_fires_for_vault_mail_by_either_path() {
+    _make_private receiver
+    "$CS_BIN" -msg receiver "sealed idle" >/dev/null 2>&1 || return 1
+    local name; name=$(basename "$(PRIV_MAILDIR receiver)"/new/*.json)
+    local rc=0
+    filechanged "$(RCV_META)/private/mail/new/$name" add >/dev/null 2>&1 || rc=$?
+    assert_eq "2" "$rc" "an arrival reported through the link wakes" || return 1
+    rm -f "$(PRIV_MAILDIR receiver)/woke"
+    rc=0
+    filechanged "$(PRIV_MAILDIR receiver)/new/$name" add >/dev/null 2>&1 || rc=$?
+    assert_eq "2" "$rc" "an arrival reported at the vault's own path wakes" || return 1
+}
+
+test_cwd_change_arms_the_vault_maildir() {
+    _make_private receiver
+    local out; out=$(cwdchanged "/tmp" "/")
+    assert_eq "$(RCV_META)/private/mail/new" \
+        "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.watchPaths[0] // empty' 2>/dev/null)" \
+        "the watch is armed on the vault's maildir" || return 1
+    assert_dir "$(PRIV_MAILDIR receiver)/new" "created before it is armed" || return 1
+    assert_not_exists "$(MAILDIR)" "no plaintext mailbox created" || return 1
+}
+
+test_locked_session_mail_hooks_write_nothing() {
+    _make_private receiver
+    mv "$(RCV_META)/vault-mnt" "$TEST_TMPDIR/unmounted"
+    local out; out=$(cwdchanged "/tmp" "/")
+    assert_eq "" "$out" "a locked mailbox arms no watch" || return 1
+    wake >/dev/null
+    _prompt_as_receiver "hello" >/dev/null || true
+    assert_not_exists "$(MAILDIR)" "no plaintext mailbox created" || return 1
+}
+
+run_test test_digest_inlines_vault_mail
+run_test test_typed_prompt_clears_the_vault_wake_budget
+run_test test_stop_wake_reads_vault_mail
+run_test test_idle_wake_fires_for_vault_mail_by_either_path
+run_test test_cwd_change_arms_the_vault_maildir
+run_test test_locked_session_mail_hooks_write_nothing
+
 report_results

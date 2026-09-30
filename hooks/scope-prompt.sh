@@ -187,8 +187,9 @@ _trace input
 # wakes since the last USER prompt. A wake reaches the model as a turn of its
 # own, carrying no prompt, so treating that turn as proof would let every wake
 # reset the budget it just spent, and the ceiling would cap nothing.
-if [ -n "$PROMPT" ] && [ -n "${CLAUDE_SESSION_META_DIR:-}" ]; then
-    rm -f "$CLAUDE_SESSION_META_DIR/local/mail/wakes" 2>/dev/null || true
+if [ -n "$PROMPT" ] && [ -n "${CLAUDE_SESSION_META_DIR:-}" ] \
+    && _mail_base=$(cs_private_dir "$CLAUDE_SESSION_META_DIR"); then
+    rm -f "$_mail_base/mail/wakes" 2>/dev/null || true
 fi
 
 # --- Date reminder (every prompt; speaks only when the calendar day changed) ---
@@ -330,7 +331,7 @@ _commit_digest() {  # meta_local_dir
 # hook-vs-hook race on a mail cursor). Only new/*.json counts: an unfiltered
 # scan would pick up a .DS_Store or a subdirectory and nag about phantom mail
 # that cs -msg cannot clear. Best-effort throughout: never breaks the hook.
-_build_mail_digest() {  # meta_local_dir
+_build_mail_digest() {  # cs files dir: .cs/local, or .cs/private in an encrypted session
     local mdir="$1/mail" f total=0
     MAIL_DIGEST=""
     [ -d "$mdir/new" ] || return 0
@@ -405,7 +406,11 @@ DIGEST_PENDING=""
 MAIL_DIGEST=""
 if [ -n "${CLAUDE_SESSION_META_DIR:-}" ]; then
     _build_digest "$CLAUDE_SESSION_META_DIR/local"
-    _build_mail_digest "$CLAUDE_SESSION_META_DIR/local"
+    # The mailbox sits with the session's other cs files; a locked vault has
+    # no readable mail to digest.
+    if _mail_base=$(cs_private_dir "$CLAUDE_SESSION_META_DIR"); then
+        _build_mail_digest "$_mail_base"
+    fi
 fi
 if [ -n "$MAIL_DIGEST" ]; then
     DIGEST="${DIGEST:+$DIGEST

@@ -29,7 +29,9 @@ EOF
 # source; the precise per-session path check still happens below.
 if [ "$HOOK_EVENT" = "FileChanged" ]; then
     case "$FC_PATH" in
-        */.cs/local/mail/new/*.json) [ "$FC_EVENT" != "unlink" ] || exit 0 ;;
+        # Any mailbox shape: an encrypted session's maildir sits behind
+        # .cs/private, and the watcher may report it at the vault's own path.
+        */mail/new/*.json) [ "$FC_EVENT" != "unlink" ] || exit 0 ;;
         */.cs/local/rotation-kick/*.kick) [ "$FC_EVENT" != "unlink" ] || exit 0 ;;
         *) exit 0 ;;
     esac
@@ -71,6 +73,11 @@ if ! command -v cs_resolve_session >/dev/null 2>&1; then
         [ -n "${CLAUDE_SESSION_NAME:-}" ] && [ -n "${CLAUDE_SESSION_DIR:-}" ]
     }
 fi
+# Without the library the hook cannot tell whether the session keeps its
+# mailbox in a vault, so it reads and writes no mailbox at all.
+if ! command -v cs_private_dir >/dev/null 2>&1; then
+    cs_private_dir() { return 1; }
+fi
 if ! command -v _cs_terminate_jsonl >/dev/null 2>&1; then
     _cs_terminate_jsonl() {
         [ -s "$1" ] || return 0
@@ -98,7 +105,10 @@ fi
 # watcher lives on Claude Code's own event loop and fires independently of turn
 # state. Both share this scan, the snapshot, the gate rule and the ceiling —
 # they differ only in how they deliver.
-MAILDIR="$META_DIR/local/mail"
+# Empty when the session's vault is locked: every mail branch below then
+# stands down rather than recreate the mailbox in plaintext.
+MAILDIR=""
+if _mail_base=$(cs_private_dir "$META_DIR"); then MAILDIR="$_mail_base/mail"; fi
 MAIL_WOKE="$MAILDIR/woke"
 MAIL_UNREAD=0
 MAIL_FRESH=0
@@ -278,6 +288,7 @@ MAIL_REASON_TAIL="Run cs -msg to read it. Reply only if the message needs an ans
 # through into the walk-away run and pops a queued task, so a directory change
 # would silently consume work.
 if [ "$HOOK_EVENT" = "CwdChanged" ]; then
+    [ -n "$MAILDIR" ] || exit 0
     _mail_is_lead || exit 0
     mkdir -p "$MAILDIR/new" 2>/dev/null || exit 0
     jq -nc --arg p "$MAILDIR/new" \
@@ -387,7 +398,7 @@ if [ "$HOOK_EVENT" = "FileChanged" ]; then
         */new/*.json) _fc_name="${FC_PATH##*/}" ;;
         *) exit 0 ;;
     esac
-    [ -n "$_fc_name" ] && [ -f "$MAILDIR/new/$_fc_name" ] || exit 0
+    [ -n "$MAILDIR" ] && [ -n "$_fc_name" ] && [ -f "$MAILDIR/new/$_fc_name" ] || exit 0
     _mail_is_lead || exit 0
     # The Stop path gets the queue rule free from its position below the drain,
     # which exits in every armed or draining branch. This one has to ask: a
@@ -645,7 +656,7 @@ fi
 # queue.state records — the rule the FileChanged branch has to ask for outright.
 # A non-lead leaves the flags clear, so it neither wakes nor records: the lead's
 # wake for the same arrival has to survive a teammate ending its turn first.
-if _mail_is_lead; then
+if [ -n "$MAILDIR" ] && _mail_is_lead; then
     _mail_scan
     if [ "$MAIL_FRESH" = 0 ] && [ "$MAIL_DISCHARGED" = 1 ]; then
         _mail_record

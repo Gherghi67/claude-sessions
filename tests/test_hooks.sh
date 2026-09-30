@@ -2562,8 +2562,41 @@ test_session_start_does_not_arm_the_watcher_for_a_teammate() {
         "a teammate arms no watcher: one arrival must not wake every claude on the session" || return 1
 }
 
+
+# An encrypted session's mailbox is in its vault: the watch goes there, and a
+# locked vault gets no watch rather than a plaintext maildir beside it.
+test_session_start_arms_the_vault_maildir() {
+    session_start_setup
+    mkdir -p "$TEST_TMPDIR/vault/private"
+    ln -s "$TEST_TMPDIR/vault/private" "$CLAUDE_SESSION_META_DIR/private"
+    local output wp rc=0
+    output=$(echo '{"session_id":"s","source":"startup","cwd":"'"$CLAUDE_SESSION_DIR"'","hook_event_name":"SessionStart"}' \
+        | bash "$HOOKS_DIR/session-start.sh" 2>/dev/null)
+    wp=$(echo "$output" | jq -r '.hookSpecificOutput.watchPaths[0] // ""')
+    assert_eq "$CLAUDE_SESSION_META_DIR/private/mail/new" "$wp" "the watch is on the vault's maildir" || rc=1
+    assert_dir "$TEST_TMPDIR/vault/private/mail/new" "created before it is armed" || rc=1
+    assert_not_exists "$CLAUDE_SESSION_META_DIR/local/mail" "no plaintext maildir" || rc=1
+    session_start_teardown
+    return $rc
+}
+
+test_session_start_arms_no_watch_on_a_locked_vault() {
+    session_start_setup
+    ln -s "$TEST_TMPDIR/unmounted/private" "$CLAUDE_SESSION_META_DIR/private"
+    local output wp rc=0
+    output=$(echo '{"session_id":"s","source":"startup","cwd":"'"$CLAUDE_SESSION_DIR"'","hook_event_name":"SessionStart"}' \
+        | bash "$HOOKS_DIR/session-start.sh" 2>/dev/null)
+    wp=$(echo "$output" | jq -r '.hookSpecificOutput.watchPaths // "none"')
+    assert_eq "none" "$wp" "a locked vault arms no watch" || rc=1
+    assert_not_exists "$CLAUDE_SESSION_META_DIR/local/mail" "no plaintext maildir" || rc=1
+    session_start_teardown
+    return $rc
+}
+
 run_test test_session_start_arms_the_mail_watcher
 run_test test_session_start_does_not_arm_the_watcher_for_a_teammate
+run_test test_session_start_arms_the_vault_maildir
+run_test test_session_start_arms_no_watch_on_a_locked_vault
 run_test test_session_start_warns_that_memory_is_shared
 # The shared library ships beside the hooks; a partial deployment (an older
 # ~/.claude/hooks/cs/ under a newer session-start.sh) has the hook without it.

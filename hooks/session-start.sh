@@ -950,11 +950,14 @@ fi
 # Only the lead arms it. Every claude resolving this session runs this hook,
 # teammates included, and N watchers on one maildir means one arrival wakes N
 # processes that then race to read it, where the first mv wins.
+#
+# The maildir sits with the session's other cs files (behind .cs/private in an
+# encrypted session); a locked vault arms no watch rather than a plaintext one.
 MAIL_WATCH=""
-if [ "$IS_LEAD" = 1 ] \
-    && mkdir -p "$META_DIR/local/mail/tmp" "$META_DIR/local/mail/new" \
-                "$META_DIR/local/mail/cur" 2>/dev/null; then
-    MAIL_WATCH="$META_DIR/local/mail/new"
+if [ "$IS_LEAD" = 1 ] && _mail_base=$(cs_private_dir "$META_DIR") \
+    && mkdir -p "$_mail_base/mail/tmp" "$_mail_base/mail/new" \
+                "$_mail_base/mail/cur" 2>/dev/null; then
+    MAIL_WATCH="$_mail_base/mail/new"
 fi
 
 # A /clear on an armed handoff consumes it and injects the preamble above, but
