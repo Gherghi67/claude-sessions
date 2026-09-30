@@ -43,7 +43,7 @@ The one distinction that governs everything below is **shared vs machine-local**
 
 | Path | Purpose | Merge |
 |------|---------|-------|
-| `.cs/README.md` | Session objective (captured from the first prompt) and outcome. Human-edited. | default |
+| `.cs/README.md` | Session objective (captured from the first prompt) and outcome. Human-edited. An [encrypted session](#encrypted-sessions) keeps only the frontmatter here. | default |
 | `.cs/summary.md` | Distilled session summary, written by `/wrap` and `/summary`. | default |
 | `.cs/timeline.jsonl` | Structured event log — `started`, `ended`, `checkpoint`, `rotated`, and `narrative_rotated` events as newline-delimited JSON. A base session also records `worktree-retired` (with the feature's `task`) when a feature worktree is retired, and `feature-integrated` (with `task`, the integrated `sha` and a `result`) when `/finish` integrates one. | `union` |
 | `.cs/memory/MEMORY.md` | Index of Claude Code's native auto-memory (one line per fact). | `ours` |
@@ -52,7 +52,7 @@ The one distinction that governs everything below is **shared vs machine-local**
 | `.cs/narrative-archive/<actor>/<through-date>-<blob8>.md` | Sections `cs -narrative rotate` moved out of the live narrative, verbatim. Immutable once written; the name is derived from the content, so two machines archiving the same sections produce the same file. | default |
 | `.cs/checkpoints/` | Labelled state snapshots from `/checkpoint` (narrative + changes + git HEAD). | default |
 | `.cs/archived` | Archive marker written by `cs -archive` (date + actor). Tracked so the archived state syncs; removed on open or `cs -unarchive`. | default |
-| `.cs/handoffs/` | Lineage-stamped conversation handoffs written by the `rotate` skill (parent UUID, purpose, continuation plan). Each carries a `status:` field — `unconsumed` while pending, flipped to `consumed` by the SessionStart that rotates into it, to `discarded` by the resume prompt's `d` answer, or to `superseded` when a later rotation retires it. The `rotate` skill also prunes as it goes, deleting `consumed`, `discarded` and `superseded` files older than 30 days by `created:` unless they are among the 10 newest — instructions the skill follows, not a cs command; nothing in cs itself deletes a handoff. | default |
+| `.cs/handoffs/` | Lineage-stamped conversation handoffs written by the `rotate` skill (parent UUID, purpose, continuation plan). Each carries a `status:` field — `unconsumed` while pending, flipped to `consumed` by the SessionStart that rotates into it, to `discarded` by the resume prompt's `d` answer, or to `superseded` when a later rotation retires it. The `rotate` skill also prunes as it goes, deleting `consumed`, `discarded` and `superseded` files older than 30 days by `created:` unless they are among the 10 newest — instructions the skill follows, not a cs command; nothing in cs itself deletes a handoff. An [encrypted session](#encrypted-sessions) keeps them in `.cs/private/handoffs/` instead. | default |
 | `.cs/plans/` | Design plans and specs kept with the session. | default |
 | `.cs/brief.md` | The brief a `cs -spawn --brief` (or the `feature` skill) handed this session, moved in at launch; the wake-up line sends the session to it first. Written once per spawn, replacing an earlier one. | default |
 | `.cs/age-recipients/*.pub` | age public keys of everyone allowed to decrypt the session's synced secrets. | default |
@@ -73,6 +73,9 @@ it is machine-local and gitignored, cs regenerates it on each machine, and a
 user-owned `CLAUDE.md` is never touched.
 
 ## Machine-local files (`.cs/local/`, gitignored)
+
+An [encrypted session](#encrypted-sessions) keeps the content files among these
+in `.cs/private/` instead.
 
 | File | Purpose |
 |------|---------|
@@ -109,6 +112,85 @@ user-owned `CLAUDE.md` is never touched.
 | `mail/` | Cross-session mailbox, one JSON document per message: senders (`cs -msg`) write to the recipient's `tmp/` and rename into `new/` (atomic — a message is either entirely present or absent); `cs -msg` prints `new/*.json` and moves them to `cur/`. Unread is simply the count of `new/*.json`, the same basis for the prompt hook's digest, the status line, and the TUI. Filenames are `<zero-padded epoch>-<id>.json` — not a monotonic clock; nothing may treat name order as arrival order. `corrupt.jsonl` holds any legacy inbox lines that failed to parse during migration. (A legacy `inbox.jsonl` plus its `seen` cursor is converted on the next session open.) `out/` holds this session's own sent copies, so a thread can be re-read from either end. `woke` lists the filenames both mail wakes have already discharged — announced by a wake, or owned by the queue (`task` kind). Discharged means announced, never read: the message stays in `new/` until `cs -msg` prints it, so a spent announcement costs a wake and never a message. Anything that runs the hook against a live session's mailbox, a hand-run preview included, announces whatever it finds and leaves that mail silent but intact. The list is written tmp-then-rename under a per-process name because both wakes write it and the idle one overlaps itself. `wakes` counts wakes since the last user prompt, which clears it; `CS_MAIL_WAKE_MAX` (default 5) caps it. The directory is created at session start so Claude Code's file watcher has something to arm on: a watch given a path missing two levels never fires again for that process's lifetime. |
 | `rotation-kick/` | Arms the `/clear` auto-start. session-start.sh creates it (a watch given a missing path never fires again for that process's lifetime), hands it over as `watchPaths`, and leaves a detached child to write `rotation.kick` into it once Claude Code's watch is up; that `FileChanged` wakes the session into the handoff's next step. `delivered` marks the kick spent, so the unlink that cleanup fires cannot wake the session on its own tail. Cleared at the start of each rotation, since a stale marker would make the new kick look already spent. |
 | `spawned-by` | Spawner session name for a `cs -spawn`ed worker; deleted after the drain-finished notify (one-shot). A brief-only spawn writes it with no queue to drain, so it stays until a later queue in that session drains, and that drain reports to the spawner. |
+
+## Encrypted sessions
+
+A session can keep its private files on an encrypted volume. Four names under
+`.cs/` become symlinks into the volume's mountpoint (by convention
+`.cs/vault-mnt`), and each one is opt-in: cs only checks whether the link is
+there.
+
+| Link | What lives behind it |
+|------|----------------------|
+| `.cs/memory` | Auto-memory and the narratives. |
+| `.cs/plans` | Plans and specs. |
+| `.cs/claude-config` | Claude Code's config dir for this session. cs launches Claude Code with `CLAUDE_CONFIG_DIR` pointing here, so transcripts, prompt history, `.claude.json` and its backups never reach `~/.claude`. `CLAUDE_SECURESTORAGE_CONFIG_DIR` keeps the shell's login (empty selects the default keychain entry). On every launch cs links the shell's `settings.json`, `settings.local.json`, `CLAUDE.md`, `AGENTS.md`, `rules/`, `skills/`, `commands/`, `agents/`, `hooks/`, `plugins/`, `output-styles/`, `keybindings.json` and `vale/` into it, skipping any name the session already has. A setting you change inside the session (`/model`, `/config`) writes through the link into the shell's `settings.json`. The first launch seeds `.claude.json` from the shell's copy with `projects` emptied, since each project entry keeps that project's last prompt. cs reads the session's transcripts from `projects/` here, and the picker does not rename such a session, because its links and transcripts name its path. |
+| `.cs/private` | cs's own content files, which a plain session keeps in `.cs/local/`: `session.log`, `scope-prompt.trace`, `memory-index.snapshot`, `mail/`, the queue files (`queue/`, `queue.tmp/`, `queue.state`, `queue.done`, `queue.declined`), `notifications.jsonl`, `notifications.seen`, `failures`, `rewrite.trace`, the rotation handoffs (`handoffs/`), `pending-handoff`, checkpoints (`checkpoints/`) and, when `.cs/memory` is a link, the rotated narrative sections (`narrative-archive/`). Numbers the status line writes (`context-pct`, `limits`) and ids (`state`, `spawned-by`, `rotate-nudged`, `ctx-warned`) stay in `.cs/local/`. |
+
+Mount the volume from `.cs/local/pre-open` (see the table above). While a link
+points at a missing directory, the vault is locked, and cs writes nothing in
+its place:
+
+- `cs <name>` refuses to open the session and names the link.
+- The hooks log nothing, deliver no mail wake and drain no queue.
+- `cs -msg` to the session refuses the send. `cs -queue` in it refuses too.
+- cs offers and consumes no rotation handoff.
+- Opening a feature worktree (`base@task`) of the session refuses the same way.
+
+A regular file at any of the four names also refuses the open. cs cannot tell
+it from a locked vault, so the error names it.
+
+Opening an encrypted session also refuses when a plaintext copy of a vault
+file is still outside it: any of the `.cs/private` files above left in
+`.cs/local/`, or a `.cs/handoffs/` or `.cs/checkpoints/` folder, or a plain
+`.cs/narrative-archive/` beside a linked `.cs/memory`. The error names the file. Move it
+into the vault or delete it. cs does not move it for you, because backups and
+snapshots already hold the old copy.
+
+With `.cs/private` present, the session protocol changes too:
+
+- The objective, environment and outcome go at the top of the narrative. The
+  prompt hook does not copy the first prompt into `.cs/README.md`, which keeps
+  only its frontmatter. The first open adds a `cs:encrypted-protocol` section
+  to `CLAUDE.local.md` that says so. Delete its text but keep the comment to
+  opt out.
+- The rotate skill writes the handoff into `.cs/private/handoffs/` and commits
+  nothing from the vault.
+- The launch prompt after answering `r` does not name the handoff file, and
+  the `rotated` event in `timeline.jsonl` records the rotation without the
+  file name. A handoff's name is its topic, and both of those are plaintext.
+- `/checkpoint` saves into `.cs/private/checkpoints/`, and its `timeline.jsonl`
+  event carries no label or file name.
+
+A narrative behind a `.cs/memory` link rotates into the vault. `cs -narrative
+rotate` writes through a `.cs/narrative-archive` link when there is one, and
+into `.cs/private/narrative-archive/` otherwise. With neither, it refuses
+rather than write plaintext. `/checkpoint` refuses in that case too, since a
+checkpoint copies the narrative.
+
+The mounted volume stays out of git and out of the session's removal:
+
+- The autosave snapshot skips `.cs/vault-mnt` and every link target inside the
+  session directory. New `.gitignore` files ignore `.cs/vault-mnt/`.
+- `cs -rm` and the picker's delete refuse while a link resolves inside the
+  session directory, even with `--force`, because removing it would delete
+  what the vault holds. Unmount first.
+- Unmounted, the session removes like any other, `.cs/` included. Keep the
+  volume's container (a disk image, a cipher directory) outside the session
+  directory, or at its root where `cs -rm --force` names it and asks for
+  `--delete-files`.
+
+Link all four names. With only some of them, the rest leaks: `.cs/private`
+without `.cs/claude-config`, for example, keeps the handoffs in the vault, but
+Claude Code's transcript in `~/.claude/projects` records the start-of-session
+context that names the handoff file and quotes the conversation.
+
+Not covered: copies that backups and filesystem snapshots already made,
+third-party hooks that write under `~/.claude` directly, `.cs/summary.md`
+unless you link it into the vault yourself, the brief `cs -spawn --brief`
+delivers (`.cs/brief.md`, staged in the sessions root's `.spawn/`), and
+feature worktrees (`base@task`) of an encrypted session beyond the locked-vault
+refusal.
 
 ## Merge policy
 

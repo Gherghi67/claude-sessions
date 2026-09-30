@@ -214,6 +214,42 @@ _narrative_budget() {  # value, default
     if [ "$n" -gt 0 ]; then echo "$n"; else echo "$2"; fi
 }
 
+# The directory holding a session's cs content files (command log, mail,
+# traces). An encrypted session links .cs/private into its vault; any other
+# keeps them in .cs/local. Fails, printing nothing, when .cs/private is a link
+# whose vault is locked: a writer drops its line rather than write it anywhere
+# else in plaintext.
+cs_private_dir() {  # meta_dir
+    if [ -L "$1/private" ] || [ -e "$1/private" ]; then
+        [ -d "$1/private" ] || return 1
+        printf '%s\n' "$1/private"
+    else
+        printf '%s\n' "$1/local"
+    fi
+}
+
+# Says what an unusable .cs/private is, for an error message: the vault it
+# points at, or that it is not a directory at all.
+cs_private_state() {  # meta_dir
+    if [ -L "$1/private" ]; then
+        printf 'points at %s\n' "$(readlink "$1/private")"
+    else
+        printf 'is not a directory\n'
+    fi
+}
+
+# The rotation handoff store: .cs/private/handoffs in an encrypted session,
+# .cs/handoffs in every other. Fails, like cs_private_dir, while .cs/private
+# dangles: a locked vault has no handoffs to offer or consume.
+cs_handoff_dir() {  # meta_dir
+    if [ -L "$1/private" ] || [ -e "$1/private" ]; then
+        [ -d "$1/private" ] || return 1
+        printf '%s\n' "$1/private/handoffs"
+    else
+        printf '%s\n' "$1/handoffs"
+    fi
+}
+
 # Names a tmux window after every cs session running in its panes: "cs: a | b",
 # in pane order, each name once. Under iTerm's tmux integration the window name
 # is the tab's title, and one window holds every pane of a tab, so a single
@@ -2345,11 +2381,15 @@ fuse_session_records() {
     # Worktrees never run migrate_session, so a task branch created before the
     # log moved to .cs/local/ still keeps its audit trail at .cs/logs/; fuse
     # whichever the worktree has into the base's machine-local log.
-    local srclog
+    # An encrypted base keeps its log behind .cs/private; a locked one cannot
+    # take the log, and .cs/local must not take it in plaintext instead.
+    local srclog dstlog
     for srclog in "$src/local/session.log" "$src/logs/session.log"; do
         if [ -f "$srclog" ]; then
-            mkdir -p "$dst/local"
-            { echo ""; cat "$srclog"; } >> "$dst/local/session.log"
+            dstlog=$(cs_private_dir "$dst") \
+                || error "cannot fuse the worktree's log: $dst/private is locked. Mount it, then retry."
+            mkdir -p "$dstlog"
+            { echo ""; cat "$srclog"; } >> "$dstlog/session.log"
             break
         fi
     done
@@ -2579,6 +2619,25 @@ _emit_memory_note_block() {
 ## Where memory lives
 
 Claude's built-in memory writes durable facts to `.cs/memory/` (cs redirects via `CLAUDE_COWORK_MEMORY_PATH_OVERRIDE`); the `MEMORY.md` index lists entries and individual `<bucket>_*.md` files are loaded lazily. Only `narrative.<actor>.md` is per-actor: the durable buckets and their index are shared by every actor working in this session, so an entry may describe a different person than the one present.
+EOF
+}
+
+# The protocol for an encrypted session: migrate_session appends it once
+# .cs/private exists. It overrides the README instructions of the base
+# protocol, which every session gets from _emit_session_claude_md.
+_emit_encrypted_protocol_block() {
+    cat << 'EOF'
+<!-- cs:encrypted-protocol -->
+## Encrypted session
+
+This session keeps its private files in an encrypted vault: `.cs/memory`, `.cs/plans` and `.cs/private` link into it. Every other path in the session directory is plaintext on disk and in backups. These rules override the Session Files and Documentation Discipline sections above:
+
+- Keep the objective, environment and outcome at the top of your narrative (`.cs/memory/narrative.<actor>.md`), and read them from there on resume. `.cs/README.md` stays frontmatter only; cs does not copy your first prompt into it.
+- The bash-logger records every Bash command in `.cs/private/session.log`, inside the vault. The secrets rule above still applies.
+- Rotation handoffs live in `.cs/private/handoffs/` and are never committed; the `rotate` skill says how.
+- `cs -narrative rotate` archives your narrative's older sections into `.cs/private/narrative-archive/<actor>/` (or through a `.cs/narrative-archive` link into the vault); grep there on demand.
+- `/checkpoint` saves under `.cs/private/checkpoints/`, and the timeline records no label.
+- Keep session notes (research, scratch, drafts) under `.cs/memory`, `.cs/plans` or `.cs/private`.
 EOF
 }
 
@@ -2835,12 +2894,17 @@ _set_local_state() {
 # macOS mktemp returns /var/folders/... which is a symlink to
 # /private/var/folders/... and claude realpaths cwd before encoding.
 # CS_TRANSCRIPTS_DIR overrides the base for tests (also used by doctor).
+# A session with .cs/claude-config runs Claude Code on that config dir, so its
+# transcripts live in the dir's projects/. A dangling link (vault locked) still
+# names that base: the shared one never holds the session's conversations.
 _claude_project_dir() {
     local cwd="$1"
-    local resolved
+    local resolved base="${CS_TRANSCRIPTS_DIR:-$HOME/.claude/projects}"
     resolved=$( (cd "$cwd" 2>/dev/null && pwd -P) || printf '%s' "$cwd" )
-    printf '%s/%s\n' "${CS_TRANSCRIPTS_DIR:-$HOME/.claude/projects}" \
-        "$(_claude_encode_path "$resolved")"
+    if [ -e "$cwd/.cs/claude-config" ] || [ -L "$cwd/.cs/claude-config" ]; then
+        base="$cwd/.cs/claude-config/projects"
+    fi
+    printf '%s/%s\n' "$base" "$(_claude_encode_path "$resolved")"
 }
 
 # Discover claude's most-recently-modified transcript UUID under a project
@@ -2976,7 +3040,14 @@ _exec_fresh_rebind() {
     local new_uuid
     new_uuid=$(_alloc_uuid)
     _set_local_state "$session_dir/.cs/local/state" claude_session_id "$new_uuid"
-    _timeline_rotated "$session_dir" "$old_uuid" "$new_uuid" "$reason" "$handoff"
+    # An encrypted session's handoff name is its topic, so it stays out of
+    # the plaintext timeline and out of claude's argv (visible to ps and in a
+    # terminal title); the SessionStart hook names the file from the vault.
+    local public_handoff="$handoff"
+    if [ -L "$session_dir/.cs/private" ] || [ -e "$session_dir/.cs/private" ]; then
+        public_handoff=""
+    fi
+    _timeline_rotated "$session_dir" "$old_uuid" "$new_uuid" "$reason" "$public_handoff"
     local session_color
     session_color=$(_read_local_state "$session_dir/.cs/local/state" claude_session_color)
     local color_arg=""
@@ -2990,7 +3061,11 @@ _exec_fresh_rebind() {
     # color re-apply; all four ride claude's single prompt slot, so a displaced
     # color returns on the next open.
     local handoff_arg=""
-    [ -n "$handoff" ] && handoff_arg="Continue from the pending rotation handoff: read .cs/handoffs/$handoff first."
+    if [ -n "$public_handoff" ]; then
+        handoff_arg="Continue from the pending rotation handoff: read .cs/handoffs/$handoff first."
+    elif [ -n "$handoff" ]; then
+        handoff_arg="Continue from the pending rotation handoff."
+    fi
     local launch_prompt="${merge_kick:-${spawn_kick:-${handoff_arg:-$color_arg}}}"
     export CS_CLAUDE_SESSION_ID="$new_uuid"
     export CS_FRESH_REBIND=1
@@ -3127,18 +3202,50 @@ _run_pre_open() {  # session_name, session_dir
     [ "$rc" -eq 0 ] || error "$1: .cs/local/pre-open exited $rc; not opening the session."
 }
 
-# A session can keep .cs/memory and .cs/plans on an encrypted volume by making
-# them symlinks into its mountpoint. Unmounted, the links dangle: `test -d` is
-# false through them, so migrate would mkdir through them and abort on a raw
-# mkdir error. Refuse by name instead, before anything writes there.
+# A session can keep .cs/memory, .cs/plans, .cs/claude-config (Claude Code's
+# own config dir) and .cs/private (cs's own content files) on an encrypted
+# volume by making them symlinks into its mountpoint. Unmounted, the links
+# dangle: `test -d` is false through them, so migrate would mkdir through them
+# and abort on a raw mkdir error. Refuse by name instead, before anything
+# writes there.
 _refuse_unmounted_meta() {  # session_name, session_dir
     local sub link target
-    for sub in memory plans; do
+    for sub in memory plans claude-config private; do
         link="$2/.cs/$sub"
+        if [ -e "$link" ] && [ ! -d "$link" ]; then
+            error "$1: .cs/$sub is a file, not a directory or a link into encrypted storage. Remove it, or link it into the vault, then reopen."
+        fi
         [ -L "$link" ] && [ ! -e "$link" ] || continue
         target=$(readlink "$link")
         error "$1: .cs/$sub points at $target, which is missing (encrypted storage not mounted?). Mount it, then reopen."
     done
+    _refuse_plaintext_beside_private "$1" "$2"
+}
+
+# Once .cs/private holds a session's cs content files, a copy still in
+# .cs/local is plaintext the vault was meant to hold: an unmigrated log, or one
+# written by an older cs. Named rather than moved, since a move cannot remove
+# the copies backups and snapshots already hold.
+_refuse_plaintext_beside_private() {  # session_name, session_dir
+    local meta="$2/.cs" name
+    [ -e "$meta/private" ] || return 0
+    for name in session.log scope-prompt.trace memory-index.snapshot mail \
+                queue queue.tmp queue.state queue.done queue.declined queue.migrating \
+                notifications.jsonl notifications.seen failures rewrite.trace pending-handoff; do
+        [ -e "$meta/local/$name" ] || continue
+        error "$1: .cs/private keeps this session's cs files in its vault, but .cs/local still holds $name in plaintext. Move it into .cs/private or delete it, then reopen."
+    done
+    if [ -e "$meta/handoffs" ]; then
+        error "$1: .cs/private keeps this session's rotation handoffs in its vault, but .cs/handoffs still holds them in plaintext. Move it to .cs/private/handoffs or delete it, then reopen."
+    fi
+    if [ -e "$meta/checkpoints" ]; then
+        error "$1: .cs/private keeps this session's checkpoints in its vault, but .cs/checkpoints is still plaintext. Move it to .cs/private/checkpoints or delete it, then reopen."
+    fi
+    # A narrative in the vault rotates into it; a .cs/narrative-archive link
+    # into the vault is where rotation writes, not a leftover.
+    if [ -L "$meta/memory" ] && [ -e "$meta/narrative-archive" ] && [ ! -L "$meta/narrative-archive" ]; then
+        error "$1: this session's narrative lives in its vault, but .cs/narrative-archive is still plaintext. Move it to .cs/private/narrative-archive or delete it, then reopen."
+    fi
 }
 
 # Create session directory structure
@@ -3523,8 +3630,13 @@ migrate_session() {
     # peer still on the old cs may keep appending to the tracked log, so a
     # one-time modify/delete conflict on this low-stakes file is possible — take
     # either side.
+    # An encrypted session's log belongs behind .cs/private; open has already
+    # refused a locked vault, so cs_private_dir resolves here.
     if [ -f "$session_dir/.cs/logs/session.log" ]; then
-        cat "$session_dir/.cs/logs/session.log" >> "$session_dir/.cs/local/session.log"
+        local log_dir
+        log_dir=$(cs_private_dir "$session_dir/.cs") \
+            || error "Cannot move .cs/logs/session.log: .cs/private $(cs_private_state "$session_dir/.cs"), and cs cannot write there."
+        cat "$session_dir/.cs/logs/session.log" >> "$log_dir/session.log"
         rm -f "$session_dir/.cs/logs/session.log"
         rmdir "$session_dir/.cs/logs" 2>/dev/null || true
         # Drop the obsolete union rule for the relocated log. grep -v exits 1 when
@@ -3535,7 +3647,7 @@ migrate_session() {
             { grep -v 'logs/session\.log merge=union' "$ga" > "$ga.tmp"; } 2>/dev/null || true
             mv "$ga.tmp" "$ga" 2>/dev/null || rm -f "$ga.tmp"
         fi
-        warn "Moved .cs/logs/session.log to machine-local .cs/local/session.log"
+        warn "Moved .cs/logs/session.log to ${log_dir#"$session_dir"/}/session.log"
     fi
 
     # Remove inert sync/remote metadata left by older versions (the sync
@@ -3808,6 +3920,15 @@ EOF
         warn "Appended session wrap-up cues to CLAUDE.local.md"
     fi
 
+    # Phase 14: an encrypted session (.cs/private present; a locked one was
+    # refused before migrate) gains the encrypted protocol. The sentinel is a
+    # tombstone like cs:wrap-cues: present means managed, never re-added.
+    if [ -f "$claude_md_p9" ] && [ -d "$session_dir/.cs/private" ] \
+        && ! grep -q 'cs:encrypted-protocol' "$claude_md_p9"; then
+        { echo; _emit_encrypted_protocol_block; } >> "$claude_md_p9"
+        warn "Added the encrypted-session protocol to CLAUDE.local.md"
+    fi
+
     # Phase 11: Backfill claude_session_color in local state when absent.
     # Picks one of the 8 colors claude's /color command accepts. Idempotent —
     # runs only when the field is missing. Legacy sessions (pre-v2026.5.7)
@@ -3835,6 +3956,31 @@ _slugify_label() {
     echo "$1" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g; s/--*/-/g; s/^-//; s/-$//' | cut -c1-40
 }
 
+# Where checkpoints live: .cs/private/checkpoints in an encrypted session,
+# .cs/checkpoints in every other. A checkpoint copies the narrative, so a
+# narrative behind a .cs/memory link with no .cs/private beside it has no
+# private place to go (rc 2); a dangling .cs/private is a locked vault (rc 1).
+_checkpoints_dir() {  # meta_dir
+    if [ -L "$1/private" ] || [ -e "$1/private" ]; then
+        [ -d "$1/private" ] || return 1
+        printf '%s\n' "$1/private/checkpoints"
+    elif [ -L "$1/memory" ]; then
+        return 2
+    else
+        printf '%s\n' "$1/checkpoints"
+    fi
+}
+
+# Names why _checkpoints_dir failed; returns when it did not.
+_refuse_checkpoints_dir() {  # rc, meta_dir
+    case "$1" in
+        0) ;;
+        1) error "this session keeps its checkpoints in encrypted storage that is not mounted (.cs/private $(cs_private_state "$2")). Mount it, then retry." ;;
+        2) error "this session's narrative lives on encrypted storage (.cs/memory is a link), and .cs/private is not there to hold the checkpoint. Link .cs/private into the vault, then retry." ;;
+        *) error "_checkpoints_dir returned $1 for $2" ;;
+    esac
+}
+
 # Save a labelled checkpoint of the current session state
 save_checkpoint() {
     local label="$*"
@@ -3848,7 +3994,9 @@ save_checkpoint() {
     fi
 
     local meta_dir="$CLAUDE_SESSION_META_DIR"
-    local checkpoints_dir="$meta_dir/checkpoints"
+    local checkpoints_dir rc=0
+    checkpoints_dir=$(_checkpoints_dir "$meta_dir") || rc=$?
+    _refuse_checkpoints_dir "$rc" "$meta_dir"
     mkdir -p "$checkpoints_dir"
 
     local stamp slug filename checkpoint_path
@@ -3893,13 +4041,20 @@ save_checkpoint() {
     local timeline_file="$meta_dir/timeline.jsonl"
     local timeline_branch
     timeline_branch=$(git -C "$session_dir" branch --show-current 2>/dev/null || echo "")
+    # The label and the file name derived from it are topic text; an
+    # encrypted session's plaintext timeline records only that a checkpoint
+    # was taken.
+    local sealed=false
+    [ "$checkpoints_dir" = "$meta_dir/private/checkpoints" ] && sealed=true
     _terminate_jsonl "$timeline_file"
     { jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
            --arg event "checkpoint" \
            --arg label "$label" \
            --arg file "$filename" \
            --arg branch "$timeline_branch" \
-           '{ts: $ts, event: $event, label: $label, file: $file, branch: $branch}' \
+           --argjson sealed "$sealed" \
+           'if $sealed then {ts: $ts, event: $event, branch: $branch}
+            else {ts: $ts, event: $event, label: $label, file: $file, branch: $branch} end' \
         >> "$timeline_file"; } 2>/dev/null || true
 
     info "Checkpoint saved: $filename"
@@ -3912,7 +4067,9 @@ list_checkpoints() {
     if [ -z "${CLAUDE_SESSION_META_DIR:-}" ]; then
         error "cs -checkpoint list must be run from inside a cs session"
     fi
-    local checkpoints_dir="$CLAUDE_SESSION_META_DIR/checkpoints"
+    local checkpoints_dir rc=0
+    checkpoints_dir=$(_checkpoints_dir "$CLAUDE_SESSION_META_DIR") || rc=$?
+    _refuse_checkpoints_dir "$rc" "$CLAUDE_SESSION_META_DIR"
     if [ ! -d "$checkpoints_dir" ] || [ -z "$(ls -A "$checkpoints_dir" 2>/dev/null)" ]; then
         info "No checkpoints yet. Save one with: cs -checkpoint \"<label>\""
         return 0
@@ -3937,7 +4094,9 @@ show_checkpoint() {
     if [ -z "${CLAUDE_SESSION_META_DIR:-}" ]; then
         error "cs -checkpoint show must be run from inside a cs session"
     fi
-    local checkpoints_dir="$CLAUDE_SESSION_META_DIR/checkpoints"
+    local checkpoints_dir rc=0
+    checkpoints_dir=$(_checkpoints_dir "$CLAUDE_SESSION_META_DIR") || rc=$?
+    _refuse_checkpoints_dir "$rc" "$CLAUDE_SESSION_META_DIR"
     local path="$checkpoints_dir/${name}.md"
     if [ ! -f "$path" ]; then
         error "Checkpoint not found: $name"
@@ -3967,7 +4126,8 @@ run_checkpoint() {
 
 # --- Task queue (cs -queue) ---------------------------------------------------
 # Machine-local queue of prompts drained by the Stop hook. Files live in
-# <session>/.cs/local/: queue/ (one file per task, staged via queue.tmp/),
+# <session>/.cs/local/ (.cs/private/ in an encrypted session): queue/ (one
+# file per task, staged via queue.tmp/),
 # queue.done, queue.state (idle|armed|draining), queue.declined (epoch).
 # Plain files so the standalone Stop hook can read them without bin/cs's
 # helpers.
@@ -4049,7 +4209,19 @@ rotate_narrative() {
         | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | tail -1 || true)
     [ -n "$through" ] || through="undated"
 
-    local arch_dir="$meta_dir/narrative-archive/$actor"
+    # An encrypted session's narrative sits in the vault behind the .cs/memory
+    # link, so its archive must too. A .cs/narrative-archive link is used as
+    # it is; otherwise .cs/private holds the archive. With neither, the only
+    # place left is plaintext, so the rotation refuses.
+    local arch_root="$meta_dir/narrative-archive"
+    if [ -L "$meta_dir/memory" ] && [ ! -L "$arch_root" ]; then
+        if [ ! -d "$meta_dir/private" ]; then
+            rm -f "$snap"
+            error "narrative.$actor.md lives on encrypted storage (.cs/memory is a link), and neither .cs/private nor .cs/narrative-archive is there to hold its archive. Link one of them into the vault, then run cs -narrative rotate again."
+        fi
+        arch_root="$meta_dir/private/narrative-archive"
+    fi
+    local arch_dir="$arch_root/$actor"
     mkdir -p "$arch_dir"
     [ -w "$arch_dir" ] || { rm -f "$snap"; error "Cannot write to $arch_dir"; }
     local body="$arch_dir/.body.$$"
@@ -4102,7 +4274,7 @@ rotate_narrative() {
     mv "$live_tmp" "$live"
     rm -f "$snap"
 
-    local chunk_rel=".cs/narrative-archive/$actor/$(basename "$chunk")"
+    local chunk_rel=".cs/${arch_root#"$meta_dir"/}/$actor/$(basename "$chunk")"
     if git -C "$session_dir" rev-parse --git-dir >/dev/null 2>&1 \
         && git -C "$session_dir" ls-files --error-unmatch -- "$live" >/dev/null 2>&1 \
         && { git -C "$session_dir" check-ignore -q --no-index -- "$live" \
@@ -4153,7 +4325,7 @@ rotate_narrative() {
     local archived_kb now_kb
     archived_kb=$(( (cut - head_end) / 1024 ))
     now_kb=$(( $(wc -c < "$live" | tr -d ' ') / 1024 ))
-    echo "rotated $sections sections (${archived_kb} KB) -> .cs/narrative-archive/$actor/$(basename "$chunk"); live file now ${now_kb} KB"
+    echo "rotated $sections sections (${archived_kb} KB) -> $chunk_rel; live file now ${now_kb} KB"
 }
 
 # Dispatcher for cs -narrative
@@ -4348,6 +4520,23 @@ _mail_ensure_maildir() {  # maildir
     mkdir -p "$1/tmp" "$1/new" "$1/cur" "$1/out"
 }
 
+# A session's mailbox sits with its other cs files: in its vault when
+# .cs/private links there, else in .cs/local. rc 1, printing nothing, when the
+# link dangles (the vault is locked): mail is never written beside it in
+# plaintext.
+_mail_dir() {  # meta_dir
+    local base
+    base=$(cs_private_dir "$1") || return 1
+    printf '%s/mail' "$base"
+}
+
+# The current session's own mailbox, or the error that its vault is locked.
+# Callers capture it, so error only ends their subshell: each one exits after.
+_mail_own_dir() {
+    _mail_dir "$CLAUDE_SESSION_META_DIR" \
+        || error "this session keeps its mail in encrypted storage that is not mounted (.cs/private $(cs_private_state "$CLAUDE_SESSION_META_DIR")). Mount it, then retry."
+}
+
 # Thread ids are 6 hex digits because an agent has to retype them. RANDOM is 15
 # bits, so two draws cover the 24. Collisions matter — a repeat would merge two
 # unrelated transcripts and misroute replies — so generation avoids the roots
@@ -4373,7 +4562,8 @@ _mail_new_thread() {  # maildir
 # failure to file the copy must never report the send as failed.
 _mail_keep_sent() {  # line, fname
     [ -n "${CLAUDE_SESSION_META_DIR:-}" ] || return 0
-    local mine="$CLAUDE_SESSION_META_DIR/local/mail"
+    local mine
+    mine=$(_mail_dir "$CLAUDE_SESSION_META_DIR") || return 0
     _mail_ensure_maildir "$mine" 2>/dev/null || return 0
     if ! { { printf '%s\n' "$1" > "$mine/tmp/$2"; } 2>/dev/null \
             && mv "$mine/tmp/$2" "$mine/out/$2" 2>/dev/null; }; then
@@ -4433,8 +4623,9 @@ _mail_send() {  # target, [--kind|-k KIND] [--reply THREAD] body
     if [ -n "$reply_thread" ]; then
         [ -n "${CLAUDE_SESSION_META_DIR:-}" ] \
             || error "cs -msg --reply resolves the thread from a session's mailbox; run it inside a session"
-        local pair derived rc=0
-        pair=$(_mail_reply_peer "$CLAUDE_SESSION_META_DIR/local/mail" "$reply_thread") || rc=$?
+        local pair derived rc=0 mine
+        mine=$(_mail_own_dir) || exit 1
+        pair=$(_mail_reply_peer "$mine" "$reply_thread") || rc=$?
         case "$rc" in
             0) : ;;
             2) error "thread $reply_thread names more than one correspondent; it is not a single conversation" ;;
@@ -4470,6 +4661,11 @@ _mail_send() {  # target, [--kind|-k KIND] [--reply THREAD] body
         body="$(_trim "$body")"
     fi
     [ -n "$body" ] || error "cs -msg needs a non-empty body"
+    # Resolved before anything is written: a locked recipient gets nothing at
+    # all, neither its queue task nor a plaintext mailbox beside the vault.
+    local target_files
+    target_files=$(cs_private_dir "$target_dir/.cs") \
+        || error "$target keeps its mail in encrypted storage that is not mounted (.cs/private $(cs_private_state "$target_dir/.cs")). Nothing was sent."
     local bytes
     bytes=$(LC_ALL=C printf '%s' "$body" | wc -c | tr -d '[:space:]')
     if [ "$bytes" -gt "$MAIL_BODY_MAX" ]; then
@@ -4479,13 +4675,13 @@ _mail_send() {  # target, [--kind|-k KIND] [--reply THREAD] body
         # Queue first, attribution second: if the queue write fails (a
         # multi-line body among the ways it refuses) nothing is sent; if the
         # mail write fails the work is still delivered.
-        _queue_add "$target_dir/.cs/local" "$body"
+        _queue_add "$target_files" "$body"
     fi
     # Deliver into the RECIPIENT's tmp/, then rename into its new/: both live
     # in one tree, so the rename is atomic even for adopted (symlinked)
     # sessions, where a sender-side tmp/ could sit on another volume and
     # degrade the mv to copy-then-unlink.
-    local maildir="$target_dir/.cs/local/mail"
+    local maildir="$target_files/mail"
     # Everything after _queue_add must fail gracefully for a task-kind send:
     # the work is already queued, so aborting here makes the sender believe the
     # send failed, and a retry queues the task a second time. The maildir
@@ -4508,7 +4704,11 @@ _mail_send() {  # target, [--kind|-k KIND] [--reply THREAD] body
     if [ -n "$reply_thread" ]; then
         thread="$reply_thread"
     else
-        thread="$(_mail_new_thread "${CLAUDE_SESSION_META_DIR:-$target_dir/.cs}/local/mail")"
+        local roots="$maildir"
+        if [ -n "${CLAUDE_SESSION_META_DIR:-}" ]; then
+            roots=$(_mail_dir "$CLAUDE_SESSION_META_DIR") || roots="$maildir"
+        fi
+        thread="$(_mail_new_thread "$roots")"
     fi
     # The body rides on stdin, never as an --arg: `cs -msg <target> -` exists
     # precisely so a multi-KB handoff need not go through argv, and putting it
@@ -4564,7 +4764,8 @@ _mail_print_files() {  # file...
 }
 
 _mail_read() {
-    local maildir="$CLAUDE_SESSION_META_DIR/local/mail"
+    local maildir
+    maildir=$(_mail_own_dir) || exit 1
     local f files=()
     for f in "$maildir"/new/*.json; do
         [ -f "$f" ] || continue
@@ -4583,7 +4784,8 @@ _mail_read() {
 }
 
 _mail_log() {
-    local maildir="$CLAUDE_SESSION_META_DIR/local/mail"
+    local maildir
+    maildir=$(_mail_own_dir) || exit 1
     local f files=()
     # Sent copies belong in the history too: without out/, a session cannot see
     # what it said, and cannot find the thread id of any conversation it started.
@@ -4657,7 +4859,8 @@ _mail_emit_subtree() {  # index
 _mail_thread() {  # thread id
     local id="${1:-}"
     [ -n "$id" ] || error "cs -msg thread needs a thread id (cs -msg log lists them)"
-    local maildir="$CLAUDE_SESSION_META_DIR/local/mail"
+    local maildir
+    maildir=$(_mail_own_dir) || exit 1
     local files=() f
     # Already in filename order, so siblings answering one parent stay in it.
     while IFS= read -r f; do
@@ -4964,7 +5167,12 @@ run_queue() {
     if [ -z "${CLAUDE_SESSION_META_DIR:-}" ]; then
         error "cs -queue must be run inside a cs session, or as: cs <session> -queue ..."
     fi
-    local qdir="$CLAUDE_SESSION_META_DIR/local"
+    # The queue sits with the session's other cs files: behind .cs/private in
+    # an encrypted session, where a locked vault refuses rather than queue a
+    # task beside it in plaintext.
+    local qdir
+    qdir=$(cs_private_dir "$CLAUDE_SESSION_META_DIR") \
+        || error "this session keeps its queue in encrypted storage that is not mounted (.cs/private $(cs_private_state "$CLAUDE_SESSION_META_DIR")). Mount it, then retry."
     _queue_convert_legacy "$qdir"
     local sub="${1:-list}"
     case "$sub" in
@@ -6667,7 +6875,7 @@ search_sessions() {
 
     local found=0
     local search_files=".cs/README.md"
-    local -a search_globs=(".cs/memory/*.md" ".cs/narrative-archive/*/*.md")
+    local -a search_globs=(".cs/memory/*.md" ".cs/narrative-archive/*/*.md" ".cs/private/narrative-archive/*/*.md")
 
     for session_dir in "$SESSIONS_ROOT"/*/; do
         [ -d "$session_dir" ] || continue
@@ -6910,8 +7118,10 @@ list_sessions() {
         local created="-"
         local modified="-"
 
-        local log_file="$session_dir/.cs/local/session.log"
-        # Fall back to older locations for unmigrated sessions
+        local log_file="$session_dir/.cs/private/session.log"
+        # An encrypted session keeps its log behind .cs/private; every other
+        # one in .cs/local. Fall back to older locations for unmigrated sessions
+        [ ! -f "$log_file" ] && log_file="$session_dir/.cs/local/session.log"
         [ ! -f "$log_file" ] && log_file="$session_dir/.cs/logs/session.log"
         [ ! -f "$log_file" ] && log_file="$session_dir/logs/session.log"
         if [ -f "$log_file" ]; then
@@ -7054,6 +7264,25 @@ _remove_one_session() {
 
     if [ -z "$force" ] && session_is_live "$session_dir/.cs"; then
         error "Session '$session_name' is live (pid $(read_lock_pid "$session_dir/.cs")); use --force to remove anyway"
+    fi
+
+    # An encrypted session mounts its vault inside the session directory by
+    # convention, and rm -rf recurses into a mount: removing the session would
+    # delete what the vault holds. A link that resolves into this directory
+    # means the vault is mounted here, so refuse, --force or not. An adopted
+    # session loses only its link below, so it is exempt.
+    if [ ! -L "$session_dir" ]; then
+        local sub link real_dir real_target
+        real_dir=$(cd "$session_dir" && pwd -P)
+        for sub in memory plans claude-config private; do
+            link="$session_dir/.cs/$sub"
+            [ -L "$link" ] || continue
+            real_target=$(cd "$link" 2>/dev/null && pwd -P) || continue
+            case "$real_target" in
+                "$real_dir"/*)
+                    error "Session '$session_name' has encrypted storage mounted inside it: .cs/$sub points at $(readlink "$link"). Removing the session would delete what the vault holds; unmount it, then retry." ;;
+            esac
+        done
     fi
 
     # Every confirmation below reads from stdin; a script piping input through
@@ -7580,7 +7809,8 @@ _handoff_is_unconsumed() {  # handoff_file
 # show, not a filter: the pick deliberately still offers a handoff from
 # elsewhere, because continuing one on another machine is a working flow.
 _handoff_is_local() {  # handoff_file, session_dir
-    local log="$2/.cs/local/session.log" parent
+    local log parent
+    log="$(cs_private_dir "$2/.cs")/session.log" || return 1
     [ -f "$log" ] || return 1
     parent=$(awk '
         NR==1 { if ($0 != "---") exit; next }
@@ -7672,7 +7902,8 @@ _resume_context_pct() {  # session_dir
 # retires the one it had. Offering r in those cases sends the user back for
 # something that no longer exists.
 _disarm_rotation_marker() {  # session_dir [surviving_handoff]
-    local marker="$1/.cs/local/pending-handoff"
+    local marker
+    marker="$(cs_private_dir "$1/.cs")/pending-handoff" || return 0
     [ -f "$marker" ] || return 0
     rm -f "$marker" 2>/dev/null || true
     # An explicit if: `[ ... ] && return 0` as the last command returns 1 when
@@ -7682,6 +7913,63 @@ _disarm_rotation_marker() {  # session_dir [surviving_handoff]
         return 0
     fi
     printf "${DIM}Rotation marker disarmed; the handoff stays pending — answer r, or re-run the rotate skill.${NC}\n"
+}
+
+# A session whose .cs/claude-config exists keeps Claude Code's whole config
+# dir there (transcripts, prompt history, .claude.json and its backups), so an
+# encrypted session's conversation never lands in ~/.claude. The login stays
+# the one the shell would use: CLAUDE_SECURESTORAGE_CONFIG_DIR names the
+# keychain entry independently of the config dir, and empty selects the
+# default entry. A value inherited from a parent launch into such a session is
+# recognisable by its path and dropped, so a session without the link opens
+# on the shell's own config.
+_export_session_claude_config() {  # session_dir
+    local config="$1/.cs/claude-config"
+    case "${CLAUDE_CONFIG_DIR:-}" in
+        */.cs/claude-config)
+            unset CLAUDE_CONFIG_DIR CLAUDE_SECURESTORAGE_CONFIG_DIR
+            ;;
+    esac
+    [ -e "$config" ] || return 0
+    _link_shared_claude_config "$config" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+    # Claude Code keeps .claude.json beside the config dir by default, inside it
+    # when CLAUDE_CONFIG_DIR is set.
+    _seed_session_claude_json "$config" "${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"
+    export CLAUDE_SECURESTORAGE_CONFIG_DIR="${CLAUDE_SECURESTORAGE_CONFIG_DIR-${CLAUDE_CONFIG_DIR-}}"
+    export CLAUDE_CONFIG_DIR="$config"
+}
+
+# The session's config dir shares the shell's settings, instructions and
+# extensions by symlink, so hooks, skills and plugins behave as they do
+# anywhere else. Only these names are shared: everything else Claude Code
+# writes (projects/, history.jsonl, backups/, todos/) is born in the session's
+# config dir and stays behind the vault. An entry already there is the
+# session's own and is left alone.
+_link_shared_claude_config() {  # session_config_dir, shell_config_dir
+    local name
+    for name in settings.json settings.local.json CLAUDE.md AGENTS.md rules skills \
+        commands agents hooks plugins output-styles keybindings.json vale; do
+        [ -e "$2/$name" ] || continue
+        [ -e "$1/$name" ] || [ -L "$1/$name" ] && continue
+        ln -s "$2/$name" "$1/$name" || error "could not link $1/$name to $2/$name."
+    done
+}
+
+# The session's .claude.json starts once as a copy of the shell's, so the
+# login's onboarding and preferences carry over, with every project's record
+# dropped: each keeps that project's last prompt in plaintext. From then on it
+# is the session's own. jq exits 0 on an empty file and prints nothing, so -e
+# is what turns an empty or unreadable source into a refusal.
+_seed_session_claude_json() {  # session_config_dir, shell_claude_json
+    local dest="$1/.claude.json" tmp
+    [ -e "$dest" ] || [ -L "$dest" ] && return 0
+    [ -e "$2" ] || return 0
+    tmp=$(mktemp "$1/.claude.json.XXXXXX") || error "could not create a temporary file in $1."
+    if ! jq -e '.projects = {}' "$2" > "$tmp" 2>/dev/null; then
+        rm -f "$tmp"
+        error "$2 is not a JSON object cs can copy into $1; fix it, then reopen."
+    fi
+    mv "$tmp" "$dest" || { rm -f "$tmp"; error "could not write $dest."; }
 }
 
 # One row of the pending-handoff answers: the key, a padded label, and a dim
@@ -7851,6 +8139,7 @@ launch_claude_code() {
     local memory_path="$session_dir/.cs/memory"
     export CLAUDE_CODE_AUTO_MEMORY_PATH="$memory_path"
     export CLAUDE_COWORK_MEMORY_PATH_OVERRIDE="$memory_path"
+    _export_session_claude_config "$session_dir"
     # Expose the recorded session UUID to hooks. Hooks can use this to
     # reverse-look-up which cs session they're firing inside without having
     # to depend on $CLAUDE_CODE_SESSION_ID (set by Claude Code itself, but
@@ -8129,8 +8418,14 @@ EOF
         # Deliberate rotation: an unconsumed handoff written by the rotate
         # skill adds a third answer. Lexicographically last basename wins
         # (the YYYY-MM-DD- prefix makes that the newest date).
-        local pending_handoff="" _hf
-        for _hf in "$session_dir/.cs/handoffs"/*.md; do
+        # An encrypted session keeps its handoffs and the marker in its vault;
+        # the open has already refused a locked one.
+        local pending_handoff="" _hf _handoff_dir _marker_dir
+        _handoff_dir=$(cs_handoff_dir "$session_dir/.cs") \
+            || error "$session_name: .cs/private dangles after the open checked it (vault unmounted mid-launch?). Mount it, then reopen."
+        _marker_dir=$(cs_private_dir "$session_dir/.cs") \
+            || error "$session_name: .cs/private dangles after the open checked it (vault unmounted mid-launch?). Mount it, then reopen."
+        for _hf in "$_handoff_dir"/*.md; do
             [ -f "$_hf" ] || continue
             _handoff_is_unconsumed "$_hf" || continue
             pending_handoff="$_hf"
@@ -8144,13 +8439,13 @@ EOF
         # scan; a marker naming a spent or absent file is stale and the scan
         # still answers. The marker names a basename, never a path: a separator
         # would resolve outside the handoff store.
-        local _marker="$session_dir/.cs/local/pending-handoff" _armed
+        local _marker="$_marker_dir/pending-handoff" _armed
         if [ -f "$_marker" ]; then
             _armed=$(cat "$_marker" 2>/dev/null | tr -d '[:space:]' || true)
             case "$_armed" in */*|*\\*) _armed="" ;; esac
-            if [ -n "$_armed" ] && [ -f "$session_dir/.cs/handoffs/$_armed" ] \
-                && _handoff_is_unconsumed "$session_dir/.cs/handoffs/$_armed"; then
-                pending_handoff="$session_dir/.cs/handoffs/$_armed"
+            if [ -n "$_armed" ] && [ -f "$_handoff_dir/$_armed" ] \
+                && _handoff_is_unconsumed "$_handoff_dir/$_armed"; then
+                pending_handoff="$_handoff_dir/$_armed"
             fi
         fi
         # A spawned launch is unattended: take the default (resume) instead
@@ -8193,8 +8488,8 @@ EOF
                 ;;
             [rR])
                 if [ -n "$pending_handoff" ]; then
-                    mkdir -p "$session_dir/.cs/local"
-                    printf '%s\n' "$(basename "$pending_handoff")" > "$session_dir/.cs/local/pending-handoff"
+                    mkdir -p "$_marker_dir"
+                    printf '%s\n' "$(basename "$pending_handoff")" > "$_marker_dir/pending-handoff"
                     echo ""
                     # r is the user explicitly choosing the rotation handoff
                     # over resuming; a merge armed moments earlier must not
@@ -8337,6 +8632,9 @@ create_session_gitignore() {
 # Session archives (large binaries; unrelated to the tracked .cs/archived marker)
 .cs/archives/
 
+# An encrypted session's mounted volume (never staged in plaintext)
+.cs/vault-mnt/
+
 # Session cooldown markers
 .cs/.narrative-reminder-cooldown
 
@@ -8375,6 +8673,7 @@ ensure_cs_gitignore_entries() {
     entries=$(cat << 'ENTRIES'
 .cs/local/
 .cs/archives/
+.cs/vault-mnt/
 .cs/.narrative-reminder-cooldown
 .claude/settings.local.json
 CLAUDE.local.md
@@ -9134,9 +9433,14 @@ main() {
         fi
         if [ ! -d "$session_dir" ]; then
             is_new="true"
+            # The checkout carries the base's committed vault links; a locked
+            # vault would leave setup writing through dangling ones.
+            _refuse_unmounted_meta "$wt_base" "$base_dir"
             confirm_clean_worktree_base "$base_dir" "$wt_base"
             session_dir=$(create_worktree_session "$base_dir" "$wt_base" "$wt_task")
         else
+            # A worktree of an encrypted session carries its vault links too.
+            _refuse_unmounted_meta "$session_name" "$session_dir"
             # The backfill a base session gets from migrate_session, which the
             # worktree path below deliberately skips: an older worktree, or one
             # from a clone, still arrives at the umask's mode.

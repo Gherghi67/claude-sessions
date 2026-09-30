@@ -1797,6 +1797,42 @@ test_mail_segment_ignores_non_json_entries() {
     assert_output_contains "$out" "✉ 3" "non-.json entries are not counted as unread" || return 1
 }
 
+# An encrypted session's mailbox is behind .cs/private, a link into its vault;
+# while the link dangles (the vault locked) there is nothing to count.
+test_notes_segment_counts_the_vault_queue() {
+    export NO_COLOR=1
+    export CLAUDE_SESSION_NAME="vaultq"
+    make_cs_session "vaultq" 0 cyan
+    local meta="$CS_SESSIONS_ROOT/vaultq/.cs"
+    mkdir -p "$TEST_TMPDIR/vaultq/private/queue"
+    ln -s "$TEST_TMPDIR/vaultq/private" "$meta/private"
+    printf 'task a\n' > "$TEST_TMPDIR/vaultq/private/queue/0000000001-a"
+    printf 'task b\n' > "$TEST_TMPDIR/vaultq/private/queue/0000000002-b"
+    local out
+    out=$(run_sl "$FIXTURE_DOCS")
+    assert_output_contains "$out" "▤ 2" "the vault's queue is counted" || return 1
+    mv "$TEST_TMPDIR/vaultq" "$TEST_TMPDIR/vaultq-unmounted"
+    out=$(run_sl "$FIXTURE_DOCS")
+    assert_output_not_contains "$out" "▤" "a locked vault shows no queue" || return 1
+}
+
+test_mail_segment_counts_the_vault_mailbox() {
+    export NO_COLOR=1
+    export CLAUDE_SESSION_NAME="vaultmail"
+    make_cs_session "vaultmail" 0 cyan
+    local meta="$CS_SESSIONS_ROOT/vaultmail/.cs"
+    mkdir -p "$TEST_TMPDIR/vault/private/mail/new"
+    ln -s "$TEST_TMPDIR/vault/private" "$meta/private"
+    printf '{"a":1}\n' > "$TEST_TMPDIR/vault/private/mail/new/0000000001-a.json"
+    printf '{"a":2}\n' > "$TEST_TMPDIR/vault/private/mail/new/0000000002-b.json"
+    local out
+    out=$(run_sl "$FIXTURE_DOCS")
+    assert_output_contains "$out" "✉ 2" "the vault's unread mail is counted" || return 1
+    mv "$TEST_TMPDIR/vault" "$TEST_TMPDIR/unmounted"
+    out=$(run_sl "$FIXTURE_DOCS")
+    assert_output_not_contains "$out" "✉" "a locked vault shows no mail" || return 1
+}
+
 test_pane_segment_absent_outside_tmux() {
     export NO_COLOR=1
     export CS_STATUSLINE_SEGMENTS="session,pane,ctx"
@@ -1893,6 +1929,8 @@ run_test test_notes_segment_counts_only_files
 run_test test_mail_segment_shows_unread_count
 run_test test_mail_segment_absent_when_all_read
 run_test test_mail_segment_ignores_non_json_entries
+run_test test_mail_segment_counts_the_vault_mailbox
+run_test test_notes_segment_counts_the_vault_queue
 run_test test_pane_segment_hidden_when_tmux_is_foreign
 run_test test_pane_segment_absent_outside_tmux
 run_test test_pane_segment_needs_both_tmux_vars

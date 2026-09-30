@@ -253,6 +253,30 @@ EOF
         "unrelated merge rules must survive the strip" || return 1
 }
 
+# An encrypted session keeps its log behind .cs/private: the legacy log goes
+# there, never into plaintext .cs/local, where the next open would refuse it.
+test_migration_moves_session_log_into_private() {
+    local session_dir="$CS_SESSIONS_ROOT/legacy-private-log" vault="$TEST_TMPDIR/vault"
+    mkdir -p "$session_dir/.cs"/{logs,memory} "$vault/private"
+    printf '# Session: legacy-private-log\n' > "$session_dir/.cs/README.md"
+    echo "# Session narrative" > "$session_dir/.cs/memory/narrative.md"
+    echo "# Session" > "$session_dir/CLAUDE.md"
+    printf '[2026-01-01 10:01:00] BASH: echo sealed\n' > "$session_dir/.cs/logs/session.log"
+    (cd "$session_dir" && git init -q && git add -A && git commit -q -m "init")
+    ln -s "$vault/private" "$session_dir/.cs/private"
+
+    "$CS_BIN" legacy-private-log <<< "" >/dev/null 2>&1 || true
+
+    assert_file_contains "$vault/private/session.log" "BASH: echo sealed" \
+        "the legacy log lands in the vault" || return 1
+    assert_file_not_exists "$session_dir/.cs/local/session.log" \
+        "no plaintext copy in .cs/local" || return 1
+    local output rc=0
+    output=$("$CS_BIN" legacy-private-log <<< "" 2>&1) || rc=$?
+    assert_output_not_contains "$output" "still holds session.log in plaintext" \
+        "the next open does not refuse cs's own file" || return 1
+}
+
 # ============================================================================
 # Cycle 4: session-start.sh rebinds the uuid in local state, not the README
 # ============================================================================
@@ -427,4 +451,5 @@ run_test test_session_end_leaves_readme_untouched
 run_test test_union_merge_attributes_written
 run_test test_divergent_appends_merge_clean
 run_test test_frontmatter_backfill_created_uses_git_date
+run_test test_migration_moves_session_log_into_private
 report_results

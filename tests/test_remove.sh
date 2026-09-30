@@ -196,6 +196,38 @@ test_remove_confirm_lists_foreign_entries() {
     assert_dir "$dir" "declined session must survive" || return 1
 }
 
+# An encrypted session mounts its vault inside the session directory by
+# convention; rm -rf would recurse into the mount and delete what the vault
+# holds, even under --force --delete-files. Unmounted, the links dangle and
+# removal goes ahead.
+_vaulted_session() {  # name; echoes the session dir
+    local dir
+    dir=$(create_test_session "$1")
+    mkdir -p "$dir/.cs/vault-mnt/memory"
+    echo sealed > "$dir/.cs/vault-mnt/memory/narrative.md"
+    rm -rf "$dir/.cs/memory"
+    ln -s "$dir/.cs/vault-mnt/memory" "$dir/.cs/memory"
+    echo "$dir"
+}
+
+test_remove_refuses_while_the_vault_is_mounted_inside() {
+    local dir out rc=0
+    dir=$(_vaulted_session v1)
+    out=$("$CS_BIN" -rm v1 --force --delete-files </dev/null 2>&1) || rc=$?
+    assert_eq "1" "$rc" "removal refuses" || return 1
+    assert_eq "Error: Session 'v1' has encrypted storage mounted inside it: .cs/memory points at $dir/.cs/vault-mnt/memory. Removing the session would delete what the vault holds; unmount it, then retry." \
+        "$out" "names the mounted link" || return 1
+    assert_file_exists "$dir/.cs/vault-mnt/memory/narrative.md" "the vault's contents survive" || return 1
+}
+
+test_remove_goes_ahead_once_the_vault_is_unmounted() {
+    local dir
+    dir=$(_vaulted_session v2)
+    rm -rf "$dir/.cs/vault-mnt/memory"
+    "$CS_BIN" -rm v2 --force --delete-files </dev/null >/dev/null 2>&1 || return 1
+    assert_not_exists "$dir" "an unmounted encrypted session is removed" || return 1
+}
+
 # A worktree session beside a base repo, with one untracked and one
 # git-ignored file the user added. Echoes the worktree path.
 _worktree_with_user_files() {  # base-name
@@ -267,5 +299,7 @@ run_test test_remove_force_refuses_worktree_with_untracked_or_ignored_files
 run_test test_remove_force_with_delete_files_removes_worktree
 run_test test_remove_worktree_confirm_lists_untracked_files
 run_test test_remove_force_on_adopted_removes_only_the_link
+run_test test_remove_refuses_while_the_vault_is_mounted_inside
+run_test test_remove_goes_ahead_once_the_vault_is_unmounted
 
 report_results

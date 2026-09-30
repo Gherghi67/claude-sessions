@@ -536,6 +536,33 @@ test_stage_trace_records_the_run_in_order() {
         || { echo "  FAIL: elapsed column must be non-decreasing integer milliseconds"; return 1; }
 }
 
+# An encrypted session keeps its cs files behind .cs/private, a link into its
+# vault; the trace, launch mark included, goes there and never to .cs/local.
+test_stage_trace_goes_into_the_private_dir() {
+    seed_repo "src/api.ts"
+    mkdir -p "$TEST_TMPDIR/vault/private" "$CLAUDE_SESSION_META_DIR/local"
+    ln -s "$TEST_TMPDIR/vault/private" "$CLAUDE_SESSION_META_DIR/private"
+    run_hook "implement a retry wrapper around the fetch call in src/api.ts" >/dev/null 2>&1
+    local stages
+    stages=$(awk '{print $3}' "$TEST_TMPDIR/vault/private/scope-prompt.trace" 2>/dev/null)
+    assert_output_contains "$stages" "launch" "the launch mark lands in the private dir" || return 1
+    assert_output_contains "$stages" "emit" "the stage trace lands in the private dir" || return 1
+    assert_file_not_exists "$(_trace_file)" "nothing may be traced in plaintext" || return 1
+}
+
+# A locked vault leaves the link dangling: the prompt still goes through, and
+# no trace is written anywhere.
+test_stage_trace_is_skipped_while_the_private_dir_is_locked() {
+    seed_repo "src/api.ts"
+    mkdir -p "$CLAUDE_SESSION_META_DIR/local"
+    ln -s "$TEST_TMPDIR/unmounted/private" "$CLAUDE_SESSION_META_DIR/private"
+    local rc=0
+    run_hook "implement a retry wrapper around the fetch call in src/api.ts" >/dev/null 2>&1 || rc=$?
+    assert_eq "0" "$rc" "the hook must not block the prompt" || return 1
+    assert_file_not_exists "$(_trace_file)" "nothing may be traced in plaintext" || return 1
+    assert_not_exists "$TEST_TMPDIR/unmounted" "nothing may be created where the vault mounts" || return 1
+}
+
 test_stage_trace_stops_where_a_killed_run_stopped() {
     seed_repo "src/api.ts"
     # A git that blocks parks the hook in the grounded scan, exactly where the
@@ -920,6 +947,8 @@ run_test test_empty_tree_tombstone_marker
 run_test test_injection_prompt_is_data_not_code
 run_test test_firing_prompt_exits_zero
 run_test test_stage_trace_records_the_run_in_order
+run_test test_stage_trace_goes_into_the_private_dir
+run_test test_stage_trace_is_skipped_while_the_private_dir_is_locked
 run_test test_stage_trace_stops_where_a_killed_run_stopped
 run_test test_stage_trace_marks_a_run_killed_before_the_trace_opens
 run_test test_stage_trace_records_the_invoking_directory

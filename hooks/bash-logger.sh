@@ -11,6 +11,9 @@ set -uo pipefail
 # before its own decline, silently. When the library is absent the fallback
 # is the env-only check this guard replaced, so the hook behaves as it used to.
 _cs_lib="$(dirname "$0")/cs-resolve.sh"
+# cs-shared.sh is build.sh's copy of lib/02-shared.sh: it names the directory
+# the log lives in. Same guard, same reasons.
+_cs_shared="$(dirname "$0")/cs-shared.sh"
 # shellcheck source=cs-resolve.sh
 # Parse-check before sourcing: a truncated or corrupt library is readable,
 # and sourcing it aborts the hook at the syntax error, before the fallback
@@ -24,11 +27,18 @@ _cs_lib="$(dirname "$0")/cs-resolve.sh"
 case $- in *e*) _cs_had_e=1 ;; *) _cs_had_e=0 ;; esac
 set +e
 [ -r "$_cs_lib" ] && "${BASH:-/bin/bash}" -n "$_cs_lib" 2>/dev/null && . "$_cs_lib"
+# shellcheck source=cs-shared.sh
+[ -r "$_cs_shared" ] && "${BASH:-/bin/bash}" -n "$_cs_shared" 2>/dev/null && . "$_cs_shared"
 if [ "$_cs_had_e" = 1 ]; then set -e; fi
 if ! command -v cs_resolve_session >/dev/null 2>&1; then
     cs_resolve_session() {
         [ -n "${CLAUDE_SESSION_NAME:-}" ] && [ -n "${CLAUDE_SESSION_DIR:-}" ]
     }
+fi
+# Without the library there is no telling whether the session keeps its log in
+# a vault, so nothing is logged rather than risk writing it in plaintext.
+if ! command -v cs_private_dir >/dev/null 2>&1; then
+    cs_private_dir() { return 1; }
 fi
 # Only run in cs sessions
 cs_resolve_session "" || exit 0
@@ -56,6 +66,7 @@ if [ ${#COMMAND} -gt 200 ]; then
     COMMAND="${COMMAND:0:200}..."
 fi
 
-echo "[$(date '+%Y-%m-%d %H:%M:%S')] BASH: $COMMAND" >> "$META_DIR/local/session.log"
+LOG_DIR=$(cs_private_dir "$META_DIR") || exit 0
+echo "[$(date '+%Y-%m-%d %H:%M:%S')] BASH: $COMMAND" >> "$LOG_DIR/session.log"
 
 exit 0

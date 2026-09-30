@@ -364,6 +364,22 @@ test_adopt_gitignores_cs_local() {
         ".gitignore should ignore .cs/local/" || return 1
 }
 
+# An encrypted session mounts its volume at .cs/vault-mnt by convention; git
+# must ignore it both in the .gitignore cs writes and in a project's own
+# .gitignore that adopt appends to.
+test_adopt_gitignores_the_vault_mount() {
+    local fresh="$TEST_TMPDIR/fresh" owned="$TEST_TMPDIR/owned"
+    mkdir -p "$fresh" "$owned"
+    (cd "$fresh" && git init -q && "$CS_BIN" -adopt fresh-session >/dev/null 2>&1)
+    (cd "$owned" && git init -q && printf 'node_modules/\n' > .gitignore \
+        && "$CS_BIN" -adopt owned-session >/dev/null 2>&1)
+    git -C "$fresh" check-ignore -q .cs/vault-mnt/memory/narrative.md \
+        || { echo "  FAIL: cs's own .gitignore must ignore .cs/vault-mnt/"; return 1; }
+    git -C "$owned" check-ignore -q .cs/vault-mnt/memory/narrative.md \
+        || { echo "  FAIL: adopt must append .cs/vault-mnt/ to a project .gitignore"; return 1; }
+    assert_file_contains "$owned/.gitignore" "node_modules/" "the project's own entry stays" || return 1
+}
+
 # ============================================================================
 # Runner
 # ============================================================================
@@ -374,6 +390,7 @@ echo "==============="
 echo ""
 
 run_test test_adopt_gitignores_cs_local
+run_test test_adopt_gitignores_the_vault_mount
 run_test test_adopt_sets_memory_merge_driver
 
 run_test test_adopt_creates_cs_structure

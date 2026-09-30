@@ -23,7 +23,8 @@ _handoff_is_unconsumed() {  # handoff_file
 # show, not a filter: the pick deliberately still offers a handoff from
 # elsewhere, because continuing one on another machine is a working flow.
 _handoff_is_local() {  # handoff_file, session_dir
-    local log="$2/.cs/local/session.log" parent
+    local log parent
+    log="$(cs_private_dir "$2/.cs")/session.log" || return 1
     [ -f "$log" ] || return 1
     parent=$(awk '
         NR==1 { if ($0 != "---") exit; next }
@@ -115,7 +116,8 @@ _resume_context_pct() {  # session_dir
 # retires the one it had. Offering r in those cases sends the user back for
 # something that no longer exists.
 _disarm_rotation_marker() {  # session_dir [surviving_handoff]
-    local marker="$1/.cs/local/pending-handoff"
+    local marker
+    marker="$(cs_private_dir "$1/.cs")/pending-handoff" || return 0
     [ -f "$marker" ] || return 0
     rm -f "$marker" 2>/dev/null || true
     # An explicit if: `[ ... ] && return 0` as the last command returns 1 when
@@ -125,6 +127,63 @@ _disarm_rotation_marker() {  # session_dir [surviving_handoff]
         return 0
     fi
     printf "${DIM}Rotation marker disarmed; the handoff stays pending — answer r, or re-run the rotate skill.${NC}\n"
+}
+
+# A session whose .cs/claude-config exists keeps Claude Code's whole config
+# dir there (transcripts, prompt history, .claude.json and its backups), so an
+# encrypted session's conversation never lands in ~/.claude. The login stays
+# the one the shell would use: CLAUDE_SECURESTORAGE_CONFIG_DIR names the
+# keychain entry independently of the config dir, and empty selects the
+# default entry. A value inherited from a parent launch into such a session is
+# recognisable by its path and dropped, so a session without the link opens
+# on the shell's own config.
+_export_session_claude_config() {  # session_dir
+    local config="$1/.cs/claude-config"
+    case "${CLAUDE_CONFIG_DIR:-}" in
+        */.cs/claude-config)
+            unset CLAUDE_CONFIG_DIR CLAUDE_SECURESTORAGE_CONFIG_DIR
+            ;;
+    esac
+    [ -e "$config" ] || return 0
+    _link_shared_claude_config "$config" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+    # Claude Code keeps .claude.json beside the config dir by default, inside it
+    # when CLAUDE_CONFIG_DIR is set.
+    _seed_session_claude_json "$config" "${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"
+    export CLAUDE_SECURESTORAGE_CONFIG_DIR="${CLAUDE_SECURESTORAGE_CONFIG_DIR-${CLAUDE_CONFIG_DIR-}}"
+    export CLAUDE_CONFIG_DIR="$config"
+}
+
+# The session's config dir shares the shell's settings, instructions and
+# extensions by symlink, so hooks, skills and plugins behave as they do
+# anywhere else. Only these names are shared: everything else Claude Code
+# writes (projects/, history.jsonl, backups/, todos/) is born in the session's
+# config dir and stays behind the vault. An entry already there is the
+# session's own and is left alone.
+_link_shared_claude_config() {  # session_config_dir, shell_config_dir
+    local name
+    for name in settings.json settings.local.json CLAUDE.md AGENTS.md rules skills \
+        commands agents hooks plugins output-styles keybindings.json vale; do
+        [ -e "$2/$name" ] || continue
+        [ -e "$1/$name" ] || [ -L "$1/$name" ] && continue
+        ln -s "$2/$name" "$1/$name" || error "could not link $1/$name to $2/$name."
+    done
+}
+
+# The session's .claude.json starts once as a copy of the shell's, so the
+# login's onboarding and preferences carry over, with every project's record
+# dropped: each keeps that project's last prompt in plaintext. From then on it
+# is the session's own. jq exits 0 on an empty file and prints nothing, so -e
+# is what turns an empty or unreadable source into a refusal.
+_seed_session_claude_json() {  # session_config_dir, shell_claude_json
+    local dest="$1/.claude.json" tmp
+    [ -e "$dest" ] || [ -L "$dest" ] && return 0
+    [ -e "$2" ] || return 0
+    tmp=$(mktemp "$1/.claude.json.XXXXXX") || error "could not create a temporary file in $1."
+    if ! jq -e '.projects = {}' "$2" > "$tmp" 2>/dev/null; then
+        rm -f "$tmp"
+        error "$2 is not a JSON object cs can copy into $1; fix it, then reopen."
+    fi
+    mv "$tmp" "$dest" || { rm -f "$tmp"; error "could not write $dest."; }
 }
 
 # One row of the pending-handoff answers: the key, a padded label, and a dim
@@ -294,6 +353,7 @@ launch_claude_code() {
     local memory_path="$session_dir/.cs/memory"
     export CLAUDE_CODE_AUTO_MEMORY_PATH="$memory_path"
     export CLAUDE_COWORK_MEMORY_PATH_OVERRIDE="$memory_path"
+    _export_session_claude_config "$session_dir"
     # Expose the recorded session UUID to hooks. Hooks can use this to
     # reverse-look-up which cs session they're firing inside without having
     # to depend on $CLAUDE_CODE_SESSION_ID (set by Claude Code itself, but
@@ -572,8 +632,14 @@ EOF
         # Deliberate rotation: an unconsumed handoff written by the rotate
         # skill adds a third answer. Lexicographically last basename wins
         # (the YYYY-MM-DD- prefix makes that the newest date).
-        local pending_handoff="" _hf
-        for _hf in "$session_dir/.cs/handoffs"/*.md; do
+        # An encrypted session keeps its handoffs and the marker in its vault;
+        # the open has already refused a locked one.
+        local pending_handoff="" _hf _handoff_dir _marker_dir
+        _handoff_dir=$(cs_handoff_dir "$session_dir/.cs") \
+            || error "$session_name: .cs/private dangles after the open checked it (vault unmounted mid-launch?). Mount it, then reopen."
+        _marker_dir=$(cs_private_dir "$session_dir/.cs") \
+            || error "$session_name: .cs/private dangles after the open checked it (vault unmounted mid-launch?). Mount it, then reopen."
+        for _hf in "$_handoff_dir"/*.md; do
             [ -f "$_hf" ] || continue
             _handoff_is_unconsumed "$_hf" || continue
             pending_handoff="$_hf"
@@ -587,13 +653,13 @@ EOF
         # scan; a marker naming a spent or absent file is stale and the scan
         # still answers. The marker names a basename, never a path: a separator
         # would resolve outside the handoff store.
-        local _marker="$session_dir/.cs/local/pending-handoff" _armed
+        local _marker="$_marker_dir/pending-handoff" _armed
         if [ -f "$_marker" ]; then
             _armed=$(cat "$_marker" 2>/dev/null | tr -d '[:space:]' || true)
             case "$_armed" in */*|*\\*) _armed="" ;; esac
-            if [ -n "$_armed" ] && [ -f "$session_dir/.cs/handoffs/$_armed" ] \
-                && _handoff_is_unconsumed "$session_dir/.cs/handoffs/$_armed"; then
-                pending_handoff="$session_dir/.cs/handoffs/$_armed"
+            if [ -n "$_armed" ] && [ -f "$_handoff_dir/$_armed" ] \
+                && _handoff_is_unconsumed "$_handoff_dir/$_armed"; then
+                pending_handoff="$_handoff_dir/$_armed"
             fi
         fi
         # A spawned launch is unattended: take the default (resume) instead
@@ -636,8 +702,8 @@ EOF
                 ;;
             [rR])
                 if [ -n "$pending_handoff" ]; then
-                    mkdir -p "$session_dir/.cs/local"
-                    printf '%s\n' "$(basename "$pending_handoff")" > "$session_dir/.cs/local/pending-handoff"
+                    mkdir -p "$_marker_dir"
+                    printf '%s\n' "$(basename "$pending_handoff")" > "$_marker_dir/pending-handoff"
                     echo ""
                     # r is the user explicitly choosing the rotation handoff
                     # over resuming; a merge armed moments earlier must not

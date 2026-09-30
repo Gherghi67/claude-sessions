@@ -230,6 +230,34 @@ test_check_with_an_unreadable_snapshot_is_an_error() {
         "the error must name the snapshot" || return 1
 }
 
+
+# An encrypted session's MEMORY.md lives in its vault; the snapshot is a copy
+# of it, so it goes behind .cs/private too, never into .cs/local.
+test_snapshot_goes_into_the_private_dir() {
+    _guard_session
+    mkdir -p "$TEST_TMPDIR/vault/private"
+    ln -s "$TEST_TMPDIR/vault/private" "$SESSION/.cs/private"
+    local out
+    out=$(_guard snapshot 2>&1) || { echo "  FAIL: snapshot exited non-zero: $out"; return 1; }
+    assert_eq "$(cat "$INDEX")" "$(cat "$TEST_TMPDIR/vault/private/memory-index.snapshot")" \
+        "the snapshot should be the index, in the private dir" || return 1
+    assert_file_not_exists "$SESSION/.cs/local/memory-index.snapshot" \
+        "nothing may be copied into .cs/local" || return 1
+    _guard check > /dev/null || { echo "  FAIL: check should read the private snapshot"; return 1; }
+}
+
+test_snapshot_refuses_a_locked_private_dir() {
+    _guard_session
+    ln -s "$TEST_TMPDIR/unmounted/private" "$SESSION/.cs/private"
+    local out rc=0
+    out=$(_guard snapshot 2>&1) || rc=$?
+    assert_eq 2 "$rc" "snapshot must fail while the vault is locked" || return 1
+    assert_eq "memory-index-guard: .cs/private is locked; mount the session's vault, then retry" \
+        "$out" "snapshot must say why" || return 1
+    assert_file_not_exists "$SESSION/.cs/local/memory-index.snapshot" \
+        "nothing may be copied into .cs/local" || return 1
+}
+
 run_test test_check_fails_when_a_link_is_removed
 run_test test_check_passes_a_rewrite_that_keeps_every_link_at_the_budget
 run_test test_check_counts_bytes_not_characters
@@ -246,5 +274,7 @@ run_test test_check_fails_on_an_unindexed_bucket_entry
 run_test test_first_sweep_snapshots_an_absent_index_as_empty
 run_test test_snapshot_outside_a_session_root_is_an_error
 run_test test_check_with_an_unreadable_snapshot_is_an_error
+run_test test_snapshot_goes_into_the_private_dir
+run_test test_snapshot_refuses_a_locked_private_dir
 
 report_results

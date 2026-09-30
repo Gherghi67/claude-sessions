@@ -15,9 +15,17 @@ set -uo pipefail
 # 3.2 has no builtin epoch clock, so there one `date` fork supplies whole seconds;
 # a `date` that stalls leaves no mark, which reads the same as a hook that never
 # started.
-_launch_local="${CLAUDE_SESSION_META_DIR:-${CLAUDE_SESSION_DIR:-}/.cs}/local"
+# An encrypted session traces into .cs/private and, while that is locked, not
+# at all: cs_private_dir's rule, spelled out here because the library is not
+# sourced yet.
+_launch_meta="${CLAUDE_SESSION_META_DIR:-${CLAUDE_SESSION_DIR:-}/.cs}"
+_launch_local="$_launch_meta/local"
+_launch_trace_dir="$_launch_local"
+if [ -L "$_launch_meta/private" ] || [ -e "$_launch_meta/private" ]; then
+    _launch_trace_dir="$_launch_meta/private"
+fi
 if [ "${CS_SCOPE_TRACE_DISABLE:-}" != "1" ] && [ -n "${CLAUDE_SESSION_DIR:-}" ] \
-    && [ -d "$_launch_local" ] && [ ! -f "$_launch_local/disabled" ]; then
+    && [ -d "$_launch_local" ] && [ -d "$_launch_trace_dir" ] && [ ! -f "$_launch_local/disabled" ]; then
     _launch_ms=""
     case "${EPOCHREALTIME:-}" in
         *[.,]*)
@@ -35,7 +43,7 @@ if [ "${CS_SCOPE_TRACE_DISABLE:-}" != "1" ] && [ -n "${CLAUDE_SESSION_DIR:-}" ] 
     esac
     if [ -n "$_launch_ms" ]; then
         { printf '%s %s launch\n' "$$" "$_launch_ms" \
-            >> "$_launch_local/scope-prompt.trace"; } 2>/dev/null || true
+            >> "$_launch_trace_dir/scope-prompt.trace"; } 2>/dev/null || true
     fi
 fi
 
@@ -47,6 +55,9 @@ fi
 # before its own decline, silently. When the library is absent the fallback
 # is the env-only check this guard replaced, so the hook behaves as it used to.
 _cs_lib="$(dirname "$0")/cs-resolve.sh"
+# cs-shared.sh is build.sh's copy of lib/02-shared.sh: it names the directory
+# the trace lives in. Same guard, same reasons.
+_cs_shared="$(dirname "$0")/cs-shared.sh"
 # shellcheck source=cs-resolve.sh
 # Parse-check before sourcing: a truncated or corrupt library is readable,
 # and sourcing it aborts the hook at the syntax error, before the fallback
@@ -60,7 +71,14 @@ _cs_lib="$(dirname "$0")/cs-resolve.sh"
 case $- in *e*) _cs_had_e=1 ;; *) _cs_had_e=0 ;; esac
 set +e
 [ -r "$_cs_lib" ] && "${BASH:-/bin/bash}" -n "$_cs_lib" 2>/dev/null && . "$_cs_lib"
+# shellcheck source=cs-shared.sh
+[ -r "$_cs_shared" ] && "${BASH:-/bin/bash}" -n "$_cs_shared" 2>/dev/null && . "$_cs_shared"
 if [ "$_cs_had_e" = 1 ]; then set -e; fi
+# Without the library there is no telling whether the session keeps its trace
+# in a vault, so nothing is traced rather than risk writing it in plaintext.
+if ! command -v cs_private_dir >/dev/null 2>&1; then
+    cs_private_dir() { return 1; }
+fi
 if ! command -v cs_resolve_session >/dev/null 2>&1; then
     cs_resolve_session() {
         [ -n "${CLAUDE_SESSION_NAME:-}" ] && [ -n "${CLAUDE_SESSION_DIR:-}" ]
@@ -140,7 +158,9 @@ _T0=$_MS
 # block's place, and it is empty on every run that reaches the scan.
 SKIP_NOTE=""
 
-_trace_open "${CLAUDE_SESSION_META_DIR:-}/local"
+if [ -n "${CLAUDE_SESSION_META_DIR:-}" ] && _trace_dir=$(cs_private_dir "$CLAUDE_SESSION_META_DIR"); then
+    _trace_open "$_trace_dir"
+fi
 
 # The user is back: drop the statusline's finished-blink marker before any
 # other gate (slash commands and short prompts clear it too).
@@ -167,8 +187,9 @@ _trace input
 # wakes since the last USER prompt. A wake reaches the model as a turn of its
 # own, carrying no prompt, so treating that turn as proof would let every wake
 # reset the budget it just spent, and the ceiling would cap nothing.
-if [ -n "$PROMPT" ] && [ -n "${CLAUDE_SESSION_META_DIR:-}" ]; then
-    rm -f "$CLAUDE_SESSION_META_DIR/local/mail/wakes" 2>/dev/null || true
+if [ -n "$PROMPT" ] && [ -n "${CLAUDE_SESSION_META_DIR:-}" ] \
+    && _mail_base=$(cs_private_dir "$CLAUDE_SESSION_META_DIR"); then
+    rm -f "$_mail_base/mail/wakes" 2>/dev/null || true
 fi
 
 # --- Date reminder (every prompt; speaks only when the calendar day changed) ---
@@ -310,7 +331,7 @@ _commit_digest() {  # meta_local_dir
 # hook-vs-hook race on a mail cursor). Only new/*.json counts: an unfiltered
 # scan would pick up a .DS_Store or a subdirectory and nag about phantom mail
 # that cs -msg cannot clear. Best-effort throughout: never breaks the hook.
-_build_mail_digest() {  # meta_local_dir
+_build_mail_digest() {  # cs files dir: .cs/local, or .cs/private in an encrypted session
     local mdir="$1/mail" f total=0
     MAIL_DIGEST=""
     [ -d "$mdir/new" ] || return 0
@@ -383,9 +404,14 @@ _build_mail_digest() {  # meta_local_dir
 DIGEST=""
 DIGEST_PENDING=""
 MAIL_DIGEST=""
-if [ -n "${CLAUDE_SESSION_META_DIR:-}" ]; then
-    _build_digest "$CLAUDE_SESSION_META_DIR/local"
-    _build_mail_digest "$CLAUDE_SESSION_META_DIR/local"
+# The queue inbox and the mailbox sit with the session's other cs files
+# (behind .cs/private in an encrypted session); a locked vault has nothing
+# readable to digest, and DIGEST_DIR stays empty so no cursor is written.
+DIGEST_DIR=""
+if [ -n "${CLAUDE_SESSION_META_DIR:-}" ] \
+    && DIGEST_DIR=$(cs_private_dir "$CLAUDE_SESSION_META_DIR"); then
+    _build_digest "$DIGEST_DIR"
+    _build_mail_digest "$DIGEST_DIR"
 fi
 if [ -n "$MAIL_DIGEST" ]; then
     DIGEST="${DIGEST:+$DIGEST
@@ -422,7 +448,7 @@ _digest_exit() {
     # An emission that failed left the digest and the note unheard; the cursor
     # and the stamp wait for the next prompt to carry them.
     if [ "$_emitted" -eq 0 ]; then
-        _commit_digest "${CLAUDE_SESSION_META_DIR:-}/local"
+        _commit_digest "$DIGEST_DIR"
         _commit_date_stamp "${CLAUDE_SESSION_META_DIR:-}/local"
     fi
     _trace exit
@@ -435,10 +461,14 @@ _digest_exit() {
 # Matching the bracket SHAPE (not the exact template wording) stays robust if the
 # template text changes; scoping to the Objective section leaves the Outcome
 # placeholder untouched. First real prompt wins; a hand-written objective (not
-# bracketed) is never overwritten.
+# bracketed) is never overwritten. An encrypted session (.cs/private present,
+# mounted or not) keeps its objective in the narrative, inside the vault, so
+# the plaintext README never gains the prompt.
 _obj_readme="${CLAUDE_SESSION_META_DIR:-}/README.md"
 if [ "${CS_OBJECTIVE_CAPTURE_DISABLE:-}" != "1" ] \
     && [ -n "${CLAUDE_SESSION_META_DIR:-}" ] \
+    && ! [ -L "$CLAUDE_SESSION_META_DIR/private" ] \
+    && ! [ -e "$CLAUDE_SESSION_META_DIR/private" ] \
     && [ -f "$_obj_readme" ] \
     && awk '
         /^## / { in_obj = ($0 ~ /^## Objective/) }
@@ -694,7 +724,7 @@ fi
 _emitted=0
 _emit_context "$DATE_NOTE" "$DIGEST" "$CLARIFY" "$BLOCK" || _emitted=$?
 if [ "$_emitted" -eq 0 ]; then
-    _commit_digest "${CLAUDE_SESSION_META_DIR:-}/local"
+    _commit_digest "$DIGEST_DIR"
     _commit_date_stamp "${CLAUDE_SESSION_META_DIR:-}/local"
 fi
 _trace emit

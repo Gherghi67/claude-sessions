@@ -474,9 +474,17 @@ pub mod test_root {
     }
 }
 
-/// Directory holding a session's per-machine queue files (`.cs/local`).
+/// Directory holding a session's cs content files (queue, mailbox): `.cs/private`
+/// in an encrypted session, a link into its vault that reads as empty while it
+/// dangles (the vault locked), else `.cs/local`. cs_private_dir's rule.
+fn cs_files_dir(meta_dir: &Path) -> PathBuf {
+    let private = meta_dir.join("private");
+    if private.symlink_metadata().is_ok() { private } else { meta_dir.join("local") }
+}
+
+/// Directory holding a session's queue files.
 pub fn queue_dir(name: &str) -> PathBuf {
-    sessions_root().join(name).join(".cs").join("local")
+    cs_files_dir(&sessions_root().join(name).join(".cs"))
 }
 
 /// True while the session's queue drain is live: cs's Stop hook writes
@@ -660,7 +668,7 @@ fn read_session(path: &Path, secret_counts: &HashMap<String, u32>) -> Session {
         None => Liveness::Dormant,
     };
     let secrets_count = secret_counts.get(&name).copied().unwrap_or(0);
-    let queue_depth = queue_task_files_in(&meta_dir.join("local/queue")).len() as u32;
+    let queue_depth = queue_task_files_in(&cs_files_dir(&meta_dir).join("queue")).len() as u32;
     let unread_mail = unread_mail_count(&meta_dir);
     let has_git = is_git_checkout(path);
     let git_repo = if has_git {
@@ -699,9 +707,12 @@ fn read_session(path: &Path, secret_counts: &HashMap<String, u32>) -> Session {
 }
 
 fn find_log_file(session_dir: &Path) -> Option<PathBuf> {
-    // Machine-local is the current home; the older .cs/logs/ and flat logs/
-    // locations are kept as fallbacks for sessions not yet migrated.
+    // An encrypted session keeps its log behind .cs/private (a link into its
+    // vault, unreadable while locked); machine-local is every other session's
+    // home; the older .cs/logs/ and flat logs/ locations are kept as fallbacks
+    // for sessions not yet migrated.
     for candidate in [
+        ".cs/private/session.log",
         ".cs/local/session.log",
         ".cs/logs/session.log",
         "logs/session.log",
@@ -1020,8 +1031,49 @@ fn worktree_untracked(path: &Path) -> Result<Vec<String>, String> {
 /// Remove a session at `path` by whatever means its kind requires: symlinks
 /// are unlinked, worktree sessions are unregistered through git, and plain
 /// directories are removed outright.
+/// The links an encrypted session keeps into its vault, under `.cs/`.
+pub const VAULT_LINKS: [&str; 4] = ["memory", "plans", "claude-config", "private"];
+
+/// Whether `.cs/<sub>` in `dir` is a symlink, resolving or not: a locked
+/// vault leaves it dangling.
+pub fn is_vault_link(dir: &Path, sub: &str) -> bool {
+    dir.join(".cs")
+        .join(sub)
+        .symlink_metadata()
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
+}
+
+/// The first vault link that resolves inside `dir`, with its target as
+/// written: the vault is mounted in the session directory itself.
+fn mounted_vault_link(dir: &Path) -> Option<(&'static str, PathBuf)> {
+    let real_dir = fs::canonicalize(dir).ok()?;
+    VAULT_LINKS.iter().find_map(|sub| {
+        if !is_vault_link(dir, sub) {
+            return None;
+        }
+        let link = dir.join(".cs").join(sub);
+        let real = fs::canonicalize(&link).ok()?;
+        real.starts_with(&real_dir)
+            .then(|| fs::read_link(&link).ok())
+            .flatten()
+            .map(|target| (*sub, target))
+    })
+}
+
 pub fn remove_session_path(root: &Path, name: &str, path: &Path) -> std::io::Result<()> {
-    if path.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+    let is_link = path.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false);
+    // remove_dir_all recurses into a mount, so a vault mounted inside the
+    // session would lose its contents. An adopted session loses only its link.
+    if !is_link {
+        if let Some((sub, target)) = mounted_vault_link(path) {
+            return Err(std::io::Error::other(format!(
+                "{name} has encrypted storage mounted inside it: .cs/{sub} points at {}; unmount it, then retry",
+                target.display()
+            )));
+        }
+    }
+    if is_link {
         fs::remove_file(path)?;
     } else if worktree_parts(name).is_some() && path.join(".git").is_file() {
         remove_worktree_session(root, name, path)?;
@@ -1068,8 +1120,9 @@ fn remove_worktree_session(root: &Path, name: &str, path: &Path) -> std::io::Res
 /// what it prints into `cur/`), matching the shell reader and the statusline.
 /// Only `*.json` files count — a `.DS_Store`, a staging leftover or a
 /// subdirectory would otherwise badge a phantom unread that never clears.
+/// A locked vault's read fails and counts 0.
 fn unread_mail_count(meta_dir: &Path) -> u32 {
-    fs::read_dir(meta_dir.join("local/mail/new"))
+    fs::read_dir(cs_files_dir(meta_dir).join("mail/new"))
         .map(|entries| {
             entries
                 .flatten()
@@ -1575,6 +1628,47 @@ mod tests {
         fs::remove_dir_all(&dir).unwrap();
     }
 
+    // An encrypted session keeps its queue behind .cs/private: the scan's
+    // depth, the notes panel and the editor all read it there, and a locked
+    // vault reads as an empty queue.
+    #[test]
+    fn queue_reads_the_private_dir() {
+        let dir = std::env::temp_dir().join(format!("cs-queue-private-{}", std::process::id()));
+        let vault = dir.join("vault/private");
+        fs::create_dir_all(vault.join("queue")).unwrap();
+        fs::create_dir_all(dir.join("root/vt/.cs/local")).unwrap();
+        std::os::unix::fs::symlink(&vault, dir.join("root/vt/.cs/private")).unwrap();
+        fs::write(vault.join("queue/0000000001-a"), "sealed task\n").unwrap();
+        fs::write(vault.join("queue.state"), "draining\n").unwrap();
+        let _root = test_root::scoped(dir.join("root"));
+        assert_eq!(queue_dir("vt"), dir.join("root/vt/.cs/private"));
+        assert_eq!(read_queue("vt"), vec!["sealed task".to_string()]);
+        assert!(queue_active("vt"));
+        let scanned = scan_sessions_in(&dir.join("root"));
+        assert_eq!(scanned.iter().find(|s| s.name == "vt").map(|s| s.queue_depth), Some(1));
+        fs::rename(dir.join("vault"), dir.join("unmounted")).unwrap();
+        assert!(read_queue("vt").is_empty());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // An encrypted session keeps its mailbox behind .cs/private, a link into
+    // its vault; while that link dangles (the vault locked) nothing counts.
+    #[test]
+    fn unread_mail_counts_the_private_mailbox() {
+        let dir = std::env::temp_dir().join(format!("cs-unread-private-{}", std::process::id()));
+        let vault = dir.join("vault/private");
+        let new = vault.join("mail/new");
+        fs::create_dir_all(&new).unwrap();
+        fs::create_dir_all(dir.join("meta")).unwrap();
+        std::os::unix::fs::symlink(&vault, dir.join("meta/private")).unwrap();
+        fs::write(new.join("0000000001-a.json"), "{\"a\":1}\n").unwrap();
+        fs::write(new.join("0000000002-b.json"), "{\"a\":2}\n").unwrap();
+        assert_eq!(unread_mail_count(&dir.join("meta")), 2);
+        fs::rename(dir.join("vault"), dir.join("unmounted")).unwrap();
+        assert_eq!(unread_mail_count(&dir.join("meta")), 0);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn unread_mail_is_zero_without_maildir() {
         let dir = std::env::temp_dir().join(format!("cs-unread-none-{}", std::process::id()));
@@ -1635,6 +1729,24 @@ mod tests {
     #[test]
     fn truncate_repo_one_char_is_ellipsis() {
         assert_eq!(truncate_repo("erp/firstborn-server", 1), "\u{2026}");
+    }
+
+    // An encrypted session keeps its log behind .cs/private, a link into its
+    // vault; the picker's created date comes from there.
+    #[test]
+    fn find_log_file_reads_the_private_log() {
+        let dir = std::env::temp_dir().join(format!("cs-test-private-log-{}", std::process::id()));
+        let vault = dir.join("vault/private");
+        fs::create_dir_all(&vault).unwrap();
+        fs::create_dir_all(dir.join("vt/.cs")).unwrap();
+        std::os::unix::fs::symlink(&vault, dir.join("vt/.cs/private")).unwrap();
+        fs::write(vault.join("session.log"), "Claude Code Session Log\nSession: vt\nStarted: 2026-03-04 05:06:00\n").unwrap();
+
+        let log = find_log_file(&dir.join("vt"));
+
+        assert_eq!(log, Some(dir.join("vt/.cs/private/session.log")));
+        assert_eq!(parse_created(&log.unwrap()), Some("2026-03-04 05:06".to_string()));
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -1717,6 +1829,36 @@ mod tests {
             "base repo must not keep a stale worktree registration"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // An encrypted session mounts its vault inside the session directory by
+    // convention, and remove_dir_all recurses into a mount: deleting the
+    // session would delete what the vault holds. Unmounted, the link dangles
+    // and the delete goes ahead.
+    #[test]
+    fn remove_session_path_refuses_while_the_vault_is_mounted_inside() {
+        let root = std::env::temp_dir().join(format!("cs-rm-vault-{}", std::process::id()));
+        let dir = root.join("vt");
+        let vault = dir.join(".cs/vault-mnt/memory");
+        fs::create_dir_all(&vault).unwrap();
+        fs::write(vault.join("narrative.md"), "sealed\n").unwrap();
+        std::os::unix::fs::symlink(&vault, dir.join(".cs/memory")).unwrap();
+
+        let err = remove_session_path(&root, "vt", &dir).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "vt has encrypted storage mounted inside it: .cs/memory points at {}; unmount it, then retry",
+                vault.display()
+            )
+        );
+        assert!(vault.join("narrative.md").exists(), "the vault's contents survive");
+
+        fs::remove_dir_all(&vault).unwrap();
+        remove_session_path(&root, "vt", &dir).unwrap();
+        assert!(!dir.exists(), "an unmounted encrypted session is removed");
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

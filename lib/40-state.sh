@@ -70,12 +70,17 @@ _set_local_state() {
 # macOS mktemp returns /var/folders/... which is a symlink to
 # /private/var/folders/... and claude realpaths cwd before encoding.
 # CS_TRANSCRIPTS_DIR overrides the base for tests (also used by doctor).
+# A session with .cs/claude-config runs Claude Code on that config dir, so its
+# transcripts live in the dir's projects/. A dangling link (vault locked) still
+# names that base: the shared one never holds the session's conversations.
 _claude_project_dir() {
     local cwd="$1"
-    local resolved
+    local resolved base="${CS_TRANSCRIPTS_DIR:-$HOME/.claude/projects}"
     resolved=$( (cd "$cwd" 2>/dev/null && pwd -P) || printf '%s' "$cwd" )
-    printf '%s/%s\n' "${CS_TRANSCRIPTS_DIR:-$HOME/.claude/projects}" \
-        "$(_claude_encode_path "$resolved")"
+    if [ -e "$cwd/.cs/claude-config" ] || [ -L "$cwd/.cs/claude-config" ]; then
+        base="$cwd/.cs/claude-config/projects"
+    fi
+    printf '%s/%s\n' "$base" "$(_claude_encode_path "$resolved")"
 }
 
 # Discover claude's most-recently-modified transcript UUID under a project
@@ -211,7 +216,14 @@ _exec_fresh_rebind() {
     local new_uuid
     new_uuid=$(_alloc_uuid)
     _set_local_state "$session_dir/.cs/local/state" claude_session_id "$new_uuid"
-    _timeline_rotated "$session_dir" "$old_uuid" "$new_uuid" "$reason" "$handoff"
+    # An encrypted session's handoff name is its topic, so it stays out of
+    # the plaintext timeline and out of claude's argv (visible to ps and in a
+    # terminal title); the SessionStart hook names the file from the vault.
+    local public_handoff="$handoff"
+    if [ -L "$session_dir/.cs/private" ] || [ -e "$session_dir/.cs/private" ]; then
+        public_handoff=""
+    fi
+    _timeline_rotated "$session_dir" "$old_uuid" "$new_uuid" "$reason" "$public_handoff"
     local session_color
     session_color=$(_read_local_state "$session_dir/.cs/local/state" claude_session_color)
     local color_arg=""
@@ -225,7 +237,11 @@ _exec_fresh_rebind() {
     # color re-apply; all four ride claude's single prompt slot, so a displaced
     # color returns on the next open.
     local handoff_arg=""
-    [ -n "$handoff" ] && handoff_arg="Continue from the pending rotation handoff: read .cs/handoffs/$handoff first."
+    if [ -n "$public_handoff" ]; then
+        handoff_arg="Continue from the pending rotation handoff: read .cs/handoffs/$handoff first."
+    elif [ -n "$handoff" ]; then
+        handoff_arg="Continue from the pending rotation handoff."
+    fi
     local launch_prompt="${merge_kick:-${spawn_kick:-${handoff_arg:-$color_arg}}}"
     export CS_CLAUDE_SESSION_ID="$new_uuid"
     export CS_FRESH_REBIND=1

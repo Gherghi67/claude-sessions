@@ -44,6 +44,11 @@ set +e
 # shellcheck source=cs-shared.sh
 [ -r "$_cs_shared" ] && "${BASH:-/bin/bash}" -n "$_cs_shared" 2>/dev/null && . "$_cs_shared"
 if [ "$_cs_had_e" = 1 ]; then set -e; fi
+# Without the library there is no telling whether the session keeps its log in
+# a vault, so nothing is logged rather than risk writing it in plaintext.
+if ! command -v cs_private_dir >/dev/null 2>&1; then
+    cs_private_dir() { return 1; }
+fi
 if ! command -v cs_resolve_session >/dev/null 2>&1; then
     cs_resolve_session() {
         [ -n "${CLAUDE_SESSION_NAME:-}" ] && [ -n "${CLAUDE_SESSION_DIR:-}" ]
@@ -81,9 +86,12 @@ fi
 
 # Log session end. Ensure the gitignored machine-local dir exists first so an
 # append into a missing dir cannot abort this hook (and its cleanup) under set -e.
+# An encrypted session logs into its vault; while the vault is locked the log
+# goes nowhere, never into .cs/local.
 mkdir -p "$META_DIR/local" 2>/dev/null || true
-echo "" >> "$META_DIR/local/session.log"
-echo "$(date '+%Y-%m-%d %H:%M:%S') - Session ended (source: $END_REASON, ID: $SESSION_ID)" >> "$META_DIR/local/session.log"
+if _log_dir=$(cs_private_dir "$META_DIR"); then SESSION_LOG="$_log_dir/session.log"; else SESSION_LOG=/dev/null; fi
+echo "" >> "$SESSION_LOG"
+echo "$(date '+%Y-%m-%d %H:%M:%S') - Session ended (source: $END_REASON, ID: $SESSION_ID)" >> "$SESSION_LOG"
 
 # Append structured event to timeline.jsonl
 TIMELINE_FILE="$META_DIR/timeline.jsonl"
@@ -212,7 +220,7 @@ if [ -n "$SESSIONS_ROOT" ] && [ -d "$SESSIONS_ROOT" ]; then
     } > "$INDEX_FILE"; } 2>/dev/null || true
 fi
 
-echo "Session management cleanup complete" >> "$META_DIR/local/session.log"
-echo "================================================================================" >> "$META_DIR/local/session.log"
+echo "Session management cleanup complete" >> "$SESSION_LOG"
+echo "================================================================================" >> "$SESSION_LOG"
 
 exit 0

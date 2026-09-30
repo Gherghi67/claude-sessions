@@ -5,7 +5,19 @@
 set -euo pipefail
 
 INDEX=".cs/memory/MEMORY.md"
-SNAPSHOT=".cs/local/memory-index.snapshot"
+# The snapshot copies MEMORY.md, so it sits where the session keeps its cs
+# files: .cs/private for an encrypted session, whose index lives in the vault,
+# .cs/local for any other. cs-shared.sh (build.sh's copy of lib/02-shared.sh)
+# holds that rule.
+_shared="$(dirname "$0")/cs-shared.sh"
+[ -r "$_shared" ] || { printf 'memory-index-guard: %s is missing; reinstall cs\n' "$_shared" >&2; exit 2; }
+# shellcheck source=cs-shared.sh
+. "$_shared"
+if ! _snapshot_dir=$(cs_private_dir .cs); then
+    printf 'memory-index-guard: .cs/private is locked; mount the session'"'"'s vault, then retry\n' >&2
+    exit 2
+fi
+SNAPSHOT="$_snapshot_dir/memory-index.snapshot"
 # Claude Code loads MEMORY.md at every session start and cuts it past a limit;
 # pointers beyond the cut are never read again. Bytes, not characters.
 BUDGET=24400
@@ -41,7 +53,7 @@ _need_snapshot() {
 case "${1:-}" in
     snapshot)
         [ -d .cs/memory ] || _die "no .cs/memory here; run from the session root"
-        mkdir -p .cs/local || _die "cannot create .cs/local"
+        mkdir -p "$_snapshot_dir" || _die "cannot create $_snapshot_dir"
         # Claude Code writes MEMORY.md with the first entry, so a fresh
         # session's first sweep starts from an empty index.
         if [ -f "$INDEX" ]; then

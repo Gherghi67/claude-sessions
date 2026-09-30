@@ -29,7 +29,9 @@ EOF
 # source; the precise per-session path check still happens below.
 if [ "$HOOK_EVENT" = "FileChanged" ]; then
     case "$FC_PATH" in
-        */.cs/local/mail/new/*.json) [ "$FC_EVENT" != "unlink" ] || exit 0 ;;
+        # Any mailbox shape: an encrypted session's maildir sits behind
+        # .cs/private, and the watcher may report it at the vault's own path.
+        */mail/new/*.json) [ "$FC_EVENT" != "unlink" ] || exit 0 ;;
         */.cs/local/rotation-kick/*.kick) [ "$FC_EVENT" != "unlink" ] || exit 0 ;;
         *) exit 0 ;;
     esac
@@ -71,6 +73,11 @@ if ! command -v cs_resolve_session >/dev/null 2>&1; then
         [ -n "${CLAUDE_SESSION_NAME:-}" ] && [ -n "${CLAUDE_SESSION_DIR:-}" ]
     }
 fi
+# Without the library the hook cannot tell whether the session keeps its
+# mailbox in a vault, so it reads and writes no mailbox at all.
+if ! command -v cs_private_dir >/dev/null 2>&1; then
+    cs_private_dir() { return 1; }
+fi
 if ! command -v _cs_terminate_jsonl >/dev/null 2>&1; then
     _cs_terminate_jsonl() {
         [ -s "$1" ] || return 0
@@ -98,7 +105,15 @@ fi
 # watcher lives on Claude Code's own event loop and fires independently of turn
 # state. Both share this scan, the snapshot, the gate rule and the ceiling —
 # they differ only in how they deliver.
-MAILDIR="$META_DIR/local/mail"
+# The session's cs content files (mailbox, queue, inbox, failure counter) sit
+# behind .cs/private in an encrypted session. CS_FILES is empty when that vault
+# is locked: every mail and queue branch below then stands down rather than
+# recreate its files in plaintext. Readings the status line writes (context-pct,
+# limits) and ids (spawned-by) stay in .cs/local.
+CS_FILES=""
+if _cs_files=$(cs_private_dir "$META_DIR"); then CS_FILES="$_cs_files"; fi
+MAILDIR=""
+[ -z "$CS_FILES" ] || MAILDIR="$CS_FILES/mail"
 MAIL_WOKE="$MAILDIR/woke"
 MAIL_UNREAD=0
 MAIL_FRESH=0
@@ -278,6 +293,7 @@ MAIL_REASON_TAIL="Run cs -msg to read it. Reply only if the message needs an ans
 # through into the walk-away run and pops a queued task, so a directory change
 # would silently consume work.
 if [ "$HOOK_EVENT" = "CwdChanged" ]; then
+    [ -n "$MAILDIR" ] || exit 0
     _mail_is_lead || exit 0
     mkdir -p "$MAILDIR/new" 2>/dev/null || exit 0
     jq -nc --arg p "$MAILDIR/new" \
@@ -387,15 +403,15 @@ if [ "$HOOK_EVENT" = "FileChanged" ]; then
         */new/*.json) _fc_name="${FC_PATH##*/}" ;;
         *) exit 0 ;;
     esac
-    [ -n "$_fc_name" ] && [ -f "$MAILDIR/new/$_fc_name" ] || exit 0
+    [ -n "$MAILDIR" ] && [ -n "$_fc_name" ] && [ -f "$MAILDIR/new/$_fc_name" ] || exit 0
     _mail_is_lead || exit 0
     # The Stop path gets the queue rule free from its position below the drain,
     # which exits in every armed or draining branch. This one has to ask: a
     # rewake at priority "next" lands between drain turns, shifting the pop one
     # turn late and mis-attributing a tool failure to the current task's
     # breaker. An empty queue is never gating, whatever queue.state records.
-    if [ "$(_qlen "$META_DIR/local/queue")" -gt 0 ]; then
-        _fc_qstate=$(cat "$META_DIR/local/queue.state" 2>/dev/null | tr -d '[:space:]' || true)
+    if [ "$(_qlen "$CS_FILES/queue")" -gt 0 ]; then
+        _fc_qstate=$(cat "$CS_FILES/queue.state" 2>/dev/null | tr -d '[:space:]' || true)
         case "$_fc_qstate" in armed|draining) exit 0 ;; esac
     fi
     _mail_scan
@@ -435,7 +451,8 @@ fi
 # --- Task queue drain (walk-away mode) ---------------------------------------
 # Hands the agent its next queued task when armed; asks once when idle. Wins
 # over the narrative nag (returns early). Queue text is arbitrary -> jq emit.
-QDIR="$META_DIR/local"
+QDIR="$CS_FILES"
+LOCAL="$META_DIR/local"
 QUEUE="$QDIR/queue"
 QSTATE_FILE="$QDIR/queue.state"
 
@@ -473,9 +490,9 @@ _inbox_append() {  # jq --arg/--argjson pairs..., then the jq object program
 # Best-effort: a failed send never breaks the drain. Callers decide whether
 # spawned-by survives (kept on breaker trips, deleted after the final drain).
 _notify_spawner() {  # message
-    [ -s "$QDIR/spawned-by" ] || return 0
+    [ -s "$LOCAL/spawned-by" ] || return 0
     local spawner=""
-    IFS= read -r spawner < "$QDIR/spawned-by" || true
+    IFS= read -r spawner < "$LOCAL/spawned-by" || true
     if [ -n "$spawner" ] && command -v cs >/dev/null 2>&1; then
         cs -msg "$spawner" -k notify "$1" >/dev/null 2>&1 || true
     fi
@@ -495,7 +512,7 @@ _breaker_check() {
         return 0
     fi
 
-    ctx=$(cat "$QDIR/context-pct" 2>/dev/null | tr -d '[:space:]' || true)
+    ctx=$(cat "$LOCAL/context-pct" 2>/dev/null | tr -d '[:space:]' || true)
     case "$ctx" in
         ''|*[!0-9]*) : ;;
         *) if [ "$ctx" -ge "$max_ctx" ]; then
@@ -504,9 +521,9 @@ _breaker_check() {
            fi ;;
     esac
 
-    if [ -f "$QDIR/limits" ]; then
-        fiveh=$(awk -F': ' '/^five_hour_used_pct:/ {print $2; exit}' "$QDIR/limits" 2>/dev/null | tr -d '[:space:]')
-        stamped=$(awk -F': ' '/^stamped_at:/ {print $2; exit}' "$QDIR/limits" 2>/dev/null | tr -d '[:space:]')
+    if [ -f "$LOCAL/limits" ]; then
+        fiveh=$(awk -F': ' '/^five_hour_used_pct:/ {print $2; exit}' "$LOCAL/limits" 2>/dev/null | tr -d '[:space:]')
+        stamped=$(awk -F': ' '/^stamped_at:/ {print $2; exit}' "$LOCAL/limits" 2>/dev/null | tr -d '[:space:]')
         case "$fiveh" in ''|*[!0-9]*) fiveh="";; esac
         case "$stamped" in ''|*[!0-9]*) stamped="";; esac
         if [ -n "$fiveh" ] && [ -n "$stamped" ]; then
@@ -525,7 +542,9 @@ _breaker_check() {
 # idle turn pops a task: an eight-task queue reads "all tasks complete" after
 # eight reviewer turns with nothing done. A teammate falls through to the
 # narrative reminder like any other Stop.
-QLEN=$(_qlen "$QUEUE")
+# A locked vault has no readable queue; an empty QDIR must not glob "/queue".
+QLEN=0
+[ -z "$QDIR" ] || QLEN=$(_qlen "$QUEUE")
 if [ "$QLEN" -gt 0 ] && _mail_is_lead; then
     QSTATE=$(cat "$QSTATE_FILE" 2>/dev/null | tr -d '[:space:]' || true)
     [ -n "$QSTATE" ] || QSTATE="idle"
@@ -573,7 +592,7 @@ $SCOPE"
                 # Spawned worker: tell the spawner its batch is done. One-shot
                 # (spawned-by is deleted) so later unrelated drains stay silent.
                 _notify_spawner "queue drained: $DONE_COUNT task(s) done"
-                rm -f "$QDIR/spawned-by"
+                rm -f "$LOCAL/spawned-by"
                 rm -f "$QDIR/failures"
                 jq -nc '{decision:"block", reason:"cs task queue: all tasks complete. Mark the final native task completed, then give the user a brief summary of what the walk-away run accomplished and anything that needs their attention."}'
                 exit 0
@@ -623,7 +642,7 @@ $SCOPE"
             fi
         fi
         if [ "$GATE" = "1" ]; then
-            CTX=$(cat "$QDIR/context-pct" 2>/dev/null | tr -d '[:space:]' || true)
+            CTX=$(cat "$LOCAL/context-pct" 2>/dev/null | tr -d '[:space:]' || true)
             CTX_LINE=""
             COMPACT=""
             case "$CTX" in
@@ -645,7 +664,7 @@ fi
 # queue.state records — the rule the FileChanged branch has to ask for outright.
 # A non-lead leaves the flags clear, so it neither wakes nor records: the lead's
 # wake for the same arrival has to survive a teammate ending its turn first.
-if _mail_is_lead; then
+if [ -n "$MAILDIR" ] && _mail_is_lead; then
     _mail_scan
     if [ "$MAIL_FRESH" = 0 ] && [ "$MAIL_DISCHARGED" = 1 ]; then
         _mail_record
@@ -675,7 +694,7 @@ fi
 # last nudged, machine-local.
 NUDGE_CTX=$(_num_or "${CS_ROTATE_NUDGE_CTX:-}" 65)
 NUDGE_UUID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || true)
-NUDGE_PCT=$(cat "$QDIR/context-pct" 2>/dev/null | tr -d '[:space:]' || true)
+NUDGE_PCT=$(cat "$LOCAL/context-pct" 2>/dev/null | tr -d '[:space:]' || true)
 case "$NUDGE_PCT" in ''|*[!0-9]*) NUDGE_PCT="";; esac
 # The file holds the LEAD's reading only: the status line writes it for the
 # launched conversation alone. A teammate's Stop acting on it announces
@@ -686,9 +705,9 @@ if [ -n "$NUDGE_PCT" ] && [ -n "$NUDGE_UUID" ] && [ "$NUDGE_PCT" -ge "$NUDGE_CTX
     # Append-only list of nudged conversations: a tmux teammate shares this
     # directory and runs the same Stop, so a single-slot cursor let each
     # teammate's stop cancel the lead's notice and re-arm it every turn.
-    if ! grep -qx "$NUDGE_UUID" "$QDIR/rotate-nudged" 2>/dev/null; then
-        printf '%s\n' "$NUDGE_UUID" >> "$QDIR/rotate-nudged"
-        REASON="Context is at ${NUDGE_PCT}% — consider rotating this conversation. Invoke the rotate skill to distill a handoff into .cs/handoffs/ and arm it; the user then runs /clear to continue in a fresh conversation, without leaving Claude Code. One-time notice for this conversation; if now is a bad time, simply continue."
+    if ! grep -qx "$NUDGE_UUID" "$LOCAL/rotate-nudged" 2>/dev/null; then
+        printf '%s\n' "$NUDGE_UUID" >> "$LOCAL/rotate-nudged"
+        REASON="Context is at ${NUDGE_PCT}% — consider rotating this conversation. Invoke the rotate skill to distill a handoff and arm it; the user then runs /clear to continue in a fresh conversation, without leaving Claude Code. One-time notice for this conversation; if now is a bad time, simply continue."
         jq -nc --arg r "$REASON" '{decision: "block", reason: $r}'
         exit 0
     fi
@@ -701,8 +720,8 @@ fi
 WARN_CTX=$(_num_or "${CS_CTX_WARN_CTX:-}" 40)
 if [ -n "$NUDGE_PCT" ] && [ -n "$NUDGE_UUID" ] \
     && [ "$NUDGE_PCT" -ge "$WARN_CTX" ] && [ "$NUDGE_PCT" -lt "$NUDGE_CTX" ]; then
-    if ! grep -qx "$NUDGE_UUID" "$QDIR/ctx-warned" 2>/dev/null; then
-        printf '%s\n' "$NUDGE_UUID" >> "$QDIR/ctx-warned"
+    if ! grep -qx "$NUDGE_UUID" "$LOCAL/ctx-warned" 2>/dev/null; then
+        printf '%s\n' "$NUDGE_UUID" >> "$LOCAL/ctx-warned"
         REASON="Context is at ${NUDGE_PCT}% — past the comfortable-headroom mark. Briefly let the user know so they can steer toward a natural stopping point or plan a rotation; the rotate nudge follows at ${NUDGE_CTX}%. One-time notice for this conversation; no action needed now."
         jq -nc --arg r "$REASON" '{decision: "block", reason: $r}'
         exit 0

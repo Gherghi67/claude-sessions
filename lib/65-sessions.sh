@@ -34,7 +34,7 @@ search_sessions() {
 
     local found=0
     local search_files=".cs/README.md"
-    local -a search_globs=(".cs/memory/*.md" ".cs/narrative-archive/*/*.md")
+    local -a search_globs=(".cs/memory/*.md" ".cs/narrative-archive/*/*.md" ".cs/private/narrative-archive/*/*.md")
 
     for session_dir in "$SESSIONS_ROOT"/*/; do
         [ -d "$session_dir" ] || continue
@@ -277,8 +277,10 @@ list_sessions() {
         local created="-"
         local modified="-"
 
-        local log_file="$session_dir/.cs/local/session.log"
-        # Fall back to older locations for unmigrated sessions
+        local log_file="$session_dir/.cs/private/session.log"
+        # An encrypted session keeps its log behind .cs/private; every other
+        # one in .cs/local. Fall back to older locations for unmigrated sessions
+        [ ! -f "$log_file" ] && log_file="$session_dir/.cs/local/session.log"
         [ ! -f "$log_file" ] && log_file="$session_dir/.cs/logs/session.log"
         [ ! -f "$log_file" ] && log_file="$session_dir/logs/session.log"
         if [ -f "$log_file" ]; then
@@ -421,6 +423,25 @@ _remove_one_session() {
 
     if [ -z "$force" ] && session_is_live "$session_dir/.cs"; then
         error "Session '$session_name' is live (pid $(read_lock_pid "$session_dir/.cs")); use --force to remove anyway"
+    fi
+
+    # An encrypted session mounts its vault inside the session directory by
+    # convention, and rm -rf recurses into a mount: removing the session would
+    # delete what the vault holds. A link that resolves into this directory
+    # means the vault is mounted here, so refuse, --force or not. An adopted
+    # session loses only its link below, so it is exempt.
+    if [ ! -L "$session_dir" ]; then
+        local sub link real_dir real_target
+        real_dir=$(cd "$session_dir" && pwd -P)
+        for sub in memory plans claude-config private; do
+            link="$session_dir/.cs/$sub"
+            [ -L "$link" ] || continue
+            real_target=$(cd "$link" 2>/dev/null && pwd -P) || continue
+            case "$real_target" in
+                "$real_dir"/*)
+                    error "Session '$session_name' has encrypted storage mounted inside it: .cs/$sub points at $(readlink "$link"). Removing the session would delete what the vault holds; unmount it, then retry." ;;
+            esac
+        done
     fi
 
     # Every confirmation below reads from stdin; a script piping input through

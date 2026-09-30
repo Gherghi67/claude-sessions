@@ -81,18 +81,50 @@ _run_pre_open() {  # session_name, session_dir
     [ "$rc" -eq 0 ] || error "$1: .cs/local/pre-open exited $rc; not opening the session."
 }
 
-# A session can keep .cs/memory and .cs/plans on an encrypted volume by making
-# them symlinks into its mountpoint. Unmounted, the links dangle: `test -d` is
-# false through them, so migrate would mkdir through them and abort on a raw
-# mkdir error. Refuse by name instead, before anything writes there.
+# A session can keep .cs/memory, .cs/plans, .cs/claude-config (Claude Code's
+# own config dir) and .cs/private (cs's own content files) on an encrypted
+# volume by making them symlinks into its mountpoint. Unmounted, the links
+# dangle: `test -d` is false through them, so migrate would mkdir through them
+# and abort on a raw mkdir error. Refuse by name instead, before anything
+# writes there.
 _refuse_unmounted_meta() {  # session_name, session_dir
     local sub link target
-    for sub in memory plans; do
+    for sub in memory plans claude-config private; do
         link="$2/.cs/$sub"
+        if [ -e "$link" ] && [ ! -d "$link" ]; then
+            error "$1: .cs/$sub is a file, not a directory or a link into encrypted storage. Remove it, or link it into the vault, then reopen."
+        fi
         [ -L "$link" ] && [ ! -e "$link" ] || continue
         target=$(readlink "$link")
         error "$1: .cs/$sub points at $target, which is missing (encrypted storage not mounted?). Mount it, then reopen."
     done
+    _refuse_plaintext_beside_private "$1" "$2"
+}
+
+# Once .cs/private holds a session's cs content files, a copy still in
+# .cs/local is plaintext the vault was meant to hold: an unmigrated log, or one
+# written by an older cs. Named rather than moved, since a move cannot remove
+# the copies backups and snapshots already hold.
+_refuse_plaintext_beside_private() {  # session_name, session_dir
+    local meta="$2/.cs" name
+    [ -e "$meta/private" ] || return 0
+    for name in session.log scope-prompt.trace memory-index.snapshot mail \
+                queue queue.tmp queue.state queue.done queue.declined queue.migrating \
+                notifications.jsonl notifications.seen failures rewrite.trace pending-handoff; do
+        [ -e "$meta/local/$name" ] || continue
+        error "$1: .cs/private keeps this session's cs files in its vault, but .cs/local still holds $name in plaintext. Move it into .cs/private or delete it, then reopen."
+    done
+    if [ -e "$meta/handoffs" ]; then
+        error "$1: .cs/private keeps this session's rotation handoffs in its vault, but .cs/handoffs still holds them in plaintext. Move it to .cs/private/handoffs or delete it, then reopen."
+    fi
+    if [ -e "$meta/checkpoints" ]; then
+        error "$1: .cs/private keeps this session's checkpoints in its vault, but .cs/checkpoints is still plaintext. Move it to .cs/private/checkpoints or delete it, then reopen."
+    fi
+    # A narrative in the vault rotates into it; a .cs/narrative-archive link
+    # into the vault is where rotation writes, not a leftover.
+    if [ -L "$meta/memory" ] && [ -e "$meta/narrative-archive" ] && [ ! -L "$meta/narrative-archive" ]; then
+        error "$1: this session's narrative lives in its vault, but .cs/narrative-archive is still plaintext. Move it to .cs/private/narrative-archive or delete it, then reopen."
+    fi
 }
 
 # Create session directory structure
@@ -477,8 +509,13 @@ migrate_session() {
     # peer still on the old cs may keep appending to the tracked log, so a
     # one-time modify/delete conflict on this low-stakes file is possible — take
     # either side.
+    # An encrypted session's log belongs behind .cs/private; open has already
+    # refused a locked vault, so cs_private_dir resolves here.
     if [ -f "$session_dir/.cs/logs/session.log" ]; then
-        cat "$session_dir/.cs/logs/session.log" >> "$session_dir/.cs/local/session.log"
+        local log_dir
+        log_dir=$(cs_private_dir "$session_dir/.cs") \
+            || error "Cannot move .cs/logs/session.log: .cs/private $(cs_private_state "$session_dir/.cs"), and cs cannot write there."
+        cat "$session_dir/.cs/logs/session.log" >> "$log_dir/session.log"
         rm -f "$session_dir/.cs/logs/session.log"
         rmdir "$session_dir/.cs/logs" 2>/dev/null || true
         # Drop the obsolete union rule for the relocated log. grep -v exits 1 when
@@ -489,7 +526,7 @@ migrate_session() {
             { grep -v 'logs/session\.log merge=union' "$ga" > "$ga.tmp"; } 2>/dev/null || true
             mv "$ga.tmp" "$ga" 2>/dev/null || rm -f "$ga.tmp"
         fi
-        warn "Moved .cs/logs/session.log to machine-local .cs/local/session.log"
+        warn "Moved .cs/logs/session.log to ${log_dir#"$session_dir"/}/session.log"
     fi
 
     # Remove inert sync/remote metadata left by older versions (the sync
@@ -760,6 +797,15 @@ Do not fire on every short affirmative ("yes", "ok", "thanks"). Fire when the *w
 To opt out, delete the prose above but keep the `cs:wrap-cues` HTML comment as a tombstone — cs treats the sentinel's presence as "managed, do not re-add."
 EOF
         warn "Appended session wrap-up cues to CLAUDE.local.md"
+    fi
+
+    # Phase 14: an encrypted session (.cs/private present; a locked one was
+    # refused before migrate) gains the encrypted protocol. The sentinel is a
+    # tombstone like cs:wrap-cues: present means managed, never re-added.
+    if [ -f "$claude_md_p9" ] && [ -d "$session_dir/.cs/private" ] \
+        && ! grep -q 'cs:encrypted-protocol' "$claude_md_p9"; then
+        { echo; _emit_encrypted_protocol_block; } >> "$claude_md_p9"
+        warn "Added the encrypted-session protocol to CLAUDE.local.md"
     fi
 
     # Phase 11: Backfill claude_session_color in local state when absent.

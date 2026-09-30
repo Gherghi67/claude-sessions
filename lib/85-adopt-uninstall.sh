@@ -15,6 +15,9 @@ create_session_gitignore() {
 # Session archives (large binaries; unrelated to the tracked .cs/archived marker)
 .cs/archives/
 
+# An encrypted session's mounted volume (never staged in plaintext)
+.cs/vault-mnt/
+
 # Session cooldown markers
 .cs/.narrative-reminder-cooldown
 
@@ -53,6 +56,7 @@ ensure_cs_gitignore_entries() {
     entries=$(cat << 'ENTRIES'
 .cs/local/
 .cs/archives/
+.cs/vault-mnt/
 .cs/.narrative-reminder-cooldown
 .claude/settings.local.json
 CLAUDE.local.md

@@ -1755,13 +1755,27 @@ _session_encrypted() {  # session_name
     return 1
 }
 
-# Count of queued tasks for the current session (one file per task in
-# .cs/local/queue/), shown right after the session name. Hidden when the
+# Where the current session's cs content files live: .cs/private in an
+# encrypted session (a link into its vault; while it dangles nothing under it
+# reads, so its segments show nothing), else .cs/local. cs_private_dir's rule,
+# inlined: the bar sources no library.
+_sl_cs_files() {
+    local meta="$SESSIONS_ROOT/$CLAUDE_SESSION_NAME/.cs"
+    if [ -L "$meta/private" ] || [ -e "$meta/private" ]; then
+        printf '%s' "$meta/private"
+    else
+        printf '%s' "$meta/local"
+    fi
+}
+
+# Count of queued tasks for the current session (one file per task in the
+# queue/ directory), shown right after the session name. Hidden when the
 # queue is empty or absent. Only regular files count, so a subdirectory or
 # an unmatched glob (bash 3.2 has no nullglob) never inflates the count.
 _seg_notes() {
     [ -n "${CLAUDE_SESSION_NAME:-}" ] || return 0
-    local qdir="$SESSIONS_ROOT/$CLAUDE_SESSION_NAME/.cs/local/queue"
+    local qdir
+    qdir="$(_sl_cs_files)/queue"
     [ -d "$qdir" ] || return 0
     local n=0 f
     for f in "$qdir"/*; do
@@ -1781,7 +1795,8 @@ _seg_notes() {
 # nullglob (an unmatched glob comes back literal).
 _seg_mail() {
     [ -n "${CLAUDE_SESSION_NAME:-}" ] || return 0
-    local mdir="$SESSIONS_ROOT/$CLAUDE_SESSION_NAME/.cs/local/mail"
+    local mdir
+    mdir="$(_sl_cs_files)/mail"
     [ -d "$mdir/new" ] || return 0
     local unread=0 f
     for f in "$mdir"/new/*.json; do

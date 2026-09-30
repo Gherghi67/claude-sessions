@@ -309,17 +309,22 @@ test_cs_launch_kicks_dropped() {
         "2026-07-01T10:00:02Z" '{"promptSource": "typed"}'
     add_msg "$f" "Continue from where we stopped and spawned by hand, the retry fix" \
         "2026-07-01T10:00:03Z" '{"promptSource": "typed"}'
+    add_msg "$f" "Continue from the pending rotation handoff." \
+        "2026-07-01T10:00:04Z" '{"promptSource": "typed"}'
     run_build > /dev/null || { echo "  FAIL: build exited non-zero"; return 1; }
     if grep -q -e "pending rotation handoff" -e "Send results with" -e "brief is .cs/brief.md" "$(corpus_path)"; then
         echo "  FAIL: a cs launch kick reached the corpus"; return 1
     fi
-    assert_file_contains "$(corpus_path)" "3 machine-authored" \
+    assert_file_contains "$(corpus_path)" "4 machine-authored" \
         "stats should count the launch kicks as machine-authored" || return 1
     assert_file_contains "$(corpus_path)" "Continue from where we stopped" \
         "a typed message sharing the opening words must be kept" || return 1
     assert_file_contains "$SCRIPT_DIR/../lib/40-state.sh" \
         'handoff_arg="Continue from the pending rotation handoff: read .cs/handoffs/' \
         "rotation kick wording moved; update the corpus filter" || return 1
+    assert_file_contains "$SCRIPT_DIR/../lib/40-state.sh" \
+        'handoff_arg="Continue from the pending rotation handoff\."' \
+        "encrypted rotation kick wording moved; update the corpus filter" || return 1
     assert_file_contains "$SCRIPT_DIR/../lib/75-launch.sh" \
         'spawn_kick="Spawned by $_spawner. $_work Send results with: cs -msg ' \
         "spawn kick wording moved; update the corpus filter" || return 1

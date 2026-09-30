@@ -21,6 +21,14 @@ work in flight and its next step. Do not stop to ask; the `cs` mod's
 button runs `/rotate` with no argument, and a question there would defeat the
 one-key rotation it exists for.
 
+**Encrypted session.** When `.cs/private` exists, the session keeps its
+handoffs in its vault: every `.cs/handoffs/` below means
+`.cs/private/handoffs/`, step 9 arms `.cs/private/pending-handoff`, and the
+session log is `.cs/private/session.log`. Commit nothing from the vault:
+skip steps 4, 6 and 8 for handoffs (the prune's "git tracks it" rule then
+keeps every one). If `.cs/private` is a link to a missing directory, the
+vault is locked: tell the user to mount it and stop.
+
 ## Process
 
 1. Determine the parent conversation UUID: the `claude_session_id` line of
@@ -206,8 +214,9 @@ one-key rotation it exists for.
 7. Retire this machine's leftovers: for every OTHER file in `.cs/handoffs/`
    whose frontmatter still says `status: unconsumed`, flip that one
    frontmatter line to `status: superseded` — but only when its `parent:`
-   UUID appears in `.cs/local/session.log`, which records every conversation
-   this checkout has run (`Session started (... ID: <uuid>)`).
+   UUID appears in `.cs/local/session.log` (`.cs/private/session.log` when
+   `.cs/private` exists: an encrypted session), which records every
+   conversation this checkout has run (`Session started (... ID: <uuid>)`).
 
    That file is machine-local, which is the whole point of using it.
    `.cs/handoffs/` is shared, so a handoff whose parent is absent from the log
@@ -251,7 +260,8 @@ one-key rotation it exists for.
    is a `## Successor report` appended by the conversation that took it
    over, and any tracked session state, like narratives. Stage those paths
    by name, skipping every ignored one (the step 4 check).
-9. Arm it, LAST: write its basename (no path) to `.cs/local/pending-handoff`.
+9. Arm it, LAST: write its basename (no path) to `.cs/local/pending-handoff`
+   (`.cs/private/pending-handoff` in an encrypted session).
    Machine-local state — never commit it.
 
    Arming is the final step because an armed marker is fragile in a way a

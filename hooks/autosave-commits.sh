@@ -10,6 +10,9 @@ set -euo pipefail
 # before its own decline, silently. When the library is absent the fallback
 # is the env-only check this guard replaced, so the hook behaves as it used to.
 _cs_lib="$(dirname "$0")/cs-resolve.sh"
+# cs-shared.sh is build.sh's copy of lib/02-shared.sh: it names the directory
+# the log lives in. Same guard, same reasons.
+_cs_shared="$(dirname "$0")/cs-shared.sh"
 # shellcheck source=cs-resolve.sh
 # Parse-check before sourcing: a truncated or corrupt library is readable,
 # and sourcing it aborts the hook at the syntax error, before the fallback
@@ -23,7 +26,14 @@ _cs_lib="$(dirname "$0")/cs-resolve.sh"
 case $- in *e*) _cs_had_e=1 ;; *) _cs_had_e=0 ;; esac
 set +e
 [ -r "$_cs_lib" ] && "${BASH:-/bin/bash}" -n "$_cs_lib" 2>/dev/null && . "$_cs_lib"
+# shellcheck source=cs-shared.sh
+[ -r "$_cs_shared" ] && "${BASH:-/bin/bash}" -n "$_cs_shared" 2>/dev/null && . "$_cs_shared"
 if [ "$_cs_had_e" = 1 ]; then set -e; fi
+# Without the library there is no telling whether the session keeps its log in
+# a vault, so nothing is logged rather than risk writing it in plaintext.
+if ! command -v cs_private_dir >/dev/null 2>&1; then
+    cs_private_dir() { return 1; }
+fi
 if ! command -v cs_resolve_session >/dev/null 2>&1; then
     cs_resolve_session() {
         [ -n "${CLAUDE_SESSION_NAME:-}" ] && [ -n "${CLAUDE_SESSION_DIR:-}" ]
@@ -122,8 +132,22 @@ autosave_to_shadow_ref() {
         TEMP_INDEX=$(mktemp "${TMPDIR:-/tmp}/cs-autosave.XXXXXX")
         cp "$GIT_DIR/index" "$TEMP_INDEX"
 
-        # Stage all current files in the temporary index
-        GIT_INDEX_FILE="$TEMP_INDEX" git add -A 2>/dev/null || { rm -f "$TEMP_INDEX"; exit 0; }
+        # Stage all current files in the temporary index, except an encrypted
+        # session's mounted volume: its blobs would land in plaintext
+        # .git/objects, pinned by the autosave ref. The ignore entry for
+        # .cs/vault-mnt/ is not enough: a worktree never runs the migration
+        # that adds it, and a mount can sit elsewhere in the tree. So the
+        # conventional mount and every link target inside this tree are
+        # excluded here. An exclude cannot drop a path the index
+        # already tracks; a freshly mounted volume is untracked.
+        excludes=(':(exclude).cs/vault-mnt')
+        top=$(pwd -P)
+        for sub in memory plans claude-config private; do
+            [ -L "$META_DIR/$sub" ] || continue
+            target=$(cd "$META_DIR/$sub" 2>/dev/null && pwd -P) || continue
+            case "$target" in "$top"/*) excludes+=(":(exclude)${target#"$top"/}") ;; esac
+        done
+        GIT_INDEX_FILE="$TEMP_INDEX" git add -A -- ':/' "${excludes[@]}" 2>/dev/null || { rm -f "$TEMP_INDEX"; exit 0; }
 
         # Write tree object from temporary index
         tree=$(GIT_INDEX_FILE="$TEMP_INDEX" git write-tree 2>/dev/null) || { rm -f "$TEMP_INDEX"; exit 0; }
@@ -145,7 +169,9 @@ cs-base: $base"
         git update-ref "$SESSION_REF" "$commit" 2>/dev/null || exit 0
 
         if [ -n "$LATEST_ENTRY" ]; then
-            echo "[$TIMESTAMP] Autosave: $LATEST_ENTRY" >> "$META_DIR/local/session.log"
+            if LOG_DIR=$(cs_private_dir "$META_DIR"); then
+                echo "[$TIMESTAMP] Autosave: $LATEST_ENTRY" >> "$LOG_DIR/session.log"
+            fi
         fi
     )
 }

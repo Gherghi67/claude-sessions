@@ -196,7 +196,12 @@ run_queue() {
     if [ -z "${CLAUDE_SESSION_META_DIR:-}" ]; then
         error "cs -queue must be run inside a cs session, or as: cs <session> -queue ..."
     fi
-    local qdir="$CLAUDE_SESSION_META_DIR/local"
+    # The queue sits with the session's other cs files: behind .cs/private in
+    # an encrypted session, where a locked vault refuses rather than queue a
+    # task beside it in plaintext.
+    local qdir
+    qdir=$(cs_private_dir "$CLAUDE_SESSION_META_DIR") \
+        || error "this session keeps its queue in encrypted storage that is not mounted (.cs/private $(cs_private_state "$CLAUDE_SESSION_META_DIR")). Mount it, then retry."
     _queue_convert_legacy "$qdir"
     local sub="${1:-list}"
     case "$sub" in

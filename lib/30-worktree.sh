@@ -889,11 +889,15 @@ fuse_session_records() {
     # Worktrees never run migrate_session, so a task branch created before the
     # log moved to .cs/local/ still keeps its audit trail at .cs/logs/; fuse
     # whichever the worktree has into the base's machine-local log.
-    local srclog
+    # An encrypted base keeps its log behind .cs/private; a locked one cannot
+    # take the log, and .cs/local must not take it in plaintext instead.
+    local srclog dstlog
     for srclog in "$src/local/session.log" "$src/logs/session.log"; do
         if [ -f "$srclog" ]; then
-            mkdir -p "$dst/local"
-            { echo ""; cat "$srclog"; } >> "$dst/local/session.log"
+            dstlog=$(cs_private_dir "$dst") \
+                || error "cannot fuse the worktree's log: $dst/private is locked. Mount it, then retry."
+            mkdir -p "$dstlog"
+            { echo ""; cat "$srclog"; } >> "$dstlog/session.log"
             break
         fi
     done

@@ -2044,6 +2044,7 @@ impl App {
         let mut deleted = 0;
         let mut errors = 0;
         let mut live: Vec<String> = Vec::new();
+        let mut reasons: Vec<String> = Vec::new();
         let names: Vec<String> = self.marked_sessions.iter().cloned().collect();
         for name in &names {
             // Resolved per name rather than from the selection: a batch mixes
@@ -2066,8 +2067,9 @@ impl App {
                     deleted += 1;
                     self.flash_row(name.clone(), FlashKind::Success);
                 }
-                Err(_) => {
+                Err(e) => {
                     errors += 1;
+                    reasons.push(e.to_string());
                     self.flash_row(name.clone(), FlashKind::Error);
                 }
             }
@@ -2076,16 +2078,15 @@ impl App {
         self.rescan_now();
         if errors == 0 {
             self.set_status(format!("Deleted {} sessions", deleted), StatusLevel::Success);
-        } else if live.is_empty() {
-            self.set_status(
-                format!("Deleted {}, {} failed", deleted, errors),
-                StatusLevel::Error,
-            );
         } else {
-            self.set_status(
-                format!("Deleted {}, {} failed — live: {}", deleted, errors, live.join(", ")),
-                StatusLevel::Error,
-            );
+            let mut text = format!("Deleted {}, {} failed", deleted, errors);
+            if !live.is_empty() {
+                text.push_str(&format!(" — live: {}", live.join(", ")));
+            }
+            if !reasons.is_empty() {
+                text.push_str(&format!(" — {}", reasons.join("; ")));
+            }
+            self.set_status(text, StatusLevel::Error);
         }
         self.mode = Mode::Normal;
         self.delete_countdown_start = None;
@@ -2113,6 +2114,20 @@ impl App {
             if session.name.contains('@') {
                 self.set_status(
                     "Can't rename a worktree session from the TUI",
+                    StatusLevel::Error,
+                );
+                self.mode = Mode::Normal;
+                return;
+            }
+            // An encrypted session reaches its vault through absolute links and
+            // keeps its transcripts under the current path's name; a rename
+            // strands both. symlink_metadata sees a link whose vault is locked.
+            let dir = self.sessions_root.join(&session.name);
+            let encrypted = std::fs::symlink_metadata(dir.join(".cs/claude-config")).is_ok()
+                || session::VAULT_LINKS.iter().any(|sub| session::is_vault_link(&dir, sub));
+            if encrypted {
+                self.set_status(
+                    "Can't rename an encrypted session: its vault links name this path",
                     StatusLevel::Error,
                 );
                 self.mode = Mode::Normal;
@@ -3692,6 +3707,65 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    // An encrypted session keeps Claude Code's config in its vault through
+    // absolute links, and its transcripts under the old path's name; a rename
+    // would strand both. A locked vault leaves the link dangling, so the
+    // refusal has to hold for a link that resolves to nothing.
+    #[test]
+    fn rename_refuses_a_session_with_its_own_claude_config() {
+        use crate::session::test_root;
+        let root = std::env::temp_dir().join(format!("cs-test-rename-vault-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("vt/.cs/local")).unwrap();
+        std::os::unix::fs::symlink(root.join("vt/.cs/vault-mnt/claude-config"), root.join("vt/.cs/claude-config"))
+            .unwrap();
+        let _guard = test_root::scoped(root.clone());
+        let mut app = app_on(&root, "vt");
+        app.mode = Mode::Rename;
+        app.rename_input.set("vt2");
+
+        app.execute_rename();
+
+        assert_eq!(
+            app.status_message.as_ref().map(|m| m.text.as_str()),
+            Some("Can't rename an encrypted session: its vault links name this path")
+        );
+        assert!(root.join("vt").is_dir(), "the session must stay where it is");
+        assert!(!root.join("vt2").exists());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    // .cs/memory, .cs/plans and .cs/private are vault links too, each naming
+    // the session's current path.
+    #[test]
+    fn rename_refuses_a_session_with_any_vault_link() {
+        use crate::session::test_root;
+        for sub in ["memory", "plans", "private"] {
+            let root = std::env::temp_dir()
+                .join(format!("cs-test-rename-{}-{}", sub, std::process::id()));
+            std::fs::create_dir_all(root.join("vt/.cs/local")).unwrap();
+            std::os::unix::fs::symlink(
+                root.join(format!("vt/.cs/vault-mnt/{sub}")),
+                root.join(format!("vt/.cs/{sub}")),
+            )
+            .unwrap();
+            let _guard = test_root::scoped(root.clone());
+            let mut app = app_on(&root, "vt");
+            app.mode = Mode::Rename;
+            app.rename_input.set("vt2");
+
+            app.execute_rename();
+
+            assert_eq!(
+                app.status_message.as_ref().map(|m| m.text.as_str()),
+                Some("Can't rename an encrypted session: its vault links name this path"),
+                "a .cs/{sub} link must refuse"
+            );
+            assert!(root.join("vt").is_dir(), "the session must stay where it is");
+            assert!(!root.join("vt2").exists());
+            std::fs::remove_dir_all(&root).ok();
+        }
+    }
+
     #[test]
     fn a_rescan_finishing_under_a_modal_waits_for_normal_mode() {
         use crate::session::test_root;
@@ -4053,6 +4127,30 @@ mod tests {
             "status should name the locking pid, got: {}",
             status.text
         );
+    }
+
+    // A batch keeps the reason a delete failed: a mounted vault says to
+    // unmount it, and "1 failed" alone does not.
+    #[test]
+    fn batch_delete_names_a_mounted_vault() {
+        use crate::session::test_root;
+        let root = std::env::temp_dir().join(format!("cs-test-batch-vault-{}", std::process::id()));
+        let vault = root.join("vt/.cs/vault-mnt/memory");
+        std::fs::create_dir_all(&vault).unwrap();
+        std::os::unix::fs::symlink(&vault, root.join("vt/.cs/memory")).unwrap();
+        let _guard = test_root::scoped(root.clone());
+        let mut app = app_on(&root, "vt");
+        app.marked_sessions.insert("vt".to_string());
+
+        app.execute_batch_delete();
+
+        let status = app.status_message.as_ref().map(|m| m.text.clone()).unwrap_or_default();
+        assert!(
+            status.contains("vt has encrypted storage mounted inside it") && status.contains("unmount it"),
+            "status should carry the refusal, got: {status}"
+        );
+        assert!(vault.is_dir(), "the vault survives");
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

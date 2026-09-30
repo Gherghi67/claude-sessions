@@ -1971,6 +1971,51 @@ test_session_end_generates_index_with_many_changes() {
     index_teardown
 }
 
+# An encrypted session keeps its cs files behind .cs/private, a link into its
+# vault. Every hook that writes the session log writes it there, and none
+# writes a plaintext copy into .cs/local.
+test_lifecycle_hooks_log_into_the_private_dir() {
+    index_setup
+    rm "$CLAUDE_SESSION_META_DIR/local/session.log"
+    mkdir -p "$TEST_TMPDIR/vault/private"
+    ln -s "$TEST_TMPDIR/vault/private" "$CLAUDE_SESSION_META_DIR/private"
+
+    echo '{"session_id":"test-123","source":"startup","cwd":"'"$CLAUDE_SESSION_DIR"'","hook_event_name":"SessionStart"}' \
+        | bash "$HOOKS_DIR/session-start.sh" >/dev/null 2>&1
+    echo '{"tool_name":"Bash","error":"Command failed with exit code 1"}' \
+        | bash "$HOOKS_DIR/tool-failure-logger.sh"
+    echo '{"session_id":"test-123","reason":"clear"}' | bash "$HOOKS_DIR/session-end.sh" >/dev/null 2>&1
+
+    local log="$TEST_TMPDIR/vault/private/session.log"
+    assert_file_contains "$log" "Session started (source: startup, ID: test-123)" \
+        "session-start should log into the private dir" || { index_teardown; return 1; }
+    assert_file_contains "$log" "Tool failure: Bash" \
+        "tool-failure-logger should log into the private dir" || { index_teardown; return 1; }
+    assert_file_contains "$log" "Session ended (source: clear, ID: test-123)" \
+        "session-end should log into the private dir" || { index_teardown; return 1; }
+    assert_file_not_exists "$CLAUDE_SESSION_META_DIR/local/session.log" \
+        "nothing may be logged in plaintext" || { index_teardown; return 1; }
+    index_teardown
+}
+
+# A locked vault leaves the link dangling: the hooks still run, and write no
+# log anywhere.
+test_lifecycle_hooks_log_nothing_while_locked() {
+    index_setup
+    rm "$CLAUDE_SESSION_META_DIR/local/session.log"
+    ln -s "$TEST_TMPDIR/unmounted/private" "$CLAUDE_SESSION_META_DIR/private"
+
+    echo '{"tool_name":"Bash","error":"Command failed with exit code 1"}' \
+        | bash "$HOOKS_DIR/tool-failure-logger.sh"
+    echo '{"session_id":"test-123","reason":"clear"}' | bash "$HOOKS_DIR/session-end.sh" >/dev/null 2>&1
+
+    assert_file_not_exists "$CLAUDE_SESSION_META_DIR/local/session.log" \
+        "nothing may be logged in plaintext" || { index_teardown; return 1; }
+    assert_not_exists "$TEST_TMPDIR/unmounted" "nothing may be created where the vault mounts" \
+        || { index_teardown; return 1; }
+    index_teardown
+}
+
 # SessionEnd carries why the conversation ended in `reason` (clear, resume,
 # logout, prompt_input_exit, other). The log and the timeline record that
 # value, so a /clear is told apart from quitting.
@@ -2081,6 +2126,8 @@ run_test test_subagent_context_points_to_secret_store
 
 # Tool failure logger
 run_test test_failure_logged_to_session_log
+run_test test_lifecycle_hooks_log_into_the_private_dir
+run_test test_lifecycle_hooks_log_nothing_while_locked
 run_test test_failure_log_has_timestamp
 run_test test_failure_truncates_long_errors
 run_test test_failure_handles_huge_multiline_error
@@ -2515,8 +2562,41 @@ test_session_start_does_not_arm_the_watcher_for_a_teammate() {
         "a teammate arms no watcher: one arrival must not wake every claude on the session" || return 1
 }
 
+
+# An encrypted session's mailbox is in its vault: the watch goes there, and a
+# locked vault gets no watch rather than a plaintext maildir beside it.
+test_session_start_arms_the_vault_maildir() {
+    session_start_setup
+    mkdir -p "$TEST_TMPDIR/vault/private"
+    ln -s "$TEST_TMPDIR/vault/private" "$CLAUDE_SESSION_META_DIR/private"
+    local output wp rc=0
+    output=$(echo '{"session_id":"s","source":"startup","cwd":"'"$CLAUDE_SESSION_DIR"'","hook_event_name":"SessionStart"}' \
+        | bash "$HOOKS_DIR/session-start.sh" 2>/dev/null)
+    wp=$(echo "$output" | jq -r '.hookSpecificOutput.watchPaths[0] // ""')
+    assert_eq "$CLAUDE_SESSION_META_DIR/private/mail/new" "$wp" "the watch is on the vault's maildir" || rc=1
+    assert_dir "$TEST_TMPDIR/vault/private/mail/new" "created before it is armed" || rc=1
+    assert_not_exists "$CLAUDE_SESSION_META_DIR/local/mail" "no plaintext maildir" || rc=1
+    session_start_teardown
+    return $rc
+}
+
+test_session_start_arms_no_watch_on_a_locked_vault() {
+    session_start_setup
+    ln -s "$TEST_TMPDIR/unmounted/private" "$CLAUDE_SESSION_META_DIR/private"
+    local output wp rc=0
+    output=$(echo '{"session_id":"s","source":"startup","cwd":"'"$CLAUDE_SESSION_DIR"'","hook_event_name":"SessionStart"}' \
+        | bash "$HOOKS_DIR/session-start.sh" 2>/dev/null)
+    wp=$(echo "$output" | jq -r '.hookSpecificOutput.watchPaths // "none"')
+    assert_eq "none" "$wp" "a locked vault arms no watch" || rc=1
+    assert_not_exists "$CLAUDE_SESSION_META_DIR/local/mail" "no plaintext maildir" || rc=1
+    session_start_teardown
+    return $rc
+}
+
 run_test test_session_start_arms_the_mail_watcher
 run_test test_session_start_does_not_arm_the_watcher_for_a_teammate
+run_test test_session_start_arms_the_vault_maildir
+run_test test_session_start_arms_no_watch_on_a_locked_vault
 run_test test_session_start_warns_that_memory_is_shared
 # The shared library ships beside the hooks; a partial deployment (an older
 # ~/.claude/hooks/cs/ under a newer session-start.sh) has the hook without it.
