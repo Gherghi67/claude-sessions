@@ -125,7 +125,7 @@ there.
 | `.cs/memory` | Auto-memory and the narratives. |
 | `.cs/plans` | Plans and specs. |
 | `.cs/claude-config` | Claude Code's config dir for this session. cs launches Claude Code with `CLAUDE_CONFIG_DIR` pointing here, so transcripts, prompt history, `.claude.json` and its backups never reach `~/.claude`. `CLAUDE_SECURESTORAGE_CONFIG_DIR` keeps the shell's login (empty selects the default keychain entry). On every launch cs links the shell's `settings.json`, `settings.local.json`, `CLAUDE.md`, `AGENTS.md`, `rules/`, `skills/`, `commands/`, `agents/`, `hooks/`, `plugins/`, `output-styles/`, `keybindings.json` and `vale/` into it, skipping any name the session already has. A setting you change inside the session (`/model`, `/config`) writes through the link into the shell's `settings.json`. The first launch seeds `.claude.json` from the shell's copy with `projects` emptied, since each project entry keeps that project's last prompt. cs reads the session's transcripts from `projects/` here, and the picker does not rename such a session, because its links and transcripts name its path. |
-| `.cs/private` | cs's own content files, which a plain session keeps in `.cs/local/`: `session.log`, `scope-prompt.trace`, `memory-index.snapshot`, `mail/`, the queue files (`queue/`, `queue.tmp/`, `queue.state`, `queue.done`, `queue.declined`), `notifications.jsonl`, `notifications.seen`, `failures`, `rewrite.trace`, the rotation handoffs (`handoffs/`) and `pending-handoff`. Numbers the status line writes (`context-pct`, `limits`) and ids (`state`, `spawned-by`, `rotate-nudged`, `ctx-warned`) stay in `.cs/local/`. |
+| `.cs/private` | cs's own content files, which a plain session keeps in `.cs/local/`: `session.log`, `scope-prompt.trace`, `memory-index.snapshot`, `mail/`, the queue files (`queue/`, `queue.tmp/`, `queue.state`, `queue.done`, `queue.declined`), `notifications.jsonl`, `notifications.seen`, `failures`, `rewrite.trace`, the rotation handoffs (`handoffs/`), `pending-handoff`, checkpoints (`checkpoints/`) and, when `.cs/memory` is a link, the rotated narrative sections (`narrative-archive/`). Numbers the status line writes (`context-pct`, `limits`) and ids (`state`, `spawned-by`, `rotate-nudged`, `ctx-warned`) stay in `.cs/local/`. |
 
 Mount the volume from `.cs/local/pre-open` (see the table above). While a link
 points at a missing directory, the vault is locked, and cs writes nothing in
@@ -135,6 +135,10 @@ its place:
 - The hooks log nothing, deliver no mail wake and drain no queue.
 - `cs -msg` to the session refuses the send. `cs -queue` in it refuses too.
 - cs offers and consumes no rotation handoff.
+- Opening a feature worktree (`base@task`) of the session refuses the same way.
+
+A regular file at any of the four names also refuses the open. cs cannot tell
+it from a locked vault, so the error names it.
 
 Opening an encrypted session also refuses when a plaintext copy of a vault
 file is still outside it: any of the `.cs/private` files above left in
@@ -154,11 +158,34 @@ With `.cs/private` present, the session protocol changes too:
 - The launch prompt after answering `r` does not name the handoff file, and
   the `rotated` event in `timeline.jsonl` records the rotation without the
   file name. A handoff's name is its topic, and both of those are plaintext.
+- `/checkpoint` saves into `.cs/private/checkpoints/`, and its `timeline.jsonl`
+  event carries no label or file name.
+
+A narrative behind a `.cs/memory` link rotates into the vault. `cs -narrative
+rotate` writes through a `.cs/narrative-archive` link when there is one, and
+into `.cs/private/narrative-archive/` otherwise. With neither, it refuses
+rather than write plaintext. `/checkpoint` refuses in that case too, since a
+checkpoint copies the narrative.
+
+The mounted volume stays out of git and out of the session's removal:
+
+- The autosave snapshot skips `.cs/vault-mnt` and every link target inside the
+  session directory. New `.gitignore` files ignore `.cs/vault-mnt/`.
+- `cs -rm` and the picker's delete refuse while a link resolves inside the
+  session directory, even with `--force`, because removing it would delete
+  what the vault holds. Unmount first.
+
+Link all four names. With only some of them, the rest leaks: `.cs/private`
+without `.cs/claude-config`, for example, keeps the handoffs in the vault, but
+Claude Code's transcript in `~/.claude/projects` records the start-of-session
+context that names the handoff file and quotes the conversation.
 
 Not covered: copies that backups and filesystem snapshots already made,
 third-party hooks that write under `~/.claude` directly, `.cs/summary.md`
-unless you link it into the vault yourself, and feature worktrees (`base@task`)
-of an encrypted session.
+unless you link it into the vault yourself, the brief `cs -spawn --brief`
+delivers (`.cs/brief.md`, staged in the sessions root's `.spawn/`), and
+feature worktrees (`base@task`) of an encrypted session beyond the locked-vault
+refusal.
 
 ## Merge policy
 
