@@ -94,6 +94,24 @@ test_worktree_open_refuses_a_locked_vault() {
     assert_not_exists "$TEST_TMPDIR/launched" "claude never starts" || return 1
 }
 
+# Creating a worktree checks out the base's committed vault links; with the
+# vault locked they dangle, and setup would mkdir through them halfway
+# through registering the worktree. Refuse before git sees anything.
+test_worktree_create_refuses_a_locked_base_vault() {
+    local base_dir out rc=0
+    base_dir=$(create_test_session_with_git "myproj")
+    rm -rf "$base_dir/.cs/memory"
+    ln -s "$TEST_TMPDIR/unmounted/memory" "$base_dir/.cs/memory"
+    git -C "$base_dir" add -A .cs/memory
+    git -C "$base_dir" -c user.email=t@example.com -c user.name=t commit -qm "vault link"
+    out=$("$CS_BIN" "myproj@fix-auth" < /dev/null 2>&1) || rc=$?
+    assert_eq "1" "$rc" "the create refuses" || return 1
+    assert_eq "Error: myproj: .cs/memory points at $TEST_TMPDIR/unmounted/memory, which is missing (encrypted storage not mounted?). Mount it, then reopen." \
+        "$out" "names the base's dangling link" || return 1
+    assert_not_exists "$CS_SESSIONS_ROOT/myproj@fix-auth" "no worktree on refusal" || return 1
+    assert_eq "" "$(git -C "$base_dir" branch --list cs/fix-auth)" "no task branch on refusal" || return 1
+}
+
 test_worktree_create_refuses_dirty_base() {
     local base_dir
     base_dir=$(create_test_session_with_git "myproj")
@@ -714,6 +732,7 @@ run_test test_plain_names_still_work
 run_test test_worktree_create_tracked_mode
 run_test test_worktree_create_refuses_dirty_base
 run_test test_worktree_open_refuses_a_locked_vault
+run_test test_worktree_create_refuses_a_locked_base_vault
 run_test test_worktree_create_reuses_existing_branch
 run_test test_worktree_create_ignored_mode_bootstraps_cs
 run_test test_ignored_mode_worktree_starts_with_nothing_untracked

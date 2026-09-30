@@ -396,6 +396,9 @@ main() {
         fi
         if [ ! -d "$session_dir" ]; then
             is_new="true"
+            # The checkout carries the base's committed vault links; a locked
+            # vault would leave setup writing through dangling ones.
+            _refuse_unmounted_meta "$wt_base" "$base_dir"
             confirm_clean_worktree_base "$base_dir" "$wt_base"
             session_dir=$(create_worktree_session "$base_dir" "$wt_base" "$wt_task")
         else
