@@ -59,6 +59,7 @@ No git repo required. No project structure needed. Just a name for what you're w
 - **Health checks** - `cs -doctor` reports status of Keychain backend, hook registration, shadow-ref freshness, auto-memory writability, status line registration, Claude Code settings audit (hooks/MCPs/permissions/env vars counts), cumulative token usage for the current project, whether the cs and cs-update mods ran, and an authority section listing every hook that injects into the model's context together with the switch that turns each one off
 - **Usage attribution** - `cs -usage` shows which sessions are consuming the 5-hour and weekly rate-limit windows: per-session input/output token sums (deduplicated by API request, cache-read excluded), anchored at the true reset boundaries when the cs status line is active. `cs -usage <name>` breaks one session down per conversation with a lifetime column. Both views fold in every subagent and workflow-agent transcript beneath a conversation, however deep Claude Code nests them, while the model column stays the conversation's own. A `READS>350L` column counts Read tool results over 350 lines as `untargeted/all ~tokens`: a read is targeted when the model's own Read call carried an offset or a limit, so a bare read the harness capped at its line limit still counts as untargeted, and the token figure is the untargeted characters at four per token, the share a size gate could have intercepted. Subagent transcripts keep the file text in the tool result itself rather than in a file record; the column counts both shapes. Reads made through Bash (`cat`, `head`) carry no file shape in the transcript and are not counted.
 - **Session tags** - `cs -tag add api` tags the current session in its README frontmatter (`tags: [api]` — the same field Obsidian indexes); `cs -list --tag api` filters the listing, and the picker filters live with `#api` in the search query (combining with fuzzy name search). Tags show in the preview card. The `encrypted` tag marks a session that keeps its notes in an encrypted volume (`.cs/memory` linked into the mount): the picker draws a lock beside its name and a `vault` line in the preview reading `locked` or `unlocked`, from whether `.cs/memory` resolves, and the status line draws the same lock after the session name. The lock is a Nerd Font glyph, drawn once this machine has confirmed its font (the status line's `cs -statusline caps` answer); until then both show `enc`.
+- **Encrypted sessions** - A session can keep everything private on an encrypted volume by linking four names under `.cs/` into its mountpoint: `memory`, `plans`, `claude-config` (Claude Code's config dir for the session, so transcripts and prompt history never reach `~/.claude`) and `private` (cs's own log, mail, queue, traces and rotation handoffs). While the volume is not mounted, cs refuses to open the session and writes nothing in plaintext in its place. See [docs/session-layout.md](docs/session-layout.md#encrypted-sessions).
 - **Session archive** - `cs -archive <name>` drops a tracked `.cs/archived` marker that hides a finished session from the picker, `cs -list`, and `cs -search` (the marker syncs with the session, so archiving on one machine archives everywhere). `cs -list --archived` lists only archived sessions, `cs -search <q> --include-archived` searches them, and the picker toggles visibility with `A` (archived rows render dimmed) and archives or unarchives the selected session with `a`. Opening an archived session unarchives it.
 
 ### Unattended and multi-agent work
@@ -246,7 +247,7 @@ This converts the current directory into a cs session in place:
 │   ├── plans/              # Claude Code plans
 │   ├── timeline.jsonl      # Session event log (starts, ends, checkpoints)
 │   ├── checkpoints/        # Labelled narrative snapshots (/checkpoint)
-│   ├── handoffs/           # Conversation rotation handoffs (rotate skill)
+│   ├── handoffs/           # Conversation rotation handoffs (rotate skill); .cs/private/handoffs in an encrypted session
 │   ├── brief.md            # Brief from cs -spawn --brief / the feature skill, when spawned with one
 │   └── local/              # Machine-local state + session.log audit trail (gitignored)
 ├── .claude/
@@ -392,7 +393,8 @@ days by its `created:` date, unless it is among the 10 newest in the store. That
 pass is part of the skill's instructions rather than something cs runs — no cs
 command deletes a handoff — so the directory only shrinks when you rotate. Git
 history keeps every file the pass removes. The conversation keeps running;
-nothing has ended yet.
+nothing has ended yet. An [encrypted session](docs/session-layout.md#encrypted-sessions)
+keeps the handoff and the marker in `.cs/private/` and commits neither.
 
 Because the handoff is committed and becomes the next conversation's opening
 prompt, the skill redacts credentials, identifying data and sensitive
