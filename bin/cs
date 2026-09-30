@@ -3238,6 +3238,14 @@ _refuse_plaintext_beside_private() {  # session_name, session_dir
     if [ -e "$meta/handoffs" ]; then
         error "$1: .cs/private keeps this session's rotation handoffs in its vault, but .cs/handoffs still holds them in plaintext. Move it to .cs/private/handoffs or delete it, then reopen."
     fi
+    if [ -e "$meta/checkpoints" ]; then
+        error "$1: .cs/private keeps this session's checkpoints in its vault, but .cs/checkpoints is still plaintext. Move it to .cs/private/checkpoints or delete it, then reopen."
+    fi
+    # A narrative in the vault rotates into it; a .cs/narrative-archive link
+    # into the vault is where rotation writes, not a leftover.
+    if [ -L "$meta/memory" ] && [ -e "$meta/narrative-archive" ] && [ ! -L "$meta/narrative-archive" ]; then
+        error "$1: this session's narrative lives in its vault, but .cs/narrative-archive is still plaintext. Move it to .cs/private/narrative-archive or delete it, then reopen."
+    fi
 }
 
 # Create session directory structure

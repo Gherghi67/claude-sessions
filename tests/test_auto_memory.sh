@@ -870,6 +870,33 @@ test_a_file_at_a_vault_link_refuses_open() {
     assert_not_exists "$TEST_TMPDIR/launched" "claude never starts" || return 1
 }
 
+# Checkpoints and a vault narrative's rotated sections belong behind the
+# vault too; copies made before the session was encrypted are named. A
+# .cs/narrative-archive that is itself a link into the vault is fine.
+test_plaintext_checkpoints_and_archive_beside_private_refuse_open() {
+    _make_vaulted_session vt
+    _make_vaulted_private vt
+    local meta="$CS_SESSIONS_ROOT/vt/.cs" out rc=0
+    mkdir -p "$meta/checkpoints"
+    out=$("$CS_BIN" vt <<< "" 2>&1) || rc=$?
+    assert_eq "1" "$rc" "cs should exit 1 on checkpoints" || return 1
+    assert_eq "Error: vt: .cs/private keeps this session's checkpoints in its vault, but .cs/checkpoints is still plaintext. Move it to .cs/private/checkpoints or delete it, then reopen." \
+        "$out" "cs should name .cs/checkpoints" || return 1
+    rm -rf "$meta/checkpoints"
+    mkdir -p "$meta/narrative-archive/alice"
+    rc=0
+    out=$("$CS_BIN" vt <<< "" 2>&1) || rc=$?
+    assert_eq "1" "$rc" "cs should exit 1 on narrative-archive" || return 1
+    assert_eq "Error: vt: this session's narrative lives in its vault, but .cs/narrative-archive is still plaintext. Move it to .cs/private/narrative-archive or delete it, then reopen." \
+        "$out" "cs should name .cs/narrative-archive" || return 1
+    rm -rf "$meta/narrative-archive"
+    mkdir -p "$meta/vault-mnt/narrative-archive"
+    ln -s "$meta/vault-mnt/narrative-archive" "$meta/narrative-archive"
+    rc=0
+    out=$("$CS_BIN" vt <<< "" 2>&1) || rc=$?
+    assert_output_not_contains "$out" "narrative-archive is still plaintext" "a link into the vault is not a leftover" || return 1
+}
+
 # After the first launch the session's .claude.json is Claude Code's to write.
 test_claude_config_seeds_claude_json_once() {
     printf '{"from":"home"}\n' > "$HOME/.claude.json"
@@ -967,5 +994,6 @@ run_test test_plaintext_left_beside_private_refuses_open
 run_test test_plaintext_mailbox_left_beside_private_refuses_open
 run_test test_plaintext_queue_files_left_beside_private_refuse_open
 run_test test_a_file_at_a_vault_link_refuses_open
+run_test test_plaintext_checkpoints_and_archive_beside_private_refuse_open
 
 report_results
