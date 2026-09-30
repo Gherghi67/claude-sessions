@@ -82,7 +82,7 @@ _lock_collision_menu() {
     case "$action" in
         force) return 0 ;;                              # force a second launch here
         open:*) exec "$0" "${action#open:}" ;;          # resume an existing feature
-        tui) exec "$0" -tui ;;                          # pick a different session
+        tui) _vault_leave; exec "$0" -tui ;;            # pick a different session
         new)
             printf '    %bFeature name%b  %b›%b ' "$WHITE" "$NC" "$GOLD" "$NC"
             read -r feature || feature=""

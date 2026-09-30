@@ -472,6 +472,25 @@ test_open_that_stops_leaves_a_vault_another_holder_keeps() {
     assert_eq "" "$(cat "$FAKE_HDIUTIL_LOG")" "joined the holder's mount, never detached it" || return 1
 }
 
+# The collision menu's session manager replaces this cs with the picker: that
+# process no longer opens the vault, so it must not stay listed as a holder.
+test_open_handing_off_to_the_session_manager_leaves_the_holders() {
+    _encrypted_session enc || return 1
+    : > "$TEST_TMPDIR/mounted"
+    cat > "$TEST_TMPDIR/stub/cs-tui" <<EOF
+#!/bin/sh
+grep -qx "\$PPID" "$CS_SESSIONS_ROOT/enc/.cs/local/vault-holders" 2>/dev/null && echo listed > "$TEST_TMPDIR/tui-saw" || echo absent > "$TEST_TMPDIR/tui-saw"
+EOF
+    chmod +x "$TEST_TMPDIR/stub/cs-tui"
+    sleep 300 &
+    local live=$! out rc=0
+    echo "$live" > "$CS_SESSIONS_ROOT/enc/.cs/session.lock"
+    out=$(_open enc "3" 2>&1) || rc=$?
+    kill "$live" 2>/dev/null; wait "$live" 2>/dev/null
+    assert_output_contains "$out" "3  session manager" "menu row 3 is the session manager" || return 1
+    assert_eq "absent" "$(cat "$TEST_TMPDIR/tui-saw" 2>/dev/null)" "the picker's process is not a vault holder" || return 1
+}
+
 # A claude that copies the hdiutil log as it stood while it ran.
 _claude_snapshot() {
     local c="$TEST_TMPDIR/claude-snap"
@@ -641,6 +660,7 @@ run_test test_open_that_stops_detaches_the_vault_it_mounted
 run_test test_open_that_stops_leaves_a_running_session_vault_mounted
 run_test test_open_cancelled_at_a_prompt_detaches_the_vault_it_mounted
 run_test test_open_that_stops_leaves_a_vault_another_holder_keeps
+run_test test_open_handing_off_to_the_session_manager_leaves_the_holders
 run_test test_open_resuming_keeps_the_vault_while_claude_runs
 run_test test_open_fresh_leaves_the_detach_to_the_waiter
 run_test test_session_end_detaches_after_the_lead_exits

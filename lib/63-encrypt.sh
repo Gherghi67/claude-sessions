@@ -159,14 +159,23 @@ _arm_vault_detach() {  # session_dir
     trap _detach_opened_vault EXIT
 }
 
-_detach_opened_vault() {
-    local meta="$CS_OPENED_VAULT_META" mnt lock rest
+# A cs that execs something other than claude stops holding the vault: its
+# pid lives on in a process that never opens it. Other lines stay as they are.
+_vault_leave() {
+    local meta="$CS_OPENED_VAULT_META" tmp
     [ -n "$meta" ] || return 0
-    if [ -f "$meta/local/vault-holders" ]; then
-        rest=$(grep -vx "$$" "$meta/local/vault-holders" || true)
-        printf '%s\n' "$rest" | grep . > "$meta/local/vault-holders.tmp" || true
-        mv -f "$meta/local/vault-holders.tmp" "$meta/local/vault-holders"
-    fi
+    CS_OPENED_VAULT_META=""
+    [ -f "$meta/local/vault-holders" ] || return 0
+    tmp="$meta/local/vault-holders.$$"
+    grep -vx "$$" "$meta/local/vault-holders" > "$tmp" || true
+    mv -f "$tmp" "$meta/local/vault-holders"
+}
+
+# The holder list is read, never rewritten, here: dead pids and this one are
+# skipped, so a concurrent open's line is never lost.
+_detach_opened_vault() {
+    local meta="$CS_OPENED_VAULT_META" mnt lock
+    [ -n "$meta" ] || return 0
     _vault_live_holder_besides "$meta" "$$" && return 0
     lock=$(read_lock_pid "$meta")
     [ -n "$lock" ] && [ "$lock" != "$$" ] && kill -0 "$lock" 2>/dev/null && return 0
