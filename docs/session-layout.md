@@ -155,6 +155,15 @@ password. A second conversation opened while the session runs joins the
 mounted volume without asking. An open that stops before Claude Code starts
 (a refusal, or a cancelled prompt) unmounts the volume it mounted.
 
+Every open that mounts or joins the volume adds its process id to
+`.cs/local/vault-holders`. A process that replaces itself with Claude Code
+keeps its id, so the entry stays valid while that conversation runs. cs
+unmounts the volume only when no listed process and no session lock is
+still alive, so a second conversation keeps it mounted after the first one
+ends. An open that finds the volume mounted with nothing alive behind it
+stops the old SessionEnd unmount first, then unmounts the volume and asks
+for the password.
+
 `cs -encrypt` refuses, before it writes anything, when:
 
 - the machine is not a Mac, or stdin is not a terminal
