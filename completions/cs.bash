@@ -167,7 +167,10 @@ _cs_completions() {
     # first.
     if $after_remove; then
         COMPREPLY=()
-        _cs_add_session_matches "$cur"
+        case "$cur" in
+            -*) COMPREPLY=($(compgen -W "--force -f --delete-files" -- "$cur")) ;;
+            *) _cs_add_session_matches "$cur" ;;
+        esac
         return
     fi
 
