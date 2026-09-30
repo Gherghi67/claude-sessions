@@ -2551,6 +2551,7 @@ mod tests {
                 git_repo: Some("hex/alpha".into()),
                 tags: Vec::new(),
                 archived: false,
+                vault: None,
             },
             Session {
                 name: "beta".into(),
@@ -2566,6 +2567,7 @@ mod tests {
                 git_repo: Some("hex/beta".into()),
                 tags: Vec::new(),
                 archived: false,
+                vault: None,
             },
             Session {
                 name: "gamma".into(),
@@ -2581,6 +2583,7 @@ mod tests {
                 git_repo: None,
                 tags: Vec::new(),
                 archived: false,
+                vault: None,
             },
         ]
     }
@@ -2873,6 +2876,7 @@ mod tests {
             git_repo: None,
             tags: tags.iter().map(|t| t.to_string()).collect(),
             archived: false,
+            vault: None,
         }
     }
 
@@ -2891,6 +2895,7 @@ mod tests {
             git_repo: None,
             tags: Vec::new(),
             archived: true,
+            vault: None,
         }
     }
 
@@ -3073,6 +3078,7 @@ mod tests {
             git_repo: None,
             tags: Vec::new(),
             archived: false,
+            vault: None,
         };
         // Insertion order deliberately differs from recency order.
         let app = App::new(vec![
@@ -4879,6 +4885,7 @@ mod tests {
             git_repo: None,
             tags: Vec::new(),
             archived: false,
+            vault: None,
         };
         vec![
             session("today-a", 0),

@@ -2175,6 +2175,7 @@ mod tests {
             git_repo: None,
             tags: Vec::new(),
             archived: false,
+            vault: None,
         }]
     }
 
@@ -2197,6 +2198,7 @@ mod tests {
                 git_repo: None,
                 tags: Vec::new(),
                 archived: false,
+                vault: None,
             },
             Session {
                 name: "recent".into(),
@@ -2212,6 +2214,7 @@ mod tests {
                 git_repo: None,
                 tags: Vec::new(),
                 archived: false,
+                vault: None,
             },
         ]
     }
@@ -3650,6 +3653,7 @@ mod tests {
                 git_repo: None,
                 tags: Vec::new(),
                 archived: false,
+                vault: None,
             });
         }
         let mut app = App::new(sessions);
@@ -4202,6 +4206,7 @@ mod tests {
             git_repo: None,
             tags: Vec::new(),
             archived: true,
+            vault: None,
         });
         v
     }

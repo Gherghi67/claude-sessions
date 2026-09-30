@@ -58,6 +58,22 @@ pub struct Session {
     pub git_repo: Option<String>,
     pub tags: Vec<String>,
     pub archived: bool,
+    /// Present only for a session tagged `encrypted`: whether its vault is
+    /// mounted right now.
+    pub vault: Option<Vault>,
+}
+
+/// The tag a session carries in its README frontmatter to declare that it
+/// keeps its notes in an encrypted volume.
+pub const ENCRYPTED_TAG: &str = "encrypted";
+
+/// Whether an encrypted session's volume is mounted. Read from `.cs/memory`,
+/// which such a session links into the volume: a link that resolves means
+/// mounted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Vault {
+    Locked,
+    Unlocked,
 }
 
 /// A pending cs update: the newer version and its release-note summaries as
@@ -632,6 +648,13 @@ fn read_session(path: &Path, secret_counts: &HashMap<String, u32>) -> Session {
         .map(|s| parse_frontmatter_tags(&s))
         .unwrap_or_default();
     let archived = meta_dir.join("archived").is_file();
+    let vault = tags.iter().any(|t| t == ENCRYPTED_TAG).then(|| {
+        if meta_dir.join("memory").exists() {
+            Vault::Unlocked
+        } else {
+            Vault::Locked
+        }
+    });
 
     Session {
         name,
@@ -647,6 +670,7 @@ fn read_session(path: &Path, secret_counts: &HashMap<String, u32>) -> Session {
         git_repo,
         tags,
         archived,
+        vault,
     }
 }
 
@@ -1181,6 +1205,50 @@ mod tests {
             .output()
             .expect("git runs");
         assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    }
+
+    fn encrypted_session(root: &Path, name: &str, tags: &str) -> PathBuf {
+        let dir = root.join(name);
+        fs::create_dir_all(dir.join(".cs/local")).unwrap();
+        fs::write(dir.join(".cs/README.md"), format!("---\ntags: [{tags}]\n---\n# {name}\n")).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_session_tagged_encrypted_reads_locked_while_its_memory_link_dangles() {
+        let root = std::env::temp_dir().join(format!("cs-vault-locked-{}", std::process::id()));
+        let dir = encrypted_session(&root, "rel", "home, encrypted");
+        std::os::unix::fs::symlink(dir.join(".cs/vault-mnt/memory"), dir.join(".cs/memory")).unwrap();
+
+        let session = read_session(&dir, &HashMap::new());
+
+        assert_eq!(session.vault, Some(Vault::Locked));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_session_tagged_encrypted_reads_unlocked_once_its_memory_resolves() {
+        let root = std::env::temp_dir().join(format!("cs-vault-open-{}", std::process::id()));
+        let dir = encrypted_session(&root, "rel", "encrypted");
+        fs::create_dir_all(dir.join(".cs/vault-mnt/memory")).unwrap();
+        std::os::unix::fs::symlink(dir.join(".cs/vault-mnt/memory"), dir.join(".cs/memory")).unwrap();
+
+        let session = read_session(&dir, &HashMap::new());
+
+        assert_eq!(session.vault, Some(Vault::Unlocked));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_untagged_session_has_no_vault_even_with_a_dangling_memory_link() {
+        let root = std::env::temp_dir().join(format!("cs-vault-none-{}", std::process::id()));
+        let dir = encrypted_session(&root, "synced", "home");
+        std::os::unix::fs::symlink(dir.join("gone"), dir.join(".cs/memory")).unwrap();
+
+        let session = read_session(&dir, &HashMap::new());
+
+        assert_eq!(session.vault, None);
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
