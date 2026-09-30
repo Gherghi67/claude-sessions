@@ -3174,7 +3174,9 @@ _refuse_unmounted_meta() {  # session_name, session_dir
 _refuse_plaintext_beside_private() {  # session_name, session_dir
     local meta="$2/.cs" name
     [ -e "$meta/private" ] || return 0
-    for name in session.log scope-prompt.trace memory-index.snapshot mail; do
+    for name in session.log scope-prompt.trace memory-index.snapshot mail \
+                queue queue.tmp queue.state queue.done queue.declined queue.migrating \
+                notifications.jsonl notifications.seen failures rewrite.trace; do
         [ -e "$meta/local/$name" ] || continue
         error "$1: .cs/private keeps this session's cs files in its vault, but .cs/local still holds $name in plaintext. Move it into .cs/private or delete it, then reopen."
     done
@@ -5034,7 +5036,12 @@ run_queue() {
     if [ -z "${CLAUDE_SESSION_META_DIR:-}" ]; then
         error "cs -queue must be run inside a cs session, or as: cs <session> -queue ..."
     fi
-    local qdir="$CLAUDE_SESSION_META_DIR/local"
+    # The queue sits with the session's other cs files: behind .cs/private in
+    # an encrypted session, where a locked vault refuses rather than queue a
+    # task beside it in plaintext.
+    local qdir
+    qdir=$(cs_private_dir "$CLAUDE_SESSION_META_DIR") \
+        || error "this session keeps its queue in encrypted storage that is not mounted (.cs/private points at $(readlink "$CLAUDE_SESSION_META_DIR/private")). Mount it, then retry."
     _queue_convert_legacy "$qdir"
     local sub="${1:-list}"
     case "$sub" in

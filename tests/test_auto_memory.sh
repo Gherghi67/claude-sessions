@@ -838,6 +838,24 @@ test_plaintext_mailbox_left_beside_private_refuses_open() {
     assert_file_not_exists "$TEST_TMPDIR/launched" "claude must not launch" || return 1
 }
 
+# The queue, its inbox and the traces are cs files too: each one left in
+# .cs/local is named the same way.
+test_plaintext_queue_files_left_beside_private_refuse_open() {
+    _make_vaulted_session vt
+    _make_vaulted_private vt
+    local meta="$CS_SESSIONS_ROOT/vt/.cs" name out rc
+    for name in queue queue.tmp queue.state queue.done queue.declined queue.migrating \
+                notifications.jsonl notifications.seen failures rewrite.trace; do
+        case "$name" in queue|queue.tmp) mkdir -p "$meta/local/$name" ;; *) printf 'x\n' > "$meta/local/$name" ;; esac
+        rc=0
+        out=$("$CS_BIN" vt <<< "" 2>&1) || rc=$?
+        assert_eq "1" "$rc" "cs should exit 1 on $name" || return 1
+        assert_eq "Error: vt: .cs/private keeps this session's cs files in its vault, but .cs/local still holds $name in plaintext. Move it into .cs/private or delete it, then reopen." \
+            "$out" "cs should name $name" || return 1
+        rm -rf "${meta:?}/local/$name"
+    done
+}
+
 # After the first launch the session's .claude.json is Claude Code's to write.
 test_claude_config_seeds_claude_json_once() {
     printf '{"from":"home"}\n' > "$HOME/.claude.json"
@@ -933,5 +951,6 @@ run_test test_private_link_session_opens
 run_test test_unmounted_private_refuses_open
 run_test test_plaintext_left_beside_private_refuses_open
 run_test test_plaintext_mailbox_left_beside_private_refuses_open
+run_test test_plaintext_queue_files_left_beside_private_refuse_open
 
 report_results

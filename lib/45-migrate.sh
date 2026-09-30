@@ -105,7 +105,9 @@ _refuse_unmounted_meta() {  # session_name, session_dir
 _refuse_plaintext_beside_private() {  # session_name, session_dir
     local meta="$2/.cs" name
     [ -e "$meta/private" ] || return 0
-    for name in session.log scope-prompt.trace memory-index.snapshot mail; do
+    for name in session.log scope-prompt.trace memory-index.snapshot mail \
+                queue queue.tmp queue.state queue.done queue.declined queue.migrating \
+                notifications.jsonl notifications.seen failures rewrite.trace; do
         [ -e "$meta/local/$name" ] || continue
         error "$1: .cs/private keeps this session's cs files in its vault, but .cs/local still holds $name in plaintext. Move it into .cs/private or delete it, then reopen."
     done

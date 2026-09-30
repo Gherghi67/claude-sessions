@@ -629,4 +629,49 @@ run_test test_queue_list_strips_control_bytes_from_a_pending_task
 run_test test_queue_list_strips_control_bytes_from_the_done_log
 run_test test_queue_log_strips_control_bytes
 
+# An encrypted session keeps its queue with its other cs files, behind
+# .cs/private (a link into its vault); a locked vault refuses rather than
+# write the task beside it in plaintext.
+_make_private_queue() {
+    mkdir -p "$TEST_TMPDIR/vault/private"
+    ln -s "$TEST_TMPDIR/vault/private" "$CLAUDE_SESSION_META_DIR/private"
+}
+
+test_queue_in_an_encrypted_session_lives_in_its_vault() {
+    _make_private_queue
+    "$CS_BIN" -queue add "sealed task" >/dev/null 2>&1 || return 1
+    assert_file_contains "$TEST_TMPDIR/vault/private/queue/$(ls "$TEST_TMPDIR/vault/private/queue")" \
+        "sealed task" "the task is in the vault" || return 1
+    local out; out=$("$CS_BIN" -queue list 2>&1) || return 1
+    assert_output_contains "$out" "sealed task" "list reads the vault" || return 1
+    "$CS_BIN" -queue defer >/dev/null 2>&1 || return 1
+    assert_file_exists "$TEST_TMPDIR/vault/private/queue.declined" "defer records in the vault" || return 1
+    assert_file_exists "$TEST_TMPDIR/vault/private/notifications.jsonl" "the inbox is in the vault" || return 1
+    "$CS_BIN" -queue start >/dev/null 2>&1 || return 1
+    assert_eq "armed" "$(cat "$TEST_TMPDIR/vault/private/queue.state")" "start arms the vault's queue" || return 1
+    local f
+    for f in queue queue.tmp queue.state queue.declined notifications.jsonl; do
+        assert_not_exists "$CLAUDE_SESSION_META_DIR/local/$f" "no plaintext $f" || return 1
+    done
+}
+
+test_queue_in_a_locked_session_is_refused() {
+    ln -s "$TEST_TMPDIR/unmounted/private" "$CLAUDE_SESSION_META_DIR/private"
+    local out rc=0
+    out=$("$CS_BIN" -queue add "sealed task" 2>&1) || rc=$?
+    assert_eq "1" "$rc" "add exits 1" || return 1
+    assert_eq "Error: this session keeps its queue in encrypted storage that is not mounted (.cs/private points at $TEST_TMPDIR/unmounted/private). Mount it, then retry." \
+        "$out" "add names the locked vault" || return 1
+    rc=0
+    out=$(env -u CLAUDE_SESSION_NAME -u CLAUDE_SESSION_DIR -u CLAUDE_SESSION_META_DIR \
+        "$CS_BIN" test-session -queue add "sealed task" 2>&1) || rc=$?
+    assert_eq "1" "$rc" "the session-scoped arm exits 1" || return 1
+    assert_output_contains "$out" "keeps its queue in encrypted storage that is not mounted" \
+        "the session-scoped arm names the locked vault" || return 1
+    assert_not_exists "$CLAUDE_SESSION_META_DIR/local/queue" "no plaintext queue" || return 1
+}
+
+run_test test_queue_in_an_encrypted_session_lives_in_its_vault
+run_test test_queue_in_a_locked_session_is_refused
+
 report_results
