@@ -172,7 +172,16 @@ _cs() {
     # Context: after -remove/-rm. These verbs take several names, so every
     # positional past the flag completes, not just the first.
     if $after_remove; then
-        _cs_sessions
+        if [[ "$words[CURRENT]" == -* ]]; then
+            local -a rm_opts
+            rm_opts=(
+                '--force:Skip the confirm and the live lock'
+                '--delete-files:With --force, also remove files cs did not create'
+            )
+            _describe 'option' rm_opts
+        else
+            _cs_sessions
+        fi
         return
     fi
 

@@ -450,6 +450,9 @@ pub struct App {
     pub row_hit_spans: Vec<(u16, u16, usize)>,
     pub visible_sort_columns: Vec<SortColumn>,
     pub delete_countdown_start: Option<std::time::Instant>,
+    /// Lines the delete confirm shows for files beyond cs's own that the
+    /// removal would take, read when the confirm opens (never in render).
+    pub delete_warnings: Vec<String>,
     /// Fuzzy match indices per session index (for highlighting matched chars in names).
     pub fuzzy_indices: HashMap<usize, Vec<usize>>,
     /// Worktree rows (`base@task`) currently attached under their base in
@@ -612,6 +615,7 @@ impl App {
             row_flashes: HashMap::new(),
             visible_sort_columns: Vec::new(),
             delete_countdown_start: None,
+            delete_warnings: Vec::new(),
             fuzzy_indices: HashMap::new(),
             attached_worktrees: HashSet::new(),
             revealed_secret: None,
@@ -1147,8 +1151,16 @@ impl App {
                 if self.marked_sessions.is_empty() {
                     self.set_status("No sessions marked", StatusLevel::Info);
                 } else {
-                    self.delete_countdown_start = Some(std::time::Instant::now());
-                    self.mode = Mode::ConfirmBatchDelete;
+                    let mut names: Vec<String> = self.marked_sessions.iter().cloned().collect();
+                    names.sort();
+                    match self.unowned_warnings(&names) {
+                        Ok(warnings) => {
+                            self.delete_warnings = warnings;
+                            self.delete_countdown_start = Some(std::time::Instant::now());
+                            self.mode = Mode::ConfirmBatchDelete;
+                        }
+                        Err(e) => self.set_status(e, StatusLevel::Error),
+                    }
                 }
                 Action::None
             }
@@ -1532,9 +1544,15 @@ impl App {
                 // here only promises a deletion that will not happen.
                 if let Some(refusal) = self.locked_selection_refusal() {
                     self.set_status(refusal, StatusLevel::Error);
-                } else if self.selected_session().is_some() {
-                    self.mode = Mode::ConfirmDelete;
-                    self.delete_countdown_start = Some(std::time::Instant::now());
+                } else if let Some(name) = self.selected_session().map(|s| s.name.clone()) {
+                    match self.unowned_warnings(std::slice::from_ref(&name)) {
+                        Ok(warnings) => {
+                            self.delete_warnings = warnings;
+                            self.mode = Mode::ConfirmDelete;
+                            self.delete_countdown_start = Some(std::time::Instant::now());
+                        }
+                        Err(e) => self.set_status(e, StatusLevel::Error),
+                    }
                 }
                 Action::None
             }
@@ -1975,6 +1993,22 @@ impl App {
             "{} is live (pid {}) — close it first",
             session.name, pid
         ))
+    }
+
+    /// The confirm lines for `names`: one per session holding files beyond
+    /// cs's own, prefixed with the session name when more than one is
+    /// being deleted. Errors when a listing fails, so the confirm never
+    /// opens on a list it could not read.
+    fn unowned_warnings(&self, names: &[String]) -> Result<Vec<String>, String> {
+        let mut lines = Vec::new();
+        for name in names {
+            let path = self.sessions_root.join(name);
+            let entries = session::unowned_entries(name, &path)?;
+            if let Some(warning) = entries.warning() {
+                lines.push(if names.len() > 1 { format!("{name}: {warning}") } else { warning });
+            }
+        }
+        Ok(lines)
     }
 
     fn execute_delete(&mut self) {
@@ -3603,6 +3637,48 @@ mod tests {
         assert_eq!(app.sessions.len(), 3, "new session should appear after refresh");
         assert_eq!(app.selected_session_name().as_deref(), Some("bravo"));
 
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    fn app_on(root: &std::path::Path, select: &str) -> App {
+        let mut app = App::new(crate::session::scan_sessions());
+        let pos = app.filtered.iter().position(|&i| app.sessions[i].name == select).unwrap();
+        app.table_state.select(Some(pos));
+        app
+    }
+
+    #[test]
+    fn delete_confirm_names_files_cs_did_not_create() {
+        use crate::session::test_root;
+        let root = std::env::temp_dir().join(format!("cs-test-del-warn-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("rel/.cs/local")).unwrap();
+        std::fs::create_dir_all(root.join("rel/journal.sparsebundle")).unwrap();
+        let _guard = test_root::scoped(root.clone());
+        let mut app = app_on(&root, "rel");
+
+        app.execute_menu_action(MenuAction::Delete);
+
+        assert!(matches!(app.mode, Mode::ConfirmDelete));
+        assert_eq!(
+            app.delete_warnings,
+            vec!["Also deletes files cs did not create: journal.sparsebundle".to_string()]
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn delete_confirm_stays_closed_when_the_file_list_cannot_be_read() {
+        use crate::session::test_root;
+        let root = std::env::temp_dir().join(format!("cs-test-del-broken-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("proj@t/.cs/local")).unwrap();
+        std::fs::write(root.join("proj@t/.git"), "gitdir: /nonexistent/worktree\n").unwrap();
+        let _guard = test_root::scoped(root.clone());
+        let mut app = app_on(&root, "proj@t");
+
+        app.execute_menu_action(MenuAction::Delete);
+
+        assert!(matches!(app.mode, Mode::Normal), "confirm must not open on an unreadable list");
+        assert!(root.join("proj@t").exists());
         std::fs::remove_dir_all(&root).ok();
     }
 

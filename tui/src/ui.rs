@@ -1123,7 +1123,7 @@ fn render_confirm_delete(app: &App, frame: &mut Frame) {
     };
     let hint_color = if remaining > 0 { p.comment } else { p.fg };
 
-    let popup_area = centered_rect(50, 7, frame.area());
+    let popup_area = centered_rect(50, 7 + warning_rows(&app.delete_warnings), frame.area());
     frame.render_widget(Clear, popup_area);
     let block = Block::default()
         .borders(Borders::ALL)
@@ -1131,11 +1131,10 @@ fn render_confirm_delete(app: &App, frame: &mut Frame) {
         .title(" Confirm Delete ")
         .title_style(Style::default().fg(p.red).add_modifier(Modifier::BOLD));
 
-    let lines = vec![
-        Line::from(Span::styled(action_msg, Style::default().fg(p.fg))),
-        Line::from(""),
-        Line::from(Span::styled(hint, Style::default().fg(hint_color))),
-    ];
+    let mut lines = vec![Line::from(Span::styled(action_msg, Style::default().fg(p.fg)))];
+    push_warning_lines(&mut lines, &app.delete_warnings, p.red);
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(hint, Style::default().fg(hint_color))));
     let text = Paragraph::new(lines)
         .block(block)
         .wrap(Wrap { trim: true });
@@ -1163,7 +1162,7 @@ fn render_confirm_batch_delete(app: &App, frame: &mut Frame) {
     };
     let hint_color = if remaining > 0 { p.comment } else { p.fg };
 
-    let popup_area = centered_rect(55, 7, frame.area());
+    let popup_area = centered_rect(55, 7 + warning_rows(&app.delete_warnings), frame.area());
     frame.render_widget(Clear, popup_area);
     let block = Block::default()
         .borders(Borders::ALL)
@@ -1171,20 +1170,41 @@ fn render_confirm_batch_delete(app: &App, frame: &mut Frame) {
         .title(format!(" Delete {} sessions ", count))
         .title_style(Style::default().fg(p.red).add_modifier(Modifier::BOLD));
 
-    let lines = vec![
+    let mut lines = vec![
         Line::from(Span::styled(
             format!("Delete {} sessions?", count),
             Style::default().fg(p.fg),
         )),
         Line::from(Span::styled(list, Style::default().fg(p.comment))),
-        Line::from(""),
-        Line::from(Span::styled("This cannot be undone.", Style::default().fg(p.red))),
-        Line::from(Span::styled(hint, Style::default().fg(hint_color))),
     ];
+    push_warning_lines(&mut lines, &app.delete_warnings, p.red);
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("This cannot be undone.", Style::default().fg(p.red))));
+    lines.push(Line::from(Span::styled(hint, Style::default().fg(hint_color))));
     let text = Paragraph::new(lines)
         .block(block)
         .wrap(Wrap { trim: true });
     frame.render_widget(text, popup_area);
+}
+
+/// Rows the delete warnings take in a confirm popup: a blank separator,
+/// then two rows per warning, since a file list usually wraps once.
+fn warning_rows(warnings: &[String]) -> u16 {
+    if warnings.is_empty() {
+        0
+    } else {
+        1 + 2 * warnings.len() as u16
+    }
+}
+
+fn push_warning_lines(lines: &mut Vec<Line<'static>>, warnings: &[String], color: Color) {
+    if warnings.is_empty() {
+        return;
+    }
+    lines.push(Line::from(""));
+    for warning in warnings {
+        lines.push(Line::from(Span::styled(warning.clone(), Style::default().fg(color))));
+    }
 }
 
 fn render_confirm_force_open(app: &App, frame: &mut Frame) {

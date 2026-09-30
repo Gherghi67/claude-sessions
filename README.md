@@ -163,7 +163,7 @@ cs -detect-theme            # Show the detected terminal light/dark theme
 cs -list, -ls               # List all sessions
 cs -live                    # List sessions running right now on this machine, with what each is doing
 cs -status "<text>"         # Set this session's status (also: cs -status, cs -status --clear)
-cs -remove, -rm <name>...   # Remove sessions (each asks its own confirm; --force skips the confirm and the live lock)
+cs -remove, -rm <name>...   # Remove sessions (each asks its own confirm, naming files cs did not create; --force skips the confirm and the live lock, and refuses a session holding such files unless --delete-files is added)
 cs -update [--check|--force]   # Update to latest (--check: check only; --force: reinstall)
 cs -uninstall               # Uninstall cs
 cs -help, -h                # Show help message
@@ -317,8 +317,10 @@ exist.
 Each worktree is a full cs session (own conversation, color, crash
 recovery, task list) that shares the base session's secrets.
 
-cs never commits for you: retirement refuses dirty checkouts and tells you
-what to commit, and creating a feature from a base with uncommitted changes asks
+cs never commits for you: retirement refuses dirty checkouts and untracked
+files and tells you what to commit. Git-ignored files in the worktree (build
+output, local secrets) are not checked and go with it, so keep anything you
+need that git ignores outside a feature worktree. Creating a feature from a base with uncommitted changes asks
 before branching from the last commit (interactive sessions) or refuses
 (scripts). Abandon a feature with `cs -rm myproj@fix-auth`. Repos that
 gitignore `.cs/` get a per-worktree `.cs/` whose records are fused into the

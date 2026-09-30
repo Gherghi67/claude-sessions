@@ -401,6 +401,14 @@ test_bash_rm_completes_beyond_first_name() {
     assert_candidate "$out" "keep-two" "cs -rm <name> <TAB> must offer a second session" || return 1
 }
 
+test_bash_rm_completes_its_flags() {
+    create_test_session "flag-one" >/dev/null
+    put_built_cs_on_path
+    local out; out=$(bash_candidates_words "$BASH_COMP" cs -rm flag-one --)
+    assert_candidate "$out" "--force" "cs -rm <name> --<TAB> must offer --force" || return 1
+    assert_candidate "$out" "--delete-files" "cs -rm <name> --<TAB> must offer --delete-files" || return 1
+}
+
 test_bash_archive_completes_beyond_first_name() {
     create_test_session "arch-one" >/dev/null
     create_test_session "arch-two" >/dev/null
@@ -424,6 +432,15 @@ test_zsh_rm_completes_beyond_first_name() {
     put_built_cs_on_path
     local out; out=$(zsh_candidates_words cs -rm zkeep-one "")
     assert_candidate "$out" "zkeep-two" "zsh cs -rm <name> <TAB> must offer a second session" || return 1
+}
+
+test_zsh_rm_completes_its_flags() {
+    command -v zsh >/dev/null 2>&1 || { echo "    (zsh not installed, skipping)"; return 0; }
+    create_test_session "zflag-one" >/dev/null
+    put_built_cs_on_path
+    local out; out=$(zsh_candidates_words cs -rm zflag-one --)
+    assert_candidate "$out" "--force" "zsh cs -rm <name> --<TAB> must offer --force" || return 1
+    assert_candidate "$out" "--delete-files" "zsh cs -rm <name> --<TAB> must offer --delete-files" || return 1
 }
 
 echo ""
@@ -486,9 +503,11 @@ run_test test_completions_cover_all_queue_subcommands
 run_test test_bash_msg_completes_target_session
 run_test test_bash_spawn_completes_session_name
 run_test test_bash_rm_completes_beyond_first_name
+run_test test_bash_rm_completes_its_flags
 run_test test_bash_archive_completes_beyond_first_name
 run_test test_zsh_msg_completes_target_session
 run_test test_zsh_rm_completes_beyond_first_name
+run_test test_zsh_rm_completes_its_flags
 
 # Extract the SESSION subcommand arms — the second dispatch site, `cs <name>
 # -verb`, which is a different vocabulary from the top-level one above. The arms

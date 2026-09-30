@@ -881,6 +881,94 @@ pub fn worktree_parts(name: &str) -> Option<(&str, &str)> {
     name.split_once('@')
 }
 
+/// What deleting a session would take beyond cs's own files, in the two
+/// shapes `cs -rm` names them: top-level entries cs did not create in a
+/// session root, or paths git does not track in a worktree session (the
+/// only files there with no copy on the branch).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnownedEntries {
+    NotCreatedByCs(Vec<String>),
+    NotTrackedByGit(Vec<String>),
+}
+
+impl UnownedEntries {
+    /// The confirm line, matching `cs -rm`'s wording; None when nothing is at risk.
+    pub fn warning(&self) -> Option<String> {
+        let (what, paths) = match self {
+            UnownedEntries::NotCreatedByCs(p) => ("cs did not create", p),
+            UnownedEntries::NotTrackedByGit(p) => ("git does not track", p),
+        };
+        (!paths.is_empty()).then(|| format!("Also deletes files {what}: {}", paths.join(", ")))
+    }
+}
+
+/// Names cs, Claude Code and Finder put in a session root; everything else
+/// there belongs to the user. Kept in step with `_session_foreign_entries`.
+const SESSION_ROOT_OWNED: &[&str] = &[
+    ".cs", ".claude", ".git", ".gitignore", ".gitattributes", "CLAUDE.md", "CLAUDE.local.md", ".DS_Store",
+];
+
+/// Top-level names in a worktree that are cs's, not the user's.
+const WORKTREE_OWNED: &[&str] = &[".cs", ".claude", "CLAUDE.local.md", ".DS_Store"];
+
+/// What removing the session at `path` would delete that cs did not put
+/// there. An adopted session (a symlink) loses only its link, so nothing.
+/// Errors when the listing itself fails: a delete must not proceed on a
+/// list it could not read.
+pub fn unowned_entries(name: &str, path: &Path) -> Result<UnownedEntries, String> {
+    if path.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+        return Ok(UnownedEntries::NotCreatedByCs(Vec::new()));
+    }
+    if worktree_parts(name).is_some() && path.join(".git").is_file() {
+        return worktree_untracked(path).map(UnownedEntries::NotTrackedByGit);
+    }
+    let entries = match fs::read_dir(path) {
+        Ok(entries) => entries,
+        // A row whose directory is already gone holds nothing to lose.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(UnownedEntries::NotCreatedByCs(Vec::new()))
+        }
+        Err(e) => return Err(format!("cannot list {}: {e}", path.display())),
+    };
+    let mut names = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("cannot list {}: {e}", path.display()))?;
+        let entry_name = entry.file_name().to_string_lossy().into_owned();
+        if !SESSION_ROOT_OWNED.contains(&entry_name.as_str()) {
+            names.push(entry_name);
+        }
+    }
+    names.sort();
+    Ok(UnownedEntries::NotCreatedByCs(names))
+}
+
+fn worktree_untracked(path: &Path) -> Result<Vec<String>, String> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["status", "--porcelain", "--ignored", "--untracked-files=normal"])
+        .output()
+        .map_err(|e| format!("cannot run git status in {}: {e}", path.display()))?;
+    if !out.status.success() {
+        return Err(format!(
+            "git status failed in {}: {}",
+            path.display(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    let mut paths: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|l| l.starts_with("?? ") || l.starts_with("!! "))
+        .map(|l| l[3..].to_string())
+        .filter(|p| {
+            let top = p.split('/').next().unwrap_or(p);
+            !WORKTREE_OWNED.contains(&top)
+        })
+        .collect();
+    paths.sort();
+    Ok(paths)
+}
+
 /// Remove a session at `path` by whatever means its kind requires: symlinks
 /// are unlinked, worktree sessions are unregistered through git, and plain
 /// directories are removed outright.
@@ -1083,6 +1171,70 @@ mod tests {
     use super::*;
     use std::fs;
     use std::time::Duration;
+
+    fn git_in(dir: &Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["-c", "user.email=t@example.com", "-c", "user.name=t"])
+            .args(args)
+            .output()
+            .expect("git runs");
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    }
+
+    #[test]
+    fn unowned_entries_lists_top_level_files_cs_did_not_create() {
+        let root = std::env::temp_dir().join(format!("cs-unowned-plain-{}", std::process::id()));
+        let dir = root.join("rel");
+        for d in [".cs/local", ".claude", ".git", "journal.sparsebundle"] {
+            fs::create_dir_all(dir.join(d)).unwrap();
+        }
+        for f in [".gitignore", ".gitattributes", "CLAUDE.md", "CLAUDE.local.md", ".DS_Store", "start"] {
+            fs::write(dir.join(f), "x").unwrap();
+        }
+
+        let got = unowned_entries("rel", &dir).unwrap();
+
+        assert_eq!(got, UnownedEntries::NotCreatedByCs(vec!["journal.sparsebundle".into(), "start".into()]));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn unowned_entries_is_empty_for_an_adopted_link() {
+        let root = std::env::temp_dir().join(format!("cs-unowned-link-{}", std::process::id()));
+        let project = root.join("project");
+        fs::create_dir_all(&project).unwrap();
+        fs::write(project.join("main.rs"), "x").unwrap();
+        std::os::unix::fs::symlink(&project, root.join("adopted")).unwrap();
+
+        let got = unowned_entries("adopted", &root.join("adopted")).unwrap();
+
+        assert_eq!(got, UnownedEntries::NotCreatedByCs(vec![]));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn unowned_entries_lists_untracked_and_ignored_files_in_a_worktree() {
+        let root = std::env::temp_dir().join(format!("cs-unowned-wt-{}", std::process::id()));
+        let base = root.join("proj");
+        fs::create_dir_all(&base).unwrap();
+        fs::write(base.join("tracked.txt"), "x").unwrap();
+        fs::write(base.join(".gitignore"), "*.img\n.cs/local/\n").unwrap();
+        git_in(&base, &["init", "-q"]);
+        git_in(&base, &["add", "tracked.txt", ".gitignore"]);
+        git_in(&base, &["commit", "-qm", "seed"]);
+        let wt = root.join("proj@task");
+        git_in(&base, &["worktree", "add", "-q", wt.to_str().unwrap(), "-b", "cs/task"]);
+        fs::create_dir_all(wt.join(".cs/local")).unwrap();
+        fs::write(wt.join("notes.txt"), "draft").unwrap();
+        fs::write(wt.join("journal.img"), "secret").unwrap();
+
+        let got = unowned_entries("proj@task", &wt).unwrap();
+
+        assert_eq!(got, UnownedEntries::NotTrackedByGit(vec!["journal.img".into(), "notes.txt".into()]));
+        let _ = fs::remove_dir_all(&root);
+    }
 
     fn setup_session(root: &Path, name: &str) -> PathBuf {
         let dir = root.join(name);
