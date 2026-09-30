@@ -81,13 +81,14 @@ _run_pre_open() {  # session_name, session_dir
     [ "$rc" -eq 0 ] || error "$1: .cs/local/pre-open exited $rc; not opening the session."
 }
 
-# A session can keep .cs/memory and .cs/plans on an encrypted volume by making
-# them symlinks into its mountpoint. Unmounted, the links dangle: `test -d` is
-# false through them, so migrate would mkdir through them and abort on a raw
-# mkdir error. Refuse by name instead, before anything writes there.
+# A session can keep .cs/memory, .cs/plans and .cs/claude-config (Claude Code's
+# own config dir) on an encrypted volume by making them symlinks into its
+# mountpoint. Unmounted, the links dangle: `test -d` is false through them, so
+# migrate would mkdir through them and abort on a raw mkdir error. Refuse by
+# name instead, before anything writes there.
 _refuse_unmounted_meta() {  # session_name, session_dir
     local sub link target
-    for sub in memory plans; do
+    for sub in memory plans claude-config; do
         link="$2/.cs/$sub"
         [ -L "$link" ] && [ ! -e "$link" ] || continue
         target=$(readlink "$link")

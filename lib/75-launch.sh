@@ -127,6 +127,26 @@ _disarm_rotation_marker() {  # session_dir [surviving_handoff]
     printf "${DIM}Rotation marker disarmed; the handoff stays pending — answer r, or re-run the rotate skill.${NC}\n"
 }
 
+# A session whose .cs/claude-config exists keeps Claude Code's whole config
+# dir there (transcripts, prompt history, .claude.json and its backups), so an
+# encrypted session's conversation never lands in ~/.claude. The login stays
+# the one the shell would use: CLAUDE_SECURESTORAGE_CONFIG_DIR names the
+# keychain entry independently of the config dir, and empty selects the
+# default entry. A value inherited from a parent launch into such a session is
+# recognisable by its path and dropped, so a session without the link opens
+# on the shell's own config.
+_export_session_claude_config() {  # session_dir
+    local config="$1/.cs/claude-config"
+    case "${CLAUDE_CONFIG_DIR:-}" in
+        */.cs/claude-config)
+            unset CLAUDE_CONFIG_DIR CLAUDE_SECURESTORAGE_CONFIG_DIR
+            ;;
+    esac
+    [ -e "$config" ] || return 0
+    export CLAUDE_SECURESTORAGE_CONFIG_DIR="${CLAUDE_SECURESTORAGE_CONFIG_DIR-${CLAUDE_CONFIG_DIR-}}"
+    export CLAUDE_CONFIG_DIR="$config"
+}
+
 # One row of the pending-handoff answers: the key, a padded label, and a dim
 # consequence column, in the already-open menu's layout.
 _resume_menu_row() {  # key color label consequence
@@ -294,6 +314,7 @@ launch_claude_code() {
     local memory_path="$session_dir/.cs/memory"
     export CLAUDE_CODE_AUTO_MEMORY_PATH="$memory_path"
     export CLAUDE_COWORK_MEMORY_PATH_OVERRIDE="$memory_path"
+    _export_session_claude_config "$session_dir"
     # Expose the recorded session UUID to hooks. Hooks can use this to
     # reverse-look-up which cs session they're firing inside without having
     # to depend on $CLAUDE_CODE_SESSION_ID (set by Claude Code itself, but
