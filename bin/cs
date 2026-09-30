@@ -214,6 +214,20 @@ _narrative_budget() {  # value, default
     if [ "$n" -gt 0 ]; then echo "$n"; else echo "$2"; fi
 }
 
+# The directory holding a session's cs content files (command log, mail,
+# traces). An encrypted session links .cs/private into its vault; any other
+# keeps them in .cs/local. Fails, printing nothing, when .cs/private is a link
+# whose vault is locked: a writer drops its line rather than write it anywhere
+# else in plaintext.
+cs_private_dir() {  # meta_dir
+    if [ -L "$1/private" ] || [ -e "$1/private" ]; then
+        [ -d "$1/private" ] || return 1
+        printf '%s\n' "$1/private"
+    else
+        printf '%s\n' "$1/local"
+    fi
+}
+
 # Names a tmux window after every cs session running in its panes: "cs: a | b",
 # in pane order, each name once. Under iTerm's tmux integration the window name
 # is the tab's title, and one window holds every pane of a tab, so a single
@@ -3132,18 +3146,33 @@ _run_pre_open() {  # session_name, session_dir
     [ "$rc" -eq 0 ] || error "$1: .cs/local/pre-open exited $rc; not opening the session."
 }
 
-# A session can keep .cs/memory, .cs/plans and .cs/claude-config (Claude Code's
-# own config dir) on an encrypted volume by making them symlinks into its
-# mountpoint. Unmounted, the links dangle: `test -d` is false through them, so
-# migrate would mkdir through them and abort on a raw mkdir error. Refuse by
-# name instead, before anything writes there.
+# A session can keep .cs/memory, .cs/plans, .cs/claude-config (Claude Code's
+# own config dir) and .cs/private (cs's own content files) on an encrypted
+# volume by making them symlinks into its mountpoint. Unmounted, the links
+# dangle: `test -d` is false through them, so migrate would mkdir through them
+# and abort on a raw mkdir error. Refuse by name instead, before anything
+# writes there.
 _refuse_unmounted_meta() {  # session_name, session_dir
     local sub link target
-    for sub in memory plans claude-config; do
+    for sub in memory plans claude-config private; do
         link="$2/.cs/$sub"
         [ -L "$link" ] && [ ! -e "$link" ] || continue
         target=$(readlink "$link")
         error "$1: .cs/$sub points at $target, which is missing (encrypted storage not mounted?). Mount it, then reopen."
+    done
+    _refuse_plaintext_beside_private "$1" "$2"
+}
+
+# Once .cs/private holds a session's cs content files, a copy still in
+# .cs/local is plaintext the vault was meant to hold: an unmigrated log, or one
+# written by an older cs. Named rather than moved, since a move cannot remove
+# the copies backups and snapshots already hold.
+_refuse_plaintext_beside_private() {  # session_name, session_dir
+    local meta="$2/.cs" name
+    [ -e "$meta/private" ] || return 0
+    for name in session.log; do
+        [ -e "$meta/local/$name" ] || continue
+        error "$1: .cs/private keeps this session's cs files in its vault, but .cs/local still holds $name in plaintext. Move it into .cs/private or delete it, then reopen."
     done
 }
 

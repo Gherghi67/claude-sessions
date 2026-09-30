@@ -81,18 +81,33 @@ _run_pre_open() {  # session_name, session_dir
     [ "$rc" -eq 0 ] || error "$1: .cs/local/pre-open exited $rc; not opening the session."
 }
 
-# A session can keep .cs/memory, .cs/plans and .cs/claude-config (Claude Code's
-# own config dir) on an encrypted volume by making them symlinks into its
-# mountpoint. Unmounted, the links dangle: `test -d` is false through them, so
-# migrate would mkdir through them and abort on a raw mkdir error. Refuse by
-# name instead, before anything writes there.
+# A session can keep .cs/memory, .cs/plans, .cs/claude-config (Claude Code's
+# own config dir) and .cs/private (cs's own content files) on an encrypted
+# volume by making them symlinks into its mountpoint. Unmounted, the links
+# dangle: `test -d` is false through them, so migrate would mkdir through them
+# and abort on a raw mkdir error. Refuse by name instead, before anything
+# writes there.
 _refuse_unmounted_meta() {  # session_name, session_dir
     local sub link target
-    for sub in memory plans claude-config; do
+    for sub in memory plans claude-config private; do
         link="$2/.cs/$sub"
         [ -L "$link" ] && [ ! -e "$link" ] || continue
         target=$(readlink "$link")
         error "$1: .cs/$sub points at $target, which is missing (encrypted storage not mounted?). Mount it, then reopen."
+    done
+    _refuse_plaintext_beside_private "$1" "$2"
+}
+
+# Once .cs/private holds a session's cs content files, a copy still in
+# .cs/local is plaintext the vault was meant to hold: an unmigrated log, or one
+# written by an older cs. Named rather than moved, since a move cannot remove
+# the copies backups and snapshots already hold.
+_refuse_plaintext_beside_private() {  # session_name, session_dir
+    local meta="$2/.cs" name
+    [ -e "$meta/private" ] || return 0
+    for name in session.log; do
+        [ -e "$meta/local/$name" ] || continue
+        error "$1: .cs/private keeps this session's cs files in its vault, but .cs/local still holds $name in plaintext. Move it into .cs/private or delete it, then reopen."
     done
 }
 

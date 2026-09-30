@@ -1,4 +1,4 @@
-# ABOUTME: Actor identity, narrative-budget and tmux window-title code that cs AND its hooks run. build.sh
+# ABOUTME: Actor identity, narrative budget, private-dir and tmux window-title code that cs AND its hooks run. build.sh
 # ABOUTME: folds this into bin/cs and writes it verbatim to hooks/cs-shared.sh for sourcing.
 
 # Normalize an arbitrary identity string to a filesystem-safe slug.
@@ -64,6 +64,20 @@ _narrative_budget() {  # value, default
     case "${1:-}" in ''|*[!0-9]*|????????????????*) echo "$2"; return;; esac
     n=$((10#$1))
     if [ "$n" -gt 0 ]; then echo "$n"; else echo "$2"; fi
+}
+
+# The directory holding a session's cs content files (command log, mail,
+# traces). An encrypted session links .cs/private into its vault; any other
+# keeps them in .cs/local. Fails, printing nothing, when .cs/private is a link
+# whose vault is locked: a writer drops its line rather than write it anywhere
+# else in plaintext.
+cs_private_dir() {  # meta_dir
+    if [ -L "$1/private" ] || [ -e "$1/private" ]; then
+        [ -d "$1/private" ] || return 1
+        printf '%s\n' "$1/private"
+    else
+        printf '%s\n' "$1/local"
+    fi
 }
 
 # Names a tmux window after every cs session running in its panes: "cs: a | b",

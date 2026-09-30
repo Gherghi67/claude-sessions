@@ -756,6 +756,70 @@ test_claude_config_shares_from_the_shell_config_not_an_inherited_vault() {
         "claude should run on this vault and the default login" || return 1
 }
 
+# A session whose cs files (command log, mail, traces) live on its encrypted
+# volume: .cs/private links into vault-mnt. The log cs wrote at creation is
+# moved in, as a migration would.
+_make_vaulted_private() {  # name
+    local meta="$CS_SESSIONS_ROOT/$1/.cs"
+    mkdir -p "$meta/vault-mnt/private"
+    mv "$meta/local/session.log" "$meta/vault-mnt/private/session.log"
+    ln -s "$meta/vault-mnt/private" "$meta/private"
+}
+
+test_private_link_session_opens() {
+    _make_vaulted_session vt
+    _make_vaulted_private vt
+    _make_launch_sentinel
+
+    local out rc=0
+    out=$("$CS_BIN" vt <<< "" 2>&1) || rc=$?
+
+    assert_eq "0" "$rc" "cs should open the session: $out" || return 1
+    assert_eq "launched" "$(cat "$TEST_TMPDIR/launched")" "claude should launch once" || return 1
+    assert_file_not_exists "$CS_SESSIONS_ROOT/vt/.cs/local/session.log" \
+        "the open must not write a plaintext log" || return 1
+}
+
+test_unmounted_private_refuses_open() {
+    _make_vaulted_session vt
+    _make_vaulted_private vt
+    local meta="$CS_SESSIONS_ROOT/vt/.cs"
+    # memory and plans stay reachable, so the refusal can only come from private.
+    mkdir -p "$TEST_TMPDIR/elsewhere"
+    mv "$meta/vault-mnt/memory" "$meta/vault-mnt/plans" "$TEST_TMPDIR/elsewhere/"
+    rm "$meta/memory" "$meta/plans"
+    ln -s "$TEST_TMPDIR/elsewhere/memory" "$meta/memory"
+    ln -s "$TEST_TMPDIR/elsewhere/plans" "$meta/plans"
+    mv "$meta/vault-mnt" "$TEST_TMPDIR/unmounted"
+    _make_launch_sentinel
+
+    local out rc=0
+    out=$("$CS_BIN" vt <<< "" 2>&1) || rc=$?
+
+    assert_eq "1" "$rc" "cs should exit 1" || return 1
+    assert_eq "Error: vt: .cs/private points at $meta/vault-mnt/private, which is missing (encrypted storage not mounted?). Mount it, then reopen." \
+        "$out" "cs should name the dangling private link" || return 1
+    assert_file_not_exists "$TEST_TMPDIR/launched" "claude must not launch" || return 1
+}
+
+# Once a session keeps its cs files in the vault, a copy left in .cs/local is
+# plaintext the vault was meant to hold; cs names it rather than open beside it.
+test_plaintext_left_beside_private_refuses_open() {
+    _make_vaulted_session vt
+    _make_vaulted_private vt
+    local meta="$CS_SESSIONS_ROOT/vt/.cs"
+    printf 'old log\n' > "$meta/local/session.log"
+    _make_launch_sentinel
+
+    local out rc=0
+    out=$("$CS_BIN" vt <<< "" 2>&1) || rc=$?
+
+    assert_eq "1" "$rc" "cs should exit 1" || return 1
+    assert_eq "Error: vt: .cs/private keeps this session's cs files in its vault, but .cs/local still holds session.log in plaintext. Move it into .cs/private or delete it, then reopen." \
+        "$out" "cs should name the plaintext file" || return 1
+    assert_file_not_exists "$TEST_TMPDIR/launched" "claude must not launch" || return 1
+}
+
 # After the first launch the session's .claude.json is Claude Code's to write.
 test_claude_config_seeds_claude_json_once() {
     printf '{"from":"home"}\n' > "$HOME/.claude.json"
@@ -847,5 +911,8 @@ run_test test_claude_config_seeds_the_shell_profile_claude_json
 run_test test_claude_config_shares_from_the_shell_config_not_an_inherited_vault
 run_test test_claude_config_seeds_claude_json_once
 run_test test_claude_config_refuses_an_unreadable_claude_json
+run_test test_private_link_session_opens
+run_test test_unmounted_private_refuses_open
+run_test test_plaintext_left_beside_private_refuses_open
 
 report_results
