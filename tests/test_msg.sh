@@ -577,6 +577,97 @@ run_test test_task_kind_lands_in_recipient_queue
 run_test test_task_kind_clears_declined_flag
 run_test test_task_kind_rejects_multiline_body
 
+# An encrypted session keeps its cs files on its vault volume: .cs/private
+# links into it. Mail is one of those files, at either end of a send.
+_make_private() {  # session name
+    local meta="$CS_SESSIONS_ROOT/$1/.cs"
+    mkdir -p "$meta/vault-mnt/private"
+    ln -s "$meta/vault-mnt/private" "$meta/private"
+}
+PRIV_MAILDIR() { printf '%s' "$CS_SESSIONS_ROOT/$1/.cs/vault-mnt/private/mail"; }
+
+# Count of *.json documents in one maildir box.
+_box_count() {  # dir
+    local f n=0
+    for f in "$1"/*.json; do
+        [ -f "$f" ] || continue
+        n=$((n + 1))
+    done
+    printf '%s' "$n"
+}
+
+test_send_to_an_encrypted_receiver_lands_in_its_vault() {
+    _make_private receiver
+    "$CS_BIN" -msg receiver "sealed words" >/dev/null 2>&1 || return 1
+    assert_eq "1" "$(_box_count "$(PRIV_MAILDIR receiver)/new")" "delivered into the vault" || return 1
+    assert_eq "0" "$(NEW_COUNT)" "nothing delivered into .cs/local" || return 1
+    assert_not_exists "$(MAILDIR)" "no plaintext mailbox created" || return 1
+}
+
+test_send_to_a_locked_receiver_is_refused() {
+    _make_private receiver
+    local meta="$CS_SESSIONS_ROOT/receiver/.cs"
+    mv "$meta/vault-mnt" "$TEST_TMPDIR/unmounted"
+    local out rc=0
+    out=$("$CS_BIN" -msg receiver "sealed words" 2>&1) || rc=$?
+    assert_eq "1" "$rc" "send exits 1" || return 1
+    assert_eq "Error: receiver keeps its mail in encrypted storage that is not mounted (.cs/private points at $meta/vault-mnt/private). Nothing was sent." \
+        "$out" "send names the locked vault" || return 1
+    assert_not_exists "$(MAILDIR)" "no plaintext mailbox created" || return 1
+    assert_eq "0" "$(_box_count "$CLAUDE_SESSION_META_DIR/local/mail/out")" "no sent copy kept" || return 1
+}
+
+test_task_kind_to_an_encrypted_receiver_queues_in_its_vault() {
+    _make_private receiver
+    "$CS_BIN" -msg receiver -k task "sealed task" >/dev/null 2>&1 || return 1
+    grep -q "sealed task" "$CS_SESSIONS_ROOT/receiver/.cs/vault-mnt/private/queue"/* \
+        || { echo "  task not queued in the vault"; return 1; }
+    assert_not_exists "$(RQUEUE)" "no plaintext queue created" || return 1
+}
+
+test_encrypted_sender_keeps_its_copy_in_the_vault() {
+    _make_private sender
+    "$CS_BIN" -msg receiver "kept words" >/dev/null 2>&1 || return 1
+    assert_eq "1" "$(_box_count "$(PRIV_MAILDIR sender)/out")" "sent copy in the vault" || return 1
+    assert_not_exists "$CLAUDE_SESSION_META_DIR/local/mail" "no plaintext sent copy" || return 1
+}
+
+test_encrypted_session_reads_log_and_threads_its_vault_mailbox() {
+    _make_private receiver
+    "$CS_BIN" -msg receiver "vault question" >/dev/null 2>&1 || return 1
+    local thread out
+    thread=$(jq -r .thread "$(PRIV_MAILDIR receiver)"/new/*.json)
+    out=$(rcv -msg 2>&1) || return 1
+    assert_output_contains "$out" "vault question" "read shows vault mail" || return 1
+    assert_eq "1" "$(_box_count "$(PRIV_MAILDIR receiver)/cur")" "read moved it to the vault's cur/" || return 1
+    out=$(rcv -msg log 2>&1) || return 1
+    assert_output_contains "$out" "vault question" "log shows vault mail" || return 1
+    rcv -msg --reply "$thread" "vault answer" >/dev/null 2>&1 || return 1
+    assert_eq "1" "$(_box_count "$(PRIV_MAILDIR receiver)/out")" "reply copy kept in the vault" || return 1
+    out=$(rcv -msg thread "$thread" 2>&1) || return 1
+    assert_output_contains "$out" "vault answer" "thread shows the reply" || return 1
+    assert_not_exists "$(MAILDIR)" "no plaintext mailbox created" || return 1
+}
+
+test_locked_session_cannot_read_its_mail() {
+    _make_private receiver
+    local meta="$CS_SESSIONS_ROOT/receiver/.cs"
+    mv "$meta/vault-mnt" "$TEST_TMPDIR/unmounted"
+    local out rc=0
+    out=$(rcv -msg 2>&1) || rc=$?
+    assert_eq "1" "$rc" "read exits 1" || return 1
+    assert_eq "Error: this session keeps its mail in encrypted storage that is not mounted (.cs/private points at $meta/vault-mnt/private). Mount it, then retry." \
+        "$out" "read names the locked vault" || return 1
+    assert_not_exists "$(MAILDIR)" "no plaintext mailbox created" || return 1
+}
+
+run_test test_send_to_an_encrypted_receiver_lands_in_its_vault
+run_test test_send_to_a_locked_receiver_is_refused
+run_test test_task_kind_to_an_encrypted_receiver_queues_in_its_vault
+run_test test_encrypted_sender_keeps_its_copy_in_the_vault
+run_test test_encrypted_session_reads_log_and_threads_its_vault_mailbox
+run_test test_locked_session_cannot_read_its_mail
+
 # Run any command with the ambient session env pointed at receiver.
 _receiver_env() {
     CLAUDE_SESSION_NAME="receiver" \
