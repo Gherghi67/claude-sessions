@@ -2044,6 +2044,7 @@ impl App {
         let mut deleted = 0;
         let mut errors = 0;
         let mut live: Vec<String> = Vec::new();
+        let mut reasons: Vec<String> = Vec::new();
         let names: Vec<String> = self.marked_sessions.iter().cloned().collect();
         for name in &names {
             // Resolved per name rather than from the selection: a batch mixes
@@ -2066,8 +2067,9 @@ impl App {
                     deleted += 1;
                     self.flash_row(name.clone(), FlashKind::Success);
                 }
-                Err(_) => {
+                Err(e) => {
                     errors += 1;
+                    reasons.push(e.to_string());
                     self.flash_row(name.clone(), FlashKind::Error);
                 }
             }
@@ -2076,16 +2078,15 @@ impl App {
         self.rescan_now();
         if errors == 0 {
             self.set_status(format!("Deleted {} sessions", deleted), StatusLevel::Success);
-        } else if live.is_empty() {
-            self.set_status(
-                format!("Deleted {}, {} failed", deleted, errors),
-                StatusLevel::Error,
-            );
         } else {
-            self.set_status(
-                format!("Deleted {}, {} failed — live: {}", deleted, errors, live.join(", ")),
-                StatusLevel::Error,
-            );
+            let mut text = format!("Deleted {}, {} failed", deleted, errors);
+            if !live.is_empty() {
+                text.push_str(&format!(" — live: {}", live.join(", ")));
+            }
+            if !reasons.is_empty() {
+                text.push_str(&format!(" — {}", reasons.join("; ")));
+            }
+            self.set_status(text, StatusLevel::Error);
         }
         self.mode = Mode::Normal;
         self.delete_countdown_start = None;
@@ -4126,6 +4127,30 @@ mod tests {
             "status should name the locking pid, got: {}",
             status.text
         );
+    }
+
+    // A batch keeps the reason a delete failed: a mounted vault says to
+    // unmount it, and "1 failed" alone does not.
+    #[test]
+    fn batch_delete_names_a_mounted_vault() {
+        use crate::session::test_root;
+        let root = std::env::temp_dir().join(format!("cs-test-batch-vault-{}", std::process::id()));
+        let vault = root.join("vt/.cs/vault-mnt/memory");
+        std::fs::create_dir_all(&vault).unwrap();
+        std::os::unix::fs::symlink(&vault, root.join("vt/.cs/memory")).unwrap();
+        let _guard = test_root::scoped(root.clone());
+        let mut app = app_on(&root, "vt");
+        app.marked_sessions.insert("vt".to_string());
+
+        app.execute_batch_delete();
+
+        let status = app.status_message.as_ref().map(|m| m.text.clone()).unwrap_or_default();
+        assert!(
+            status.contains("vt has encrypted storage mounted inside it") && status.contains("unmount it"),
+            "status should carry the refusal, got: {status}"
+        );
+        assert!(vault.is_dir(), "the vault survives");
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
