@@ -159,7 +159,8 @@ mounted volume without asking. An open that stops before Claude Code starts
 
 - the machine is not a Mac, or stdin is not a terminal
 - the session is running, adopted, or a feature worktree (`base@task`)
-- any of the four names is already a link
+- any of the four names is already a link, or `.cs/claude-config` or
+  `.cs/private` already exists as a folder or file
 - `.cs/local/pre-open` already exists
 - the bundle already exists
 - `.cs/README.md` has no frontmatter for the tag

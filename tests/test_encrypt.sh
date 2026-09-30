@@ -132,6 +132,30 @@ test_encrypt_refuses_when_any_vault_link_exists() {
     done
 }
 
+# .cs/claude-config and .cs/private are never moved, only linked: a real one
+# would take the link inside it and keep its files in plaintext.
+test_encrypt_refuses_a_real_claude_config_or_private() {
+    _stubs
+    local l kind
+    for l in claude-config private; do
+        for kind in dir file; do
+            rm -rf "${CS_SESSIONS_ROOT:?}/enc" "$(_vault_path enc)"
+            : > "$FAKE_HDIUTIL_LOG"
+            _populated_session enc
+            if [ "$kind" = dir ]; then
+                mkdir -p "$CS_SESSIONS_ROOT/enc/.cs/$l"
+            else
+                echo "x" > "$CS_SESSIONS_ROOT/enc/.cs/$l"
+            fi
+            local out rc=0
+            out=$(_encrypt enc 2>&1) || rc=$?
+            assert_eq "1" "$rc" "non-zero exit with a $kind at .cs/$l" || return 1
+            assert_output_contains "$out" "enc: .cs/$l already exists and is not a link; cs -encrypt links it into the vault. Move it aside first." "names .cs/$l ($kind)" || return 1
+            _assert_nothing_written enc || return 1
+        done
+    done
+}
+
 test_encrypt_refuses_an_existing_pre_open() {
     _stubs
     create_test_session enc >/dev/null
@@ -487,6 +511,7 @@ run_test test_encrypt_refuses_an_unknown_session
 run_test test_encrypt_refuses_an_adopted_session
 run_test test_encrypt_refuses_a_feature_worktree_name
 run_test test_encrypt_refuses_when_any_vault_link_exists
+run_test test_encrypt_refuses_a_real_claude_config_or_private
 run_test test_encrypt_refuses_an_existing_pre_open
 run_test test_encrypt_refuses_an_existing_container
 run_test test_encrypt_builds_the_vault_and_detaches

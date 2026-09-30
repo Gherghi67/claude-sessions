@@ -6876,6 +6876,11 @@ _encrypt_refuse() {  # session_name
     for sub in $ENCRYPT_VAULT_LINKS; do
         [ -L "$meta/$sub" ] && error "$name: .cs/$sub is already a link; the session is encrypted, or half set up by hand."
     done
+    # memory and plans move into the vault; these two are only linked, so a
+    # real one would take the link inside it and keep its files in plaintext.
+    for sub in claude-config private; do
+        [ -e "$meta/$sub" ] && error "$name: .cs/$sub already exists and is not a link; cs -encrypt links it into the vault. Move it aside first."
+    done
     [ -e "$meta/local/pre-open" ] && error "$name: .cs/local/pre-open already exists; cs -encrypt writes its own. Move yours aside first."
     container=$(_encrypt_container_path "$name")
     [ -e "$container" ] && error "$name: $container already exists; cs -encrypt will not reuse or overwrite it."
