@@ -116,7 +116,8 @@ _resume_context_pct() {  # session_dir
 # retires the one it had. Offering r in those cases sends the user back for
 # something that no longer exists.
 _disarm_rotation_marker() {  # session_dir [surviving_handoff]
-    local marker="$1/.cs/local/pending-handoff"
+    local marker
+    marker="$(cs_private_dir "$1/.cs")/pending-handoff" || return 0
     [ -f "$marker" ] || return 0
     rm -f "$marker" 2>/dev/null || true
     # An explicit if: `[ ... ] && return 0` as the last command returns 1 when
@@ -631,8 +632,12 @@ EOF
         # Deliberate rotation: an unconsumed handoff written by the rotate
         # skill adds a third answer. Lexicographically last basename wins
         # (the YYYY-MM-DD- prefix makes that the newest date).
-        local pending_handoff="" _hf
-        for _hf in "$session_dir/.cs/handoffs"/*.md; do
+        # An encrypted session keeps its handoffs and the marker in its vault;
+        # the open has already refused a locked one.
+        local pending_handoff="" _hf _handoff_dir _marker_dir
+        _handoff_dir=$(cs_handoff_dir "$session_dir/.cs")
+        _marker_dir=$(cs_private_dir "$session_dir/.cs")
+        for _hf in "$_handoff_dir"/*.md; do
             [ -f "$_hf" ] || continue
             _handoff_is_unconsumed "$_hf" || continue
             pending_handoff="$_hf"
@@ -646,13 +651,13 @@ EOF
         # scan; a marker naming a spent or absent file is stale and the scan
         # still answers. The marker names a basename, never a path: a separator
         # would resolve outside the handoff store.
-        local _marker="$session_dir/.cs/local/pending-handoff" _armed
+        local _marker="$_marker_dir/pending-handoff" _armed
         if [ -f "$_marker" ]; then
             _armed=$(cat "$_marker" 2>/dev/null | tr -d '[:space:]' || true)
             case "$_armed" in */*|*\\*) _armed="" ;; esac
-            if [ -n "$_armed" ] && [ -f "$session_dir/.cs/handoffs/$_armed" ] \
-                && _handoff_is_unconsumed "$session_dir/.cs/handoffs/$_armed"; then
-                pending_handoff="$session_dir/.cs/handoffs/$_armed"
+            if [ -n "$_armed" ] && [ -f "$_handoff_dir/$_armed" ] \
+                && _handoff_is_unconsumed "$_handoff_dir/$_armed"; then
+                pending_handoff="$_handoff_dir/$_armed"
             fi
         fi
         # A spawned launch is unattended: take the default (resume) instead
@@ -695,8 +700,8 @@ EOF
                 ;;
             [rR])
                 if [ -n "$pending_handoff" ]; then
-                    mkdir -p "$session_dir/.cs/local"
-                    printf '%s\n' "$(basename "$pending_handoff")" > "$session_dir/.cs/local/pending-handoff"
+                    mkdir -p "$_marker_dir"
+                    printf '%s\n' "$(basename "$pending_handoff")" > "$_marker_dir/pending-handoff"
                     echo ""
                     # r is the user explicitly choosing the rotation handoff
                     # over resuming; a merge armed moments earlier must not

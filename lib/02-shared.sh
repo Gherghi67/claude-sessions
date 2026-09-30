@@ -80,6 +80,18 @@ cs_private_dir() {  # meta_dir
     fi
 }
 
+# The rotation handoff store: .cs/private/handoffs in an encrypted session,
+# .cs/handoffs in every other. Fails, like cs_private_dir, while .cs/private
+# dangles: a locked vault has no handoffs to offer or consume.
+cs_handoff_dir() {  # meta_dir
+    if [ -L "$1/private" ] || [ -e "$1/private" ]; then
+        [ -d "$1/private" ] || return 1
+        printf '%s\n' "$1/private/handoffs"
+    else
+        printf '%s\n' "$1/handoffs"
+    fi
+}
+
 # Names a tmux window after every cs session running in its panes: "cs: a | b",
 # in pane order, each name once. Under iTerm's tmux integration the window name
 # is the tab's title, and one window holds every pane of a tab, so a single

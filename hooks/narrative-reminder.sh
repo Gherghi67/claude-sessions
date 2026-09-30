@@ -707,7 +707,7 @@ if [ -n "$NUDGE_PCT" ] && [ -n "$NUDGE_UUID" ] && [ "$NUDGE_PCT" -ge "$NUDGE_CTX
     # teammate's stop cancel the lead's notice and re-arm it every turn.
     if ! grep -qx "$NUDGE_UUID" "$LOCAL/rotate-nudged" 2>/dev/null; then
         printf '%s\n' "$NUDGE_UUID" >> "$LOCAL/rotate-nudged"
-        REASON="Context is at ${NUDGE_PCT}% — consider rotating this conversation. Invoke the rotate skill to distill a handoff into .cs/handoffs/ and arm it; the user then runs /clear to continue in a fresh conversation, without leaving Claude Code. One-time notice for this conversation; if now is a bad time, simply continue."
+        REASON="Context is at ${NUDGE_PCT}% — consider rotating this conversation. Invoke the rotate skill to distill a handoff and arm it; the user then runs /clear to continue in a fresh conversation, without leaving Claude Code. One-time notice for this conversation; if now is a bad time, simply continue."
         jq -nc --arg r "$REASON" '{decision: "block", reason: $r}'
         exit 0
     fi

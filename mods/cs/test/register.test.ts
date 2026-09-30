@@ -336,6 +336,22 @@ test('a marker naming a handoff that is gone, consumed, or outside the store doe
   expect(findButton(await band()).props.label).toBe('rotate this conversation')
 })
 
+// An encrypted session keeps the marker and its handoffs behind .cs/private.
+const PRIVATE_MARKER = '/work/.cs/private/pending-handoff'
+const PRIVATE_HANDOFF = '/work/.cs/private/handoffs/2026-09-15-next-step.md'
+
+test('an encrypted session arms from the marker and handoff behind .cs/private', async () => {
+  files[PRIVATE_HANDOFF] = UNCONSUMED; files[PRIVATE_MARKER] = '2026-09-15-next-step.md\n'
+  percent = 3
+  expect(findButton(await band()).props.label).toBe('/clear and continue from the handoff')
+})
+
+test('a private marker never arms from the plaintext handoff store', async () => {
+  files[HANDOFF] = UNCONSUMED; files[PRIVATE_MARKER] = '2026-09-15-next-step.md\n'
+  percent = 39
+  expect(await band()).toBe(DRAWN)
+})
+
 test('an empty marker names no handoff, so the band behaves as unarmed', async () => {
   files[MARKER] = '\n'
   percent = 39

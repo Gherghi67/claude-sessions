@@ -228,6 +228,18 @@ cs_private_dir() {  # meta_dir
     fi
 }
 
+# The rotation handoff store: .cs/private/handoffs in an encrypted session,
+# .cs/handoffs in every other. Fails, like cs_private_dir, while .cs/private
+# dangles: a locked vault has no handoffs to offer or consume.
+cs_handoff_dir() {  # meta_dir
+    if [ -L "$1/private" ] || [ -e "$1/private" ]; then
+        [ -d "$1/private" ] || return 1
+        printf '%s\n' "$1/private/handoffs"
+    else
+        printf '%s\n' "$1/handoffs"
+    fi
+}
+
 # Names a tmux window after every cs session running in its panes: "cs: a | b",
 # in pane order, each name once. Under iTerm's tmux integration the window name
 # is the tab's title, and one window holds every pane of a tab, so a single
@@ -2612,6 +2624,7 @@ This session keeps its private files in an encrypted vault: `.cs/memory`, `.cs/p
 
 - Keep the objective, environment and outcome at the top of your narrative (`.cs/memory/narrative.<actor>.md`), and read them from there on resume. `.cs/README.md` stays frontmatter only; cs does not copy your first prompt into it.
 - The bash-logger records every Bash command in `.cs/private/session.log`, inside the vault. The secrets rule above still applies.
+- Rotation handoffs live in `.cs/private/handoffs/` and are never committed; the `rotate` skill says how.
 - Keep session notes (research, scratch, drafts) under `.cs/memory`, `.cs/plans` or `.cs/private`.
 EOF
 }
@@ -3028,8 +3041,16 @@ _exec_fresh_rebind() {
     # outranks a spawn kick, which outranks the handoff, which outranks the
     # color re-apply; all four ride claude's single prompt slot, so a displaced
     # color returns on the next open.
+    # An encrypted session's kick names no file: claude's argv is visible to
+    # ps and in a terminal title, and the handoff's name is its topic.
     local handoff_arg=""
-    [ -n "$handoff" ] && handoff_arg="Continue from the pending rotation handoff: read .cs/handoffs/$handoff first."
+    if [ -n "$handoff" ]; then
+        if [ -L "$session_dir/.cs/private" ] || [ -e "$session_dir/.cs/private" ]; then
+            handoff_arg="Continue from the pending rotation handoff."
+        else
+            handoff_arg="Continue from the pending rotation handoff: read .cs/handoffs/$handoff first."
+        fi
+    fi
     local launch_prompt="${merge_kick:-${spawn_kick:-${handoff_arg:-$color_arg}}}"
     export CS_CLAUDE_SESSION_ID="$new_uuid"
     export CS_FRESH_REBIND=1
@@ -3196,6 +3217,9 @@ _refuse_plaintext_beside_private() {  # session_name, session_dir
         [ -e "$meta/local/$name" ] || continue
         error "$1: .cs/private keeps this session's cs files in its vault, but .cs/local still holds $name in plaintext. Move it into .cs/private or delete it, then reopen."
     done
+    if [ -e "$meta/handoffs" ]; then
+        error "$1: .cs/private keeps this session's rotation handoffs in its vault, but .cs/handoffs still holds them in plaintext. Move it to .cs/private/handoffs or delete it, then reopen."
+    fi
 }
 
 # Create session directory structure
@@ -7777,7 +7801,8 @@ _resume_context_pct() {  # session_dir
 # retires the one it had. Offering r in those cases sends the user back for
 # something that no longer exists.
 _disarm_rotation_marker() {  # session_dir [surviving_handoff]
-    local marker="$1/.cs/local/pending-handoff"
+    local marker
+    marker="$(cs_private_dir "$1/.cs")/pending-handoff" || return 0
     [ -f "$marker" ] || return 0
     rm -f "$marker" 2>/dev/null || true
     # An explicit if: `[ ... ] && return 0` as the last command returns 1 when
@@ -8292,8 +8317,12 @@ EOF
         # Deliberate rotation: an unconsumed handoff written by the rotate
         # skill adds a third answer. Lexicographically last basename wins
         # (the YYYY-MM-DD- prefix makes that the newest date).
-        local pending_handoff="" _hf
-        for _hf in "$session_dir/.cs/handoffs"/*.md; do
+        # An encrypted session keeps its handoffs and the marker in its vault;
+        # the open has already refused a locked one.
+        local pending_handoff="" _hf _handoff_dir _marker_dir
+        _handoff_dir=$(cs_handoff_dir "$session_dir/.cs")
+        _marker_dir=$(cs_private_dir "$session_dir/.cs")
+        for _hf in "$_handoff_dir"/*.md; do
             [ -f "$_hf" ] || continue
             _handoff_is_unconsumed "$_hf" || continue
             pending_handoff="$_hf"
@@ -8307,13 +8336,13 @@ EOF
         # scan; a marker naming a spent or absent file is stale and the scan
         # still answers. The marker names a basename, never a path: a separator
         # would resolve outside the handoff store.
-        local _marker="$session_dir/.cs/local/pending-handoff" _armed
+        local _marker="$_marker_dir/pending-handoff" _armed
         if [ -f "$_marker" ]; then
             _armed=$(cat "$_marker" 2>/dev/null | tr -d '[:space:]' || true)
             case "$_armed" in */*|*\\*) _armed="" ;; esac
-            if [ -n "$_armed" ] && [ -f "$session_dir/.cs/handoffs/$_armed" ] \
-                && _handoff_is_unconsumed "$session_dir/.cs/handoffs/$_armed"; then
-                pending_handoff="$session_dir/.cs/handoffs/$_armed"
+            if [ -n "$_armed" ] && [ -f "$_handoff_dir/$_armed" ] \
+                && _handoff_is_unconsumed "$_handoff_dir/$_armed"; then
+                pending_handoff="$_handoff_dir/$_armed"
             fi
         fi
         # A spawned launch is unattended: take the default (resume) instead
@@ -8356,8 +8385,8 @@ EOF
                 ;;
             [rR])
                 if [ -n "$pending_handoff" ]; then
-                    mkdir -p "$session_dir/.cs/local"
-                    printf '%s\n' "$(basename "$pending_handoff")" > "$session_dir/.cs/local/pending-handoff"
+                    mkdir -p "$_marker_dir"
+                    printf '%s\n' "$(basename "$pending_handoff")" > "$_marker_dir/pending-handoff"
                     echo ""
                     # r is the user explicitly choosing the rotation handoff
                     # over resuming; a merge armed moments earlier must not

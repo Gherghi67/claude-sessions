@@ -99,9 +99,12 @@ export const WRAPPED = '.cs/local/wrapped'
 // The rotate skill's last step writes the handoff's basename here; cs's
 // SessionStart hook reads it on the next conversation and starts the handoff's
 // next step. While it names a handoff the conversation has nothing left to do
-// but /clear, whatever the context reads.
+// but /clear, whatever the context reads. An encrypted session keeps the
+// marker and its handoffs behind .cs/private (a link into its vault).
 export const MARKER = '.cs/local/pending-handoff'
 export const HANDOFFS = '.cs/handoffs'
+export const PRIVATE_MARKER = '.cs/private/pending-handoff'
+export const PRIVATE_HANDOFFS = '.cs/private/handoffs'
 
 // The conversation a forced rotation already ran /rotate for, by id. Written
 // BEFORE the run is scheduled: a rotation that fails must not be retried at
@@ -505,17 +508,22 @@ async function handoffArmed($: EngineInterface): Promise<boolean> {
 }
 
 // The armed handoff's text, read under the rule above; undefined when unarmed.
+// Each marker names a handoff in its own store only: the vault's marker never
+// arms from the plaintext store, nor the reverse.
 async function armedHandoff($: EngineInterface): Promise<string | undefined> {
   const cwd = await $.session.cwd()
-  if (!(await $.fs.exists(`${cwd}/${MARKER}`))) return undefined
-  try {
-    const name = (await $.fs.read(`${cwd}/${MARKER}`)).trim()
-    if (name === '' || /[/\\]/.test(name)) return undefined
-    const text = await $.fs.read(`${cwd}/${HANDOFFS}/${name}`)
-    return isUnconsumed(text) ? text : undefined
-  } catch {
-    return undefined
+  for (const [marker, store] of [[PRIVATE_MARKER, PRIVATE_HANDOFFS], [MARKER, HANDOFFS]]) {
+    if (!(await $.fs.exists(`${cwd}/${marker}`))) continue
+    try {
+      const name = (await $.fs.read(`${cwd}/${marker}`)).trim()
+      if (name === '' || /[/\\]/.test(name)) return undefined
+      const text = await $.fs.read(`${cwd}/${store}/${name}`)
+      return isUnconsumed(text) ? text : undefined
+    } catch {
+      return undefined
+    }
   }
+  return undefined
 }
 
 // The hook's own rule (_handoff_is_unconsumed in hooks/session-start.sh): a

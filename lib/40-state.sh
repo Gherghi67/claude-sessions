@@ -229,8 +229,16 @@ _exec_fresh_rebind() {
     # outranks a spawn kick, which outranks the handoff, which outranks the
     # color re-apply; all four ride claude's single prompt slot, so a displaced
     # color returns on the next open.
+    # An encrypted session's kick names no file: claude's argv is visible to
+    # ps and in a terminal title, and the handoff's name is its topic.
     local handoff_arg=""
-    [ -n "$handoff" ] && handoff_arg="Continue from the pending rotation handoff: read .cs/handoffs/$handoff first."
+    if [ -n "$handoff" ]; then
+        if [ -L "$session_dir/.cs/private" ] || [ -e "$session_dir/.cs/private" ]; then
+            handoff_arg="Continue from the pending rotation handoff."
+        else
+            handoff_arg="Continue from the pending rotation handoff: read .cs/handoffs/$handoff first."
+        fi
+    fi
     local launch_prompt="${merge_kick:-${spawn_kick:-${handoff_arg:-$color_arg}}}"
     export CS_CLAUDE_SESSION_ID="$new_uuid"
     export CS_FRESH_REBIND=1

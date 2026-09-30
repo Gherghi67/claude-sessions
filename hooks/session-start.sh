@@ -49,6 +49,10 @@ if [ "$_cs_had_e" = 1 ]; then set -e; fi
 if ! command -v cs_private_dir >/dev/null 2>&1; then
     cs_private_dir() { return 1; }
 fi
+# Nor whether its handoffs sit in a vault, so no rotation is offered or consumed.
+if ! command -v cs_handoff_dir >/dev/null 2>&1; then
+    cs_handoff_dir() { return 1; }
+fi
 if ! command -v cs_resolve_session >/dev/null 2>&1; then
     cs_resolve_session() {
         [ -n "${CLAUDE_SESSION_NAME:-}" ] && [ -n "${CLAUDE_SESSION_DIR:-}" ]
@@ -374,11 +378,18 @@ local_state_set() {
 # context-limit fork between the rotate skill and /clear cannot eat a pending
 # rotation. Only where a genuinely fresh conversation begins does a spent or
 # missing handoff make the marker stale and worth dropping.
+# An encrypted session keeps both the marker and its handoffs in the vault; a
+# locked one has neither to offer.
 ROTATION_HANDOFF=""
-PENDING_MARKER="$META_DIR/local/pending-handoff"
+PENDING_MARKER=""
+HANDOFF_DIR=""
+if _marker_dir=$(cs_private_dir "$META_DIR") && HANDOFF_DIR=$(cs_handoff_dir "$META_DIR"); then
+    PENDING_MARKER="$_marker_dir/pending-handoff"
+fi
+HANDOFF_REL=".cs/${HANDOFF_DIR#"$META_DIR"/}"
 case "$SOURCE" in
     startup|clear)
-        if [ -f "$PENDING_MARKER" ]; then
+        if [ -n "$PENDING_MARKER" ] && [ -f "$PENDING_MARKER" ]; then
             HANDOFF_BASENAME=$(cat "$PENDING_MARKER" 2>/dev/null | tr -d '[:space:]' || true)
             # The marker names a basename. Anything with a separator would
             # resolve outside the handoff store, and the file it landed on
@@ -388,7 +399,7 @@ case "$SOURCE" in
             case "$HANDOFF_BASENAME" in
                 */*|*\\*) HANDOFF_BASENAME="" ;;
             esac
-            HANDOFF_FILE="$META_DIR/handoffs/$HANDOFF_BASENAME"
+            HANDOFF_FILE="$HANDOFF_DIR/$HANDOFF_BASENAME"
             if [ -n "$HANDOFF_BASENAME" ] && [ -f "$HANDOFF_FILE" ] \
                 && _handoff_is_unconsumed "$HANDOFF_FILE"; then
                 ROTATION_HANDOFF="$HANDOFF_BASENAME"
@@ -738,7 +749,7 @@ fi
 # consumed, record the consumer, and drop the marker. Only the first status
 # line (the frontmatter's) flips; a body quoting it flush-left stays intact.
 if [ -n "$ROTATION_HANDOFF" ]; then
-    HANDOFF_FILE="$META_DIR/handoffs/$ROTATION_HANDOFF"
+    HANDOFF_FILE="$HANDOFF_DIR/$ROTATION_HANDOFF"
     { awk -v uuid="$SESSION_ID" '
         !flipped && $0 == "status: unconsumed" {
             print "status: consumed"
@@ -889,11 +900,11 @@ if [ -n "$ROTATION_HANDOFF" ]; then
     CONTEXT="${CONTEXT}
 
 --- Conversation Rotation ---
-This fresh conversation continues rotated work. Read .cs/handoffs/$ROTATION_HANDOFF FIRST — it is the previous conversation's handoff; the prior transcript is not loaded, and the handoff plus your own .cs/memory/narrative.$ACTOR_SLUG.md carry the context.
+This fresh conversation continues rotated work. Read $HANDOFF_REL/$ROTATION_HANDOFF FIRST — it is the previous conversation's handoff; the prior transcript is not loaded, and the handoff plus your own .cs/memory/narrative.$ACTOR_SLUG.md carry the context.
 
 Nothing has run yet. $ROTATION_START A BARE NUDGE — \"go\", \"continue\", \"ok\" — means begin: reconcile your native task list, which carried over from the previous conversation, with the handoff (mark what it says is done, add any next-step step that is missing, one task per step), then execute the next step and report what you did, without re-summarising it or asking which part to start with. A first message carrying its own content takes precedence over the handoff; answer that instead. Ask first only where you normally would: the handoff is missing, unreadable, or genuinely ambiguous, or its next step is destructive or irreversible.
 
-Once that next step is done, append a \`## Successor report\` section to the end of .cs/handoffs/$ROTATION_HANDOFF: each thing you had to look up again, re-derive, or found wrong in the handoff, with how you found out, or \`none\`. Append only; never rewrite what the previous conversation wrote."
+Once that next step is done, append a \`## Successor report\` section to the end of $HANDOFF_REL/$ROTATION_HANDOFF: each thing you had to look up again, re-derive, or found wrong in the handoff, with how you found out, or \`none\`. Append only; never rewrite what the previous conversation wrote."
 elif [ -n "$FRESH_NOTICE" ]; then
     CONTEXT="${CONTEXT}
 

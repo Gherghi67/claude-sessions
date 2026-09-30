@@ -111,6 +111,9 @@ _refuse_plaintext_beside_private() {  # session_name, session_dir
         [ -e "$meta/local/$name" ] || continue
         error "$1: .cs/private keeps this session's cs files in its vault, but .cs/local still holds $name in plaintext. Move it into .cs/private or delete it, then reopen."
     done
+    if [ -e "$meta/handoffs" ]; then
+        error "$1: .cs/private keeps this session's rotation handoffs in its vault, but .cs/handoffs still holds them in plaintext. Move it to .cs/private/handoffs or delete it, then reopen."
+    fi
 }
 
 # Create session directory structure

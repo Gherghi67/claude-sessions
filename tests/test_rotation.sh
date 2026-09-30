@@ -897,6 +897,8 @@ test_offer_reads_provenance_from_the_private_log() {
     _seed_handoff "$dir" "2026-07-16-mine.md" "unconsumed"
     mkdir -p "$TEST_TMPDIR/vault/private"
     mv "$dir/.cs/local/session.log" "$TEST_TMPDIR/vault/private/session.log"
+    # An encrypted session keeps its handoffs in the vault too.
+    mv "$dir/.cs/handoffs" "$TEST_TMPDIR/vault/private/handoffs"
     ln -s "$TEST_TMPDIR/vault/private" "$dir/.cs/private"
     printf '%s - Session started (source: startup, ID: %s)\n' \
         "2026-07-16 10:00:00" "$UUID_A" >> "$TEST_TMPDIR/vault/private/session.log"
@@ -2337,5 +2339,114 @@ run_test test_ctx_warning_yields_to_nudge_at_high_ctx
 run_test test_ctx_warning_threshold_override
 run_test test_ctx_warning_escalates_to_nudge_same_conversation
 run_test test_ctx_warning_band_edges
+
+# ============================================================================
+# Encrypted session: handoffs and the marker live behind .cs/private
+# ============================================================================
+
+# Turn a launched session into an encrypted one: its .cs/private links into a
+# vault dir, and the plaintext session.log the first launch wrote moves in
+# (the open refuses one left beside the link).
+_encrypt_session() {  # session_dir -> prints the vault's private dir
+    local vault
+    vault="$TEST_TMPDIR/vault-${1##*/}/private"
+    mkdir -p "$vault/handoffs"
+    [ -f "$1/.cs/local/session.log" ] && mv "$1/.cs/local/session.log" "$vault/session.log"
+    ln -s "$vault" "$1/.cs/private"
+    echo "$vault"
+}
+
+test_encrypted_rotate_answer_arms_the_private_marker() {
+    _rot_session "rot-enc-r"
+    local dir="$CS_SESSIONS_ROOT/rot-enc-r" vault
+    vault=$(_encrypt_session "$dir")
+    _seed_handoff "$vault/.." "2026-07-16-secret-topic.md" "unconsumed"
+    mv "$vault/../.cs/handoffs/2026-07-16-secret-topic.md" "$vault/handoffs/" 2>/dev/null
+    local output
+    output=$("$CS_BIN" rot-enc-r <<< "r" 2>&1) || true
+    assert_output_contains "$output" "Rotation handoff pending: 2026-07-16-secret-topic.md" \
+        "the vault's handoff is offered" || return 1
+    assert_eq "2026-07-16-secret-topic.md" "$(cat "$vault/pending-handoff" 2>/dev/null | tr -d '[:space:]')" \
+        "the marker is armed inside the vault" || return 1
+    [ ! -e "$dir/.cs/local/pending-handoff" ] \
+        || { echo "  FAIL: an encrypted session's marker must not land in .cs/local"; return 1; }
+    local args
+    args=$(grep '^STUB_ARGS: ' <<< "$output")
+    assert_output_contains "$args" "Continue from the pending rotation handoff" \
+        "the launch still kicks the fresh conversation" || return 1
+    assert_output_not_contains "$args" "secret-topic" \
+        "claude's argv never carries the handoff's name" || return 1
+}
+
+test_encrypted_discard_retires_the_vault_handoff() {
+    _rot_session "rot-enc-d"
+    local dir="$CS_SESSIONS_ROOT/rot-enc-d" vault
+    vault=$(_encrypt_session "$dir")
+    _seed_handoff "$vault/.." "2026-07-16-test.md" "unconsumed"
+    mv "$vault/../.cs/handoffs/2026-07-16-test.md" "$vault/handoffs/" 2>/dev/null
+    "$CS_BIN" rot-enc-d <<< "d" >/dev/null 2>&1 || true
+    assert_file_contains "$vault/handoffs/2026-07-16-test.md" "status: discarded" \
+        "d flips the vault's handoff" || return 1
+}
+
+test_encrypted_session_with_plaintext_handoffs_refuses_to_open() {
+    _rot_session "rot-enc-leftover"
+    local dir="$CS_SESSIONS_ROOT/rot-enc-leftover"
+    _encrypt_session "$dir" >/dev/null
+    _seed_handoff "$dir" "2026-07-16-test.md" "consumed"
+    local output
+    output=$("$CS_BIN" rot-enc-leftover <<< "y" 2>&1) || true
+    assert_output_contains "$output" ".cs/handoffs" "the refusal names the plaintext handoffs" || return 1
+    assert_output_not_contains "$output" "STUB_ARGS" "claude is not launched" || return 1
+}
+
+test_encrypted_pending_handoff_is_consumed_in_the_vault() {
+    _rot_hook_session "rot-enc-consume"
+    local vault="$TEST_TMPDIR/vault-consume/private"
+    mkdir -p "$vault"
+    ln -s "$vault" "$CLAUDE_SESSION_META_DIR/private"
+    _seed_handoff "$TEST_TMPDIR/vault-consume/stage" "2026-07-16-test.md" "unconsumed"
+    mkdir -p "$vault/handoffs"
+    mv "$TEST_TMPDIR/vault-consume/stage/.cs/handoffs/2026-07-16-test.md" "$vault/handoffs/"
+    printf '%s\n' "2026-07-16-test.md" > "$vault/pending-handoff"
+    printf 'claude_session_id: %s\n' "$UUID_B" > "$CLAUDE_SESSION_META_DIR/local/state"
+    local out
+    out=$(_start_hook "$UUID_B") || return 1
+    assert_output_contains "$out" "Conversation Rotation" "rotation preamble injected" || return 1
+    assert_output_contains "$out" ".cs/private/handoffs/2026-07-16-test.md" \
+        "the preamble names the vault's handoff" || return 1
+    assert_file_contains "$vault/handoffs/2026-07-16-test.md" "consumed_by: $UUID_B" \
+        "the vault's handoff is consumed" || return 1
+    [ ! -f "$vault/pending-handoff" ] || { echo "  FAIL: the vault's marker must be removed"; return 1; }
+}
+
+test_locked_encrypted_session_consumes_no_handoff() {
+    _rot_hook_session "rot-enc-locked"
+    ln -s "$TEST_TMPDIR/unmounted/private" "$CLAUDE_SESSION_META_DIR/private"
+    _seed_handoff "$CLAUDE_SESSION_DIR" "2026-07-16-test.md" "unconsumed"
+    printf '%s\n' "2026-07-16-test.md" > "$CLAUDE_SESSION_META_DIR/local/pending-handoff"
+    printf 'claude_session_id: %s\n' "$UUID_B" > "$CLAUDE_SESSION_META_DIR/local/state"
+    local out
+    out=$(_start_hook "$UUID_B") || return 1
+    assert_output_not_contains "$out" "Conversation Rotation" \
+        "a locked session starts no rotation" || return 1
+    assert_file_contains "$CLAUDE_SESSION_META_DIR/handoffs/2026-07-16-test.md" "status: unconsumed" \
+        "nothing outside the vault is consumed" || return 1
+}
+
+test_rotate_skill_routes_an_encrypted_session_into_the_vault() {
+    local skill="$SCRIPT_DIR/../skills/rotate/SKILL.md"
+    assert_file_contains "$skill" '\.cs/private/handoffs/' \
+        "the skill writes an encrypted session's handoff into the vault" || return 1
+    assert_file_contains "$skill" '\.cs/private/pending-handoff' \
+        "the skill arms an encrypted session's marker in the vault" || return 1
+}
+
+run_test test_encrypted_rotate_answer_arms_the_private_marker
+run_test test_encrypted_discard_retires_the_vault_handoff
+run_test test_encrypted_session_with_plaintext_handoffs_refuses_to_open
+run_test test_encrypted_pending_handoff_is_consumed_in_the_vault
+run_test test_locked_encrypted_session_consumes_no_handoff
+run_test test_rotate_skill_routes_an_encrypted_session_into_the_vault
 
 report_results
