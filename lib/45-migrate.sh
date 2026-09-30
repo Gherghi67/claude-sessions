@@ -101,6 +101,13 @@ _refuse_unmounted_meta() {  # session_name, session_dir
     _refuse_plaintext_beside_private "$1" "$2"
 }
 
+# The cs content files a plain session keeps in .cs/local and an encrypted one
+# keeps behind .cs/private. The open refuses a plaintext copy of any of them,
+# and cs -encrypt moves each into the vault.
+CS_PRIVATE_LOCAL_FILES="session.log scope-prompt.trace memory-index.snapshot mail
+    queue queue.tmp queue.state queue.done queue.declined queue.migrating
+    notifications.jsonl notifications.seen failures rewrite.trace pending-handoff"
+
 # Once .cs/private holds a session's cs content files, a copy still in
 # .cs/local is plaintext the vault was meant to hold: an unmigrated log, or one
 # written by an older cs. Named rather than moved, since a move cannot remove
@@ -108,9 +115,7 @@ _refuse_unmounted_meta() {  # session_name, session_dir
 _refuse_plaintext_beside_private() {  # session_name, session_dir
     local meta="$2/.cs" name
     [ -e "$meta/private" ] || return 0
-    for name in session.log scope-prompt.trace memory-index.snapshot mail \
-                queue queue.tmp queue.state queue.done queue.declined queue.migrating \
-                notifications.jsonl notifications.seen failures rewrite.trace pending-handoff; do
+    for name in $CS_PRIVATE_LOCAL_FILES; do
         [ -e "$meta/local/$name" ] || continue
         error "$1: .cs/private keeps this session's cs files in its vault, but .cs/local still holds $name in plaintext. Move it into .cs/private or delete it, then reopen."
     done
