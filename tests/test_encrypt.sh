@@ -202,6 +202,7 @@ test_encrypt_builds_the_vault_and_detaches() {
     assert_eq "create -size 50g -type SPARSEBUNDLE -fs APFS -encryption AES-256 -volname cs-enc $c
 attach -nobrowse -mountpoint $s/vault-mnt $c
 detach $s/vault-mnt" "$(cat "$FAKE_HDIUTIL_LOG")" "create, attach, then detach" || return 1
+    # shellcheck disable=SC2088  # cs prints the literal ~ path
     assert_output_contains "$out" "~/.claude/history.jsonl" "lists copies it could not move" || return 1
 }
 

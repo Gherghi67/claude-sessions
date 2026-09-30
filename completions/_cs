@@ -114,6 +114,7 @@ _cs() {
         '-tag:Manage session tags'
         '-archive:Archive a session (hidden from listings)'
         '-unarchive:Restore an archived session'
+        '-encrypt:Move a closed session into an encrypted vault (macOS)'
         '-status:Set or show this session'\''s advertised status'
         '-search:Search across all sessions'
         '-statusline:Manage the cs status line (enable|disable|caps)'
@@ -143,7 +144,7 @@ _cs() {
             -tag) in_tag=true; in_secrets=false; in_update=false; in_checkpoint=false; in_queue=false; in_list=false; in_narrative=false ;;
             -list|-ls) in_list=true; in_secrets=false; in_update=false; in_checkpoint=false; in_queue=false; in_tag=false; in_narrative=false ;;
             -remove|-rm) after_remove=true ;;
-            -archive|-unarchive) after_archive=true ;;
+            -archive|-unarchive|-encrypt) after_archive=true ;;
             -*) ;;
             *)
                 if ! $in_secrets && ! $after_remove && ! $in_update && ! $in_checkpoint && ! $in_queue && ! $in_narrative && ! $in_tag && ! $in_list && ! $after_archive; then
