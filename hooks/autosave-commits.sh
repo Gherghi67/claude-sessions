@@ -135,9 +135,10 @@ autosave_to_shadow_ref() {
         # Stage all current files in the temporary index, except an encrypted
         # session's mounted volume: its blobs would land in plaintext
         # .git/objects, pinned by the autosave ref. The ignore entry for
-        # .cs/vault-mnt/ is not enough, since older and adopted sessions lack
-        # it, so the conventional mount and every link target inside this
-        # tree are excluded here. An exclude cannot drop a path the index
+        # .cs/vault-mnt/ is not enough: a worktree never runs the migration
+        # that adds it, and a mount can sit elsewhere in the tree. So the
+        # conventional mount and every link target inside this tree are
+        # excluded here. An exclude cannot drop a path the index
         # already tracks; a freshly mounted volume is untracked.
         excludes=(':(exclude).cs/vault-mnt')
         top=$(pwd -P)

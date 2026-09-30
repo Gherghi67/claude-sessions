@@ -142,7 +142,8 @@ it from a locked vault, so the error names it.
 
 Opening an encrypted session also refuses when a plaintext copy of a vault
 file is still outside it: any of the `.cs/private` files above left in
-`.cs/local/`, or a `.cs/handoffs/` folder. The error names the file. Move it
+`.cs/local/`, or a `.cs/handoffs/` or `.cs/checkpoints/` folder, or a plain
+`.cs/narrative-archive/` beside a linked `.cs/memory`. The error names the file. Move it
 into the vault or delete it. cs does not move it for you, because backups and
 snapshots already hold the old copy.
 
@@ -174,6 +175,10 @@ The mounted volume stays out of git and out of the session's removal:
 - `cs -rm` and the picker's delete refuse while a link resolves inside the
   session directory, even with `--force`, because removing it would delete
   what the vault holds. Unmount first.
+- Unmounted, the session removes like any other, `.cs/` included. Keep the
+  volume's container (a disk image, a cipher directory) outside the session
+  directory, or at its root where `cs -rm --force` names it and asks for
+  `--delete-files`.
 
 Link all four names. With only some of them, the rest leaks: `.cs/private`
 without `.cs/claude-config`, for example, keeps the handoffs in the vault, but
