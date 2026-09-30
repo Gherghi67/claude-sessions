@@ -28,7 +28,7 @@ _mail_dir() {  # meta_dir
 # Callers capture it, so error only ends their subshell: each one exits after.
 _mail_own_dir() {
     _mail_dir "$CLAUDE_SESSION_META_DIR" \
-        || error "this session keeps its mail in encrypted storage that is not mounted (.cs/private points at $(readlink "$CLAUDE_SESSION_META_DIR/private")). Mount it, then retry."
+        || error "this session keeps its mail in encrypted storage that is not mounted (.cs/private $(cs_private_state "$CLAUDE_SESSION_META_DIR")). Mount it, then retry."
 }
 
 # Thread ids are 6 hex digits because an agent has to retype them. RANDOM is 15
@@ -159,7 +159,7 @@ _mail_send() {  # target, [--kind|-k KIND] [--reply THREAD] body
     # all, neither its queue task nor a plaintext mailbox beside the vault.
     local target_files
     target_files=$(cs_private_dir "$target_dir/.cs") \
-        || error "$target keeps its mail in encrypted storage that is not mounted (.cs/private points at $(readlink "$target_dir/.cs/private")). Nothing was sent."
+        || error "$target keeps its mail in encrypted storage that is not mounted (.cs/private $(cs_private_state "$target_dir/.cs")). Nothing was sent."
     local bytes
     bytes=$(LC_ALL=C printf '%s' "$body" | wc -c | tr -d '[:space:]')
     if [ "$bytes" -gt "$MAIL_BODY_MAX" ]; then

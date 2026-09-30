@@ -228,6 +228,16 @@ cs_private_dir() {  # meta_dir
     fi
 }
 
+# Says what an unusable .cs/private is, for an error message: the vault it
+# points at, or that it is not a directory at all.
+cs_private_state() {  # meta_dir
+    if [ -L "$1/private" ]; then
+        printf 'points at %s\n' "$(readlink "$1/private")"
+    else
+        printf 'is not a directory\n'
+    fi
+}
+
 # The rotation handoff store: .cs/private/handoffs in an encrypted session,
 # .cs/handoffs in every other. Fails, like cs_private_dir, while .cs/private
 # dangles: a locked vault has no handoffs to offer or consume.
@@ -3202,6 +3212,9 @@ _refuse_unmounted_meta() {  # session_name, session_dir
     local sub link target
     for sub in memory plans claude-config private; do
         link="$2/.cs/$sub"
+        if [ -e "$link" ] && [ ! -d "$link" ]; then
+            error "$1: .cs/$sub is a file, not a directory or a link into encrypted storage. Remove it, or link it into the vault, then reopen."
+        fi
         [ -L "$link" ] && [ ! -e "$link" ] || continue
         target=$(readlink "$link")
         error "$1: .cs/$sub points at $target, which is missing (encrypted storage not mounted?). Mount it, then reopen."
@@ -3614,7 +3627,7 @@ migrate_session() {
     if [ -f "$session_dir/.cs/logs/session.log" ]; then
         local log_dir
         log_dir=$(cs_private_dir "$session_dir/.cs") \
-            || error "Cannot move .cs/logs/session.log: .cs/private points at $(readlink "$session_dir/.cs/private"), which is missing."
+            || error "Cannot move .cs/logs/session.log: .cs/private $(cs_private_state "$session_dir/.cs"), and cs cannot write there."
         cat "$session_dir/.cs/logs/session.log" >> "$log_dir/session.log"
         rm -f "$session_dir/.cs/logs/session.log"
         rmdir "$session_dir/.cs/logs" 2>/dev/null || true
@@ -3954,7 +3967,7 @@ _checkpoints_dir() {  # meta_dir
 _refuse_checkpoints_dir() {  # rc, meta_dir
     case "$1" in
         0) ;;
-        1) error "this session keeps its checkpoints in encrypted storage that is not mounted (.cs/private points at $(readlink "$2/private")). Mount it, then retry." ;;
+        1) error "this session keeps its checkpoints in encrypted storage that is not mounted (.cs/private $(cs_private_state "$2")). Mount it, then retry." ;;
         2) error "this session's narrative lives on encrypted storage (.cs/memory is a link), and .cs/private is not there to hold the checkpoint. Link .cs/private into the vault, then retry." ;;
         *) error "_checkpoints_dir returned $1 for $2" ;;
     esac
@@ -4513,7 +4526,7 @@ _mail_dir() {  # meta_dir
 # Callers capture it, so error only ends their subshell: each one exits after.
 _mail_own_dir() {
     _mail_dir "$CLAUDE_SESSION_META_DIR" \
-        || error "this session keeps its mail in encrypted storage that is not mounted (.cs/private points at $(readlink "$CLAUDE_SESSION_META_DIR/private")). Mount it, then retry."
+        || error "this session keeps its mail in encrypted storage that is not mounted (.cs/private $(cs_private_state "$CLAUDE_SESSION_META_DIR")). Mount it, then retry."
 }
 
 # Thread ids are 6 hex digits because an agent has to retype them. RANDOM is 15
@@ -4644,7 +4657,7 @@ _mail_send() {  # target, [--kind|-k KIND] [--reply THREAD] body
     # all, neither its queue task nor a plaintext mailbox beside the vault.
     local target_files
     target_files=$(cs_private_dir "$target_dir/.cs") \
-        || error "$target keeps its mail in encrypted storage that is not mounted (.cs/private points at $(readlink "$target_dir/.cs/private")). Nothing was sent."
+        || error "$target keeps its mail in encrypted storage that is not mounted (.cs/private $(cs_private_state "$target_dir/.cs")). Nothing was sent."
     local bytes
     bytes=$(LC_ALL=C printf '%s' "$body" | wc -c | tr -d '[:space:]')
     if [ "$bytes" -gt "$MAIL_BODY_MAX" ]; then
@@ -5151,7 +5164,7 @@ run_queue() {
     # task beside it in plaintext.
     local qdir
     qdir=$(cs_private_dir "$CLAUDE_SESSION_META_DIR") \
-        || error "this session keeps its queue in encrypted storage that is not mounted (.cs/private points at $(readlink "$CLAUDE_SESSION_META_DIR/private")). Mount it, then retry."
+        || error "this session keeps its queue in encrypted storage that is not mounted (.cs/private $(cs_private_state "$CLAUDE_SESSION_META_DIR")). Mount it, then retry."
     _queue_convert_legacy "$qdir"
     local sub="${1:-list}"
     case "$sub" in

@@ -91,6 +91,9 @@ _refuse_unmounted_meta() {  # session_name, session_dir
     local sub link target
     for sub in memory plans claude-config private; do
         link="$2/.cs/$sub"
+        if [ -e "$link" ] && [ ! -d "$link" ]; then
+            error "$1: .cs/$sub is a file, not a directory or a link into encrypted storage. Remove it, or link it into the vault, then reopen."
+        fi
         [ -L "$link" ] && [ ! -e "$link" ] || continue
         target=$(readlink "$link")
         error "$1: .cs/$sub points at $target, which is missing (encrypted storage not mounted?). Mount it, then reopen."
@@ -503,7 +506,7 @@ migrate_session() {
     if [ -f "$session_dir/.cs/logs/session.log" ]; then
         local log_dir
         log_dir=$(cs_private_dir "$session_dir/.cs") \
-            || error "Cannot move .cs/logs/session.log: .cs/private points at $(readlink "$session_dir/.cs/private"), which is missing."
+            || error "Cannot move .cs/logs/session.log: .cs/private $(cs_private_state "$session_dir/.cs"), and cs cannot write there."
         cat "$session_dir/.cs/logs/session.log" >> "$log_dir/session.log"
         rm -f "$session_dir/.cs/logs/session.log"
         rmdir "$session_dir/.cs/logs" 2>/dev/null || true

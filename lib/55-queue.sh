@@ -201,7 +201,7 @@ run_queue() {
     # task beside it in plaintext.
     local qdir
     qdir=$(cs_private_dir "$CLAUDE_SESSION_META_DIR") \
-        || error "this session keeps its queue in encrypted storage that is not mounted (.cs/private points at $(readlink "$CLAUDE_SESSION_META_DIR/private")). Mount it, then retry."
+        || error "this session keeps its queue in encrypted storage that is not mounted (.cs/private $(cs_private_state "$CLAUDE_SESSION_META_DIR")). Mount it, then retry."
     _queue_convert_legacy "$qdir"
     local sub="${1:-list}"
     case "$sub" in

@@ -617,6 +617,17 @@ test_send_to_a_locked_receiver_is_refused() {
     assert_eq "0" "$(_box_count "$CLAUDE_SESSION_META_DIR/local/mail/out")" "no sent copy kept" || return 1
 }
 
+test_send_to_a_receiver_whose_private_is_a_file_is_refused() {
+    local meta="$CS_SESSIONS_ROOT/receiver/.cs"
+    printf 'not a vault\n' > "$meta/private"
+    local out rc=0
+    out=$("$CS_BIN" -msg receiver "sealed words" 2>&1) || rc=$?
+    assert_eq "1" "$rc" "send exits 1" || return 1
+    assert_eq "Error: receiver keeps its mail in encrypted storage that is not mounted (.cs/private is not a directory). Nothing was sent." \
+        "$out" "send says what .cs/private is" || return 1
+    assert_not_exists "$(MAILDIR)" "no plaintext mailbox created" || return 1
+}
+
 test_task_kind_to_an_encrypted_receiver_queues_in_its_vault() {
     _make_private receiver
     "$CS_BIN" -msg receiver -k task "sealed task" >/dev/null 2>&1 || return 1
@@ -663,6 +674,7 @@ test_locked_session_cannot_read_its_mail() {
 
 run_test test_send_to_an_encrypted_receiver_lands_in_its_vault
 run_test test_send_to_a_locked_receiver_is_refused
+run_test test_send_to_a_receiver_whose_private_is_a_file_is_refused
 run_test test_task_kind_to_an_encrypted_receiver_queues_in_its_vault
 run_test test_encrypted_sender_keeps_its_copy_in_the_vault
 run_test test_encrypted_session_reads_log_and_threads_its_vault_mailbox

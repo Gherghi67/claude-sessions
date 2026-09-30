@@ -856,6 +856,20 @@ test_plaintext_queue_files_left_beside_private_refuse_open() {
     done
 }
 
+# A regular file where a vault link belongs is neither a vault nor a place
+# cs can write; the open names it rather than treat the session as locked.
+test_a_file_at_a_vault_link_refuses_open() {
+    _make_vaulted_session vt
+    _make_launch_sentinel
+    local meta="$CS_SESSIONS_ROOT/vt/.cs" out rc=0
+    printf 'not a vault\n' > "$meta/private"
+    out=$("$CS_BIN" vt <<< "" 2>&1) || rc=$?
+    assert_eq "1" "$rc" "cs should exit 1" || return 1
+    assert_eq "Error: vt: .cs/private is a file, not a directory or a link into encrypted storage. Remove it, or link it into the vault, then reopen." \
+        "$out" "cs should name the file" || return 1
+    assert_not_exists "$TEST_TMPDIR/launched" "claude never starts" || return 1
+}
+
 # After the first launch the session's .claude.json is Claude Code's to write.
 test_claude_config_seeds_claude_json_once() {
     printf '{"from":"home"}\n' > "$HOME/.claude.json"
@@ -952,5 +966,6 @@ run_test test_unmounted_private_refuses_open
 run_test test_plaintext_left_beside_private_refuses_open
 run_test test_plaintext_mailbox_left_beside_private_refuses_open
 run_test test_plaintext_queue_files_left_beside_private_refuse_open
+run_test test_a_file_at_a_vault_link_refuses_open
 
 report_results

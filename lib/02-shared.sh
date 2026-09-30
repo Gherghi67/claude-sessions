@@ -80,6 +80,16 @@ cs_private_dir() {  # meta_dir
     fi
 }
 
+# Says what an unusable .cs/private is, for an error message: the vault it
+# points at, or that it is not a directory at all.
+cs_private_state() {  # meta_dir
+    if [ -L "$1/private" ]; then
+        printf 'points at %s\n' "$(readlink "$1/private")"
+    else
+        printf 'is not a directory\n'
+    fi
+}
+
 # The rotation handoff store: .cs/private/handoffs in an encrypted session,
 # .cs/handoffs in every other. Fails, like cs_private_dir, while .cs/private
 # dangles: a locked vault has no handoffs to offer or consume.

@@ -34,7 +34,7 @@ _checkpoints_dir() {  # meta_dir
 _refuse_checkpoints_dir() {  # rc, meta_dir
     case "$1" in
         0) ;;
-        1) error "this session keeps its checkpoints in encrypted storage that is not mounted (.cs/private points at $(readlink "$2/private")). Mount it, then retry." ;;
+        1) error "this session keeps its checkpoints in encrypted storage that is not mounted (.cs/private $(cs_private_state "$2")). Mount it, then retry." ;;
         2) error "this session's narrative lives on encrypted storage (.cs/memory is a link), and .cs/private is not there to hold the checkpoint. Link .cs/private into the vault, then retry." ;;
         *) error "_checkpoints_dir returned $1 for $2" ;;
     esac
