@@ -820,6 +820,24 @@ test_plaintext_left_beside_private_refuses_open() {
     assert_file_not_exists "$TEST_TMPDIR/launched" "claude must not launch" || return 1
 }
 
+# A mailbox is a directory, not a file: a plaintext one left in .cs/local is
+# named the same way, whatever it holds.
+test_plaintext_mailbox_left_beside_private_refuses_open() {
+    _make_vaulted_session vt
+    _make_vaulted_private vt
+    local meta="$CS_SESSIONS_ROOT/vt/.cs"
+    mkdir -p "$meta/local/mail/cur"
+    _make_launch_sentinel
+
+    local out rc=0
+    out=$("$CS_BIN" vt <<< "" 2>&1) || rc=$?
+
+    assert_eq "1" "$rc" "cs should exit 1" || return 1
+    assert_eq "Error: vt: .cs/private keeps this session's cs files in its vault, but .cs/local still holds mail in plaintext. Move it into .cs/private or delete it, then reopen." \
+        "$out" "cs should name the plaintext mailbox" || return 1
+    assert_file_not_exists "$TEST_TMPDIR/launched" "claude must not launch" || return 1
+}
+
 # After the first launch the session's .claude.json is Claude Code's to write.
 test_claude_config_seeds_claude_json_once() {
     printf '{"from":"home"}\n' > "$HOME/.claude.json"
@@ -914,5 +932,6 @@ run_test test_claude_config_refuses_an_unreadable_claude_json
 run_test test_private_link_session_opens
 run_test test_unmounted_private_refuses_open
 run_test test_plaintext_left_beside_private_refuses_open
+run_test test_plaintext_mailbox_left_beside_private_refuses_open
 
 report_results
