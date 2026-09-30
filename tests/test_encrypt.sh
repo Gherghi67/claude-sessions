@@ -329,6 +329,102 @@ test_pre_open_attaches_with_a_prompt() {
     assert_eq "attach -nobrowse -mountpoint $FAKE_MNT $(_vault_path enc)" "$(cat "$FAKE_HDIUTIL_LOG")" "one attach, no -stdinpass" || return 1
 }
 
+# SessionEnd leaves a waiter that detaches the vault once the lead claude
+# exits. The "claude" here is a sleep the test ends; the vault reads mounted.
+HOOK_SESSION_END="$SCRIPT_DIR/../hooks/session-end.sh"
+
+_end_conversation() {  # name reason claude_pid lead_pid
+    printf '{"session_id":"11111111-2222-3333-4444-555555555555","reason":"%s"}' "$2" |
+        CLAUDE_SESSION_NAME="$1" CLAUDE_SESSION_DIR="$CS_SESSIONS_ROOT/$1" \
+        CLAUDE_SESSION_META_DIR="$CS_SESSIONS_ROOT/$1/.cs" \
+        CLAUDE_PID="$3" CS_LEAD_PID="$4" FAKE_MOUNTED=1 \
+        bash "$HOOK_SESSION_END" >/dev/null 2>&1
+}
+
+_wait_for_log() {  # expected -> polls the hdiutil log up to 10 s
+    local i=0
+    while [ $i -lt 50 ]; do
+        [ "$(cat "$FAKE_HDIUTIL_LOG")" = "$1" ] && return 0
+        sleep 0.2; i=$((i + 1))
+    done
+    return 1
+}
+
+_waiter_gone() {  # name -> waits up to 10 s for the waiter to finish
+    local f="$CS_SESSIONS_ROOT/$1/.cs/local/vault-waiter.pid" i=0
+    while [ $i -lt 50 ]; do
+        [ -e "$f" ] || return 0
+        sleep 0.2; i=$((i + 1))
+    done
+    return 1
+}
+
+test_session_end_detaches_after_the_lead_exits() {
+    _encrypted_session enc || return 1
+    sleep 300 &
+    local claude=$!
+    _end_conversation enc prompt_input_exit "$claude" "$claude"
+    [ -s "$CS_SESSIONS_ROOT/enc/.cs/local/vault-waiter.pid" ] || { kill "$claude"; echo "  FAIL: no waiter recorded"; return 1; }
+    sleep 1.5
+    local early; early=$(cat "$FAKE_HDIUTIL_LOG")
+    kill "$claude" 2>/dev/null; wait "$claude" 2>/dev/null
+    assert_eq "" "$early" "no detach while claude still runs" || return 1
+    _wait_for_log "detach $FAKE_MNT" || { echo "  FAIL: no detach after exit: $(cat "$FAKE_HDIUTIL_LOG")"; return 1; }
+    _waiter_gone enc || { echo "  FAIL: waiter pid file left"; return 1; }
+}
+
+test_session_end_leaves_the_vault_for_clear_resume_and_non_leads() {
+    _encrypted_session enc || return 1
+    local case_ reason lead claude
+    for case_ in "clear same" "resume same" "prompt_input_exit other"; do
+        reason=${case_% *}
+        sleep 300 &
+        claude=$!
+        if [ "${case_#* }" = same ]; then lead=$claude; else lead=1; fi
+        _end_conversation enc "$reason" "$claude" "$lead"
+        kill "$claude" 2>/dev/null; wait "$claude" 2>/dev/null
+        [ ! -e "$CS_SESSIONS_ROOT/enc/.cs/local/vault-waiter.pid" ] || { echo "  FAIL: waiter started for $case_"; return 1; }
+    done
+    sleep 1.5
+    assert_eq "" "$(cat "$FAKE_HDIUTIL_LOG")" "no detach for clear, resume or a non-lead" || return 1
+}
+
+test_session_end_ignores_a_session_cs_did_not_encrypt() {
+    _encrypted_session enc || return 1
+    rm "$CS_SESSIONS_ROOT/enc/.cs/local/vault"
+    sleep 300 &
+    local claude=$!
+    _end_conversation enc prompt_input_exit "$claude" "$claude"
+    kill "$claude" 2>/dev/null; wait "$claude" 2>/dev/null
+    sleep 1.5
+    [ ! -e "$CS_SESSIONS_ROOT/enc/.cs/local/vault-waiter.pid" ] || { echo "  FAIL: waiter started"; return 1; }
+    assert_eq "" "$(cat "$FAKE_HDIUTIL_LOG")" "no detach" || return 1
+}
+
+test_session_end_waiter_spares_a_reopened_session() {
+    _encrypted_session enc || return 1
+    sleep 300 &
+    local claude=$!
+    _end_conversation enc prompt_input_exit "$claude" "$claude"
+    sleep 300 &
+    local reopened=$!
+    echo "$reopened" > "$CS_SESSIONS_ROOT/enc/.cs/session.lock"
+    kill "$claude" 2>/dev/null; wait "$claude" 2>/dev/null
+    _waiter_gone enc || { kill "$reopened"; echo "  FAIL: waiter still running"; return 1; }
+    kill "$reopened" 2>/dev/null; wait "$reopened" 2>/dev/null
+    assert_eq "" "$(cat "$FAKE_HDIUTIL_LOG")" "the new conversation keeps its mount" || return 1
+}
+
+test_session_end_waiter_leaves_a_busy_vault_mounted() {
+    _encrypted_session enc || return 1
+    sleep 300 &
+    local claude=$!
+    FAKE_HDIUTIL_FAIL=detach _end_conversation enc prompt_input_exit "$claude" "$claude"
+    kill "$claude" 2>/dev/null; wait "$claude" 2>/dev/null
+    _waiter_gone enc || { echo "  FAIL: waiter still running"; return 1; }
+    assert_eq "detach $FAKE_MNT" "$(cat "$FAKE_HDIUTIL_LOG")" "one plain detach, never -force" || return 1
+}
+
 run_test test_encrypt_refuses_off_macos
 run_test test_encrypt_refuses_without_a_terminal
 run_test test_encrypt_refuses_a_live_session
@@ -348,4 +444,9 @@ run_test test_pre_open_detaches_a_leftover_mount_and_asks_again
 run_test test_pre_open_refuses_a_leftover_mount_that_will_not_detach
 run_test test_pre_open_refuses_without_a_terminal
 run_test test_pre_open_attaches_with_a_prompt
+run_test test_session_end_detaches_after_the_lead_exits
+run_test test_session_end_leaves_the_vault_for_clear_resume_and_non_leads
+run_test test_session_end_ignores_a_session_cs_did_not_encrypt
+run_test test_session_end_waiter_spares_a_reopened_session
+run_test test_session_end_waiter_leaves_a_busy_vault_mounted
 report_results
