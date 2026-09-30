@@ -78,7 +78,19 @@ rotate_narrative() {
         | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | tail -1 || true)
     [ -n "$through" ] || through="undated"
 
-    local arch_dir="$meta_dir/narrative-archive/$actor"
+    # An encrypted session's narrative sits in the vault behind the .cs/memory
+    # link, so its archive must too. A .cs/narrative-archive link is used as
+    # it is; otherwise .cs/private holds the archive. With neither, the only
+    # place left is plaintext, so the rotation refuses.
+    local arch_root="$meta_dir/narrative-archive"
+    if [ -L "$meta_dir/memory" ] && [ ! -L "$arch_root" ]; then
+        if [ ! -d "$meta_dir/private" ]; then
+            rm -f "$snap"
+            error "narrative.$actor.md lives on encrypted storage (.cs/memory is a link), and neither .cs/private nor .cs/narrative-archive is there to hold its archive. Link one of them into the vault, then run cs -narrative rotate again."
+        fi
+        arch_root="$meta_dir/private/narrative-archive"
+    fi
+    local arch_dir="$arch_root/$actor"
     mkdir -p "$arch_dir"
     [ -w "$arch_dir" ] || { rm -f "$snap"; error "Cannot write to $arch_dir"; }
     local body="$arch_dir/.body.$$"
@@ -131,7 +143,7 @@ rotate_narrative() {
     mv "$live_tmp" "$live"
     rm -f "$snap"
 
-    local chunk_rel=".cs/narrative-archive/$actor/$(basename "$chunk")"
+    local chunk_rel=".cs/${arch_root#"$meta_dir"/}/$actor/$(basename "$chunk")"
     if git -C "$session_dir" rev-parse --git-dir >/dev/null 2>&1 \
         && git -C "$session_dir" ls-files --error-unmatch -- "$live" >/dev/null 2>&1 \
         && { git -C "$session_dir" check-ignore -q --no-index -- "$live" \
@@ -182,7 +194,7 @@ rotate_narrative() {
     local archived_kb now_kb
     archived_kb=$(( (cut - head_end) / 1024 ))
     now_kb=$(( $(wc -c < "$live" | tr -d ' ') / 1024 ))
-    echo "rotated $sections sections (${archived_kb} KB) -> .cs/narrative-archive/$actor/$(basename "$chunk"); live file now ${now_kb} KB"
+    echo "rotated $sections sections (${archived_kb} KB) -> $chunk_rel; live file now ${now_kb} KB"
 }
 
 # Dispatcher for cs -narrative

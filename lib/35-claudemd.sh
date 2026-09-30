@@ -171,6 +171,7 @@ This session keeps its private files in an encrypted vault: `.cs/memory`, `.cs/p
 - Keep the objective, environment and outcome at the top of your narrative (`.cs/memory/narrative.<actor>.md`), and read them from there on resume. `.cs/README.md` stays frontmatter only; cs does not copy your first prompt into it.
 - The bash-logger records every Bash command in `.cs/private/session.log`, inside the vault. The secrets rule above still applies.
 - Rotation handoffs live in `.cs/private/handoffs/` and are never committed; the `rotate` skill says how.
+- `cs -narrative rotate` archives your narrative's older sections into `.cs/private/narrative-archive/<actor>/` (or through a `.cs/narrative-archive` link into the vault); grep there on demand.
 - Keep session notes (research, scratch, drafts) under `.cs/memory`, `.cs/plans` or `.cs/private`.
 EOF
 }

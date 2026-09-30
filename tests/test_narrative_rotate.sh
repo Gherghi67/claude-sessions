@@ -549,6 +549,55 @@ test_rotate_appends_a_timeline_event() {
     case "$archive" in .cs/narrative-archive/alice/2026-08-08-*.md) ;; *) echo "  FAIL: archive field should be session-relative: $archive"; return 1 ;; esac
 }
 
+# An encrypted session's narrative lives in a vault behind the .cs/memory
+# link. Its rotated sections must stay in the vault too: never in plaintext
+# .cs/narrative-archive, which autosave and backups read.
+_vault_memory() {
+    VAULT="$TEST_TMPDIR/vault"
+    mkdir -p "$VAULT"
+    mv "$SESSION_DIR/.cs/memory" "$VAULT/memory"
+    ln -s "$VAULT/memory" "$SESSION_DIR/.cs/memory"
+}
+
+test_rotate_archives_an_encrypted_narrative_behind_private() {
+    _vault_memory
+    mkdir -p "$VAULT/private"
+    ln -s "$VAULT/private" "$SESSION_DIR/.cs/private"
+    _make_narrative "$LIVE" 10 500
+    local output archive
+    output=$("$CS_BIN" -narrative rotate 2>&1) || { echo "$output"; return 1; }
+    assert_file_not_contains "$LIVE" "section 7$" "section 7 is archived" || return 1
+    assert_eq "1" "$(find "$VAULT/private/narrative-archive/alice" -name '2026-08-08-*.md' | wc -l | tr -d ' ')" \
+        "one chunk inside the vault" || return 1
+    assert_not_exists "$SESSION_DIR/.cs/narrative-archive" "nothing in plaintext .cs/narrative-archive" || return 1
+    assert_output_contains "$output" "-> .cs/private/narrative-archive/alice/2026-08-08-" "names the vault path" || return 1
+    archive=$(jq -r 'select(.event == "narrative_rotated") | .archive' "$SESSION_DIR/.cs/timeline.jsonl")
+    case "$archive" in .cs/private/narrative-archive/alice/2026-08-08-*.md) ;; *) echo "  FAIL: timeline archive: $archive"; return 1 ;; esac
+}
+
+test_rotate_uses_a_narrative_archive_linked_into_the_vault() {
+    _vault_memory
+    mkdir -p "$VAULT/narrative-archive"
+    ln -s "$VAULT/narrative-archive" "$SESSION_DIR/.cs/narrative-archive"
+    _make_narrative "$LIVE" 10 500
+    "$CS_BIN" -narrative rotate > /dev/null 2>&1 || return 1
+    assert_eq "1" "$(find "$VAULT/narrative-archive/alice" -name '2026-08-08-*.md' | wc -l | tr -d ' ')" \
+        "the chunk goes through the existing link" || return 1
+}
+
+test_rotate_refuses_an_encrypted_narrative_with_nowhere_private_to_archive() {
+    _vault_memory
+    _make_narrative "$LIVE" 10 500
+    local before output rc=0
+    before=$(_bytes "$LIVE")
+    output=$("$CS_BIN" -narrative rotate 2>&1) || rc=$?
+    assert_eq "1" "$rc" "the rotation refuses" || return 1
+    assert_output_contains "$output" "narrative.alice.md lives on encrypted storage (.cs/memory is a link), and neither .cs/private nor .cs/narrative-archive is there to hold its archive" \
+        "names the missing link" || return 1
+    assert_eq "$before" "$(_bytes "$LIVE")" "the live file is untouched" || return 1
+    assert_not_exists "$SESSION_DIR/.cs/narrative-archive" "nothing in plaintext .cs/narrative-archive" || return 1
+}
+
 test_rotate_does_not_splice_onto_a_torn_timeline() {
     _make_narrative "$LIVE" 10 500
     local timeline="$SESSION_DIR/.cs/timeline.jsonl"
@@ -851,6 +900,9 @@ run_test test_rotate_never_force_adds_into_an_ignored_cs
 run_test test_rotate_names_an_ignored_archive_directory
 run_test test_rotate_outside_git_still_rotates
 run_test test_rotate_appends_a_timeline_event
+run_test test_rotate_archives_an_encrypted_narrative_behind_private
+run_test test_rotate_uses_a_narrative_archive_linked_into_the_vault
+run_test test_rotate_refuses_an_encrypted_narrative_with_nowhere_private_to_archive
 run_test test_rotate_does_not_splice_onto_a_torn_timeline
 run_test test_rotate_then_peer_append_merges_without_resurrection
 run_test test_two_clones_rotating_at_different_cuts_merge_clean

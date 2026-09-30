@@ -34,7 +34,7 @@ search_sessions() {
 
     local found=0
     local search_files=".cs/README.md"
-    local -a search_globs=(".cs/memory/*.md" ".cs/narrative-archive/*/*.md")
+    local -a search_globs=(".cs/memory/*.md" ".cs/narrative-archive/*/*.md" ".cs/private/narrative-archive/*/*.md")
 
     for session_dir in "$SESSIONS_ROOT"/*/; do
         [ -d "$session_dir" ] || continue
