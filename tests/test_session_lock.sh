@@ -181,7 +181,7 @@ test_session_end_keeps_the_lock_for_clear_and_resume() {
     for reason in clear resume; do
         echo "$$" > "$meta_dir/session.lock"
         printf '{"session_id": "test-123", "reason": "%s"}' "$reason" \
-            | CS_RESOLVED_FROM=env "$SCRIPT_DIR/../hooks/session-end.sh"
+            | CS_RESOLVED_FROM="env" "$SCRIPT_DIR/../hooks/session-end.sh"
         assert_eq "$$" "$(cat "$meta_dir/session.lock" 2>/dev/null)" "lock kept after reason $reason" || return 1
     done
 }

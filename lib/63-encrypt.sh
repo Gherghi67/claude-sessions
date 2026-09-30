@@ -184,6 +184,7 @@ run_encrypt() {
     # Hold the session lock while the password prompts run, so an open in
     # another terminal meets the collision check instead of racing the moves.
     echo "$$" > "$meta/session.lock"
+    # shellcheck disable=SC2064  # the path is fixed now, on purpose
     trap "release_session_lock $(printf '%q' "$meta")" EXIT
     mnt="$meta/vault-mnt"
     container=$(_encrypt_container_path "$name")
