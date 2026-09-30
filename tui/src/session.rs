@@ -1031,8 +1031,49 @@ fn worktree_untracked(path: &Path) -> Result<Vec<String>, String> {
 /// Remove a session at `path` by whatever means its kind requires: symlinks
 /// are unlinked, worktree sessions are unregistered through git, and plain
 /// directories are removed outright.
+/// The links an encrypted session keeps into its vault, under `.cs/`.
+pub const VAULT_LINKS: [&str; 4] = ["memory", "plans", "claude-config", "private"];
+
+/// Whether `.cs/<sub>` in `dir` is a symlink, resolving or not: a locked
+/// vault leaves it dangling.
+pub fn is_vault_link(dir: &Path, sub: &str) -> bool {
+    dir.join(".cs")
+        .join(sub)
+        .symlink_metadata()
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
+}
+
+/// The first vault link that resolves inside `dir`, with its target as
+/// written: the vault is mounted in the session directory itself.
+fn mounted_vault_link(dir: &Path) -> Option<(&'static str, PathBuf)> {
+    let real_dir = fs::canonicalize(dir).ok()?;
+    VAULT_LINKS.iter().find_map(|sub| {
+        if !is_vault_link(dir, sub) {
+            return None;
+        }
+        let link = dir.join(".cs").join(sub);
+        let real = fs::canonicalize(&link).ok()?;
+        real.starts_with(&real_dir)
+            .then(|| fs::read_link(&link).ok())
+            .flatten()
+            .map(|target| (*sub, target))
+    })
+}
+
 pub fn remove_session_path(root: &Path, name: &str, path: &Path) -> std::io::Result<()> {
-    if path.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+    let is_link = path.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false);
+    // remove_dir_all recurses into a mount, so a vault mounted inside the
+    // session would lose its contents. An adopted session loses only its link.
+    if !is_link {
+        if let Some((sub, target)) = mounted_vault_link(path) {
+            return Err(std::io::Error::other(format!(
+                "{name} has encrypted storage mounted inside it: .cs/{sub} points at {}; unmount it, then retry",
+                target.display()
+            )));
+        }
+    }
+    if is_link {
         fs::remove_file(path)?;
     } else if worktree_parts(name).is_some() && path.join(".git").is_file() {
         remove_worktree_session(root, name, path)?;
@@ -1788,6 +1829,36 @@ mod tests {
             "base repo must not keep a stale worktree registration"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // An encrypted session mounts its vault inside the session directory by
+    // convention, and remove_dir_all recurses into a mount: deleting the
+    // session would delete what the vault holds. Unmounted, the link dangles
+    // and the delete goes ahead.
+    #[test]
+    fn remove_session_path_refuses_while_the_vault_is_mounted_inside() {
+        let root = std::env::temp_dir().join(format!("cs-rm-vault-{}", std::process::id()));
+        let dir = root.join("vt");
+        let vault = dir.join(".cs/vault-mnt/memory");
+        fs::create_dir_all(&vault).unwrap();
+        fs::write(vault.join("narrative.md"), "sealed\n").unwrap();
+        std::os::unix::fs::symlink(&vault, dir.join(".cs/memory")).unwrap();
+
+        let err = remove_session_path(&root, "vt", &dir).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "vt has encrypted storage mounted inside it: .cs/memory points at {}; unmount it, then retry",
+                vault.display()
+            )
+        );
+        assert!(vault.join("narrative.md").exists(), "the vault's contents survive");
+
+        fs::remove_dir_all(&vault).unwrap();
+        remove_session_path(&root, "vt", &dir).unwrap();
+        assert!(!dir.exists(), "an unmounted encrypted session is removed");
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
