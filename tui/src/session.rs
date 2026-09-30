@@ -67,6 +67,30 @@ pub struct Session {
 /// keeps its notes in an encrypted volume.
 pub const ENCRYPTED_TAG: &str = "encrypted";
 
+/// The marker drawn beside an encrypted session: a Nerd Font lock once this
+/// machine has confirmed its font draws private-use glyphs (the statusline's
+/// caps consent, `CS_STATUSLINE_CAPS` overriding the answer file), else a word.
+/// KEEP IN SYNC with `_caps_wanted` and ICON_LOCK in bin/cs-statusline.
+pub fn lock_marker() -> &'static str {
+    let env = std::env::var("CS_STATUSLINE_CAPS").ok();
+    let config = std::env::var("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|_| std::env::var("HOME").map(|h| PathBuf::from(h).join(".config")));
+    let answer = config
+        .ok()
+        .and_then(|dir| fs::read_to_string(dir.join("cs/statusline-caps")).ok());
+    lock_marker_for(env.as_deref(), answer.as_deref())
+}
+
+fn lock_marker_for(env: Option<&str>, caps_file: Option<&str>) -> &'static str {
+    let wanted = match env {
+        Some("1") => true,
+        Some("0") => false,
+        _ => caps_file.and_then(|f| f.lines().next()) == Some("on"),
+    };
+    if wanted { "\u{f023}" } else { "enc" }
+}
+
 /// Whether an encrypted session's volume is mounted. Read from `.cs/memory`,
 /// which such a session links into the volume: a link that resolves means
 /// mounted.
@@ -1212,6 +1236,15 @@ mod tests {
         fs::create_dir_all(dir.join(".cs/local")).unwrap();
         fs::write(dir.join(".cs/README.md"), format!("---\ntags: [{tags}]\n---\n# {name}\n")).unwrap();
         dir
+    }
+
+    #[test]
+    fn lock_marker_follows_the_caps_consent_with_the_env_overriding_the_file() {
+        assert_eq!(lock_marker_for(None, None), "enc", "unanswered draws the word");
+        assert_eq!(lock_marker_for(None, Some("on\n")), "\u{f023}");
+        assert_eq!(lock_marker_for(None, Some("off\n")), "enc");
+        assert_eq!(lock_marker_for(Some("0"), Some("on\n")), "enc", "env 0 beats the file");
+        assert_eq!(lock_marker_for(Some("1"), None), "\u{f023}", "env 1 beats a missing file");
     }
 
     #[test]
