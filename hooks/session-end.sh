@@ -121,8 +121,13 @@ fi
 # a duplicate with no collision menu. A stale lock is still cleared either way, so a
 # crashed session does not stay locked out. Ownership cannot be the $$ test
 # lib/15-lock.sh uses — a hook is a different process.
+# A /clear or /resume ends the conversation but not the claude that holds the
+# lock, so the lock stays until that claude exits.
 if [ "${CS_RESOLVED_FROM:-env}" = "env" ]; then
-    rm -f "$META_DIR/session.lock" 2>/dev/null || true
+    case "$END_REASON" in
+        clear|resume) ;;
+        *) rm -f "$META_DIR/session.lock" 2>/dev/null || true ;;
+    esac
 else
     _cs_lock_pid=$(cat "$META_DIR/session.lock" 2>/dev/null | tr -d '[:space:]') || true
     case "${_cs_lock_pid:-}" in
