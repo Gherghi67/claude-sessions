@@ -1071,8 +1071,12 @@ fn remove_worktree_session(root: &Path, name: &str, path: &Path) -> std::io::Res
 /// what it prints into `cur/`), matching the shell reader and the statusline.
 /// Only `*.json` files count — a `.DS_Store`, a staging leftover or a
 /// subdirectory would otherwise badge a phantom unread that never clears.
+/// An encrypted session keeps its mailbox behind `.cs/private`, a link into its
+/// vault; while that link dangles (the vault locked) the read fails and counts 0.
 fn unread_mail_count(meta_dir: &Path) -> u32 {
-    fs::read_dir(meta_dir.join("local/mail/new"))
+    let private = meta_dir.join("private");
+    let base = if private.symlink_metadata().is_ok() { private } else { meta_dir.join("local") };
+    fs::read_dir(base.join("mail/new"))
         .map(|entries| {
             entries
                 .flatten()
@@ -1575,6 +1579,24 @@ mod tests {
             1,
             "only new/*.json files count as unread"
         );
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // An encrypted session keeps its mailbox behind .cs/private, a link into
+    // its vault; while that link dangles (the vault locked) nothing counts.
+    #[test]
+    fn unread_mail_counts_the_private_mailbox() {
+        let dir = std::env::temp_dir().join(format!("cs-unread-private-{}", std::process::id()));
+        let vault = dir.join("vault/private");
+        let new = vault.join("mail/new");
+        fs::create_dir_all(&new).unwrap();
+        fs::create_dir_all(dir.join("meta")).unwrap();
+        std::os::unix::fs::symlink(&vault, dir.join("meta/private")).unwrap();
+        fs::write(new.join("0000000001-a.json"), "{\"a\":1}\n").unwrap();
+        fs::write(new.join("0000000002-b.json"), "{\"a\":2}\n").unwrap();
+        assert_eq!(unread_mail_count(&dir.join("meta")), 2);
+        fs::rename(dir.join("vault"), dir.join("unmounted")).unwrap();
+        assert_eq!(unread_mail_count(&dir.join("meta")), 0);
         fs::remove_dir_all(&dir).unwrap();
     }
 

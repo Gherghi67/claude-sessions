@@ -1778,10 +1778,17 @@ _seg_notes() {
 # the same basis as the shell reader and the TUI. Only *.json files count: a
 # .DS_Store, a staging leftover or a subdirectory must not show a phantom
 # unread that never clears. The [ -f ] guard also covers bash 3.2's lack of
-# nullglob (an unmatched glob comes back literal).
+# nullglob (an unmatched glob comes back literal). An encrypted session keeps
+# its mailbox behind .cs/private (cs_private_dir's rule, inlined: the bar
+# sources no library); while that link dangles nothing is counted.
 _seg_mail() {
     [ -n "${CLAUDE_SESSION_NAME:-}" ] || return 0
-    local mdir="$SESSIONS_ROOT/$CLAUDE_SESSION_NAME/.cs/local/mail"
+    local meta="$SESSIONS_ROOT/$CLAUDE_SESSION_NAME/.cs" mdir
+    if [ -L "$meta/private" ] || [ -e "$meta/private" ]; then
+        mdir="$meta/private/mail"
+    else
+        mdir="$meta/local/mail"
+    fi
     [ -d "$mdir/new" ] || return 0
     local unread=0 f
     for f in "$mdir"/new/*.json; do
