@@ -498,8 +498,13 @@ migrate_session() {
     # peer still on the old cs may keep appending to the tracked log, so a
     # one-time modify/delete conflict on this low-stakes file is possible — take
     # either side.
+    # An encrypted session's log belongs behind .cs/private; open has already
+    # refused a locked vault, so cs_private_dir resolves here.
     if [ -f "$session_dir/.cs/logs/session.log" ]; then
-        cat "$session_dir/.cs/logs/session.log" >> "$session_dir/.cs/local/session.log"
+        local log_dir
+        log_dir=$(cs_private_dir "$session_dir/.cs") \
+            || error "Cannot move .cs/logs/session.log: .cs/private points at $(readlink "$session_dir/.cs/private"), which is missing."
+        cat "$session_dir/.cs/logs/session.log" >> "$log_dir/session.log"
         rm -f "$session_dir/.cs/logs/session.log"
         rmdir "$session_dir/.cs/logs" 2>/dev/null || true
         # Drop the obsolete union rule for the relocated log. grep -v exits 1 when
@@ -510,7 +515,7 @@ migrate_session() {
             { grep -v 'logs/session\.log merge=union' "$ga" > "$ga.tmp"; } 2>/dev/null || true
             mv "$ga.tmp" "$ga" 2>/dev/null || rm -f "$ga.tmp"
         fi
-        warn "Moved .cs/logs/session.log to machine-local .cs/local/session.log"
+        warn "Moved .cs/logs/session.log to ${log_dir#"$session_dir"/}/session.log"
     fi
 
     # Remove inert sync/remote metadata left by older versions (the sync
