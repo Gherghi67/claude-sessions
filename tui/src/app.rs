@@ -2118,6 +2118,18 @@ impl App {
                 self.mode = Mode::Normal;
                 return;
             }
+            // An encrypted session reaches its vault through absolute links and
+            // keeps its transcripts under the current path's name; a rename
+            // strands both. symlink_metadata sees a link whose vault is locked.
+            let claude_config = self.sessions_root.join(&session.name).join(".cs/claude-config");
+            if std::fs::symlink_metadata(&claude_config).is_ok() {
+                self.set_status(
+                    "Can't rename an encrypted session: its vault links name this path",
+                    StatusLevel::Error,
+                );
+                self.mode = Mode::Normal;
+                return;
+            }
         }
 
         if let Some(session) = self.selected_session() {
@@ -3689,6 +3701,33 @@ mod tests {
 
         assert!(matches!(app.mode, Mode::Normal), "confirm must not open on an unreadable list");
         assert!(root.join("proj@t").exists());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    // An encrypted session keeps Claude Code's config in its vault through
+    // absolute links, and its transcripts under the old path's name; a rename
+    // would strand both. A locked vault leaves the link dangling, so the
+    // refusal has to hold for a link that resolves to nothing.
+    #[test]
+    fn rename_refuses_a_session_with_its_own_claude_config() {
+        use crate::session::test_root;
+        let root = std::env::temp_dir().join(format!("cs-test-rename-vault-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("vt/.cs/local")).unwrap();
+        std::os::unix::fs::symlink(root.join("vt/.cs/vault-mnt/claude-config"), root.join("vt/.cs/claude-config"))
+            .unwrap();
+        let _guard = test_root::scoped(root.clone());
+        let mut app = app_on(&root, "vt");
+        app.mode = Mode::Rename;
+        app.rename_input.set("vt2");
+
+        app.execute_rename();
+
+        assert_eq!(
+            app.status_message.as_ref().map(|m| m.text.as_str()),
+            Some("Can't rename an encrypted session: its vault links name this path")
+        );
+        assert!(root.join("vt").is_dir(), "the session must stay where it is");
+        assert!(!root.join("vt2").exists());
         std::fs::remove_dir_all(&root).ok();
     }
 
