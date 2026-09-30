@@ -731,6 +731,31 @@ test_claude_config_seeds_the_shell_profile_claude_json() {
         "the copy should come from the profile's .claude.json" || return 1
 }
 
+# A cs launched from inside another encrypted session inherits that session's
+# vault as CLAUDE_CONFIG_DIR; sharing from it would tie this vault to that one.
+test_claude_config_shares_from_the_shell_config_not_an_inherited_vault() {
+    local other="$TEST_TMPDIR/other/.cs/claude-config"
+    mkdir -p "$other" "$HOME/.claude"
+    printf '{"model":"other"}\n' > "$other/settings.json"
+    printf '{"from":"other"}\n' > "$other/.claude.json"
+    printf '{"model":"home"}\n' > "$HOME/.claude/settings.json"
+    printf '{"from":"home"}\n' > "$HOME/.claude.json"
+    _make_vaulted_session vt
+    _make_vaulted_config vt
+    _make_config_sentinel
+
+    CLAUDE_CONFIG_DIR="$other" CLAUDE_SECURESTORAGE_CONFIG_DIR="" \
+        "$CS_BIN" vt <<< "" >/dev/null 2>&1 || true
+
+    local config="$CS_SESSIONS_ROOT/vt/.cs/claude-config"
+    assert_eq "$HOME/.claude/settings.json" "$(readlink "$config/settings.json")" \
+        "settings.json should link to the shell's config" || return 1
+    assert_eq '{"from":"home","projects":{}}' "$(jq -c . "$config/.claude.json")" \
+        "the copy should come from the shell's .claude.json" || return 1
+    assert_eq "config=$config secure=" "$(cat "$TEST_TMPDIR/launched")" \
+        "claude should run on this vault and the default login" || return 1
+}
+
 # After the first launch the session's .claude.json is Claude Code's to write.
 test_claude_config_seeds_claude_json_once() {
     printf '{"from":"home"}\n' > "$HOME/.claude.json"
@@ -819,6 +844,7 @@ run_test test_claude_config_keeps_its_own_entries
 run_test test_claude_config_never_links_conversation_state
 run_test test_claude_config_seeds_claude_json_without_projects
 run_test test_claude_config_seeds_the_shell_profile_claude_json
+run_test test_claude_config_shares_from_the_shell_config_not_an_inherited_vault
 run_test test_claude_config_seeds_claude_json_once
 run_test test_claude_config_refuses_an_unreadable_claude_json
 
