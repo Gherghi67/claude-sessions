@@ -19,6 +19,11 @@ EOF
 #!/bin/sh
 echo "$*" >> "$FAKE_HDIUTIL_LOG"
 [ "$1" = "${FAKE_HDIUTIL_FAIL:-}" ] && { echo "hdiutil: $1 failed - stub" >&2; exit 1; }
+# With $FAKE_LOCK_WATCH set, create records whether that lock names a live pid.
+if [ "$1" = "create" ] && [ -n "${FAKE_LOCK_WATCH:-}" ]; then
+    p=$(cat "$FAKE_LOCK_WATCH" 2>/dev/null)
+    if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then echo live; else echo "none:$p"; fi > "$FAKE_LOCK_WATCH.seen"
+fi
 # create makes the container, the one side effect cs relies on.
 if [ "$1" = "create" ]; then eval "last=\${$#}"; mkdir -p "$last"; fi
 # With $FAKE_MOUNT_FLAG set, attach and detach flip the mount stub's answer.
@@ -233,6 +238,27 @@ attach -nobrowse -mountpoint $s/vault-mnt $c
 detach $s/vault-mnt" "$(cat "$FAKE_HDIUTIL_LOG")" "create, attach, then detach" || return 1
     # shellcheck disable=SC2088  # cs prints the literal ~ path
     assert_output_contains "$out" "~/.claude/history.jsonl" "lists copies it could not move" || return 1
+}
+
+# An open while cs -encrypt asks for passwords would race its moves; the
+# session lock holds it off, and is gone once cs -encrypt ends.
+test_encrypt_holds_the_session_lock_while_it_works() {
+    _stubs
+    _populated_session enc
+    local lock="$CS_SESSIONS_ROOT/enc/.cs/session.lock" rc=0
+    FAKE_LOCK_WATCH="$lock" _encrypt enc >/dev/null 2>&1 || rc=$?
+    assert_eq "0" "$rc" "encrypt succeeds" || return 1
+    assert_eq "live" "$(cat "$lock.seen" 2>/dev/null)" "a live lock while hdiutil runs" || return 1
+    [ ! -e "$lock" ] || { echo "  FAIL: lock left after encrypt: $(cat "$lock")"; return 1; }
+}
+
+test_encrypt_releases_the_session_lock_when_it_stops() {
+    _stubs
+    _populated_session enc
+    local lock="$CS_SESSIONS_ROOT/enc/.cs/session.lock" rc=0
+    FAKE_HDIUTIL_FAIL=attach _encrypt enc >/dev/null 2>&1 || rc=$?
+    assert_eq "1" "$rc" "encrypt stops" || return 1
+    [ ! -e "$lock" ] || { echo "  FAIL: lock left after a failed encrypt: $(cat "$lock")"; return 1; }
 }
 
 test_encrypt_refuses_a_readme_it_cannot_tag() {
@@ -515,6 +541,8 @@ run_test test_encrypt_refuses_a_real_claude_config_or_private
 run_test test_encrypt_refuses_an_existing_pre_open
 run_test test_encrypt_refuses_an_existing_container
 run_test test_encrypt_builds_the_vault_and_detaches
+run_test test_encrypt_holds_the_session_lock_while_it_works
+run_test test_encrypt_releases_the_session_lock_when_it_stops
 run_test test_encrypt_refuses_a_readme_it_cannot_tag
 run_test test_encrypt_stops_when_create_fails
 run_test test_encrypt_stops_when_attach_fails

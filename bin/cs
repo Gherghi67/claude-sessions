@@ -6990,6 +6990,10 @@ run_encrypt() {
     local name="$1" meta container mnt sub
     _encrypt_refuse "$name"
     meta="$SESSIONS_ROOT/$name/.cs"
+    # Hold the session lock while the password prompts run, so an open in
+    # another terminal meets the collision check instead of racing the moves.
+    echo "$$" > "$meta/session.lock"
+    trap "release_session_lock $(printf '%q' "$meta")" EXIT
     mnt="$meta/vault-mnt"
     container=$(_encrypt_container_path "$name")
 
