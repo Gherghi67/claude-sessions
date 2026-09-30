@@ -254,6 +254,81 @@ test_encrypt_stops_on_a_failed_move_and_names_what_moved() {
     [ ! -e "$s/local/pre-open" ] || { echo "  FAIL: pre-open written after a failed move"; return 1; }
 }
 
+# pre-open runs from the session directory before every open. `mount` is a
+# stub that reports the vault mounted when FAKE_MOUNTED=1.
+_encrypted_session() {  # name -> leaves an encrypted session and a clean hdiutil log
+    _stubs
+    _populated_session "$1"
+    _encrypt "$1" >/dev/null 2>&1 || { echo "  FAIL: fixture encrypt failed"; return 1; }
+    cat > "$TEST_TMPDIR/stub/mount" <<'EOF'
+#!/bin/sh
+[ "${FAKE_MOUNTED:-}" = "1" ] && echo "/dev/disk9s1 on $FAKE_MNT (apfs, local, nodev, nosuid, journaled, noowners, nobrowse)"
+echo "/dev/disk3s1 on / (apfs, sealed, local, read-only, journaled)"
+EOF
+    chmod +x "$TEST_TMPDIR/stub/mount"
+    FAKE_MNT=$(cd "$CS_SESSIONS_ROOT/$1/.cs/vault-mnt" && pwd -P)
+    export FAKE_MNT
+    : > "$FAKE_HDIUTIL_LOG"
+}
+
+_pre_open() {  # name [env...] -> runs the hook the way _run_pre_open does
+    local name="$1"; shift
+    (cd "$CS_SESSIONS_ROOT/$name" && env "$@" .cs/local/pre-open </dev/null)
+}
+
+test_pre_open_joins_a_mount_held_by_a_running_session() {
+    _encrypted_session enc || return 1
+    sleep 300 &
+    local live=$! rc=0
+    echo "$live" > "$CS_SESSIONS_ROOT/enc/.cs/session.lock"
+    _pre_open enc FAKE_MOUNTED=1 >/dev/null 2>&1 || rc=$?
+    kill "$live" 2>/dev/null; wait "$live" 2>/dev/null
+    assert_eq "0" "$rc" "exit 0" || return 1
+    assert_eq "" "$(cat "$FAKE_HDIUTIL_LOG")" "no prompt, no hdiutil call" || return 1
+}
+
+test_pre_open_detaches_a_leftover_mount_and_asks_again() {
+    _encrypted_session enc || return 1
+    sleep 300 &
+    local waiter=$! rc=0
+    echo "$waiter" > "$CS_SESSIONS_ROOT/enc/.cs/local/vault-waiter.pid"
+    _pre_open enc FAKE_MOUNTED=1 CS_ASSUME_TTY=1 >/dev/null 2>&1 || rc=$?
+    local alive=0
+    kill -0 "$waiter" 2>/dev/null && alive=1
+    kill "$waiter" 2>/dev/null; wait "$waiter" 2>/dev/null
+    assert_eq "0" "$rc" "exit 0" || return 1
+    assert_eq "0" "$alive" "the old waiter is killed" || return 1
+    [ ! -e "$CS_SESSIONS_ROOT/enc/.cs/local/vault-waiter.pid" ] || { echo "  FAIL: waiter pid file left"; return 1; }
+    assert_eq "detach $FAKE_MNT
+attach -nobrowse -mountpoint $FAKE_MNT $(_vault_path enc)" "$(cat "$FAKE_HDIUTIL_LOG")" "detach, then a prompting attach" || return 1
+}
+
+test_pre_open_refuses_a_leftover_mount_that_will_not_detach() {
+    _encrypted_session enc || return 1
+    local out rc=0
+    out=$(_pre_open enc FAKE_MOUNTED=1 CS_ASSUME_TTY=1 FAKE_HDIUTIL_FAIL=detach 2>&1) || rc=$?
+    assert_eq "1" "$rc" "non-zero exit" || return 1
+    assert_output_contains "$out" "run: hdiutil detach $FAKE_MNT" "names the command" || return 1
+    assert_eq "detach $FAKE_MNT" "$(cat "$FAKE_HDIUTIL_LOG")" "never attaches silently" || return 1
+}
+
+test_pre_open_refuses_without_a_terminal() {
+    _encrypted_session enc || return 1
+    local out rc=0
+    out=$(_pre_open enc 2>&1) || rc=$?
+    assert_eq "1" "$rc" "non-zero exit" || return 1
+    assert_output_contains "$out" "cs: this session is encrypted and needs a terminal to ask for the vault password." "says why" || return 1
+    assert_eq "" "$(cat "$FAKE_HDIUTIL_LOG")" "no hdiutil call, so no dialog" || return 1
+}
+
+test_pre_open_attaches_with_a_prompt() {
+    _encrypted_session enc || return 1
+    local rc=0
+    _pre_open enc CS_ASSUME_TTY=1 >/dev/null 2>&1 || rc=$?
+    assert_eq "0" "$rc" "exit 0" || return 1
+    assert_eq "attach -nobrowse -mountpoint $FAKE_MNT $(_vault_path enc)" "$(cat "$FAKE_HDIUTIL_LOG")" "one attach, no -stdinpass" || return 1
+}
+
 run_test test_encrypt_refuses_off_macos
 run_test test_encrypt_refuses_without_a_terminal
 run_test test_encrypt_refuses_a_live_session
@@ -268,4 +343,9 @@ run_test test_encrypt_refuses_a_readme_it_cannot_tag
 run_test test_encrypt_stops_when_create_fails
 run_test test_encrypt_stops_when_attach_fails
 run_test test_encrypt_stops_on_a_failed_move_and_names_what_moved
+run_test test_pre_open_joins_a_mount_held_by_a_running_session
+run_test test_pre_open_detaches_a_leftover_mount_and_asks_again
+run_test test_pre_open_refuses_a_leftover_mount_that_will_not_detach
+run_test test_pre_open_refuses_without_a_terminal
+run_test test_pre_open_attaches_with_a_prompt
 report_results
