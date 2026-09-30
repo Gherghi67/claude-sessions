@@ -4,6 +4,11 @@ All notable changes to cs are documented here. Release notes are also available 
 
 <!-- New entries group changes under Keep-a-Changelog headings (Added / Changed / Removed / Fixes / Docs), or Features / Performance where those fit the release. -->
 
+## Unreleased
+
+### Changed
+- `cs -rm` names the files and folders in a session that cs did not create (anything beside `.cs/`, `.claude/`, the git files and the two `CLAUDE` files) before it asks to remove the session. `--force` refuses such a session and lists them; add `--delete-files` to remove it anyway. An adopted session still loses only its link, so this applies to sessions cs created.
+
 ## 2026.9.23
 
 ### Added

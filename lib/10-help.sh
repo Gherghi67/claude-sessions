@@ -50,7 +50,7 @@ Commands:
   -archive <name>... [--force]  Archive sessions (hidden until reopened; --force if live)
   -unarchive <name>...  Restore archived sessions to the listings
   -status "<text>"    Set this session's advertised status (also: -status, -status --clear/-c)
-  -remove, -rm <name>... [--force]  Remove sessions (each asks its own confirm; --force if live)
+  -remove, -rm <name>... [--force [--delete-files]]  Remove sessions (each asks its own confirm and names files cs did not create; --force if live; --delete-files lets --force remove those files)
   -secrets <cmd>      Manage current session secrets (requires CLAUDE_SESSION_NAME)
   -update             Update cs to latest version
     --check, -c       Check for updates without installing
