@@ -214,7 +214,7 @@ launch_claude_code() {
     # A force chosen at the collision menu is equivalent to --force for the
     # rest of the launch.
     [ "${CS_COLLISION_FORCE:-}" = "1" ] && force="true"
-    trap 'reset_tab_title; release_session_lock "'"$session_dir/.cs"'"' EXIT
+    trap 'reset_tab_title; release_session_lock "'"$session_dir/.cs"'"; _detach_opened_vault' EXIT
     trap 'reset_tab_title; release_session_lock "'"$session_dir/.cs"'"; exit 130' INT TERM
 
     # Opening an archived session revives it. Placed after lock acquisition so
@@ -771,6 +771,8 @@ EOF
         # Try continuing previous conversation
         SECONDS=0
         local rc=0
+        # Once claude runs, the SessionEnd waiter owns the vault detach.
+        CS_OPENED_VAULT_MNT=""
         # shellcheck disable=SC2086
         $CLAUDE_CODE_BIN --name "$session_name" $continue_flag ${launch_prompt:+"$launch_prompt"} || rc=$?
         if [ $rc -ne 0 ] && [ $SECONDS -lt 3 ]; then

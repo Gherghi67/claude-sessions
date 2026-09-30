@@ -110,6 +110,28 @@ EOF
     chmod +x "$hook"
 }
 
+# The mountpoint of a vault this cs run's pre-open mounted. An open that stops
+# before exec'ing claude (a refusal, or a cancelled prompt) detaches it on the
+# way out; exec replaces cs and drops the EXIT trap, so claude keeps it.
+CS_OPENED_VAULT_MNT=""
+
+_arm_vault_detach() {  # session_dir
+    local meta="$1/.cs" mnt
+    [ -f "$meta/local/vault" ] || return 0
+    # pre-open joined the mount a running conversation holds; not ours to detach.
+    session_is_live "$meta" && return 0
+    mnt=$(cd "$meta/vault-mnt" 2>/dev/null && pwd -P) || return 0
+    mount | grep -F " on $mnt (" >/dev/null || return 0
+    CS_OPENED_VAULT_MNT="$mnt"
+    trap _detach_opened_vault EXIT
+}
+
+_detach_opened_vault() {
+    [ -n "$CS_OPENED_VAULT_MNT" ] || return 0
+    hdiutil detach "$CS_OPENED_VAULT_MNT" >/dev/null 2>&1 \
+        || warn "The vault is still mounted at $CS_OPENED_VAULT_MNT; the next open detaches it, or run: hdiutil detach $CS_OPENED_VAULT_MNT"
+}
+
 run_encrypt() {
     [ $# -eq 1 ] || error "Usage: cs -encrypt <name>"
     local name="$1" meta container mnt sub

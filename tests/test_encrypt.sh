@@ -21,6 +21,11 @@ echo "$*" >> "$FAKE_HDIUTIL_LOG"
 [ "$1" = "${FAKE_HDIUTIL_FAIL:-}" ] && { echo "hdiutil: $1 failed - stub" >&2; exit 1; }
 # create makes the container, the one side effect cs relies on.
 if [ "$1" = "create" ]; then eval "last=\${$#}"; mkdir -p "$last"; fi
+# With $FAKE_MOUNT_FLAG set, attach and detach flip the mount stub's answer.
+if [ -n "${FAKE_MOUNT_FLAG:-}" ]; then
+    [ "$1" = "attach" ] && : > "$FAKE_MOUNT_FLAG"
+    [ "$1" = "detach" ] && rm -f "$FAKE_MOUNT_FLAG"
+fi
 exit 0
 EOF
     chmod +x "$d/uname" "$d/hdiutil"
@@ -263,7 +268,7 @@ _encrypted_session() {  # name -> leaves an encrypted session and a clean hdiuti
     _encrypt "$1" >/dev/null 2>&1 || { echo "  FAIL: fixture encrypt failed"; return 1; }
     cat > "$TEST_TMPDIR/stub/mount" <<'EOF'
 #!/bin/sh
-[ "${FAKE_MOUNTED:-}" = "1" ] && echo "/dev/disk9s1 on $FAKE_MNT (apfs, local, nodev, nosuid, journaled, noowners, nobrowse)"
+{ [ "${FAKE_MOUNTED:-}" = "1" ] || [ -e "${FAKE_MOUNT_FLAG:-/nonexistent}" ]; } && echo "/dev/disk9s1 on $FAKE_MNT (apfs, local, nodev, nosuid, journaled, noowners, nobrowse)"
 echo "/dev/disk3s1 on / (apfs, sealed, local, read-only, journaled)"
 EOF
     chmod +x "$TEST_TMPDIR/stub/mount"
@@ -328,6 +333,55 @@ test_pre_open_attaches_with_a_prompt() {
     _pre_open enc CS_ASSUME_TTY=1 >/dev/null 2>&1 || rc=$?
     assert_eq "0" "$rc" "exit 0" || return 1
     assert_eq "attach -nobrowse -mountpoint $FAKE_MNT $(_vault_path enc)" "$(cat "$FAKE_HDIUTIL_LOG")" "one attach, no -stdinpass" || return 1
+}
+
+# An open that stops before claude runs detaches the vault its pre-open
+# mounted; a vault a running conversation holds stays mounted.
+_open() {  # name [answers] -> opens the session as a human at a terminal would; the mount stub tracks attach/detach
+    printf '%s' "${2:-}" | FAKE_MOUNT_FLAG="$TEST_TMPDIR/mounted" CS_ASSUME_TTY=1 "$CS_BIN" "$1"
+}
+
+test_open_that_stops_detaches_the_vault_it_mounted() {
+    _encrypted_session enc || return 1
+    echo "plaintext" > "$CS_SESSIONS_ROOT/enc/.cs/local/session.log"
+    local out rc=0
+    out=$(_open enc 2>&1) || rc=$?
+    assert_eq "1" "$rc" "the open stops" || return 1
+    assert_output_contains "$out" "still holds session.log in plaintext" "stops at the plaintext refusal" || return 1
+    assert_eq "attach -nobrowse -mountpoint $FAKE_MNT $(_vault_path enc)
+detach $FAKE_MNT" "$(cat "$FAKE_HDIUTIL_LOG")" "attach, then detach on the way out" || return 1
+}
+
+test_open_that_stops_leaves_a_running_session_vault_mounted() {
+    _encrypted_session enc || return 1
+    : > "$TEST_TMPDIR/mounted"
+    sleep 300 &
+    local live=$! rc=0
+    echo "$live" > "$CS_SESSIONS_ROOT/enc/.cs/session.lock"
+    echo "plaintext" > "$CS_SESSIONS_ROOT/enc/.cs/local/session.log"
+    _open enc >/dev/null 2>&1 || rc=$?
+    kill "$live" 2>/dev/null; wait "$live" 2>/dev/null
+    assert_eq "1" "$rc" "the open stops" || return 1
+    assert_eq "" "$(cat "$FAKE_HDIUTIL_LOG")" "joined the mount, never detached it" || return 1
+}
+
+test_open_cancelled_at_a_prompt_detaches_the_vault_it_mounted() {
+    _encrypted_session enc || return 1
+    local out rc=0
+    out=$(_open enc 2>&1) || rc=$?
+    assert_eq "130" "$rc" "no answer to 'Continue previous conversation?' cancels" || return 1
+    assert_output_contains "$out" "Continue previous conversation?" "stopped at the prompt" || return 1
+    assert_eq "attach -nobrowse -mountpoint $FAKE_MNT $(_vault_path enc)
+detach $FAKE_MNT" "$(cat "$FAKE_HDIUTIL_LOG")" "attach, then detach on the way out" || return 1
+}
+
+test_open_that_reaches_claude_keeps_the_vault_mounted() {
+    _encrypted_session enc || return 1
+    local out rc=0
+    out=$(_open enc "y
+" 2>&1) || rc=$?
+    assert_eq "0" "$rc" "the open reaches claude: $out" || return 1
+    assert_eq "attach -nobrowse -mountpoint $FAKE_MNT $(_vault_path enc)" "$(cat "$FAKE_HDIUTIL_LOG")" "no detach once claude runs" || return 1
 }
 
 # SessionEnd leaves a waiter that detaches the vault once the lead claude
@@ -445,6 +499,10 @@ run_test test_pre_open_detaches_a_leftover_mount_and_asks_again
 run_test test_pre_open_refuses_a_leftover_mount_that_will_not_detach
 run_test test_pre_open_refuses_without_a_terminal
 run_test test_pre_open_attaches_with_a_prompt
+run_test test_open_that_stops_detaches_the_vault_it_mounted
+run_test test_open_that_stops_leaves_a_running_session_vault_mounted
+run_test test_open_cancelled_at_a_prompt_detaches_the_vault_it_mounted
+run_test test_open_that_reaches_claude_keeps_the_vault_mounted
 run_test test_session_end_detaches_after_the_lead_exits
 run_test test_session_end_leaves_the_vault_for_clear_resume_and_non_leads
 run_test test_session_end_ignores_a_session_cs_did_not_encrypt

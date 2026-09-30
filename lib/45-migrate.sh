@@ -79,6 +79,7 @@ _run_pre_open() {  # session_name, session_dir
     [ -x "$hook" ] || error "$1: .cs/local/pre-open is not executable; chmod +x it, or remove it."
     (cd "$2" && "$hook") || rc=$?
     [ "$rc" -eq 0 ] || error "$1: .cs/local/pre-open exited $rc; not opening the session."
+    _arm_vault_detach "$2"
 }
 
 # A session can keep .cs/memory, .cs/plans, .cs/claude-config (Claude Code's
