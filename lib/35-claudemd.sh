@@ -172,6 +172,7 @@ This session keeps its private files in an encrypted vault: `.cs/memory`, `.cs/p
 - The bash-logger records every Bash command in `.cs/private/session.log`, inside the vault. The secrets rule above still applies.
 - Rotation handoffs live in `.cs/private/handoffs/` and are never committed; the `rotate` skill says how.
 - `cs -narrative rotate` archives your narrative's older sections into `.cs/private/narrative-archive/<actor>/` (or through a `.cs/narrative-archive` link into the vault); grep there on demand.
+- `/checkpoint` saves under `.cs/private/checkpoints/`, and the timeline records no label.
 - Keep session notes (research, scratch, drafts) under `.cs/memory`, `.cs/plans` or `.cs/private`.
 EOF
 }
