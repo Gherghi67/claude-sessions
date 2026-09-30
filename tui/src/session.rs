@@ -922,7 +922,14 @@ pub fn unowned_entries(name: &str, path: &Path) -> Result<UnownedEntries, String
     if worktree_parts(name).is_some() && path.join(".git").is_file() {
         return worktree_untracked(path).map(UnownedEntries::NotTrackedByGit);
     }
-    let entries = fs::read_dir(path).map_err(|e| format!("cannot list {}: {e}", path.display()))?;
+    let entries = match fs::read_dir(path) {
+        Ok(entries) => entries,
+        // A row whose directory is already gone holds nothing to lose.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(UnownedEntries::NotCreatedByCs(Vec::new()))
+        }
+        Err(e) => return Err(format!("cannot list {}: {e}", path.display())),
+    };
     let mut names = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|e| format!("cannot list {}: {e}", path.display()))?;
