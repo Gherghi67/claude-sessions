@@ -196,6 +196,46 @@ test_remove_confirm_lists_foreign_entries() {
     assert_dir "$dir" "declined session must survive" || return 1
 }
 
+# A worktree session beside a base repo, with one untracked and one
+# git-ignored file the user added. Echoes the worktree path.
+_worktree_with_user_files() {  # base-name
+    local base="$CS_SESSIONS_ROOT/$1" wt="$CS_SESSIONS_ROOT/$1@t"
+    create_test_session "$1" >/dev/null
+    printf '*.img\n.cs/local/\n' > "$base/.gitignore"
+    git -C "$base" init -q
+    git -C "$base" add CLAUDE.md .gitignore
+    git -C "$base" -c user.email=t@example.com -c user.name=t commit -qm seed
+    git -C "$base" worktree add -q "$wt" -b "cs/$1-t"
+    mkdir -p "$wt/.cs/local"
+    echo draft > "$wt/notes.txt"
+    echo secret > "$wt/journal.img"
+    echo "$wt"
+}
+
+test_remove_force_refuses_worktree_with_untracked_or_ignored_files() {
+    local wt out rc=0
+    wt=$(_worktree_with_user_files wf1)
+    out=$("$CS_BIN" -rm wf1@t --force </dev/null 2>&1) || rc=$?
+    [ "$rc" -ne 0 ] || { echo "  FAIL: --force removed a worktree holding untracked files"; return 1; }
+    assert_output_contains "$out" "journal.img, notes.txt" "refusal names the untracked and ignored files" || return 1
+    assert_file_exists "$wt/journal.img" "ignored file must survive the refusal" || return 1
+}
+
+test_remove_force_with_delete_files_removes_worktree() {
+    local wt
+    wt=$(_worktree_with_user_files wf2)
+    "$CS_BIN" -rm wf2@t --force --delete-files </dev/null >/dev/null 2>&1 || return 1
+    assert_not_exists "$wt" "worktree should be gone with --delete-files" || return 1
+}
+
+test_remove_worktree_confirm_lists_untracked_files() {
+    local wt out
+    wt=$(_worktree_with_user_files wf3)
+    out=$(printf 'n\n' | CS_ASSUME_TTY=1 "$CS_BIN" -rm wf3@t 2>&1) || return 1
+    assert_output_contains "$out" "Also deletes files git does not track: journal.img, notes.txt" "confirm lists untracked and ignored files" || return 1
+    assert_dir "$wt" "declined worktree must survive" || return 1
+}
+
 test_remove_force_on_adopted_removes_only_the_link() {
     local project_dir="$TEST_TMPDIR/adopted-project"
     mkdir -p "$project_dir"
@@ -223,6 +263,9 @@ run_test test_remove_force_refuses_when_session_holds_files_cs_did_not_create
 run_test test_remove_force_with_delete_files_removes_foreign_files
 run_test test_remove_force_ignores_cs_owned_entries_and_ds_store
 run_test test_remove_confirm_lists_foreign_entries
+run_test test_remove_force_refuses_worktree_with_untracked_or_ignored_files
+run_test test_remove_force_with_delete_files_removes_worktree
+run_test test_remove_worktree_confirm_lists_untracked_files
 run_test test_remove_force_on_adopted_removes_only_the_link
 
 report_results
