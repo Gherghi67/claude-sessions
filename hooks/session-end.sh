@@ -121,13 +121,57 @@ fi
 # a duplicate with no collision menu. A stale lock is still cleared either way, so a
 # crashed session does not stay locked out. Ownership cannot be the $$ test
 # lib/15-lock.sh uses — a hook is a different process.
+# A /clear or /resume ends the conversation but not the claude that holds the
+# lock, so the lock stays until that claude exits.
 if [ "${CS_RESOLVED_FROM:-env}" = "env" ]; then
-    rm -f "$META_DIR/session.lock" 2>/dev/null || true
+    case "$END_REASON" in
+        clear|resume) ;;
+        *) rm -f "$META_DIR/session.lock" 2>/dev/null || true ;;
+    esac
 else
     _cs_lock_pid=$(cat "$META_DIR/session.lock" 2>/dev/null | tr -d '[:space:]') || true
     case "${_cs_lock_pid:-}" in
         ''|*[!0-9]*) rm -f "$META_DIR/session.lock" 2>/dev/null || true ;;
         *) kill -0 "$_cs_lock_pid" 2>/dev/null || rm -f "$META_DIR/session.lock" 2>/dev/null || true ;;
+    esac
+fi
+
+# A session cs -encrypt built detaches its vault when the lead conversation
+# ends, so the next open asks for the password again. Claude Code still holds
+# the transcript under .cs/claude-config open while this hook runs, so a waiter
+# detaches once that claude exits. Before detaching it checks the lock again,
+# which SessionEnd removed above, so a reopen in the meantime holds the mount,
+# and .cs/local/vault-holders, where every cs that opened the vault is listed.
+# The detach is plain, never -force: whatever still holds the volume keeps it
+# mounted, and the next open's pre-open handles the leftover. A /clear or
+# /resume carries on in the same claude.
+if [ -f "$META_DIR/local/vault" ] && [ "${CS_RESOLVED_FROM:-env}" = "env" ] \
+    && command -v cs_is_lead >/dev/null 2>&1 && cs_is_lead; then
+    case "$END_REASON" in
+        clear|resume) ;;
+        *)
+            nohup /bin/bash -c '
+                dir=$1 pid=$2
+                while kill -0 "$pid" 2>/dev/null; do sleep 1; done
+                alive() { case "$1" in ""|*[!0-9]*) return 1 ;; esac; kill -0 "$1" 2>/dev/null; }
+                held=""
+                alive "$(tr -d "[:space:]" < "$dir/.cs/session.lock" 2>/dev/null)" && held=1
+                if [ -z "$held" ] && [ -f "$dir/.cs/local/vault-holders" ]; then
+                    while read -r h; do alive "$h" && held=1; done < "$dir/.cs/local/vault-holders"
+                fi
+                if [ -z "$held" ] && mnt=$(cd "$dir/.cs/vault-mnt" 2>/dev/null && pwd -P) \
+                    && mount | grep -F " on $mnt (" >/dev/null; then
+                    # A child with a recorded pid, so a reopen can stop it.
+                    hdiutil detach "$mnt" >/dev/null 2>&1 &
+                    echo "$!" > "$dir/.cs/local/vault-detach.pid"
+                    wait "$!" || true
+                    rm -f "$dir/.cs/local/vault-detach.pid"
+                fi
+                rm -f "$dir/.cs/local/vault-waiter.pid"
+            ' cs-vault-waiter "$SESSION_DIR" "$CLAUDE_PID" </dev/null >/dev/null 2>&1 &
+            echo "$!" > "$META_DIR/local/vault-waiter.pid"
+            disown 2>/dev/null || true
+            ;;
     esac
 fi
 

@@ -214,7 +214,7 @@ launch_claude_code() {
     # A force chosen at the collision menu is equivalent to --force for the
     # rest of the launch.
     [ "${CS_COLLISION_FORCE:-}" = "1" ] && force="true"
-    trap 'reset_tab_title; release_session_lock "'"$session_dir/.cs"'"' EXIT
+    trap 'reset_tab_title; release_session_lock "'"$session_dir/.cs"'"; _detach_opened_vault' EXIT
     trap 'reset_tab_title; release_session_lock "'"$session_dir/.cs"'"; exit 130' INT TERM
 
     # Opening an archived session revives it. Placed after lock acquisition so

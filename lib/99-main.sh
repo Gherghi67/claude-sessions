@@ -172,6 +172,11 @@ main() {
             run_tag "$@"
             return $?
             ;;
+        -encrypt)
+            shift
+            run_encrypt "$@"
+            return $?
+            ;;
         -archive)
             shift
             run_archive "$@"

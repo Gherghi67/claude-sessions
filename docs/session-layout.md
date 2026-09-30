@@ -127,6 +127,61 @@ there.
 | `.cs/claude-config` | Claude Code's config dir for this session. cs launches Claude Code with `CLAUDE_CONFIG_DIR` pointing here, so transcripts, prompt history, `.claude.json` and its backups never reach `~/.claude`. `CLAUDE_SECURESTORAGE_CONFIG_DIR` keeps the shell's login (empty selects the default keychain entry). On every launch cs links the shell's `settings.json`, `settings.local.json`, `CLAUDE.md`, `AGENTS.md`, `rules/`, `skills/`, `commands/`, `agents/`, `hooks/`, `plugins/`, `output-styles/`, `keybindings.json` and `vale/` into it, skipping any name the session already has. A setting you change inside the session (`/model`, `/config`) writes through the link into the shell's `settings.json`. The first launch seeds `.claude.json` from the shell's copy with `projects` emptied, since each project entry keeps that project's last prompt. cs reads the session's transcripts from `projects/` here, and the picker does not rename such a session, because its links and transcripts name its path. |
 | `.cs/private` | cs's own content files, which a plain session keeps in `.cs/local/`: `session.log`, `scope-prompt.trace`, `memory-index.snapshot`, `mail/`, the queue files (`queue/`, `queue.tmp/`, `queue.state`, `queue.done`, `queue.declined`), `notifications.jsonl`, `notifications.seen`, `failures`, `rewrite.trace`, the rotation handoffs (`handoffs/`), `pending-handoff`, checkpoints (`checkpoints/`) and, when `.cs/memory` is a link, the rotated narrative sections (`narrative-archive/`). Numbers the status line writes (`context-pct`, `limits`) and ids (`state`, `spawned-by`, `rotate-nudged`, `ctx-warned`) stay in `.cs/local/`. |
 
+### Encrypting a session with `cs -encrypt`
+
+On macOS, `cs -encrypt <name>` sets this up for an existing session. Run it
+from a terminal, with the session closed. It:
+
+1. Creates an AES-256 encrypted sparse bundle at
+   `~/.local/share/cs/vaults/<name>.sparsebundle` with `hdiutil`, which asks
+   for a new password. The bundle grows as it fills, up to 50 GB. It lives
+   outside the session directory, so `cs -rm` never deletes it.
+2. Mounts it at `.cs/vault-mnt` (`hdiutil` asks for the password again) and
+   turns Spotlight indexing off for it.
+3. Moves `.cs/memory`, `.cs/plans`, the `.cs/local/` files listed under
+   `.cs/private` above, and `.cs/handoffs`, `.cs/checkpoints` and
+   `.cs/narrative-archive` into the volume, then links the four names into it.
+4. Writes `.cs/local/pre-open` and `.cs/local/vault` (the bundle's path), tags
+   the session `encrypted`, and unmounts the volume.
+
+From then on every open asks for the password in the terminal. `pre-open`
+refuses to open the session without a terminal, because without one `hdiutil`
+shows a dialog that offers to save the password in the keychain. When the lead
+conversation ends (not on `/clear` or `/resume`), the SessionEnd hook waits for
+Claude Code to exit and unmounts the volume, unless the session reopened in
+the meantime. The unmount is never forced: if something still holds the
+volume, it stays mounted, and the next open unmounts it and asks for the
+password. A second conversation opened while the session runs joins the
+mounted volume without asking. An open that stops before Claude Code starts
+(a refusal, or a cancelled prompt) unmounts the volume it mounted.
+
+Every open that mounts or joins the volume adds its process id to
+`.cs/local/vault-holders`. A process that replaces itself with Claude Code
+keeps its id, so the entry stays valid while that conversation runs. cs
+unmounts the volume only when no listed process and no session lock is
+still alive, so a second conversation keeps it mounted after the first one
+ends. An open that finds the volume mounted with nothing alive behind it
+stops the old SessionEnd unmount first, then unmounts the volume and asks
+for the password.
+
+`cs -encrypt` refuses, before it writes anything, when:
+
+- the machine is not a Mac, or stdin is not a terminal
+- the session is running, adopted, or a feature worktree (`base@task`)
+- any of the four names is already a link, or `.cs/claude-config` or
+  `.cs/private` already exists as a folder or file
+- `.cs/local/pre-open` already exists
+- the bundle already exists
+- `.cs/README.md` has no frontmatter for the tag
+
+If a move fails partway, it stops, lists what moved and what did not, and
+leaves the volume mounted so you can finish by hand. When it finishes, it lists
+the copies it cannot reach: the session's transcripts in `~/.claude/projects/`,
+its lines in `~/.claude/history.jsonl`, its entries in `~/.claude.json` and that
+file's backups, `.cs/summary.md` and `.cs/brief.md`, git history, and backups.
+
+### Setting it up by hand
+
 Mount the volume from `.cs/local/pre-open` (see the table above). While a link
 points at a missing directory, the vault is locked, and cs writes nothing in
 its place:
