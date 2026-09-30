@@ -780,6 +780,15 @@ EOF
         warn "Appended session wrap-up cues to CLAUDE.local.md"
     fi
 
+    # Phase 14: an encrypted session (.cs/private present; a locked one was
+    # refused before migrate) gains the encrypted protocol. The sentinel is a
+    # tombstone like cs:wrap-cues: present means managed, never re-added.
+    if [ -f "$claude_md_p9" ] && [ -d "$session_dir/.cs/private" ] \
+        && ! grep -q 'cs:encrypted-protocol' "$claude_md_p9"; then
+        { echo; _emit_encrypted_protocol_block; } >> "$claude_md_p9"
+        warn "Added the encrypted-session protocol to CLAUDE.local.md"
+    fi
+
     # Phase 11: Backfill claude_session_color in local state when absent.
     # Picks one of the 8 colors claude's /color command accepts. Idempotent —
     # runs only when the field is missing. Legacy sessions (pre-v2026.5.7)

@@ -206,8 +206,9 @@ one-key rotation it exists for.
 7. Retire this machine's leftovers: for every OTHER file in `.cs/handoffs/`
    whose frontmatter still says `status: unconsumed`, flip that one
    frontmatter line to `status: superseded` — but only when its `parent:`
-   UUID appears in `.cs/local/session.log`, which records every conversation
-   this checkout has run (`Session started (... ID: <uuid>)`).
+   UUID appears in `.cs/local/session.log` (`.cs/private/session.log` when
+   `.cs/private` exists: an encrypted session), which records every
+   conversation this checkout has run (`Session started (... ID: <uuid>)`).
 
    That file is machine-local, which is the whole point of using it.
    `.cs/handoffs/` is shared, so a handoff whose parent is absent from the log

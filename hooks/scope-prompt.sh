@@ -461,10 +461,14 @@ _digest_exit() {
 # Matching the bracket SHAPE (not the exact template wording) stays robust if the
 # template text changes; scoping to the Objective section leaves the Outcome
 # placeholder untouched. First real prompt wins; a hand-written objective (not
-# bracketed) is never overwritten.
+# bracketed) is never overwritten. An encrypted session (.cs/private present,
+# mounted or not) keeps its objective in the narrative, inside the vault, so
+# the plaintext README never gains the prompt.
 _obj_readme="${CLAUDE_SESSION_META_DIR:-}/README.md"
 if [ "${CS_OBJECTIVE_CAPTURE_DISABLE:-}" != "1" ] \
     && [ -n "${CLAUDE_SESSION_META_DIR:-}" ] \
+    && ! [ -L "$CLAUDE_SESSION_META_DIR/private" ] \
+    && ! [ -e "$CLAUDE_SESSION_META_DIR/private" ] \
     && [ -f "$_obj_readme" ] \
     && awk '
         /^## / { in_obj = ($0 ~ /^## Objective/) }
