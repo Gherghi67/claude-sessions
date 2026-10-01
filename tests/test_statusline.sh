@@ -2005,21 +2005,6 @@ test_shared_clock_replaces_inherited_garbage() {
     assert_file_contains "$lim" "stamped_at: [0-9]" "stamp is a real epoch, not inherited garbage" || return 1
 }
 
-# The attention pulse parity uses the shared clock; an inherited garbage _NOW must
-# not reach the arithmetic (crashes bash 3.2 under set -u). With the pin at an even
-# second the mark renders brand regardless of the inherited value.
-test_pulse_ignores_inherited_now() {
-    export COLORTERM=truecolor
-    export CLAUDE_SESSION_NAME="inhpulse"
-    make_cs_session "inhpulse" 1024 blue
-    mkdir -p "$CS_SESSIONS_ROOT/inhpulse/.cs/local"
-    touch "$CS_SESSIONS_ROOT/inhpulse/.cs/local/attention"
-    local json='{"session_name":"inhpulse","workspace":{"current_dir":"/none"}}'
-    local out
-    out=$(_NOW=garbage CS_STATUSLINE_NOW=1000 run_sl "$json")
-    assert_output_contains_f "$out" '38;2;217;119;87;1m✳' "pin wins over inherited _NOW; even second stays brand" || return 1
-}
-
 # The memo ready-flag itself must not be trusted from the environment: with BOTH
 # _SL_NOW_READY and a garbage _NOW inherited, the render still sanitizes them and
 # honors the pin (not the inherited garbage) in the stamp.
@@ -2030,20 +2015,6 @@ test_shared_clock_ignores_inherited_ready_flag() {
     _SL_NOW_READY=1 _NOW=garbage CS_STATUSLINE_NOW=1234567890 run_sl "$fixture" > /dev/null
     local lim="$CS_SESSIONS_ROOT/inhready/.cs/local/limits"
     assert_file_contains "$lim" "stamped_at: 1234567890" "inherited ready flag + garbage _NOW sanitized; pin wins" || return 1
-}
-
-# Same both-inherited case on the pulse path: sanitized memo state means the
-# garbage _NOW never reaches the arithmetic (which would crash bash 3.2 set -u).
-test_pulse_ignores_inherited_ready_flag() {
-    export COLORTERM=truecolor
-    export CLAUDE_SESSION_NAME="inhrpulse"
-    make_cs_session "inhrpulse" 1024 blue
-    mkdir -p "$CS_SESSIONS_ROOT/inhrpulse/.cs/local"
-    touch "$CS_SESSIONS_ROOT/inhrpulse/.cs/local/attention"
-    local json='{"session_name":"inhrpulse","workspace":{"current_dir":"/none"}}'
-    local out
-    out=$(_SL_NOW_READY=1 _NOW=garbage CS_STATUSLINE_NOW=1000 run_sl "$json")
-    assert_output_contains_f "$out" '38;2;217;119;87;1m✳' "inherited ready flag + garbage _NOW sanitized; pin parity holds" || return 1
 }
 
 # A leading-zero clock value (e.g. a pin of 08) passes a bare digit check but is
@@ -2240,9 +2211,7 @@ run_test test_limits_file_skipped_without_rate_limits
 run_test test_limits_stamp_uses_shared_clock
 run_test test_shared_clock_ignores_inherited_now
 run_test test_shared_clock_replaces_inherited_garbage
-run_test test_pulse_ignores_inherited_now
 run_test test_shared_clock_ignores_inherited_ready_flag
-run_test test_pulse_ignores_inherited_ready_flag
 run_test test_shared_clock_normalizes_leading_zero_pin
 run_test test_sl_theme_user_pin_overrides
 run_test test_sl_theme_non_macos_uses_frozen_launch_value
@@ -3488,7 +3457,7 @@ test_logo_is_brand_ink_inside_identity() {
         "one fill space between the mark and the session name" || return 1
 }
 
-test_logo_pulse_alternates_brand_and_brandshade() {
+test_logo_holds_brandshade_while_attention_is_raised() {
     export COLORTERM=truecolor
     export CS_TERM_BG_RGB="253;246;227"
     export CLAUDE_SESSION_NAME="blinksess"
@@ -3499,11 +3468,11 @@ test_logo_pulse_alternates_brand_and_brandshade() {
     local even odd
     even=$(CS_STATUSLINE_NOW=1000 run_sl "$json")
     odd=$(CS_STATUSLINE_NOW=1001 run_sl "$json")
-    assert_output_contains_f "$even" "38;2;217;119;87;1m✳" "even second: brand" || return 1
-    assert_output_contains_f "$odd"  "38;2;184;101;74;1m✳" "odd second: brandshade" || return 1
+    assert_output_contains_f "$even" "38;2;184;101;74;1m✳" "attention: brandshade on an even second" || return 1
+    assert_output_contains_f "$odd"  "38;2;184;101;74;1m✳" "attention: brandshade on an odd second" || return 1
 }
 
-test_crit_text_pulses_white_and_critshade() {
+test_crit_text_holds_white_on_the_red_fill() {
     export COLORTERM=truecolor
     export CS_TERM_BG_RGB="253;246;227"
     local json='{"session_name":"s","workspace":{"current_dir":"/none"},"context_window":{"used_percentage":71}}'
@@ -3511,9 +3480,9 @@ test_crit_text_pulses_white_and_critshade() {
     even=$(CS_STATUSLINE_NOW=1000 run_sl "$json")
     odd=$(CS_STATUSLINE_NOW=1001 run_sl "$json")
     assert_output_contains_f "$even" "48;2;215;0;21;38;2;255;255;255;1m71%" "even second: white on the red fill" || return 1
-    assert_output_contains_f "$odd"  "48;2;215;0;21;38;2;255;205;200;1m71%" "odd second: the reddish white" || return 1
-    assert_output_contains_f "$odd"  "48;2;215;0;21;38;2;255;205;200;1m◕ ctx" "the label pulses with the number" || return 1
-    assert_output_not_contains_f "$odd" "38;2;255;255;255" "no white left on the odd second" || return 1
+    assert_output_contains_f "$odd"  "48;2;215;0;21;38;2;255;255;255;1m71%" "odd second: still white on the red fill" || return 1
+    assert_output_contains_f "$odd"  "48;2;215;0;21;38;2;255;255;255;1m◕ ctx" "the label stays white with the number" || return 1
+    assert_output_not_contains_f "$odd" "38;2;255;205;200" "no reddish white on any second" || return 1
 }
 
 # The effort word takes Claude Code's own /effort colours (pixel-sampled from
@@ -3607,8 +3576,8 @@ run_test test_line_ends_at_the_last_cap_regardless_of_columns
 run_test test_ctx_amber_is_ink_on_the_surface
 run_test test_ctx_crit_inverts_only_its_capsule
 run_test test_logo_is_brand_ink_inside_identity
-run_test test_logo_pulse_alternates_brand_and_brandshade
-run_test test_crit_text_pulses_white_and_critshade
+run_test test_logo_holds_brandshade_while_attention_is_raised
+run_test test_crit_text_holds_white_on_the_red_fill
 run_test test_effort_takes_claude_codes_effort_colours
 run_test test_effort_max_is_a_gradient_across_its_letters
 run_test test_notes_and_mail_are_amber_ink_after_the_session

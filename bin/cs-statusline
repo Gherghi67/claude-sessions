@@ -860,7 +860,6 @@ _sgr() {
                 # same hue on both, so its ink is too.
                 critink) rgb="255;255;255" ;;
                 # The crit pulse's dim phase: white warmed toward the fill.
-                critshade) rgb="255;205;200" ;;
                 # The effort word wears Claude Code's own /effort picker
                 # colours (pixel-sampled from the light picker); on dark they
                 # are lifted a third of the way to white so they keep reading
@@ -920,7 +919,6 @@ _sgr() {
                 ink2)    [ "$SL_THEME" = "dark" ] && idx=250 || idx=241 ;;
                 crit)    [ "$SL_THEME" = "dark" ] && idx=203 || idx=160 ;;
                 critink) idx=231 ;;
-                critshade) idx=224 ;;
                 effort-low)    [ "$SL_THEME" = "dark" ] && idx=179 || idx=136 ;;
                 effort-medium) [ "$SL_THEME" = "dark" ] && idx=71  || idx=28 ;;
                 effort-high)   [ "$SL_THEME" = "dark" ] && idx=105 || idx=63 ;;
@@ -969,7 +967,6 @@ _sgr() {
                 ink2)    [ "$SL_THEME" = "dark" ] && base=97 || base=37 ;;
                 crit)    base=31 ;;
                 critink) base=97 ;;
-                critshade) base=97 ;;
                 effort-low)    base=33 ;;
                 effort-medium) base=32 ;;
                 effort-high)   base=34 ;;
@@ -1683,17 +1680,16 @@ EOF
 
 # The Claude mark, coral ink on the identity capsule. While the session's
 # attention marker exists (raised by the Stop hook when Claude finishes a turn,
-# cleared on the next prompt) the mark alternates brand/brandshade by epoch-
-# second parity, so the phase advances each time Claude Code repaints the bar;
-# cs registers a 60 s refresh timer, so an idle bar changes phase once a minute. CS_STATUSLINE_NOW pins
-# the clock for tests. Plain mode has no colour, so no mark.
+# cleared on the next prompt) the mark takes brandshade instead of brand. The
+# ink holds steady because an idle bar repaints only once a minute, and a timed
+# blink would freeze on whichever phase it last drew. Plain mode has no colour,
+# so no mark.
 _seg_logo() {
     [ "$LEVEL" = "plain" ] && return 0
     local ink=brand
     if [ -n "${CLAUDE_SESSION_NAME:-}" ] \
         && [ -f "$SESSIONS_ROOT/$CLAUDE_SESSION_NAME/.cs/local/attention" ]; then
-        _sl_now
-        [ $(( ${_NOW:-0} % 2 )) -eq 1 ] && ink=brandshade
+        ink=brandshade
     fi
     _add "${ICON_LOGO}" identity "$ink" bold
 }
@@ -2097,13 +2093,7 @@ _render() {
     local esc=$'\033' reset=$'\033[0m'
     local capl=$'\xee\x82\xb6' capr=$'\xee\x82\xb4'   # U+E0B6, U+E0B4
     _caps_wanted || { capl=""; capr=""; }
-    local fill fillsgr capsgr ink weight first k critink=critink
-    # A red capsule's text pulses white/critshade on the same epoch-second
-    # clock as the attention mark, so a crit reading moves while the bar idles.
-    if [ -n "$_CRIT_GROUPS" ]; then
-        _sl_now
-        [ $(( ${_NOW:-0} % 2 )) -eq 1 ] && critink=critshade
-    fi
+    local fill fillsgr capsgr ink weight first k
     out="$reset"
     # Capsules in first-seen group order; a group's items in their own order,
     # even when CS_STATUSLINE_SEGMENTS interleaves them (session,ctx,model).
@@ -2132,7 +2122,7 @@ _render() {
             first=""
             ink="${_SEG_INK[i]}"; weight=22
             [ -n "${_SEG_BOLD[i]}" ] && weight=1
-            if [ "$fill" = "crit" ]; then ink="$critink"; weight=1; fi
+            if [ "$fill" = "crit" ]; then ink=critink; weight=1; fi
             _sgr 38 "$ink"
             out+="${esc}[${fillsgr};${_SGR};${weight}m${_SEG_TEXT[i]}"
         done

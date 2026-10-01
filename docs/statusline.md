@@ -6,7 +6,7 @@
 ✳ claude-sessions  ·  ⎇ main↑1 +2!1  ·  ✦ Fable 5.1 medium  ◑ ctx 42%  ◷ 5h 31% ⋮ ◶ wk 84% · 5d16h
 ```
 
-One capsule carries identity — the Claude mark, the session, the branch, the model — and one carries the context gauge. The quota capsule (5h, joined by a vertical ellipsis to wk once wk reaches 50) is always there; the Fable window gets its own capsule at 50. Colour is state: bold amber ink on a number past its warn threshold, and the capsule inverts to red at crit, its text pulsing white/pink on the attention clock. The plain form (`NO_COLOR=1`) is `claude-sessions · ⎇ main↑1 +2!1 · ✦ Fable 5.1 medium > ◑ ctx 42% > ◷ 5h 31% ⋮ ◶ wk 84% · 5d16h`.
+One capsule carries identity — the Claude mark, the session, the branch, the model — and one carries the context gauge. The quota capsule (5h, joined by a vertical ellipsis to wk once wk reaches 50) is always there; the Fable window gets its own capsule at 50. Colour is state: bold amber ink on a number past its warn threshold, and the capsule inverts to red at crit, its text white on the red. The plain form (`NO_COLOR=1`) is `claude-sessions · ⎇ main↑1 +2!1 · ✦ Fable 5.1 medium > ◑ ctx 42% > ◷ 5h 31% ⋮ ◶ wk 84% · 5d16h`.
 
 ## Segments
 
@@ -14,7 +14,7 @@ Default order: `logo,session,notes,mail,git,model,ctx,limits`. One capsule holds
 
 | Name | Group | Rest | Hot | Hidden when | Source |
 |---|---|---|---|---|---|
-| `logo` | identity | `✳` in brand coral, bold; pulses brand/brandshade by epoch parity while `.cs/local/attention` exists | — | plain mode (no colour) | `.cs/local/attention` marker (raised by the Stop hook, cleared on the next prompt or session start) |
+| `logo` | identity | `✳` in brand coral, bold; brandshade while `.cs/local/attention` exists | — | plain mode (no colour) | `.cs/local/attention` marker (raised by the Stop hook, cleared on the next prompt or session start) |
 | `session` | identity | name, bold, primary ink | — | never | stdin `session_name`, falling back to `CLAUDE_SESSION_NAME`, then the workspace dir basename ; a session whose `.cs/README.md` frontmatter tags include `encrypted` gets a lock after the name (U+F023, secondary ink) once `cs -statusline caps` answered yes, `enc` until then |
 | `notes` | identity | `▤ N`, amber ink, regular, directly after the session | — | queue empty or absent | Task files in `.cs/local/queue/` (one file per task; `.cs/private/queue/` in an [encrypted session](session-layout.md#encrypted-sessions)) |
 | `mail` | identity | `✉ N`, amber ink, regular, after notes | — | nothing unread | Count of `.cs/local/mail/new/*.json` documents (`.cs/private/mail/` in an encrypted session; `cs -msg` moves what it prints to `cur/`); only `.json` files count, so a stray `.DS_Store` or staging leftover never shows a phantom unread |
@@ -164,13 +164,12 @@ Color depth is detected per render, in priority order: `FORCE_COLOR=0`, `NO_COLO
 | `ink` | primary text | a 35% shade of the surface on a light surface, `white` on a dark one | 236/255 | 97 |
 | `ink2` | secondary text, dots, gauge labels | a 55% shade of the surface (lifted toward white on a dark surface), like `ink` | 241/250 | 37/97 |
 | `brand` | the mark | `217;119;87` | 173 | 33 |
-| `brandshade` | the pulse's dim phase | `184;101;74` | 167 | 33 |
+| `brandshade` | the mark while the attention marker exists | `184;101;74` | 167 | 33 |
 | `periwinkle` | the subagent rows' model capsule | light: `76;29;149`; dark: `196;181;253` | 55/147 | 35/95 |
 | `amber` | hot numbers, notes and mail counts | light: `180;83;9`; dark: `253;230;138` — light/dark by the measured `CS_TERM_BG_RGB`, by theme only when unmeasured | 130/221 | 33/93 |
 | `crit` | inverted capsule fill | light: `215;0;21`; dark: `255;69;58` | 160/203 | 31 |
 | `critink` | inverted capsule text | `255;255;255` on both themes | 231 | 97 |
 | `effort-*` | the effort word | Claude Code's /effort picker colours, pixel-sampled; lifted a third toward white on dark; `effort-max-1..3` are the gradient stops | 136/179, 28/71, 63/105, 93/135, 110·140·175 / 153·183·218 | 33, 32, 34, 35, 36·35·95 |
-| `critshade` | the crit pulse's dim phase | `255;205;200` | 224 | 97 |
 
 Every capsule fill is `surface`, a shade of the terminal's own background so the bar harmonizes with the terminal instead of sitting on a fixed grey; darker on a light terminal, lighter on a dark one. On a cream terminal (`253;246;227`) the derived surface comes out `227;221;204`, a warm off-white a few shades darker — so the values above are the fallback for an unmeasured background and a reference for what the derived shade lands near, not fixed paints.
 
