@@ -1,10 +1,5 @@
 # ABOUTME: Actor identity, narrative budget, private-dir and tmux window-title code that cs AND its hooks run. build.sh
 # ABOUTME: folds this into bin/cs and writes it verbatim to hooks/cs-shared.sh for sourcing.
-# shellcheck disable=SC2034  # cs and the hooks that source this file read every variable set here
-
-# The four names under .cs/ that an encrypted session links into its vault;
-# see docs/session-layout.md "Encrypted sessions".
-CS_VAULT_LINKS="memory plans claude-config private"
 
 # Normalize an arbitrary identity string to a filesystem-safe slug.
 _slugify() {
@@ -70,6 +65,11 @@ _narrative_budget() {  # value, default
     n=$((10#$1))
     if [ "$n" -gt 0 ]; then echo "$n"; else echo "$2"; fi
 }
+
+# The four names under .cs/ that an encrypted session links into its vault;
+# see docs/session-layout.md "Encrypted sessions".
+# shellcheck disable=SC2034  # read by cs and by the hooks that source this file
+CS_VAULT_LINKS="memory plans claude-config private"
 
 # The directory holding a session's cs content files (command log, mail,
 # traces). An encrypted session links .cs/private into its vault; any other
