@@ -1063,9 +1063,13 @@ fn mounted_vault_link(dir: &Path) -> Option<(&'static str, PathBuf)> {
 
 /// The first mount point at or under `dir` in `table`, the output of
 /// `mount`: macOS lists "<dev> on <path> (<opts>)", Linux
-/// "<dev> on <path> type <fs> (<opts>)". Each mount point's ancestors are
-/// compared by device and inode, which see through letter case and
-/// symlinks where a path prefix would not.
+/// "<dev> on <path> type <fs> (<opts>)", and neither escapes its fields: a
+/// source may hold " on " and a path " on ", " type " or " (". So each line
+/// is read the Linux way (cut at its last " type ") and then the macOS way,
+/// and in each every absolute path that follows an " on " is a candidate, as
+/// cs -rm reads it. Each candidate's ancestors are compared by device and
+/// inode, which see through letter case and symlinks where a path prefix
+/// would not.
 fn mount_under(dir: &Path, table: &str) -> Option<PathBuf> {
     use std::os::unix::fs::MetadataExt;
     let target = fs::metadata(dir).ok()?;
@@ -1075,10 +1079,14 @@ fn mount_under(dir: &Path, table: &str) -> Option<PathBuf> {
             .unwrap_or(false)
     };
     table.lines().find_map(|line| {
-        let (_, rest) = line.split_once(" on ")?;
-        let end = rest.rfind(" type ").or_else(|| rest.rfind(" ("))?;
-        let mnt = Path::new(&rest[..end]);
-        mnt.ancestors().any(is_dir).then(|| mnt.to_path_buf())
+        let body = line.rsplit_once(" (").map_or(line, |(head, _)| head);
+        let linux = body.rsplit_once(" type ").map(|(head, _)| head);
+        linux.into_iter().chain(std::iter::once(body)).find_map(|text| {
+            text.match_indices(" on ").find_map(|(at, sep)| {
+                let mnt = Path::new(&text[at + sep.len()..]);
+                (mnt.is_absolute() && mnt.ancestors().any(is_dir)).then(|| mnt.to_path_buf())
+            })
+        })
     })
 }
 
@@ -1939,6 +1947,33 @@ mod tests {
 
         assert_eq!(mount_under(&dir, &table), None);
         let _ = fs::remove_dir_all(&root);
+    }
+
+    // A mount source may itself hold " on " (an NFS export, an SMB share).
+    #[test]
+    fn mount_under_reads_a_mount_whose_source_holds_on() {
+        let root = std::env::temp_dir().join(format!("cs-mount-src-on-{}", std::process::id()));
+        let dir = root.join("h1");
+        let mnt = dir.join(".cs/vault-mnt");
+        fs::create_dir_all(&mnt).unwrap();
+        let table = format!("host:/export on disk on {} (nfs)\n", mnt.display());
+
+        assert_eq!(mount_under(&dir, &table), Some(mnt.clone()));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    // macOS never prints " type <fs>", so a path holding " type " is still the
+    // mount point, not a Linux line to cut short.
+    #[test]
+    fn mount_under_reads_a_macos_mount_point_holding_type() {
+        let root = std::env::temp_dir().join(format!("cs-mount-type-{}/project type archive", std::process::id()));
+        let dir = root.join("h1");
+        let mnt = dir.join(".cs/vault-mnt");
+        fs::create_dir_all(&mnt).unwrap();
+        let table = format!("/dev/disk9s1 on {} (apfs, local, nodev, nosuid, journaled)\n", mnt.display());
+
+        assert_eq!(mount_under(&dir, &table), Some(mnt.clone()));
+        let _ = fs::remove_dir_all(root.parent().unwrap());
     }
 
     #[test]
