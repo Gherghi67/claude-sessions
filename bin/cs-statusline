@@ -1683,8 +1683,8 @@ EOF
 # The Claude mark, coral ink on the identity capsule. While the session's
 # attention marker exists (raised by the Stop hook when Claude finishes a turn,
 # cleared on the next prompt) the mark alternates brand/brandshade by epoch-
-# second parity; the statusLine registration's refreshInterval repaints the bar
-# every second while idle so the phase keeps advancing. CS_STATUSLINE_NOW pins
+# second parity, so the phase advances each time Claude Code repaints the bar;
+# cs registers no refresh timer, so an idle bar holds its phase. CS_STATUSLINE_NOW pins
 # the clock for tests. Plain mode has no colour, so no mark.
 _seg_logo() {
     [ "$LEVEL" = "plain" ] && return 0

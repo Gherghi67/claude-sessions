@@ -948,7 +948,8 @@ test_statusline_enable_registers() {
     mkdir -p "$fake_home/.claude" "$fake_home/.local/bin"
     echo '#!/bin/sh' > "$fake_home/.local/bin/cs-statusline"
     chmod +x "$fake_home/.local/bin/cs-statusline"
-    echo '{}' > "$fake_home/.claude/settings.json"
+    echo '{"statusLine":{"type":"command","command":"/old/path/cs-statusline","refreshInterval":1}}' \
+        > "$fake_home/.claude/settings.json"
     HOME="$fake_home" "$CS_BIN" -statusline enable > /dev/null 2>&1 || {
         echo "  FAIL: cs -statusline enable exited non-zero"
         return 1
@@ -962,12 +963,10 @@ test_statusline_enable_registers() {
             return 1
             ;;
     esac
-    # The attention pulse animates on Claude Code's refresh timer; without
-    # refreshInterval the bar only repaints on events and freezes when idle.
-    local interval
-    interval=$(jq -r '.statusLine.refreshInterval // ""' "$fake_home/.claude/settings.json")
-    if [ "$interval" != "1" ]; then
-        echo "  FAIL: enable should register refreshInterval 1 (got '$interval')"
+    # No refresh timer: on Claude Code 2.1.286 every tick lists all processes
+    # with `ps -A`, and across a dozen sessions that hit the process limit.
+    if jq -e '.statusLine | has("refreshInterval")' "$fake_home/.claude/settings.json" > /dev/null; then
+        echo "  FAIL: enable must not register a refreshInterval (got $(jq -c .statusLine "$fake_home/.claude/settings.json"))"
         return 1
     fi
 }
@@ -1066,7 +1065,7 @@ test_install_refreshes_registered_statusline_despite_marker() {
     local fake_home="$TEST_TMPDIR/home-sl-declined-registered"
     mkdir -p "$fake_home/.claude" "$fake_home/.config/cs"
     touch "$fake_home/.config/cs/statusline-declined"
-    echo '{"statusLine":{"type":"command","command":"/old/path/cs-statusline"}}' > "$fake_home/.claude/settings.json"
+    echo '{"statusLine":{"type":"command","command":"/old/path/cs-statusline","refreshInterval":1}}' > "$fake_home/.claude/settings.json"
     HOME="$fake_home" bash "$INSTALL_SH" > /dev/null 2>&1 < /dev/null || {
         echo "  FAIL: install.sh exited non-zero"
         return 1
@@ -1075,6 +1074,11 @@ test_install_refreshes_registered_statusline_despite_marker() {
     cmd=$(jq -r '.statusLine.command // ""' "$fake_home/.claude/settings.json")
     if [ "$cmd" != "$fake_home/.local/bin/cs-statusline" ]; then
         echo "  FAIL: registered cs-statusline was not refreshed (got '$cmd')"
+        return 1
+    fi
+    # The refresh writes today's registration, which has no refresh timer.
+    if jq -e '.statusLine | has("refreshInterval")' "$fake_home/.claude/settings.json" > /dev/null; then
+        echo "  FAIL: the refresh kept a refreshInterval (got $(jq -c .statusLine "$fake_home/.claude/settings.json"))"
         return 1
     fi
 }
