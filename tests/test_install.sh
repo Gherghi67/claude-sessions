@@ -963,10 +963,13 @@ test_statusline_enable_registers() {
             return 1
             ;;
     esac
-    # No refresh timer: on Claude Code 2.1.286 every tick lists all processes
-    # with `ps -A`, and across a dozen sessions that hit the process limit.
-    if jq -e '.statusLine | has("refreshInterval")' "$fake_home/.claude/settings.json" > /dev/null; then
-        echo "  FAIL: enable must not register a refreshInterval (got $(jq -c .statusLine "$fake_home/.claude/settings.json"))"
+    # A 60 s refresh timer keeps an idle conversation's heartbeat fresh. Each
+    # tick on Claude Code 2.1.286 lists every process with `ps -A`, and at one a
+    # second across a dozen sessions that hit the process limit.
+    local interval
+    interval=$(jq -r '.statusLine.refreshInterval // ""' "$fake_home/.claude/settings.json")
+    if [ "$interval" != "60" ]; then
+        echo "  FAIL: enable should register refreshInterval 60 (got '$interval')"
         return 1
     fi
 }
@@ -1076,9 +1079,11 @@ test_install_refreshes_registered_statusline_despite_marker() {
         echo "  FAIL: registered cs-statusline was not refreshed (got '$cmd')"
         return 1
     fi
-    # The refresh writes today's registration, which has no refresh timer.
-    if jq -e '.statusLine | has("refreshInterval")' "$fake_home/.claude/settings.json" > /dev/null; then
-        echo "  FAIL: the refresh kept a refreshInterval (got $(jq -c .statusLine "$fake_home/.claude/settings.json"))"
+    # The refresh writes today's registration: a 60 s timer, not the old 1 s one.
+    local interval
+    interval=$(jq -r '.statusLine.refreshInterval // ""' "$fake_home/.claude/settings.json")
+    if [ "$interval" != "60" ]; then
+        echo "  FAIL: the refresh should set refreshInterval 60 (got '$interval')"
         return 1
     fi
 }

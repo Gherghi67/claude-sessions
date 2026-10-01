@@ -128,7 +128,7 @@ _sl_parent_pid() {
 # JSON payload piped to stdin, so under Claude Code the answer is always empty
 # (`not a tty`) and only a render started from a shell gets a device. The
 # answer is the same for every render of a conversation either way, and `tty`
-# is a program, so asking it once a second costs a process a second in every
+# is a program, so asking it on every render costs a process per render in every
 # open session: it is cached by the same parent identity the tmux caches use. An entry expires with the pid it is
 # keyed on becoming plausibly reusable, not with the terminal, which is why the
 # age is the tmux ancestry cache's rather than a terminal session's.
@@ -238,7 +238,7 @@ TMUX_REAL_CACHE_TTL=300
 # How long a walk that has been spawned is assumed to still be running. A walk
 # that can answer takes a fraction of a second (155-415 ms measured), so this
 # only ever gates a `ps` that has stalled: without it such a walk is respawned
-# every render, once a second, per conversation, for as long as the session is
+# on every render, per conversation, for as long as the session is
 # open, and each one waits on a `ps` that never returns. Past the TTL one
 # render tries again, so a child that died before clearing its mark wedges
 # nothing.
@@ -647,8 +647,9 @@ _parse_stdin() {
         # environment to tell it apart, and its reading would replace the
         # lead's for every gate that reads the file.
         #
-        # The write is a fork (mv, or touch), and the bar repaints once a
-        # second, so it runs only when the value changed or the last write is
+        # The write is a fork (mv, or touch), and the bar repaints on every
+        # Claude Code event and once a minute when idle, so it runs only when
+        # the value changed or the last write is
         # older than STAMP_EVERY: the heartbeat readers allow 900 s, the limits
         # readers 1800 s. The sibling `.at` file holds the last write's epoch,
         # because a render cannot read an mtime without forking stat.
@@ -1148,9 +1149,9 @@ _usage_cache_dir() { printf '%s\n' "${CS_USAGE_DIR:-$SESSIONS_ROOT/.usage}"; }
 # global config), in _ORG; empty when the file is missing or will not parse.
 # `--stream` walks the document instead of building it: this file accumulates
 # per-project prompt history and grows without bound, and the render path reads
-# it once a second. Measured on a 5.5 MB config, streaming a single key beats
+# it on every repaint. Measured on a 5.5 MB config, streaming a single key beats
 # parsing the whole document by roughly an order of magnitude.
-# The account changes at a sign-in, not once a second, so a render takes the
+# The account changes at a sign-in, not between repaints, so a render takes the
 # answer kept for ORG_CACHE_TTL under the config's path: a swap shows within
 # five minutes instead of costing a jq walk of a multi-megabyte file per
 # render. The refresher passes `fresh`: it attributes a reading and detects a
@@ -1603,8 +1604,8 @@ _read_state_key() {  # state-file key
 # Format the git segment text for a workspace dir into _GIT_TEXT, empty when
 # it is not a git repo / git is unavailable / git times out.
 # git status is the one fork here that also reads the working tree, and the bar
-# repaints once a second; a reading is reused for GIT_CACHE_TTL seconds, keyed
-# by the workspace path, so at most one render in five pays for it.
+# repaints on every Claude Code event; a reading is reused for GIT_CACHE_TTL
+# seconds, keyed by the workspace path, so one render per window pays for it.
 GIT_CACHE_TTL=5
 
 _git_text() {
@@ -1684,7 +1685,7 @@ EOF
 # attention marker exists (raised by the Stop hook when Claude finishes a turn,
 # cleared on the next prompt) the mark alternates brand/brandshade by epoch-
 # second parity, so the phase advances each time Claude Code repaints the bar;
-# cs registers no refresh timer, so an idle bar holds its phase. CS_STATUSLINE_NOW pins
+# cs registers a 60 s refresh timer, so an idle bar changes phase once a minute. CS_STATUSLINE_NOW pins
 # the clock for tests. Plain mode has no colour, so no mark.
 _seg_logo() {
     [ "$LEVEL" = "plain" ] && return 0
@@ -1903,7 +1904,7 @@ _fable_candidate() {
     _fable_read
     # A machine with no curl can never write the cache, so every render would be
     # due and every render would fork a subshell plus a whole bash load of this
-    # script just to bail — once a second, per open Fable session. Check here
+    # script just to bail — on every render, per open Fable session. Check here
     # instead, where the check is free.
     if [ -n "$_FABLE_DUE" ] && [ "${CS_USAGE_NO_REFRESH:-}" != "1" ] \
         && command -v curl >/dev/null 2>&1; then

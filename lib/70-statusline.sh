@@ -89,11 +89,12 @@ run_statusline_cmd() {
             [ -f "$settings" ] || echo '{}' > "$settings"
             local _tmp
             _tmp=$(mktemp)
-            # No refreshInterval: with it set, each Claude Code 2.1.286 process
-            # ran `ps -A` about twice a second, and a dozen sessions together
-            # hit the process limit. The bar repaints on Claude Code's events.
+            # refreshInterval 60 repaints an idle bar once a minute, which keeps
+            # the context-pct heartbeat fresh for a conversation with no lock.
+            # Each tick on Claude Code 2.1.286 lists every process with
+            # `ps -A`; at 1 s a dozen sessions together hit the process limit.
             if { jq --arg cmd "$bin" --arg subcmd "$subbin" \
-                '.statusLine = {type: "command", command: $cmd}
+                '.statusLine = {type: "command", command: $cmd, refreshInterval: 60}
                  | .subagentStatusLine = {type: "command", command: $subcmd}' \
                 "$settings" > "$_tmp"; } 2>/dev/null; then
                 mv "$_tmp" "$settings"
