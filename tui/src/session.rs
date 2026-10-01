@@ -1962,6 +1962,16 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    // A mount point is always absolute: text after an " on " inside a source
+    // must not resolve against the working directory (the package root under
+    // cargo test, where src/ exists).
+    #[test]
+    fn mount_under_never_reads_a_relative_path() {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+
+        assert_eq!(mount_under(&src, "map on src (autofs, nobrowse)\n"), None);
+    }
+
     // macOS never prints " type <fs>", so a path holding " type " is still the
     // mount point, not a Linux line to cut short.
     #[test]
