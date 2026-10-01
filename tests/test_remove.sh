@@ -228,6 +228,74 @@ test_remove_goes_ahead_once_the_vault_is_unmounted() {
     assert_not_exists "$dir" "an unmounted encrypted session is removed" || return 1
 }
 
+# A cs -encrypt that stops partway leaves its volume mounted at .cs/vault-mnt
+# before any vault link exists, so only the mount table shows it. A `mount`
+# stub prints the table it is given; echoes the stub's directory for PATH.
+_mount_table() {  # line...
+    local d="$TEST_TMPDIR/mount-stub"
+    mkdir -p "$d"
+    printf '%s\n' "$@" > "$d/table"
+    printf '#!/bin/sh\ncat "%s"\n' "$d/table" > "$d/mount"
+    chmod +x "$d/mount"
+    echo "$d"
+}
+
+_half_encrypted_session() {  # name; echoes the session dir
+    local dir
+    dir=$(create_test_session "$1")
+    mkdir -p "$dir/.cs/vault-mnt/memory"
+    echo sealed > "$dir/.cs/vault-mnt/memory/narrative.md"
+    echo "$dir"
+}
+
+test_remove_refuses_a_volume_mounted_inside_without_vault_links() {
+    local dir stub out rc=0
+    dir=$(_half_encrypted_session h1)
+    stub=$(_mount_table "/dev/disk3s5 on /System/Volumes/Data (apfs, local, journaled)" \
+        "/dev/disk9s1 on $dir/.cs/vault-mnt (apfs, local, nodev, nosuid, journaled, noowners, mounted by tester)")
+    out=$(PATH="$stub:$PATH" "$CS_BIN" -rm h1 --force --delete-files </dev/null 2>&1) || rc=$?
+    assert_eq "1" "$rc" "removal refuses" || return 1
+    assert_eq "Error: Session 'h1' has a volume mounted inside it at $dir/.cs/vault-mnt. Removing the session would delete what the volume holds; unmount it, then retry." \
+        "$out" "names the mount point" || return 1
+    assert_file_exists "$dir/.cs/vault-mnt/memory/narrative.md" "the volume's contents survive" || return 1
+}
+
+test_remove_reads_a_linux_mount_table() {
+    local dir stub out rc=0
+    dir=$(_half_encrypted_session h2)
+    stub=$(_mount_table "/dev/sda1 on / type ext4 (rw,relatime)" \
+        "/dev/loop9 on $dir/.cs/vault-mnt type ext4 (rw,relatime)")
+    out=$(PATH="$stub:$PATH" "$CS_BIN" -rm h2 --force --delete-files </dev/null 2>&1) || rc=$?
+    assert_eq "1" "$rc" "removal refuses" || return 1
+    assert_output_contains "$out" "has a volume mounted inside it at $dir/.cs/vault-mnt." "names the mount point" || return 1
+    assert_file_exists "$dir/.cs/vault-mnt/memory/narrative.md" "the volume's contents survive" || return 1
+}
+
+# A sibling whose name extends this one's ("h3x" beside "h3") holds the mount:
+# a string-prefix match would refuse the wrong session.
+test_remove_ignores_a_volume_mounted_in_another_session() {
+    local dir other stub
+    dir=$(create_test_session h3)
+    other=$(_half_encrypted_session h3x)
+    stub=$(_mount_table "/dev/disk9s1 on $other/.cs/vault-mnt (apfs, local, nodev, nosuid, journaled)")
+    PATH="$stub:$PATH" "$CS_BIN" -rm h3 --force --delete-files </dev/null >/dev/null 2>&1 || return 1
+    assert_not_exists "$dir" "the session without a mount is removed" || return 1
+    assert_file_exists "$other/.cs/vault-mnt/memory/narrative.md" "the other session is untouched" || return 1
+}
+
+test_remove_refuses_when_the_mount_table_cannot_be_read() {
+    local dir d out rc=0
+    dir=$(create_test_session h4)
+    d="$TEST_TMPDIR/mount-broken"
+    mkdir -p "$d"
+    printf '#!/bin/sh\necho "mount: cannot read table" >&2\nexit 1\n' > "$d/mount"
+    chmod +x "$d/mount"
+    out=$(PATH="$d:$PATH" "$CS_BIN" -rm h4 --force --delete-files </dev/null 2>&1) || rc=$?
+    assert_eq "1" "$rc" "removal refuses" || return 1
+    assert_output_contains "$out" "Error: cs -rm could not read the mount table, so it cannot tell whether a volume is mounted inside 'h4'; refusing to remove it." "says why" || return 1
+    assert_dir "$dir" "the session survives" || return 1
+}
+
 # A worktree session beside a base repo, with one untracked and one
 # git-ignored file the user added. Echoes the worktree path.
 _worktree_with_user_files() {  # base-name
@@ -301,5 +369,9 @@ run_test test_remove_worktree_confirm_lists_untracked_files
 run_test test_remove_force_on_adopted_removes_only_the_link
 run_test test_remove_refuses_while_the_vault_is_mounted_inside
 run_test test_remove_goes_ahead_once_the_vault_is_unmounted
+run_test test_remove_refuses_a_volume_mounted_inside_without_vault_links
+run_test test_remove_reads_a_linux_mount_table
+run_test test_remove_ignores_a_volume_mounted_in_another_session
+run_test test_remove_refuses_when_the_mount_table_cannot_be_read
 
 report_results

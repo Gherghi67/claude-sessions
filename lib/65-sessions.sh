@@ -380,6 +380,32 @@ _session_foreign_entries() {  # session_dir
     printf '%s' "$out"
 }
 
+# The first mount point at or under a directory, from the mount table text on
+# stdin (empty when there is none). macOS lists "<dev> on <path> (<opts>)",
+# Linux "<dev> on <path> type <fs> (<opts>)". Each mount point's ancestors are
+# compared with -ef, which sees through letter case and symlinks where a
+# string prefix would not.
+_mount_under() {  # dir
+    local dir="$1" line mnt p
+    while IFS= read -r line; do
+        mnt="${line#* on }"
+        [ "$mnt" != "$line" ] || continue
+        case "$mnt" in
+            *" type "*) mnt="${mnt% type *}" ;;
+            *) mnt="${mnt% (*}" ;;
+        esac
+        p="$mnt"
+        while [ -n "$p" ]; do
+            if [ "$p" -ef "$dir" ]; then
+                printf '%s' "$mnt"
+                return 0
+            fi
+            p="${p%/*}"
+        done
+    done
+    return 0
+}
+
 # Paths in a worktree session that git does not track (untracked or
 # ignored), as one comma-separated line; git worktree remove --force
 # deletes them with no copy on the branch. cs's own .cs/, .claude/ and
@@ -442,6 +468,14 @@ _remove_one_session() {
                     error "Session '$session_name' has encrypted storage mounted inside it: .cs/$sub points at $(readlink "$link"). Removing the session would delete what the vault holds; unmount it, then retry." ;;
             esac
         done
+        # A cs -encrypt that stopped partway leaves its volume mounted with no
+        # link yet, so the links above cannot see it; the mount table can.
+        local table mounted
+        table=$(mount) \
+            || error "cs -rm could not read the mount table, so it cannot tell whether a volume is mounted inside '$session_name'; refusing to remove it."
+        mounted=$(_mount_under "$session_dir" <<< "$table")
+        [ -z "$mounted" ] \
+            || error "Session '$session_name' has a volume mounted inside it at $mounted. Removing the session would delete what the volume holds; unmount it, then retry."
     fi
 
     # Every confirmation below reads from stdin; a script piping input through
