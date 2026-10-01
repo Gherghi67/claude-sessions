@@ -135,6 +135,23 @@ cs_tmux_title_window() {  # pane, session name ("" releases the pane)
         tmux set-window-option -t "$pane" allow-set-title on 2>/dev/null || true
     fi
     [ -z "$lock" ] || { rm -f "$lock/pid"; rmdir "$lock" 2>/dev/null; } || true
+    _cs_iterm_tab_title "$pane"
+}
+
+# Under iTerm's tmux integration the tab shows a title iTerm keeps for itself:
+# tmux window renames never reach it, and only iTerm's Python API sets it.
+# Hands the window to cs-iterm-tab.py in the background, after the lock is
+# released, since the helper takes about a second and reads the claims itself
+# when it runs. Its output is discarded and nothing waits on it, so a machine
+# without iTerm's API or the iterm2 python module goes without the tab title
+# and nothing else.
+_cs_iterm_tab_title() {  # pane
+    local helper window
+    [ "${LC_TERMINAL:-}" = iTerm2 ] && [ -z "${CS_NO_ITERM2:-}" ] || return 0
+    helper="${CS_HOOKS_DIR:-$HOME/.claude/hooks/cs}/cs-iterm-tab.py"
+    [ -f "$helper" ] && command -v python3 >/dev/null 2>&1 || return 0
+    window=$(tmux display-message -p -t "$1" '#{window_id}' 2>/dev/null) || return 0
+    ( python3 "$helper" "$window" </dev/null >/dev/null 2>&1 & )
 }
 
 # Takes the lock on a pane's window and prints its directory: a directory per
