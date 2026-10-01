@@ -162,7 +162,7 @@ if [ -n "${CLAUDE_SESSION_META_DIR:-}" ] && _trace_dir=$(cs_private_dir "$CLAUDE
     _trace_open "$_trace_dir"
 fi
 
-# The user is back: drop the statusline's finished-blink marker before any
+# The user is back: drop the statusline's attention marker before any
 # other gate (slash commands and short prompts clear it too).
 [ -n "${CLAUDE_SESSION_META_DIR:-}" ] \
     && rm -f "$CLAUDE_SESSION_META_DIR/local/attention" 2>/dev/null

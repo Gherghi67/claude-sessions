@@ -8,8 +8,8 @@ SESSIONS_ROOT="${CS_SESSIONS_ROOT:-$HOME/.claude-sessions}"
 
 # The shared-clock memo (see _sl_now) starts empty: neither the value nor its
 # ready flag may be seeded by an inherited environment variable of the same
-# name, or a stale/garbage _NOW would poison the limits stamp and crash the
-# pulse arithmetic (bash 3.2 set -u). Once, here, before the theme ladder below
+# name, or a stale/garbage _NOW would poison the limits stamp. Once, here,
+# before the theme ladder below
 # first reads the clock, and nowhere later: a bash without a builtin clock
 # (3.2) forks date to fill the memo, and a second reset would fork it again.
 _NOW=""
@@ -25,8 +25,8 @@ export GIT_OPTIONAL_LOCKS=0
 
 # Current epoch for this render, read at most once. Honors CS_STATUSLINE_NOW
 # (test/pin), then the fork-free printf builtin, then a date fork (macOS bash
-# 3.2 lacks %(...)T). Memoized so the limits stamp, countdown, and attention
-# pulse share one clock instead of forking date up to three times a render.
+# 3.2 lacks %(...)T). Memoized so the stamps, the countdown, and the cache
+# ages share one clock instead of each forking date.
 # The memo gate is a dedicated flag, not the value: even when every clock source
 # fails and _NOW ends empty, the flag records that this render already tried, so
 # a later caller does not re-fork date. main() zeroes both _NOW and the flag at
@@ -44,7 +44,7 @@ _sl_now() {
     fi
     # Normalize to canonical base-10: a leading-zero value (e.g. a pin of 08) is
     # read as octal by bash arithmetic and aborts on an 8/9 digit. 10# forces
-    # base-10 so the countdown, stamp, and pulse all get a safe integer.
+    # base-10 so the countdown, stamps, and cache ages all get a safe integer.
     # Fifteen digits at most, for the reason the Retry-After branch gives: a
     # longer value wraps past 64 bits and every clock reading built on it is
     # wrong. An unusable stamp is no stamp.
@@ -53,7 +53,7 @@ _sl_now() {
 
 # --- render caches ----------------------------------------------------------
 #
-# What a render forks, it forks once per interval, not once per second: the
+# What a render forks, it forks once per interval, not once per render: the
 # answers live under ~/.cache/cs/<kind>/<key>, two lines each. The first is
 # `epoch<TAB>identity`, the identity being the raw value the key was made from
 # (a workspace path, a config path, `<parent pid>,<TMUX>`), so two values that
@@ -128,7 +128,7 @@ _sl_parent_pid() {
 # JSON payload piped to stdin, so under Claude Code the answer is always empty
 # (`not a tty`) and only a render started from a shell gets a device. The
 # answer is the same for every render of a conversation either way, and `tty`
-# is a program, so asking it once a second costs a process a second in every
+# is a program, so asking it on every render costs a process per render in every
 # open session: it is cached by the same parent identity the tmux caches use. An entry expires with the pid it is
 # keyed on becoming plausibly reusable, not with the terminal, which is why the
 # age is the tmux ancestry cache's rather than a terminal session's.
@@ -176,9 +176,10 @@ _sl_theme_from_tmux_client() {
 # as its theme and which tty it is on, one query for the two rungs that need
 # them. Tab-separated so an empty theme (most terminals report none) still
 # leaves the tty in its own field. The answer is kept for
-# TMUX_CLIENT_CACHE_TTL under the parent pid and the TMUX claim, so the bar's
-# once-a-second repaint asks once in five: a theme toggle or a re-attach from
-# another terminal shows within that. Sets _TMUX_CLIENT_THEME and
+# TMUX_CLIENT_CACHE_TTL under the parent pid and the TMUX claim, so renders
+# while Claude works ask tmux once in five seconds: a theme toggle or a
+# re-attach from another terminal shows at the next render after that,
+# within a minute while idle. Sets _TMUX_CLIENT_THEME and
 # _TMUX_CLIENT_TTY; both empty when tmux cannot answer.
 TMUX_CLIENT_CACHE_TTL=5
 _TMUX_CLIENT_ASKED=""; _TMUX_CLIENT_THEME=""; _TMUX_CLIENT_TTY=""
@@ -238,7 +239,7 @@ TMUX_REAL_CACHE_TTL=300
 # How long a walk that has been spawned is assumed to still be running. A walk
 # that can answer takes a fraction of a second (155-415 ms measured), so this
 # only ever gates a `ps` that has stalled: without it such a walk is respawned
-# every render, once a second, per conversation, for as long as the session is
+# on every render, per conversation, for as long as the session is
 # open, and each one waits on a `ps` that never returns. Past the TTL one
 # render tries again, so a child that died before clearing its mark wedges
 # nothing.
@@ -297,7 +298,7 @@ _sl_tmux_cached_walk() {
 _sl_tmux_walk() {  # start-pid server-pid
     local start="$1" srv="$2"
     # The loop is capped: a ppid table can be cyclic if a pid is reused between
-    # the read and the walk, and an uncapped walk would spin on the render path.
+    # the read and the walk, and an uncapped walk would spin forever.
     # Capture first: under `set -o pipefail` a failing ps would decide the
     # pipeline's status whatever awk concluded. An empty table means ps is
     # missing or restricted, not that the server is absent — return 2 there,
@@ -361,7 +362,7 @@ _sl_mark_foreign_env() {
 # first render and in none after, and the first render is the one Claude Code
 # kills for running too long. So on a miss this render answers real — what
 # every pane cs launches is — and a detached child does the walk and leaves the
-# verdict where the render a second later reads it. A foreign environment draws
+# verdict where the next render reads it. A foreign environment draws
 # its own terminal's palette for one render and is corrected on the next; a
 # real one never sees a wrong palette at all.
 #
@@ -619,7 +620,7 @@ _parse_stdin() {
     command -v jq >/dev/null 2>&1 || return 1
     [ -n "$input" ] || return 1
     # A here-string, not a `printf |` pipe: each side of a pipeline is its own
-    # process, so the pipe cost two births a second on top of jq's.
+    # process, so the pipe cost two births a render on top of jq's.
     fields=$(jq -r '
         [ (.session_id // ""),
           (.session_name // ""),
@@ -647,8 +648,9 @@ _parse_stdin() {
         # environment to tell it apart, and its reading would replace the
         # lead's for every gate that reads the file.
         #
-        # The write is a fork (mv, or touch), and the bar repaints once a
-        # second, so it runs only when the value changed or the last write is
+        # The write is a fork (mv, or touch), and the bar repaints on every
+        # Claude Code event and once a minute when idle, so it runs only when
+        # the value changed or the last write is
         # older than STAMP_EVERY: the heartbeat readers allow 900 s, the limits
         # readers 1800 s. The sibling `.at` file holds the last write's epoch,
         # because a render cannot read an mtime without forking stat.
@@ -711,7 +713,7 @@ EOF
 # Seconds between rewrites of a stamp file whose value has not changed. The
 # stamp files are read for their mtime (the liveness heartbeat, 900 s window)
 # and their stamped_at (the limits readers, 1800 s window); a minute keeps
-# both fresh without a fork per second.
+# both fresh without a fork per render.
 STAMP_EVERY=60
 
 # Whether stamp file $1 needs rewriting for value $2: yes when its sibling
@@ -858,8 +860,6 @@ _sgr() {
                 # White on the red fill whatever the theme: the fill is the
                 # same hue on both, so its ink is too.
                 critink) rgb="255;255;255" ;;
-                # The crit pulse's dim phase: white warmed toward the fill.
-                critshade) rgb="255;205;200" ;;
                 # The effort word wears Claude Code's own /effort picker
                 # colours (pixel-sampled from the light picker); on dark they
                 # are lifted a third of the way to white so they keep reading
@@ -873,9 +873,9 @@ _sgr() {
                 effort-max-3)  [ "$SL_THEME" = "dark" ] && rgb="219;174;206" || rgb="200;130;179" ;;
                 brand)  rgb="217;119;87" ;;   # Claude coral (#D97757)
                 brandshade)
-                    # The mark's dim pulse phase: a coral a shade darker than
-                    # brand, distinct enough to read as a change without
-                    # looking like a foreign color.
+                    # The mark while the attention marker exists: a coral a
+                    # shade darker than brand, distinct enough to read as a
+                    # change without looking like a foreign color.
                     rgb="184;101;74" ;;
                 white)
                     # Softer text on dark terminals to avoid glare.
@@ -919,7 +919,6 @@ _sgr() {
                 ink2)    [ "$SL_THEME" = "dark" ] && idx=250 || idx=241 ;;
                 crit)    [ "$SL_THEME" = "dark" ] && idx=203 || idx=160 ;;
                 critink) idx=231 ;;
-                critshade) idx=224 ;;
                 effort-low)    [ "$SL_THEME" = "dark" ] && idx=179 || idx=136 ;;
                 effort-medium) [ "$SL_THEME" = "dark" ] && idx=71  || idx=28 ;;
                 effort-high)   [ "$SL_THEME" = "dark" ] && idx=105 || idx=63 ;;
@@ -968,7 +967,6 @@ _sgr() {
                 ink2)    [ "$SL_THEME" = "dark" ] && base=97 || base=37 ;;
                 crit)    base=31 ;;
                 critink) base=97 ;;
-                critshade) base=97 ;;
                 effort-low)    base=33 ;;
                 effort-medium) base=32 ;;
                 effort-high)   base=34 ;;
@@ -978,7 +976,7 @@ _sgr() {
                 effort-max-3)  base=95 ;;
                 white)  base=97 ;;
                 brand)  base=33 ;;
-                brandshade) base=33 ;;
+                brandshade) base=31 ;;   # red, the way the 256 shade leans; brand's 33 would hide it
                 *)      base=90 ;;
             esac
             if [ "$kind" = "48" ]; then _SGR=$((base + 10)); else _SGR="$base"; fi ;;
@@ -1148,14 +1146,14 @@ _usage_cache_dir() { printf '%s\n' "${CS_USAGE_DIR:-$SESSIONS_ROOT/.usage}"; }
 # global config), in _ORG; empty when the file is missing or will not parse.
 # `--stream` walks the document instead of building it: this file accumulates
 # per-project prompt history and grows without bound, and the render path reads
-# it once a second. Measured on a 5.5 MB config, streaming a single key beats
+# it on every repaint. Measured on a 5.5 MB config, streaming a single key beats
 # parsing the whole document by roughly an order of magnitude.
-# The account changes at a sign-in, not once a second, so a render takes the
+# The account changes at a sign-in, not between repaints, so a render takes the
 # answer kept for ORG_CACHE_TTL under the config's path: a swap shows within
-# five minutes instead of costing a jq walk of a multi-megabyte file per
-# render. The refresher passes `fresh`: it attributes a reading and detects a
-# swap across its own fetch, and a cached identity there would file one
-# account's usage under another. Its fresh answer renews the cache.
+# five minutes, six while idle, instead of costing a jq walk of a multi-megabyte
+# file per render. The refresher passes `fresh`: it attributes a reading and
+# detects a swap across its own fetch, and a cached identity there would file
+# one account's usage under another. Its fresh answer renews the cache.
 ORG_CACHE_TTL=300
 
 _read_org_from() {  # config [fresh]
@@ -1603,8 +1601,8 @@ _read_state_key() {  # state-file key
 # Format the git segment text for a workspace dir into _GIT_TEXT, empty when
 # it is not a git repo / git is unavailable / git times out.
 # git status is the one fork here that also reads the working tree, and the bar
-# repaints once a second; a reading is reused for GIT_CACHE_TTL seconds, keyed
-# by the workspace path, so at most one render in five pays for it.
+# repaints on every Claude Code event; a reading is reused for GIT_CACHE_TTL
+# seconds, keyed by the workspace path, so one render per window pays for it.
 GIT_CACHE_TTL=5
 
 _git_text() {
@@ -1682,17 +1680,16 @@ EOF
 
 # The Claude mark, coral ink on the identity capsule. While the session's
 # attention marker exists (raised by the Stop hook when Claude finishes a turn,
-# cleared on the next prompt) the mark alternates brand/brandshade by epoch-
-# second parity; the statusLine registration's refreshInterval repaints the bar
-# every second while idle so the phase keeps advancing. CS_STATUSLINE_NOW pins
-# the clock for tests. Plain mode has no colour, so no mark.
+# cleared on the next prompt) the mark takes brandshade instead of brand. The
+# ink holds steady because an idle bar repaints only once a minute, and a timed
+# blink would freeze on whichever phase it last drew. Plain mode has no colour,
+# so no mark.
 _seg_logo() {
     [ "$LEVEL" = "plain" ] && return 0
     local ink=brand
     if [ -n "${CLAUDE_SESSION_NAME:-}" ] \
         && [ -f "$SESSIONS_ROOT/$CLAUDE_SESSION_NAME/.cs/local/attention" ]; then
-        _sl_now
-        [ $(( ${_NOW:-0} % 2 )) -eq 1 ] && ink=brandshade
+        ink=brandshade
     fi
     _add "${ICON_LOGO}" identity "$ink" bold
 }
@@ -1903,7 +1900,7 @@ _fable_candidate() {
     _fable_read
     # A machine with no curl can never write the cache, so every render would be
     # due and every render would fork a subshell plus a whole bash load of this
-    # script just to bail — once a second, per open Fable session. Check here
+    # script just to bail — on every render, per open Fable session. Check here
     # instead, where the check is free.
     if [ -n "$_FABLE_DUE" ] && [ "${CS_USAGE_NO_REFRESH:-}" != "1" ] \
         && command -v curl >/dev/null 2>&1; then
@@ -2096,13 +2093,7 @@ _render() {
     local esc=$'\033' reset=$'\033[0m'
     local capl=$'\xee\x82\xb6' capr=$'\xee\x82\xb4'   # U+E0B6, U+E0B4
     _caps_wanted || { capl=""; capr=""; }
-    local fill fillsgr capsgr ink weight first k critink=critink
-    # A red capsule's text pulses white/critshade on the same epoch-second
-    # clock as the attention mark, so a crit reading moves while the bar idles.
-    if [ -n "$_CRIT_GROUPS" ]; then
-        _sl_now
-        [ $(( ${_NOW:-0} % 2 )) -eq 1 ] && critink=critshade
-    fi
+    local fill fillsgr capsgr ink weight first k
     out="$reset"
     # Capsules in first-seen group order; a group's items in their own order,
     # even when CS_STATUSLINE_SEGMENTS interleaves them (session,ctx,model).
@@ -2131,7 +2122,7 @@ _render() {
             first=""
             ink="${_SEG_INK[i]}"; weight=22
             [ -n "${_SEG_BOLD[i]}" ] && weight=1
-            if [ "$fill" = "crit" ]; then ink="$critink"; weight=1; fi
+            if [ "$fill" = "crit" ]; then ink=critink; weight=1; fi
             _sgr 38 "$ink"
             out+="${esc}[${fillsgr};${_SGR};${weight}m${_SEG_TEXT[i]}"
         done

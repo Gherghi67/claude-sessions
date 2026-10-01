@@ -380,6 +380,51 @@ _session_foreign_entries() {  # session_dir
     printf '%s' "$out"
 }
 
+# The first mount point at or under a directory, from the mount table text on
+# stdin (empty when there is none). macOS lists "<dev> on <path> (<opts>)",
+# Linux "<dev> on <path> type <fs> (<opts>)", and neither escapes its fields:
+# a source may hold " on " and a path " on ", " type " or " (". So each line
+# is read the Linux way (cut at its last " type ") and then the macOS way, and
+# in each every absolute path that follows an " on " is a candidate. Each cut
+# keeps the space after "on", so a source ending in " on", whose " on" shares
+# that space with the separator, still leaves the separator to find. Each
+# candidate's ancestors are compared with -ef, which sees through letter case
+# and symlinks where a string prefix would not.
+_mount_under() {  # dir
+    local dir="$1" line body text mnt p
+    while IFS= read -r line; do
+        body="${line% (*}"
+        for text in "${body% type *}" "$body"; do
+            while :; do
+                case "$text" in
+                    *" on "*) text="${text#* on}" ;;
+                    *) break ;;
+                esac
+                case "$text" in " /"*) mnt="${text# }" ;; *) continue ;; esac
+                p="$mnt"
+                while [ -n "$p" ]; do
+                    if [ "$p" -ef "$dir" ]; then
+                        printf '%s' "$mnt"
+                        return 0
+                    fi
+                    p="${p%/*}"
+                done
+            done
+        done
+    done
+    return 0
+}
+
+# The first volume mounted at or under a directory, from the live mount
+# table; empty when there is none. rm -rf and git worktree remove recurse into
+# a mount, so every path that deletes a directory asks this first. Fails when
+# `mount` does, so the caller refuses instead of guessing.
+_volume_mounted_under() {  # dir
+    local table
+    table=$(mount) || return 1
+    _mount_under "$1" <<< "$table"
+}
+
 # Paths in a worktree session that git does not track (untracked or
 # ignored), as one comma-separated line; git worktree remove --force
 # deletes them with no copy on the branch. cs's own .cs/, .claude/ and
@@ -433,7 +478,7 @@ _remove_one_session() {
     if [ ! -L "$session_dir" ]; then
         local sub link real_dir real_target
         real_dir=$(cd "$session_dir" && pwd -P)
-        for sub in memory plans claude-config private; do
+        for sub in $CS_VAULT_LINKS; do
             link="$session_dir/.cs/$sub"
             [ -L "$link" ] || continue
             real_target=$(cd "$link" 2>/dev/null && pwd -P) || continue
@@ -442,6 +487,13 @@ _remove_one_session() {
                     error "Session '$session_name' has encrypted storage mounted inside it: .cs/$sub points at $(readlink "$link"). Removing the session would delete what the vault holds; unmount it, then retry." ;;
             esac
         done
+        # A cs -encrypt that stopped partway leaves its volume mounted with no
+        # link yet, so the links above cannot see it; the mount table can.
+        local mounted
+        mounted=$(_volume_mounted_under "$session_dir") \
+            || error "cs -rm could not read the mount table, so it cannot tell whether a volume is mounted inside '$session_name'; refusing to remove it."
+        [ -z "$mounted" ] \
+            || error "Session '$session_name' has a volume mounted inside it at $mounted. Removing the session would delete what the volume holds; unmount it, then retry."
     fi
 
     # Every confirmation below reads from stdin; a script piping input through

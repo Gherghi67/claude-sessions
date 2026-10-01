@@ -90,7 +90,7 @@ _run_pre_open() {  # session_name, session_dir
 # writes there.
 _refuse_unmounted_meta() {  # session_name, session_dir
     local sub link target
-    for sub in memory plans claude-config private; do
+    for sub in $CS_VAULT_LINKS; do
         link="$2/.cs/$sub"
         if [ -e "$link" ] && [ ! -d "$link" ]; then
             error "$1: .cs/$sub is a file, not a directory or a link into encrypted storage. Remove it, or link it into the vault, then reopen."
@@ -100,6 +100,18 @@ _refuse_unmounted_meta() {  # session_name, session_dir
         error "$1: .cs/$sub points at $target, which is missing (encrypted storage not mounted?). Mount it, then reopen."
     done
     _refuse_plaintext_beside_private "$1" "$2"
+}
+
+# Feature worktrees of an encrypted session are not designed yet. cs -encrypt
+# links the four names relative to .cs/, so a checkout of them resolves inside
+# the worktree, where nothing is mounted; and a base whose .cs/ is ignored
+# gives the worktree plaintext files of its own. Refused by name until then.
+_refuse_worktree_of_encrypted_base() {  # base_name, base_dir
+    local sub
+    for sub in $CS_VAULT_LINKS; do
+        [ -L "$2/.cs/$sub" ] || continue
+        error "$1: .cs/$sub links into encrypted storage, and feature worktrees of an encrypted session are not supported yet."
+    done
 }
 
 # The cs content files a plain session keeps in .cs/local and an encrypted one

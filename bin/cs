@@ -215,6 +215,11 @@ _narrative_budget() {  # value, default
     if [ "$n" -gt 0 ]; then echo "$n"; else echo "$2"; fi
 }
 
+# The four names under .cs/ that an encrypted session links into its vault;
+# see docs/session-layout.md "Encrypted sessions".
+# shellcheck disable=SC2034  # read by cs and by the hooks that source this file
+CS_VAULT_LINKS="memory plans claude-config private"
+
 # The directory holding a session's cs content files (command log, mail,
 # traces). An encrypted session links .cs/private into its vault; any other
 # keeps them in .cs/local. Fails, printing nothing, when .cs/private is a link
@@ -992,7 +997,7 @@ _epoch_mtime() {  # path
 # How long after the last statusline write a lockless conversation still counts
 # as live, matching the TUI's HEARTBEAT_WINDOW_SECS. A conversation opened
 # outside cs writes no lock, but its statusline touches .cs/local/context-pct
-# every few seconds while active.
+# every minute or two while it is open: an idle bar repaints once a minute.
 HEARTBEAT_WINDOW_SECS=900
 
 # True when the statusline heartbeat is fresh: context-pct was written within
@@ -1964,6 +1969,14 @@ retire_feature_worktree() {  # base_name task sha [--force]
     if [ -n "$pid" ]; then
         error "Base session '$base_name' is open elsewhere (PID $pid); run /finish $task from that conversation"
     fi
+
+    # git worktree remove --force recurses into a mount, so a volume mounted
+    # inside the worktree would lose what it holds.
+    local mounted
+    mounted=$(_volume_mounted_under "$wt_dir") \
+        || error "cs could not read the mount table, so it cannot tell whether a volume is mounted inside $wt_dir; refusing to remove the worktree."
+    [ -z "$mounted" ] \
+        || error "The feature is landed, but its worktree has a volume mounted inside it at $mounted, and removing the worktree would delete what the volume holds. Unmount it, then run /finish $task here again."
 
     if _tree_is_dirty "$wt_dir"; then
         error "Worktree has uncommitted changes; commit them in $wt_dir first (cs never commits for you)"
@@ -3230,7 +3243,7 @@ _run_pre_open() {  # session_name, session_dir
 # writes there.
 _refuse_unmounted_meta() {  # session_name, session_dir
     local sub link target
-    for sub in memory plans claude-config private; do
+    for sub in $CS_VAULT_LINKS; do
         link="$2/.cs/$sub"
         if [ -e "$link" ] && [ ! -d "$link" ]; then
             error "$1: .cs/$sub is a file, not a directory or a link into encrypted storage. Remove it, or link it into the vault, then reopen."
@@ -3240,6 +3253,18 @@ _refuse_unmounted_meta() {  # session_name, session_dir
         error "$1: .cs/$sub points at $target, which is missing (encrypted storage not mounted?). Mount it, then reopen."
     done
     _refuse_plaintext_beside_private "$1" "$2"
+}
+
+# Feature worktrees of an encrypted session are not designed yet. cs -encrypt
+# links the four names relative to .cs/, so a checkout of them resolves inside
+# the worktree, where nothing is mounted; and a base whose .cs/ is ignored
+# gives the worktree plaintext files of its own. Refused by name until then.
+_refuse_worktree_of_encrypted_base() {  # base_name, base_dir
+    local sub
+    for sub in $CS_VAULT_LINKS; do
+        [ -L "$2/.cs/$sub" ] || continue
+        error "$1: .cs/$sub links into encrypted storage, and feature worktrees of an encrypted session are not supported yet."
+    done
 }
 
 # The cs content files a plain session keeps in .cs/local and an encrypted one
@@ -6867,10 +6892,6 @@ run_doctor() {
 }
 
 # Search across all sessions' metadata
-# The four names under .cs/ that link into the vault; see docs/session-layout.md
-# "Encrypted sessions".
-ENCRYPT_VAULT_LINKS="memory plans claude-config private"
-
 # Where the container lives: outside every session directory, so neither
 # cs -rm nor the autosave snapshot ever reaches it.
 _encrypt_container_path() {  # session_name
@@ -6891,7 +6912,7 @@ _encrypt_refuse() {  # session_name
     cs_interactive || error "cs -encrypt asks for the vault password; run it from a terminal."
     meta="$dir/.cs"
     session_is_live "$meta" && error "$name: the session is running; close it, then encrypt."
-    for sub in $ENCRYPT_VAULT_LINKS; do
+    for sub in $CS_VAULT_LINKS; do
         [ -L "$meta/$sub" ] && error "$name: .cs/$sub is already a link; the session is encrypted, or half set up by hand."
     done
     # memory and plans move into the vault; these two are only linked, so a
@@ -7061,6 +7082,10 @@ run_encrypt() {
     echo "$$" > "$meta/session.lock"
     # shellcheck disable=SC2064  # the path is fixed now, on purpose
     trap "release_session_lock $(printf '%q' "$meta")" EXIT
+    # .cs/local is gitignored and born on the first open, so a session cloned
+    # here and never opened has none; the pre-open hook and the vault record
+    # live in it. Made before anything moves, so a failure changes nothing.
+    mkdir -p "$meta/local"
     mnt="$meta/vault-mnt"
     container=$(_encrypt_container_path "$name")
 
@@ -7079,7 +7104,7 @@ run_encrypt() {
     touch "$mnt/.metadata_never_index"
 
     _encrypt_move_content "$name" "$meta"
-    for sub in $ENCRYPT_VAULT_LINKS; do
+    for sub in $CS_VAULT_LINKS; do
         ln -s "vault-mnt/$sub" "$meta/$sub"
     done
     _encrypt_write_pre_open "$meta" "$container"
@@ -7476,6 +7501,51 @@ _session_foreign_entries() {  # session_dir
     printf '%s' "$out"
 }
 
+# The first mount point at or under a directory, from the mount table text on
+# stdin (empty when there is none). macOS lists "<dev> on <path> (<opts>)",
+# Linux "<dev> on <path> type <fs> (<opts>)", and neither escapes its fields:
+# a source may hold " on " and a path " on ", " type " or " (". So each line
+# is read the Linux way (cut at its last " type ") and then the macOS way, and
+# in each every absolute path that follows an " on " is a candidate. Each cut
+# keeps the space after "on", so a source ending in " on", whose " on" shares
+# that space with the separator, still leaves the separator to find. Each
+# candidate's ancestors are compared with -ef, which sees through letter case
+# and symlinks where a string prefix would not.
+_mount_under() {  # dir
+    local dir="$1" line body text mnt p
+    while IFS= read -r line; do
+        body="${line% (*}"
+        for text in "${body% type *}" "$body"; do
+            while :; do
+                case "$text" in
+                    *" on "*) text="${text#* on}" ;;
+                    *) break ;;
+                esac
+                case "$text" in " /"*) mnt="${text# }" ;; *) continue ;; esac
+                p="$mnt"
+                while [ -n "$p" ]; do
+                    if [ "$p" -ef "$dir" ]; then
+                        printf '%s' "$mnt"
+                        return 0
+                    fi
+                    p="${p%/*}"
+                done
+            done
+        done
+    done
+    return 0
+}
+
+# The first volume mounted at or under a directory, from the live mount
+# table; empty when there is none. rm -rf and git worktree remove recurse into
+# a mount, so every path that deletes a directory asks this first. Fails when
+# `mount` does, so the caller refuses instead of guessing.
+_volume_mounted_under() {  # dir
+    local table
+    table=$(mount) || return 1
+    _mount_under "$1" <<< "$table"
+}
+
 # Paths in a worktree session that git does not track (untracked or
 # ignored), as one comma-separated line; git worktree remove --force
 # deletes them with no copy on the branch. cs's own .cs/, .claude/ and
@@ -7529,7 +7599,7 @@ _remove_one_session() {
     if [ ! -L "$session_dir" ]; then
         local sub link real_dir real_target
         real_dir=$(cd "$session_dir" && pwd -P)
-        for sub in memory plans claude-config private; do
+        for sub in $CS_VAULT_LINKS; do
             link="$session_dir/.cs/$sub"
             [ -L "$link" ] || continue
             real_target=$(cd "$link" 2>/dev/null && pwd -P) || continue
@@ -7538,6 +7608,13 @@ _remove_one_session() {
                     error "Session '$session_name' has encrypted storage mounted inside it: .cs/$sub points at $(readlink "$link"). Removing the session would delete what the vault holds; unmount it, then retry." ;;
             esac
         done
+        # A cs -encrypt that stopped partway leaves its volume mounted with no
+        # link yet, so the links above cannot see it; the mount table can.
+        local mounted
+        mounted=$(_volume_mounted_under "$session_dir") \
+            || error "cs -rm could not read the mount table, so it cannot tell whether a volume is mounted inside '$session_name'; refusing to remove it."
+        [ -z "$mounted" ] \
+            || error "Session '$session_name' has a volume mounted inside it at $mounted. Removing the session would delete what the volume holds; unmount it, then retry."
     fi
 
     # Every confirmation below reads from stdin; a script piping input through
@@ -7775,10 +7852,12 @@ run_statusline_cmd() {
             [ -f "$settings" ] || echo '{}' > "$settings"
             local _tmp
             _tmp=$(mktemp)
-            # refreshInterval keeps the bar repainting once a second while
-            # idle; the logo's attention pulse animates on that timer.
+            # refreshInterval 60 repaints an idle bar once a minute, which keeps
+            # the context-pct heartbeat fresh for a conversation with no lock.
+            # Each tick on Claude Code 2.1.286 lists every process with
+            # `ps -A`; at 1 s a dozen sessions together hit the process limit.
             if { jq --arg cmd "$bin" --arg subcmd "$subbin" \
-                '.statusLine = {type: "command", command: $cmd, refreshInterval: 1}
+                '.statusLine = {type: "command", command: $cmd, refreshInterval: 60}
                  | .subagentStatusLine = {type: "command", command: $subcmd}' \
                 "$settings" > "$_tmp"; } 2>/dev/null; then
                 mv "$_tmp" "$settings"
@@ -9274,17 +9353,26 @@ run_uninstall() {
         fi
     fi
 
-    # Ask about session data
+    # Ask about session data. rm -rf recurses into a mount, so with a volume
+    # mounted inside the sessions root (an open encrypted session's vault) the
+    # data stays and the question is not asked.
     if [ -d "$SESSIONS_ROOT" ]; then
         echo ""
-        warn "Session data exists at $SESSIONS_ROOT"
-        read -p "Delete session data? This cannot be undone. [y/N] " -n 1 -r
-        echo ""
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            rm -rf "$SESSIONS_ROOT"
-            info "Removed $SESSIONS_ROOT"
+        local mounted
+        if ! mounted=$(_volume_mounted_under "$SESSIONS_ROOT"); then
+            warn "Kept $SESSIONS_ROOT: cs could not read the mount table, so it cannot tell whether a volume is mounted inside it."
+        elif [ -n "$mounted" ]; then
+            warn "Kept $SESSIONS_ROOT: a volume is mounted inside it at $mounted, and deleting the directory would delete what the volume holds. Unmount it before you delete $SESSIONS_ROOT."
         else
-            info "Kept $SESSIONS_ROOT"
+            warn "Session data exists at $SESSIONS_ROOT"
+            read -p "Delete session data? This cannot be undone. [y/N] " -n 1 -r
+            echo ""
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                rm -rf "$SESSIONS_ROOT"
+                info "Removed $SESSIONS_ROOT"
+            else
+                info "Kept $SESSIONS_ROOT"
+            fi
         fi
     fi
 
@@ -9691,15 +9779,22 @@ main() {
         if [ ! -e "$base_dir" ]; then
             error "Base session not found: $wt_base"
         fi
+        # Checked on the base first: a worktree of an encrypted session is
+        # refused whether its vault is mounted or not, and a worktree's own
+        # copies of its links dangle with nothing to mount, so "mount it"
+        # would mislead.
+        _refuse_worktree_of_encrypted_base "$wt_base" "$base_dir"
         if [ ! -d "$session_dir" ]; then
             is_new="true"
-            # The checkout carries the base's committed vault links; a locked
-            # vault would leave setup writing through dangling ones.
+            # The base's vault links are refused above, so this catches a
+            # regular file where one belongs, or plaintext cs files beside a
+            # .cs/private made by hand.
             _refuse_unmounted_meta "$wt_base" "$base_dir"
             confirm_clean_worktree_base "$base_dir" "$wt_base"
             session_dir=$(create_worktree_session "$base_dir" "$wt_base" "$wt_task")
         else
-            # A worktree of an encrypted session carries its vault links too.
+            # A worktree whose own checkout carries vault links refuses by
+            # name while they dangle; a base's links never get this far.
             _refuse_unmounted_meta "$session_name" "$session_dir"
             # The backfill a base session gets from migrate_session, which the
             # worktree path below deliberately skips: an older worktree, or one

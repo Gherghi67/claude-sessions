@@ -68,6 +68,11 @@ _narrative_budget() {  # value, default
     if [ "$n" -gt 0 ]; then echo "$n"; else echo "$2"; fi
 }
 
+# The four names under .cs/ that an encrypted session links into its vault;
+# see docs/session-layout.md "Encrypted sessions".
+# shellcheck disable=SC2034  # read by cs and by the hooks that source this file
+CS_VAULT_LINKS="memory plans claude-config private"
+
 # The directory holding a session's cs content files (command log, mail,
 # traces). An encrypted session links .cs/private into its vault; any other
 # keeps them in .cs/local. Fails, printing nothing, when .cs/private is a link

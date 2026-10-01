@@ -499,7 +499,7 @@ if [ "$SOURCE" = "resume" ]; then
     local_state_set last_resumed "$(date '+%Y-%m-%d')"
 fi
 
-# A fresh session is attended by definition: drop any stale finished-blink
+# A fresh session is attended by definition: drop any stale attention
 # marker left by the previous conversation's final Stop.
 rm -f "$META_DIR/local/attention" 2>/dev/null || true
 

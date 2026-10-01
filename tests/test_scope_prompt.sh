@@ -110,7 +110,7 @@ seed_repo() {
 
 test_prompt_clears_attention_marker() {
     # Any prompt (even a slash command) means the user is back; the
-    # statusline's finished-blink marker must drop immediately.
+    # statusline's attention marker must drop immediately.
     mkdir -p "$CLAUDE_SESSION_META_DIR/local"
     touch "$CLAUDE_SESSION_META_DIR/local/attention"
     run_hook "/color red" >/dev/null 2>&1 || true

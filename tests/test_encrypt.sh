@@ -242,6 +242,20 @@ detach $s/vault-mnt" "$(cat "$FAKE_HDIUTIL_LOG")" "create, attach, then detach" 
     assert_output_contains "$out" "~/.claude/history.jsonl" "lists copies it could not move" || return 1
 }
 
+# A session cloned or synced here and never opened has no .cs/local: it is
+# gitignored and born on the first open, and the pre-open hook lives in it.
+test_encrypt_builds_a_session_never_opened_on_this_machine() {
+    _stubs
+    _populated_session enc
+    local s="$CS_SESSIONS_ROOT/enc/.cs" out rc=0
+    rm -rf "$s/local"
+    out=$(_encrypt enc 2>&1) || rc=$?
+    assert_eq "0" "$rc" "exit 0 (output: $out)" || return 1
+    [ -x "$s/local/pre-open" ] || { echo "  FAIL: pre-open missing or not executable"; return 1; }
+    assert_eq "$(_vault_path enc)" "$(cat "$s/local/vault")" ".cs/local/vault names the container" || return 1
+    assert_file_contains "$s/README.md" "^tags: \[encrypted\]$" "tagged encrypted" || return 1
+}
+
 # An open while cs -encrypt asks for passwords would race its moves; the
 # session lock holds it off, and is gone once cs -encrypt ends.
 test_encrypt_holds_the_session_lock_while_it_works() {
@@ -643,6 +657,7 @@ run_test test_encrypt_refuses_a_real_claude_config_or_private
 run_test test_encrypt_refuses_an_existing_pre_open
 run_test test_encrypt_refuses_an_existing_container
 run_test test_encrypt_builds_the_vault_and_detaches
+run_test test_encrypt_builds_a_session_never_opened_on_this_machine
 run_test test_encrypt_holds_the_session_lock_while_it_works
 run_test test_encrypt_releases_the_session_lock_when_it_stops
 run_test test_encrypt_refuses_a_readme_it_cannot_tag

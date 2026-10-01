@@ -1028,9 +1028,6 @@ fn worktree_untracked(path: &Path) -> Result<Vec<String>, String> {
     Ok(paths)
 }
 
-/// Remove a session at `path` by whatever means its kind requires: symlinks
-/// are unlinked, worktree sessions are unregistered through git, and plain
-/// directories are removed outright.
 /// The links an encrypted session keeps into its vault, under `.cs/`.
 pub const VAULT_LINKS: [&str; 4] = ["memory", "plans", "claude-config", "private"];
 
@@ -1061,6 +1058,50 @@ fn mounted_vault_link(dir: &Path) -> Option<(&'static str, PathBuf)> {
     })
 }
 
+/// The first mount point at or under `dir` in `table`, the output of
+/// `mount`: macOS lists "<dev> on <path> (<opts>)", Linux
+/// "<dev> on <path> type <fs> (<opts>)", and neither escapes its fields: a
+/// source may hold " on " and a path " on ", " type " or " (". So each line
+/// is read the Linux way (cut at its last " type ") and then the macOS way,
+/// and in each every absolute path that follows an " on " is a candidate, as
+/// cs -rm reads it. Matches may overlap: a source ending in " on" shares its
+/// last space with the separator. Each candidate's ancestors are compared by
+/// device and inode, which see through letter case and symlinks where a path
+/// prefix would not.
+fn mount_under(dir: &Path, table: &str) -> Option<PathBuf> {
+    use std::os::unix::fs::MetadataExt;
+    let target = fs::metadata(dir).ok()?;
+    let same_as_dir = |p: &Path| {
+        fs::metadata(p)
+            .map(|m| m.dev() == target.dev() && m.ino() == target.ino())
+            .unwrap_or(false)
+    };
+    table.lines().find_map(|line| {
+        let body = line.rsplit_once(" (").map_or(line, |(head, _)| head);
+        let linux = body.rsplit_once(" type ").map(|(head, _)| head);
+        linux.into_iter().chain(std::iter::once(body)).find_map(|text| {
+            text.char_indices()
+                .filter_map(|(at, _)| text[at..].strip_prefix(" on "))
+                .find_map(|rest| {
+                    let mnt = Path::new(rest);
+                    (mnt.is_absolute() && mnt.ancestors().any(same_as_dir)).then(|| mnt.to_path_buf())
+                })
+        })
+    })
+}
+
+/// The mount table as `mount` prints it.
+fn read_mount_table() -> std::io::Result<String> {
+    let out = std::process::Command::new("mount").output()?;
+    if !out.status.success() {
+        return Err(std::io::Error::other(format!("mount exited with {}", out.status)));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Remove a session at `path` by whatever means its kind requires: symlinks
+/// are unlinked, worktree sessions are unregistered through git, and plain
+/// directories are removed outright.
 pub fn remove_session_path(root: &Path, name: &str, path: &Path) -> std::io::Result<()> {
     let is_link = path.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false);
     // remove_dir_all recurses into a mount, so a vault mounted inside the
@@ -1070,6 +1111,19 @@ pub fn remove_session_path(root: &Path, name: &str, path: &Path) -> std::io::Res
             return Err(std::io::Error::other(format!(
                 "{name} has encrypted storage mounted inside it: .cs/{sub} points at {}; unmount it, then retry",
                 target.display()
+            )));
+        }
+        // A cs -encrypt that stopped partway leaves its volume mounted with
+        // no link yet, so the links cannot see it; the mount table can.
+        let table = read_mount_table().map_err(|e| {
+            std::io::Error::other(format!(
+                "could not read the mount table ({e}), so cannot tell whether a volume is mounted inside {name}; refusing to remove it"
+            ))
+        })?;
+        if let Some(mnt) = mount_under(path, &table) {
+            return Err(std::io::Error::other(format!(
+                "{name} has a volume mounted inside it at {}; unmount it, then retry",
+                mnt.display()
             )));
         }
     }
@@ -1859,6 +1913,85 @@ mod tests {
         remove_session_path(&root, "vt", &dir).unwrap();
         assert!(!dir.exists(), "an unmounted encrypted session is removed");
         let _ = fs::remove_dir_all(&root);
+    }
+
+    // A cs -encrypt that stops partway leaves its volume mounted at
+    // .cs/vault-mnt with no vault link yet, so only the mount table shows it.
+    #[test]
+    fn mount_under_finds_a_volume_mounted_inside_the_session() {
+        let root = std::env::temp_dir().join(format!("cs-mount-under-{}", std::process::id()));
+        let dir = root.join("h1");
+        let mnt = dir.join(".cs/vault-mnt");
+        fs::create_dir_all(&mnt).unwrap();
+        let macos = format!(
+            "/dev/disk3s5 on /System/Volumes/Data (apfs, local, journaled)\n\
+             /dev/disk9s1 on {} (apfs, local, nodev, nosuid, journaled, noowners, mounted by tester)\n",
+            mnt.display()
+        );
+        let linux = format!(
+            "/dev/sda1 on / type ext4 (rw,relatime)\n/dev/loop9 on {} type ext4 (rw,relatime)\n",
+            mnt.display()
+        );
+
+        assert_eq!(mount_under(&dir, &macos), Some(mnt.clone()), "macOS table");
+        assert_eq!(mount_under(&dir, &linux), Some(mnt.clone()), "Linux table, type dropped");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    // "h1x" beside "h1": a string-prefix match would refuse the wrong session.
+    #[test]
+    fn mount_under_ignores_a_volume_in_another_session() {
+        let root = std::env::temp_dir().join(format!("cs-mount-other-{}", std::process::id()));
+        let dir = root.join("h1");
+        let other = root.join("h1x/.cs/vault-mnt");
+        fs::create_dir_all(&dir).unwrap();
+        fs::create_dir_all(&other).unwrap();
+        let table = format!("/dev/r on / (apfs, local)\n/dev/disk9s1 on {} (apfs, local)\n", other.display());
+
+        assert_eq!(mount_under(&dir, &table), None);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    // A mount source may itself hold " on " (an NFS export, an SMB share), or
+    // end in " on", so that its " on" and the separator share one space.
+    #[test]
+    fn mount_under_reads_a_mount_whose_source_holds_on() {
+        let root = std::env::temp_dir().join(format!("cs-mount-src-on-{}", std::process::id()));
+        let dir = root.join("h1");
+        let mnt = dir.join(".cs/vault-mnt");
+        fs::create_dir_all(&mnt).unwrap();
+
+        for source in ["host:/export on disk", "host:/export on"] {
+            let macos = format!("{source} on {} (nfs)\n", mnt.display());
+            let linux = format!("{source} on {} type nfs (rw)\n", mnt.display());
+            assert_eq!(mount_under(&dir, &macos), Some(mnt.clone()), "{macos}");
+            assert_eq!(mount_under(&dir, &linux), Some(mnt.clone()), "{linux}");
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    // A mount point is always absolute: text after an " on " inside a source
+    // must not resolve against the working directory (the package root under
+    // cargo test, where src/ exists).
+    #[test]
+    fn mount_under_never_reads_a_relative_path() {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+
+        assert_eq!(mount_under(&src, "map on src (autofs, nobrowse)\n"), None);
+    }
+
+    // macOS never prints " type <fs>", so a path holding " type " is still the
+    // mount point, not a Linux line to cut short.
+    #[test]
+    fn mount_under_reads_a_macos_mount_point_holding_type() {
+        let root = std::env::temp_dir().join(format!("cs-mount-type-{}/project type archive", std::process::id()));
+        let dir = root.join("h1");
+        let mnt = dir.join(".cs/vault-mnt");
+        fs::create_dir_all(&mnt).unwrap();
+        let table = format!("/dev/disk9s1 on {} (apfs, local, nodev, nosuid, journaled)\n", mnt.display());
+
+        assert_eq!(mount_under(&dir, &table), Some(mnt.clone()));
+        let _ = fs::remove_dir_all(root.parent().unwrap());
     }
 
     #[test]

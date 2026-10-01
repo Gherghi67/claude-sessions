@@ -228,6 +228,130 @@ test_remove_goes_ahead_once_the_vault_is_unmounted() {
     assert_not_exists "$dir" "an unmounted encrypted session is removed" || return 1
 }
 
+# A cs -encrypt that stops partway leaves its volume mounted at .cs/vault-mnt
+# before any vault link exists, so only the mount table shows it.
+_half_encrypted_session() {  # name; echoes the session dir
+    local dir
+    dir=$(create_test_session "$1")
+    mkdir -p "$dir/.cs/vault-mnt/memory"
+    echo sealed > "$dir/.cs/vault-mnt/memory/narrative.md"
+    echo "$dir"
+}
+
+test_remove_refuses_a_volume_mounted_inside_without_vault_links() {
+    local dir stub="$TEST_TMPDIR/mount-stub" out rc=0
+    dir=$(_half_encrypted_session h1)
+    _stub_mount_table "$stub" "/dev/disk3s5 on /System/Volumes/Data (apfs, local, journaled)" \
+        "/dev/disk9s1 on $dir/.cs/vault-mnt (apfs, local, nodev, nosuid, journaled, noowners, mounted by tester)" || return 1
+    out=$(PATH="$stub:$PATH" "$CS_BIN" -rm h1 --force --delete-files </dev/null 2>&1) || rc=$?
+    assert_eq "1" "$rc" "removal refuses" || return 1
+    assert_eq "Error: Session 'h1' has a volume mounted inside it at $dir/.cs/vault-mnt. Removing the session would delete what the volume holds; unmount it, then retry." \
+        "$out" "names the mount point" || return 1
+    assert_file_exists "$dir/.cs/vault-mnt/memory/narrative.md" "the volume's contents survive" || return 1
+}
+
+test_remove_reads_a_linux_mount_table() {
+    local dir stub="$TEST_TMPDIR/mount-stub" out rc=0
+    dir=$(_half_encrypted_session h2)
+    _stub_mount_table "$stub" "/dev/sda1 on / type ext4 (rw,relatime)" \
+        "/dev/loop9 on $dir/.cs/vault-mnt type ext4 (rw,relatime)" || return 1
+    out=$(PATH="$stub:$PATH" "$CS_BIN" -rm h2 --force --delete-files </dev/null 2>&1) || rc=$?
+    assert_eq "1" "$rc" "removal refuses" || return 1
+    assert_eq "Error: Session 'h2' has a volume mounted inside it at $dir/.cs/vault-mnt. Removing the session would delete what the volume holds; unmount it, then retry." \
+        "$out" "names the mount point without the filesystem type" || return 1
+    assert_file_exists "$dir/.cs/vault-mnt/memory/narrative.md" "the volume's contents survive" || return 1
+}
+
+# A sibling whose name extends this one's ("h3x" beside "h3") holds the mount:
+# a string-prefix match would refuse the wrong session.
+test_remove_ignores_a_volume_mounted_in_another_session() {
+    local dir other stub="$TEST_TMPDIR/mount-stub"
+    dir=$(create_test_session h3)
+    other=$(_half_encrypted_session h3x)
+    _stub_mount_table "$stub" "/dev/disk9s1 on $other/.cs/vault-mnt (apfs, local, nodev, nosuid, journaled)" || return 1
+    PATH="$stub:$PATH" "$CS_BIN" -rm h3 --force --delete-files </dev/null >/dev/null 2>&1 || return 1
+    assert_not_exists "$dir" "the session without a mount is removed" || return 1
+    assert_file_exists "$other/.cs/vault-mnt/memory/narrative.md" "the other session is untouched" || return 1
+}
+
+test_remove_refuses_when_the_mount_table_cannot_be_read() {
+    local dir d="$TEST_TMPDIR/mount-broken" out rc=0
+    dir=$(create_test_session h4)
+    _stub_mount_unreadable "$d" || return 1
+    out=$(PATH="$d:$PATH" "$CS_BIN" -rm h4 --force --delete-files </dev/null 2>&1) || rc=$?
+    assert_eq "1" "$rc" "removal refuses" || return 1
+    assert_output_contains "$out" "Error: cs -rm could not read the mount table, so it cannot tell whether a volume is mounted inside 'h4'; refusing to remove it." "says why" || return 1
+    assert_dir "$dir" "the session survives" || return 1
+}
+
+# Runs `cs -rm <args>` with a mount stub first on PATH and gives it 30 s, so a
+# parse that never ends fails the test instead of hanging the suite. The scan
+# runs in a command-substitution child of cs, so that child goes first. Prints
+# the output, then "rc=<status>" (124 for a run that had to be stopped).
+_rm_within_30s() {  # stub-dir args...
+    local stub="$1" out="$TEST_TMPDIR/rm-within.out" pid i=0 rc=0
+    shift
+    PATH="$stub:$PATH" "$CS_BIN" -rm "$@" </dev/null >"$out" 2>&1 &
+    pid=$!
+    while kill -0 "$pid" 2>/dev/null; do
+        if [ "$i" -ge 150 ]; then
+            pkill -9 -P "$pid" 2>/dev/null
+            kill -9 "$pid" 2>/dev/null
+            wait "$pid" 2>/dev/null
+            cat "$out"
+            echo "rc=124"
+            return 0
+        fi
+        sleep 0.2
+        i=$((i + 1))
+    done
+    wait "$pid" || rc=$?
+    cat "$out"
+    echo "rc=$rc"
+}
+
+# A mount source may itself hold " on " (an NFS export, an SMB share name).
+# Another session's line like that must not stall the scan.
+test_remove_reads_past_a_mount_source_holding_on() {
+    local dir other stub="$TEST_TMPDIR/mount-stub" out
+    dir=$(create_test_session h5)
+    other=$(_half_encrypted_session h5x)
+    _stub_mount_table "$stub" "host:/export on disk on $other/.cs/vault-mnt (nfs)" || return 1
+    out=$(_rm_within_30s "$stub" h5 --force --delete-files)
+    assert_eq "Removed session: h5
+rc=0" "$out" "removal finishes" || return 1
+    assert_not_exists "$dir" "the session without a mount is removed" || return 1
+}
+
+# In the last two lines the source ends in " on", so its " on" and the
+# separator share one space.
+test_remove_refuses_a_mount_whose_source_holds_on() {
+    local dir stub="$TEST_TMPDIR/mount-stub" out line
+    dir=$(_half_encrypted_session h6)
+    for line in "host:/export on disk on $dir/.cs/vault-mnt (nfs)" \
+        "host:/export on on $dir/.cs/vault-mnt (nfs)" \
+        "host:/export on on $dir/.cs/vault-mnt type nfs (rw)"; do
+        _stub_mount_table "$stub" "$line" || return 1
+        out=$(_rm_within_30s "$stub" h6 --force --delete-files)
+        assert_eq "Error: Session 'h6' has a volume mounted inside it at $dir/.cs/vault-mnt. Removing the session would delete what the volume holds; unmount it, then retry.
+rc=1" "$out" "names the mount point: $line" || return 1
+        assert_file_exists "$dir/.cs/vault-mnt/memory/narrative.md" "the volume's contents survive: $line" || return 1
+    done
+}
+
+# macOS never prints " type <fs>", so a path holding " type " (here in the
+# sessions root) is still the mount point, not a Linux line to cut short.
+test_remove_reads_a_macos_mount_point_holding_type() {
+    local root="$TEST_TMPDIR/project type archive" dir stub="$TEST_TMPDIR/mount-stub" out
+    mkdir -p "$root"
+    dir=$(CS_SESSIONS_ROOT="$root" _half_encrypted_session h7)
+    _stub_mount_table "$stub" "/dev/disk9s1 on $dir/.cs/vault-mnt (apfs, local, nodev, nosuid, journaled, noowners, mounted by tester)" || return 1
+    out=$(CS_SESSIONS_ROOT="$root" _rm_within_30s "$stub" h7 --force --delete-files)
+    assert_eq "Error: Session 'h7' has a volume mounted inside it at $dir/.cs/vault-mnt. Removing the session would delete what the volume holds; unmount it, then retry.
+rc=1" "$out" "names the mount point" || return 1
+    assert_file_exists "$dir/.cs/vault-mnt/memory/narrative.md" "the volume's contents survive" || return 1
+}
+
 # A worktree session beside a base repo, with one untracked and one
 # git-ignored file the user added. Echoes the worktree path.
 _worktree_with_user_files() {  # base-name
@@ -301,5 +425,12 @@ run_test test_remove_worktree_confirm_lists_untracked_files
 run_test test_remove_force_on_adopted_removes_only_the_link
 run_test test_remove_refuses_while_the_vault_is_mounted_inside
 run_test test_remove_goes_ahead_once_the_vault_is_unmounted
+run_test test_remove_refuses_a_volume_mounted_inside_without_vault_links
+run_test test_remove_reads_a_linux_mount_table
+run_test test_remove_ignores_a_volume_mounted_in_another_session
+run_test test_remove_refuses_when_the_mount_table_cannot_be_read
+run_test test_remove_reads_past_a_mount_source_holding_on
+run_test test_remove_refuses_a_mount_whose_source_holds_on
+run_test test_remove_reads_a_macos_mount_point_holding_type
 
 report_results

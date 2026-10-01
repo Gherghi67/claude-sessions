@@ -1462,7 +1462,7 @@ test_idle_wake_does_not_touch_the_attention_flag() {
     local msg; msg=$(FIRST_MSG) || return 1
     filechanged "$msg" add >/dev/null 2>&1 || true
     assert_file_not_exists "$(RCV_META)/local/attention" \
-        "a watched-file event is not a finished turn: the statusline must not blink for it" || return 1
+        "a watched-file event is not a finished turn: the Claude mark must not change colour for it" || return 1
 }
 
 test_stop_wake_blocks_on_unread_mail() {

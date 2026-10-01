@@ -635,6 +635,46 @@ test_install_deploys_the_rotate_mod_and_uninstall_removes_it() {
         || { echo "  FAIL: uninstall left ~/.claude/skills/cs behind"; return 1; }
 }
 
+# rm -rf recurses into a mount, so deleting the session data while a volume is
+# mounted inside it would delete what the volume holds. The answers are:
+# continue (y), keep keychain secrets (n), delete session data (y). The
+# `mount` stub staged in stub-dir comes first on PATH.
+_uninstall_with_mounts() {  # case-name stub-dir
+    local home="$TEST_TMPDIR/$1-home" root="$TEST_TMPDIR/$1-sessions"
+    mkdir -p "$home/.claude" "$root/s1/.cs/vault-mnt"
+    echo sealed > "$root/s1/.cs/vault-mnt/notes.md"
+    printf 'yny' | HOME="$home" CS_SESSIONS_ROOT="$root" PATH="$2:$PATH" "$CS_BIN" -uninstall \
+        > "$TEST_TMPDIR/$1.out" 2>&1 || { echo "  FAIL: cs -uninstall exited non-zero"; return 1; }
+}
+
+test_uninstall_keeps_session_data_while_a_volume_is_mounted_inside() {
+    local root out stub="$TEST_TMPDIR/mount-stub"
+    root="$TEST_TMPDIR/umount-mounted-sessions"
+    _stub_mount_table "$stub" "/dev/disk9s1 on $root/s1/.cs/vault-mnt (apfs, local, nodev, nosuid, journaled)" || return 1
+    _uninstall_with_mounts umount-mounted "$stub" || return 1
+    out=$(cat "$TEST_TMPDIR/umount-mounted.out")
+    assert_file_exists "$root/s1/.cs/vault-mnt/notes.md" "the volume's contents survive" || return 1
+    assert_output_contains "$out" "Kept $root: a volume is mounted inside it at $root/s1/.cs/vault-mnt" "says why the data stays" || return 1
+}
+
+test_uninstall_keeps_session_data_when_the_mount_table_cannot_be_read() {
+    local root out stub="$TEST_TMPDIR/mount-stub"
+    root="$TEST_TMPDIR/umount-broken-sessions"
+    _stub_mount_unreadable "$stub" || return 1
+    _uninstall_with_mounts umount-broken "$stub" || return 1
+    out=$(cat "$TEST_TMPDIR/umount-broken.out")
+    assert_file_exists "$root/s1/.cs/vault-mnt/notes.md" "the data survives" || return 1
+    assert_output_contains "$out" "Kept $root: cs could not read the mount table, so it cannot tell whether a volume is mounted inside it" "says why the data stays" || return 1
+}
+
+test_uninstall_deletes_session_data_with_no_volume_mounted_inside() {
+    local root stub="$TEST_TMPDIR/mount-stub"
+    root="$TEST_TMPDIR/umount-clear-sessions"
+    _stub_mount_table "$stub" "/dev/disk3s5 on /System/Volumes/Data (apfs, local, journaled)" || return 1
+    _uninstall_with_mounts umount-clear "$stub" || return 1
+    assert_not_exists "$root" "the answered yes deletes the session data" || return 1
+}
+
 # An earlier opt-in shape had the person symlink the mod's directory under
 # ~/.claude/skills at the checkout. Copying through that link would overwrite the checkout's own
 # files and leave the link in place; the installer replaces the link with a
@@ -908,7 +948,8 @@ test_statusline_enable_registers() {
     mkdir -p "$fake_home/.claude" "$fake_home/.local/bin"
     echo '#!/bin/sh' > "$fake_home/.local/bin/cs-statusline"
     chmod +x "$fake_home/.local/bin/cs-statusline"
-    echo '{}' > "$fake_home/.claude/settings.json"
+    echo '{"statusLine":{"type":"command","command":"/old/path/cs-statusline","refreshInterval":1}}' \
+        > "$fake_home/.claude/settings.json"
     HOME="$fake_home" "$CS_BIN" -statusline enable > /dev/null 2>&1 || {
         echo "  FAIL: cs -statusline enable exited non-zero"
         return 1
@@ -922,12 +963,13 @@ test_statusline_enable_registers() {
             return 1
             ;;
     esac
-    # The attention pulse animates on Claude Code's refresh timer; without
-    # refreshInterval the bar only repaints on events and freezes when idle.
+    # A 60 s refresh timer keeps an idle conversation's heartbeat fresh. Each
+    # tick on Claude Code 2.1.286 lists every process with `ps -A`, and at one a
+    # second across a dozen sessions that hit the process limit.
     local interval
     interval=$(jq -r '.statusLine.refreshInterval // ""' "$fake_home/.claude/settings.json")
-    if [ "$interval" != "1" ]; then
-        echo "  FAIL: enable should register refreshInterval 1 (got '$interval')"
+    if [ "$interval" != "60" ]; then
+        echo "  FAIL: enable should register refreshInterval 60 (got '$interval')"
         return 1
     fi
 }
@@ -1026,7 +1068,7 @@ test_install_refreshes_registered_statusline_despite_marker() {
     local fake_home="$TEST_TMPDIR/home-sl-declined-registered"
     mkdir -p "$fake_home/.claude" "$fake_home/.config/cs"
     touch "$fake_home/.config/cs/statusline-declined"
-    echo '{"statusLine":{"type":"command","command":"/old/path/cs-statusline"}}' > "$fake_home/.claude/settings.json"
+    echo '{"statusLine":{"type":"command","command":"/old/path/cs-statusline","refreshInterval":1}}' > "$fake_home/.claude/settings.json"
     HOME="$fake_home" bash "$INSTALL_SH" > /dev/null 2>&1 < /dev/null || {
         echo "  FAIL: install.sh exited non-zero"
         return 1
@@ -1035,6 +1077,13 @@ test_install_refreshes_registered_statusline_despite_marker() {
     cmd=$(jq -r '.statusLine.command // ""' "$fake_home/.claude/settings.json")
     if [ "$cmd" != "$fake_home/.local/bin/cs-statusline" ]; then
         echo "  FAIL: registered cs-statusline was not refreshed (got '$cmd')"
+        return 1
+    fi
+    # The refresh writes today's registration: a 60 s timer, not the old 1 s one.
+    local interval
+    interval=$(jq -r '.statusLine.refreshInterval // ""' "$fake_home/.claude/settings.json")
+    if [ "$interval" != "60" ]; then
+        echo "  FAIL: the refresh should set refreshInterval 60 (got '$interval')"
         return 1
     fi
 }
@@ -1362,6 +1411,9 @@ run_test test_manifest_arrays_match_repo_files
 run_test test_skill_files_exist_in_repo
 run_test test_mod_files_manifest_matches_the_repo
 run_test test_install_deploys_the_rotate_mod_and_uninstall_removes_it
+run_test test_uninstall_keeps_session_data_while_a_volume_is_mounted_inside
+run_test test_uninstall_keeps_session_data_when_the_mount_table_cannot_be_read
+run_test test_uninstall_deletes_session_data_with_no_volume_mounted_inside
 run_test test_install_replaces_a_symlinked_mod_directory
 run_test test_strip_filters_in_sync
 run_test test_install_deploys_hooks_to_cs_subdir

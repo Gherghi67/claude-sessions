@@ -141,6 +141,25 @@ _stub_tools() {  # dir, tools...
     return 0
 }
 
+# Stage a `mount` into dir that prints the given lines as the mount table, for
+# a test that runs cs with dir first on PATH. Returns non-zero when the stub
+# cannot be staged.
+_stub_mount_table() {  # dir, line...
+    local dir="$1"; shift
+    mkdir -p "$dir" || return 1
+    printf '%s\n' "$@" > "$dir/table" || return 1
+    printf '#!/bin/sh\ncat "%s"\n' "$dir/table" > "$dir/mount" || return 1
+    chmod +x "$dir/mount"
+}
+
+# Stage a `mount` into dir that fails to read the mount table. Returns non-zero
+# when the stub cannot be staged.
+_stub_mount_unreadable() {  # dir
+    mkdir -p "$1" || return 1
+    printf '#!/bin/sh\necho "mount: cannot read table" >&2\nexit 1\n' > "$1/mount" || return 1
+    chmod +x "$1/mount"
+}
+
 
 # cs's live-duplicate guard scans the machine's whole process table for the
 # session name or its UUID. The gate runs suites in parallel and many of them
@@ -468,6 +487,16 @@ env
 STUB_EOF
     chmod +x "$stub"
     echo "$stub"
+}
+
+# Point CLAUDE_CODE_BIN, exported, at a claude stub that appends "launched" to
+# $TEST_TMPDIR/launched on each launch, so a test can tell a refusal from a
+# launch. The export lands in the calling shell; a call inside $(...) would
+# leave CLAUDE_CODE_BIN as it was.
+_make_launch_sentinel() {
+    printf '#!/bin/bash\necho launched >> "%s"\n' "$TEST_TMPDIR/launched" > "$TEST_TMPDIR/claude"
+    chmod +x "$TEST_TMPDIR/claude"
+    export CLAUDE_CODE_BIN="$TEST_TMPDIR/claude"
 }
 
 # --- Session Helpers ---

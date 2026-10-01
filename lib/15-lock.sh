@@ -215,7 +215,7 @@ _epoch_mtime() {  # path
 # How long after the last statusline write a lockless conversation still counts
 # as live, matching the TUI's HEARTBEAT_WINDOW_SECS. A conversation opened
 # outside cs writes no lock, but its statusline touches .cs/local/context-pct
-# every few seconds while active.
+# every minute or two while it is open: an idle bar repaints once a minute.
 HEARTBEAT_WINDOW_SECS=900
 
 # True when the statusline heartbeat is fresh: context-pct was written within
