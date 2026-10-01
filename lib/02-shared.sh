@@ -1,5 +1,6 @@
 # ABOUTME: Actor identity, narrative budget, private-dir and tmux window-title code that cs AND its hooks run. build.sh
 # ABOUTME: folds this into bin/cs and writes it verbatim to hooks/cs-shared.sh for sourcing.
+# shellcheck disable=SC2034  # cs and the hooks that source this file read every variable set here
 
 # The four names under .cs/ that an encrypted session links into its vault;
 # see docs/session-layout.md "Encrypted sessions".

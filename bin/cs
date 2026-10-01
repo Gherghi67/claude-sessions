@@ -150,6 +150,8 @@ _strip_hook_registration() {
         else . end
     '
 }
+# shellcheck disable=SC2034  # cs and the hooks that source this file read every variable set here
+
 # The four names under .cs/ that an encrypted session links into its vault;
 # see docs/session-layout.md "Encrypted sessions".
 CS_VAULT_LINKS="memory plans claude-config private"
