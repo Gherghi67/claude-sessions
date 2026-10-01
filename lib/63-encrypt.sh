@@ -195,6 +195,10 @@ run_encrypt() {
     echo "$$" > "$meta/session.lock"
     # shellcheck disable=SC2064  # the path is fixed now, on purpose
     trap "release_session_lock $(printf '%q' "$meta")" EXIT
+    # .cs/local is gitignored and born on the first open, so a session cloned
+    # here and never opened has none; the pre-open hook and the vault record
+    # live in it. Made before anything moves, so a failure changes nothing.
+    mkdir -p "$meta/local"
     mnt="$meta/vault-mnt"
     container=$(_encrypt_container_path "$name")
 
