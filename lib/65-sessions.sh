@@ -413,6 +413,16 @@ _mount_under() {  # dir
     return 0
 }
 
+# The first volume mounted at or under a directory, from the live mount
+# table; empty when there is none. rm -rf and git worktree remove recurse into
+# a mount, so every path that deletes a directory asks this first. Fails when
+# `mount` does, so the caller refuses instead of guessing.
+_volume_mounted_under() {  # dir
+    local table
+    table=$(mount) || return 1
+    _mount_under "$1" <<< "$table"
+}
+
 # Paths in a worktree session that git does not track (untracked or
 # ignored), as one comma-separated line; git worktree remove --force
 # deletes them with no copy on the branch. cs's own .cs/, .claude/ and
@@ -477,10 +487,9 @@ _remove_one_session() {
         done
         # A cs -encrypt that stopped partway leaves its volume mounted with no
         # link yet, so the links above cannot see it; the mount table can.
-        local table mounted
-        table=$(mount) \
+        local mounted
+        mounted=$(_volume_mounted_under "$session_dir") \
             || error "cs -rm could not read the mount table, so it cannot tell whether a volume is mounted inside '$session_name'; refusing to remove it."
-        mounted=$(_mount_under "$session_dir" <<< "$table")
         [ -z "$mounted" ] \
             || error "Session '$session_name' has a volume mounted inside it at $mounted. Removing the session would delete what the volume holds; unmount it, then retry."
     fi

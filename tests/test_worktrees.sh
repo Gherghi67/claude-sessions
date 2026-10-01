@@ -453,6 +453,52 @@ test_retire_refuses_dirty_worktree() {
     assert_dir "$wt" "worktree preserved on refusal" || return 1
 }
 
+# git worktree remove --force recurses into a mount, so a volume mounted inside
+# the feature worktree would lose what it holds. A `mount` stub prints the
+# table it is given; echoes the stub's directory for PATH.
+_retire_mount_stub() {  # line...
+    local d="$TEST_TMPDIR/retire-mount"
+    mkdir -p "$d"
+    printf '%s\n' "$@" > "$d/table"
+    printf '#!/bin/sh\ncat "%s"\n' "$d/table" > "$d/mount"
+    chmod +x "$d/mount"
+    echo "$d"
+}
+
+test_retire_refuses_a_volume_mounted_inside_the_worktree() {
+    local wt sha stub output status=0
+    create_test_session_with_git "myproj" >/dev/null
+    cs_launch "myproj@fix-auth"
+    wt="$CS_SESSIONS_ROOT/myproj@fix-auth"
+    sha=$(land_feature myproj fix-auth) || { echo "  FAIL: integrate fixture"; return 1; }
+    mkdir -p "$wt/.cs/vault-mnt"
+    echo sealed > "$wt/.cs/vault-mnt/notes.md"
+    stub=$(_retire_mount_stub "/dev/disk9s1 on $wt/.cs/vault-mnt (apfs, local, nodev, nosuid, journaled)")
+    output=$(PATH="$stub:$PATH" "$CS_BIN" "myproj" -retire-feature "fix-auth" "$sha" 2>&1) || status=$?
+    assert_eq "1" "$status" "retirement refuses" || return 1
+    assert_eq "Error: The feature is landed, but its worktree has a volume mounted inside it at $wt/.cs/vault-mnt, and removing the worktree would delete what the volume holds. Unmount it, then run /finish fix-auth here again." \
+        "$output" "names the mount" || return 1
+    assert_file_exists "$wt/.cs/vault-mnt/notes.md" "the volume's contents survive" || return 1
+}
+
+test_retire_refuses_when_the_mount_table_cannot_be_read() {
+    local wt sha d output status=0
+    create_test_session_with_git "myproj" >/dev/null
+    cs_launch "myproj@fix-auth"
+    wt="$CS_SESSIONS_ROOT/myproj@fix-auth"
+    sha=$(land_feature myproj fix-auth) || { echo "  FAIL: integrate fixture"; return 1; }
+    d="$TEST_TMPDIR/retire-mount-broken"
+    mkdir -p "$d"
+    printf '#!/bin/sh\necho "mount: cannot read table" >&2\nexit 1\n' > "$d/mount"
+    chmod +x "$d/mount"
+    output=$(PATH="$d:$PATH" "$CS_BIN" "myproj" -retire-feature "fix-auth" "$sha" 2>&1) || status=$?
+    assert_eq "1" "$status" "retirement refuses" || return 1
+    # The stub's own stderr line comes first; the refusal is the last line.
+    assert_eq "Error: cs could not read the mount table, so it cannot tell whether a volume is mounted inside $wt; refusing to remove the worktree." \
+        "$(printf '%s\n' "$output" | tail -n 1)" "says why" || return 1
+    assert_dir "$wt" "worktree preserved" || return 1
+}
+
 test_retire_refuses_a_live_feature_session_and_says_what_to_do() {
     local base_dir
     base_dir=$(create_test_session_with_git "myproj")
@@ -811,6 +857,8 @@ run_test test_launch_enables_function_hooks_unless_opted_out
 run_test test_retire_after_integrate_removes_worktree_and_branch
 run_test test_retire_refuses_dirty_worktree
 run_test test_retire_refuses_a_live_feature_session_and_says_what_to_do
+run_test test_retire_refuses_a_volume_mounted_inside_the_worktree
+run_test test_retire_refuses_when_the_mount_table_cannot_be_read
 run_test test_retire_from_live_base_session_succeeds
 run_test test_retire_from_inside_the_feature_session_refuses
 run_test test_retire_foreign_live_base_lock_still_refuses

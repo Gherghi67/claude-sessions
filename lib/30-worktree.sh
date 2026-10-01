@@ -454,6 +454,14 @@ retire_feature_worktree() {  # base_name task sha [--force]
         error "Base session '$base_name' is open elsewhere (PID $pid); run /finish $task from that conversation"
     fi
 
+    # git worktree remove --force recurses into a mount, so a volume mounted
+    # inside the worktree would lose what it holds.
+    local mounted
+    mounted=$(_volume_mounted_under "$wt_dir") \
+        || error "cs could not read the mount table, so it cannot tell whether a volume is mounted inside $wt_dir; refusing to remove the worktree."
+    [ -z "$mounted" ] \
+        || error "The feature is landed, but its worktree has a volume mounted inside it at $mounted, and removing the worktree would delete what the volume holds. Unmount it, then run /finish $task here again."
+
     if _tree_is_dirty "$wt_dir"; then
         error "Worktree has uncommitted changes; commit them in $wt_dir first (cs never commits for you)"
     fi

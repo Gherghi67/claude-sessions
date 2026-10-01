@@ -1969,6 +1969,14 @@ retire_feature_worktree() {  # base_name task sha [--force]
         error "Base session '$base_name' is open elsewhere (PID $pid); run /finish $task from that conversation"
     fi
 
+    # git worktree remove --force recurses into a mount, so a volume mounted
+    # inside the worktree would lose what it holds.
+    local mounted
+    mounted=$(_volume_mounted_under "$wt_dir") \
+        || error "cs could not read the mount table, so it cannot tell whether a volume is mounted inside $wt_dir; refusing to remove the worktree."
+    [ -z "$mounted" ] \
+        || error "The feature is landed, but its worktree has a volume mounted inside it at $mounted, and removing the worktree would delete what the volume holds. Unmount it, then run /finish $task here again."
+
     if _tree_is_dirty "$wt_dir"; then
         error "Worktree has uncommitted changes; commit them in $wt_dir first (cs never commits for you)"
     fi
@@ -7525,6 +7533,16 @@ _mount_under() {  # dir
     return 0
 }
 
+# The first volume mounted at or under a directory, from the live mount
+# table; empty when there is none. rm -rf and git worktree remove recurse into
+# a mount, so every path that deletes a directory asks this first. Fails when
+# `mount` does, so the caller refuses instead of guessing.
+_volume_mounted_under() {  # dir
+    local table
+    table=$(mount) || return 1
+    _mount_under "$1" <<< "$table"
+}
+
 # Paths in a worktree session that git does not track (untracked or
 # ignored), as one comma-separated line; git worktree remove --force
 # deletes them with no copy on the branch. cs's own .cs/, .claude/ and
@@ -7589,10 +7607,9 @@ _remove_one_session() {
         done
         # A cs -encrypt that stopped partway leaves its volume mounted with no
         # link yet, so the links above cannot see it; the mount table can.
-        local table mounted
-        table=$(mount) \
+        local mounted
+        mounted=$(_volume_mounted_under "$session_dir") \
             || error "cs -rm could not read the mount table, so it cannot tell whether a volume is mounted inside '$session_name'; refusing to remove it."
-        mounted=$(_mount_under "$session_dir" <<< "$table")
         [ -z "$mounted" ] \
             || error "Session '$session_name' has a volume mounted inside it at $mounted. Removing the session would delete what the volume holds; unmount it, then retry."
     fi
@@ -9331,17 +9348,26 @@ run_uninstall() {
         fi
     fi
 
-    # Ask about session data
+    # Ask about session data. rm -rf recurses into a mount, so with a volume
+    # mounted inside the sessions root (an open encrypted session's vault) the
+    # data stays and the question is not asked.
     if [ -d "$SESSIONS_ROOT" ]; then
         echo ""
-        warn "Session data exists at $SESSIONS_ROOT"
-        read -p "Delete session data? This cannot be undone. [y/N] " -n 1 -r
-        echo ""
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            rm -rf "$SESSIONS_ROOT"
-            info "Removed $SESSIONS_ROOT"
+        local mounted
+        if ! mounted=$(_volume_mounted_under "$SESSIONS_ROOT"); then
+            warn "Kept $SESSIONS_ROOT: cs could not read the mount table, so it cannot tell whether a volume is mounted inside it."
+        elif [ -n "$mounted" ]; then
+            warn "Kept $SESSIONS_ROOT: a volume is mounted inside it at $mounted, and deleting the directory would delete what the volume holds. Unmount it before you delete $SESSIONS_ROOT."
         else
-            info "Kept $SESSIONS_ROOT"
+            warn "Session data exists at $SESSIONS_ROOT"
+            read -p "Delete session data? This cannot be undone. [y/N] " -n 1 -r
+            echo ""
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                rm -rf "$SESSIONS_ROOT"
+                info "Removed $SESSIONS_ROOT"
+            else
+                info "Kept $SESSIONS_ROOT"
+            fi
         fi
     fi
 

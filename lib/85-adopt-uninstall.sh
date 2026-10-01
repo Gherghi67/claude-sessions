@@ -402,17 +402,26 @@ run_uninstall() {
         fi
     fi
 
-    # Ask about session data
+    # Ask about session data. rm -rf recurses into a mount, so with a volume
+    # mounted inside the sessions root (an open encrypted session's vault) the
+    # data stays and the question is not asked.
     if [ -d "$SESSIONS_ROOT" ]; then
         echo ""
-        warn "Session data exists at $SESSIONS_ROOT"
-        read -p "Delete session data? This cannot be undone. [y/N] " -n 1 -r
-        echo ""
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            rm -rf "$SESSIONS_ROOT"
-            info "Removed $SESSIONS_ROOT"
+        local mounted
+        if ! mounted=$(_volume_mounted_under "$SESSIONS_ROOT"); then
+            warn "Kept $SESSIONS_ROOT: cs could not read the mount table, so it cannot tell whether a volume is mounted inside it."
+        elif [ -n "$mounted" ]; then
+            warn "Kept $SESSIONS_ROOT: a volume is mounted inside it at $mounted, and deleting the directory would delete what the volume holds. Unmount it before you delete $SESSIONS_ROOT."
         else
-            info "Kept $SESSIONS_ROOT"
+            warn "Session data exists at $SESSIONS_ROOT"
+            read -p "Delete session data? This cannot be undone. [y/N] " -n 1 -r
+            echo ""
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                rm -rf "$SESSIONS_ROOT"
+                info "Removed $SESSIONS_ROOT"
+            else
+                info "Kept $SESSIONS_ROOT"
+            fi
         fi
     fi
 
