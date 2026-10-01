@@ -39,6 +39,8 @@ if ! command -v cs_resolve_session >/dev/null 2>&1; then
         [ -n "${CLAUDE_SESSION_NAME:-}" ] && [ -n "${CLAUDE_SESSION_DIR:-}" ]
     }
 fi
+# The snapshot still skips vault link targets without the library.
+CS_VAULT_LINKS="${CS_VAULT_LINKS:-memory plans claude-config private}"
 # Only run in cs sessions
 cs_resolve_session "" || exit 0
 
@@ -142,7 +144,7 @@ autosave_to_shadow_ref() {
         # already tracks; a freshly mounted volume is untracked.
         excludes=(':(exclude).cs/vault-mnt')
         top=$(pwd -P)
-        for sub in memory plans claude-config private; do
+        for sub in $CS_VAULT_LINKS; do
             [ -L "$META_DIR/$sub" ] || continue
             target=$(cd "$META_DIR/$sub" 2>/dev/null && pwd -P) || continue
             case "$target" in "$top"/*) excludes+=(":(exclude)${target#"$top"/}") ;; esac

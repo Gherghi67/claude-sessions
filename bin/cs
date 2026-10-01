@@ -150,6 +150,10 @@ _strip_hook_registration() {
         else . end
     '
 }
+# The four names under .cs/ that an encrypted session links into its vault;
+# see docs/session-layout.md "Encrypted sessions".
+CS_VAULT_LINKS="memory plans claude-config private"
+
 # Normalize an arbitrary identity string to a filesystem-safe slug.
 _slugify() {
     printf '%s' "$1" \
@@ -3230,7 +3234,7 @@ _run_pre_open() {  # session_name, session_dir
 # writes there.
 _refuse_unmounted_meta() {  # session_name, session_dir
     local sub link target
-    for sub in memory plans claude-config private; do
+    for sub in $CS_VAULT_LINKS; do
         link="$2/.cs/$sub"
         if [ -e "$link" ] && [ ! -d "$link" ]; then
             error "$1: .cs/$sub is a file, not a directory or a link into encrypted storage. Remove it, or link it into the vault, then reopen."
@@ -6867,10 +6871,6 @@ run_doctor() {
 }
 
 # Search across all sessions' metadata
-# The four names under .cs/ that link into the vault; see docs/session-layout.md
-# "Encrypted sessions".
-ENCRYPT_VAULT_LINKS="memory plans claude-config private"
-
 # Where the container lives: outside every session directory, so neither
 # cs -rm nor the autosave snapshot ever reaches it.
 _encrypt_container_path() {  # session_name
@@ -6891,7 +6891,7 @@ _encrypt_refuse() {  # session_name
     cs_interactive || error "cs -encrypt asks for the vault password; run it from a terminal."
     meta="$dir/.cs"
     session_is_live "$meta" && error "$name: the session is running; close it, then encrypt."
-    for sub in $ENCRYPT_VAULT_LINKS; do
+    for sub in $CS_VAULT_LINKS; do
         [ -L "$meta/$sub" ] && error "$name: .cs/$sub is already a link; the session is encrypted, or half set up by hand."
     done
     # memory and plans move into the vault; these two are only linked, so a
@@ -7083,7 +7083,7 @@ run_encrypt() {
     touch "$mnt/.metadata_never_index"
 
     _encrypt_move_content "$name" "$meta"
-    for sub in $ENCRYPT_VAULT_LINKS; do
+    for sub in $CS_VAULT_LINKS; do
         ln -s "vault-mnt/$sub" "$meta/$sub"
     done
     _encrypt_write_pre_open "$meta" "$container"
@@ -7559,7 +7559,7 @@ _remove_one_session() {
     if [ ! -L "$session_dir" ]; then
         local sub link real_dir real_target
         real_dir=$(cd "$session_dir" && pwd -P)
-        for sub in memory plans claude-config private; do
+        for sub in $CS_VAULT_LINKS; do
             link="$session_dir/.cs/$sub"
             [ -L "$link" ] || continue
             real_target=$(cd "$link" 2>/dev/null && pwd -P) || continue

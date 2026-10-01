@@ -3,6 +3,10 @@
 # ABOUTME: Actor identity, narrative budget, private-dir and tmux window-title code that cs AND its hooks run. build.sh
 # ABOUTME: folds this into bin/cs and writes it verbatim to hooks/cs-shared.sh for sourcing.
 
+# The four names under .cs/ that an encrypted session links into its vault;
+# see docs/session-layout.md "Encrypted sessions".
+CS_VAULT_LINKS="memory plans claude-config private"
+
 # Normalize an arbitrary identity string to a filesystem-safe slug.
 _slugify() {
     printf '%s' "$1" \

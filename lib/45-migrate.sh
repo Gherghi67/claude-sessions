@@ -90,7 +90,7 @@ _run_pre_open() {  # session_name, session_dir
 # writes there.
 _refuse_unmounted_meta() {  # session_name, session_dir
     local sub link target
-    for sub in memory plans claude-config private; do
+    for sub in $CS_VAULT_LINKS; do
         link="$2/.cs/$sub"
         if [ -e "$link" ] && [ ! -d "$link" ]; then
             error "$1: .cs/$sub is a file, not a directory or a link into encrypted storage. Remove it, or link it into the vault, then reopen."

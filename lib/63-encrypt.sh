@@ -1,10 +1,6 @@
 # ABOUTME: cs -encrypt: moves an existing, closed session's private files into an
 # ABOUTME: hdiutil-encrypted sparsebundle and links the four vault names into its mount.
 
-# The four names under .cs/ that link into the vault; see docs/session-layout.md
-# "Encrypted sessions".
-ENCRYPT_VAULT_LINKS="memory plans claude-config private"
-
 # Where the container lives: outside every session directory, so neither
 # cs -rm nor the autosave snapshot ever reaches it.
 _encrypt_container_path() {  # session_name
@@ -25,7 +21,7 @@ _encrypt_refuse() {  # session_name
     cs_interactive || error "cs -encrypt asks for the vault password; run it from a terminal."
     meta="$dir/.cs"
     session_is_live "$meta" && error "$name: the session is running; close it, then encrypt."
-    for sub in $ENCRYPT_VAULT_LINKS; do
+    for sub in $CS_VAULT_LINKS; do
         [ -L "$meta/$sub" ] && error "$name: .cs/$sub is already a link; the session is encrypted, or half set up by hand."
     done
     # memory and plans move into the vault; these two are only linked, so a
@@ -217,7 +213,7 @@ run_encrypt() {
     touch "$mnt/.metadata_never_index"
 
     _encrypt_move_content "$name" "$meta"
-    for sub in $ENCRYPT_VAULT_LINKS; do
+    for sub in $CS_VAULT_LINKS; do
         ln -s "vault-mnt/$sub" "$meta/$sub"
     done
     _encrypt_write_pre_open "$meta" "$container"

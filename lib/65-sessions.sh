@@ -459,7 +459,7 @@ _remove_one_session() {
     if [ ! -L "$session_dir" ]; then
         local sub link real_dir real_target
         real_dir=$(cd "$session_dir" && pwd -P)
-        for sub in memory plans claude-config private; do
+        for sub in $CS_VAULT_LINKS; do
             link="$session_dir/.cs/$sub"
             [ -L "$link" ] || continue
             real_target=$(cd "$link" 2>/dev/null && pwd -P) || continue
