@@ -1061,6 +1061,36 @@ fn mounted_vault_link(dir: &Path) -> Option<(&'static str, PathBuf)> {
     })
 }
 
+/// The first mount point at or under `dir` in `table`, the output of
+/// `mount`: macOS lists "<dev> on <path> (<opts>)", Linux
+/// "<dev> on <path> type <fs> (<opts>)". Each mount point's ancestors are
+/// compared by device and inode, which see through letter case and
+/// symlinks where a path prefix would not.
+fn mount_under(dir: &Path, table: &str) -> Option<PathBuf> {
+    use std::os::unix::fs::MetadataExt;
+    let target = fs::metadata(dir).ok()?;
+    let is_dir = |p: &Path| {
+        fs::metadata(p)
+            .map(|m| m.dev() == target.dev() && m.ino() == target.ino())
+            .unwrap_or(false)
+    };
+    table.lines().find_map(|line| {
+        let (_, rest) = line.split_once(" on ")?;
+        let end = rest.rfind(" type ").or_else(|| rest.rfind(" ("))?;
+        let mnt = Path::new(&rest[..end]);
+        mnt.ancestors().any(is_dir).then(|| mnt.to_path_buf())
+    })
+}
+
+/// The mount table as `mount` prints it.
+fn read_mount_table() -> std::io::Result<String> {
+    let out = std::process::Command::new("mount").output()?;
+    if !out.status.success() {
+        return Err(std::io::Error::other(format!("mount exited with {}", out.status)));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
 pub fn remove_session_path(root: &Path, name: &str, path: &Path) -> std::io::Result<()> {
     let is_link = path.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false);
     // remove_dir_all recurses into a mount, so a vault mounted inside the
@@ -1070,6 +1100,19 @@ pub fn remove_session_path(root: &Path, name: &str, path: &Path) -> std::io::Res
             return Err(std::io::Error::other(format!(
                 "{name} has encrypted storage mounted inside it: .cs/{sub} points at {}; unmount it, then retry",
                 target.display()
+            )));
+        }
+        // A cs -encrypt that stopped partway leaves its volume mounted with
+        // no link yet, so the links cannot see it; the mount table can.
+        let table = read_mount_table().map_err(|e| {
+            std::io::Error::other(format!(
+                "could not read the mount table ({e}), so cannot tell whether a volume is mounted inside {name}; refusing to remove it"
+            ))
+        })?;
+        if let Some(mnt) = mount_under(path, &table) {
+            return Err(std::io::Error::other(format!(
+                "{name} has a volume mounted inside it at {}; unmount it, then retry",
+                mnt.display()
             )));
         }
     }
@@ -1858,6 +1901,43 @@ mod tests {
         fs::remove_dir_all(&vault).unwrap();
         remove_session_path(&root, "vt", &dir).unwrap();
         assert!(!dir.exists(), "an unmounted encrypted session is removed");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    // A cs -encrypt that stops partway leaves its volume mounted at
+    // .cs/vault-mnt with no vault link yet, so only the mount table shows it.
+    #[test]
+    fn mount_under_finds_a_volume_mounted_inside_the_session() {
+        let root = std::env::temp_dir().join(format!("cs-mount-under-{}", std::process::id()));
+        let dir = root.join("h1");
+        let mnt = dir.join(".cs/vault-mnt");
+        fs::create_dir_all(&mnt).unwrap();
+        let macos = format!(
+            "/dev/disk3s5 on /System/Volumes/Data (apfs, local, journaled)\n\
+             /dev/disk9s1 on {} (apfs, local, nodev, nosuid, journaled, noowners, mounted by tester)\n",
+            mnt.display()
+        );
+        let linux = format!(
+            "/dev/sda1 on / type ext4 (rw,relatime)\n/dev/loop9 on {} type ext4 (rw,relatime)\n",
+            mnt.display()
+        );
+
+        assert_eq!(mount_under(&dir, &macos), Some(mnt.clone()), "macOS table");
+        assert_eq!(mount_under(&dir, &linux), Some(mnt.clone()), "Linux table, type dropped");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    // "h1x" beside "h1": a string-prefix match would refuse the wrong session.
+    #[test]
+    fn mount_under_ignores_a_volume_in_another_session() {
+        let root = std::env::temp_dir().join(format!("cs-mount-other-{}", std::process::id()));
+        let dir = root.join("h1");
+        let other = root.join("h1x/.cs/vault-mnt");
+        fs::create_dir_all(&dir).unwrap();
+        fs::create_dir_all(&other).unwrap();
+        let table = format!("/dev/r on / (apfs, local)\n/dev/disk9s1 on {} (apfs, local)\n", other.display());
+
+        assert_eq!(mount_under(&dir, &table), None);
         let _ = fs::remove_dir_all(&root);
     }
 
