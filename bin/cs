@@ -7494,25 +7494,32 @@ _session_foreign_entries() {  # session_dir
 
 # The first mount point at or under a directory, from the mount table text on
 # stdin (empty when there is none). macOS lists "<dev> on <path> (<opts>)",
-# Linux "<dev> on <path> type <fs> (<opts>)". Each mount point's ancestors are
-# compared with -ef, which sees through letter case and symlinks where a
-# string prefix would not.
+# Linux "<dev> on <path> type <fs> (<opts>)", and neither escapes its fields:
+# a source may hold " on " and a path " on ", " type " or " (". So each line
+# is read the Linux way (cut at its last " type ") and then the macOS way, and
+# in each every absolute path that follows an " on " is a candidate. Each
+# candidate's ancestors are compared with -ef, which sees through letter case
+# and symlinks where a string prefix would not.
 _mount_under() {  # dir
-    local dir="$1" line mnt p
+    local dir="$1" line body text p
     while IFS= read -r line; do
-        mnt="${line#* on }"
-        [ "$mnt" != "$line" ] || continue
-        case "$mnt" in
-            *" type "*) mnt="${mnt% type *}" ;;
-            *) mnt="${mnt% (*}" ;;
-        esac
-        p="$mnt"
-        while [ -n "$p" ]; do
-            if [ "$p" -ef "$dir" ]; then
-                printf '%s' "$mnt"
-                return 0
-            fi
-            p="${p%/*}"
+        body="${line% (*}"
+        for text in "${body% type *}" "$body"; do
+            while :; do
+                case "$text" in
+                    *" on "*) text="${text#* on }" ;;
+                    *) break ;;
+                esac
+                case "$text" in /*) ;; *) continue ;; esac
+                p="$text"
+                while [ -n "$p" ]; do
+                    if [ "$p" -ef "$dir" ]; then
+                        printf '%s' "$text"
+                        return 0
+                    fi
+                    p="${p%/*}"
+                done
+            done
         done
     done
     return 0
