@@ -112,6 +112,66 @@ test_worktree_create_refuses_a_locked_base_vault() {
     assert_eq "" "$(git -C "$base_dir" branch --list cs/fix-auth)" "no task branch on refusal" || return 1
 }
 
+# cs -encrypt links the four names relative to .cs/ ("vault-mnt/<name>"), so a
+# checkout of them resolves inside the worktree, where nothing is mounted; and
+# a base whose .cs/ is ignored gives the worktree plaintext files of its own.
+# Until worktrees of an encrypted session are designed, both refuse by name.
+_encrypt_base_links() {  # base_dir; links shaped as cs -encrypt writes them, vault mounted
+    local base="$1" sub
+    rm -rf "$base/.cs/memory"
+    for sub in memory plans claude-config private; do
+        mkdir -p "$base/.cs/vault-mnt/$sub"
+        ln -s "vault-mnt/$sub" "$base/.cs/$sub"
+    done
+    echo sealed > "$base/.cs/vault-mnt/memory/narrative.md"
+}
+
+_fake_claude() {  # echoes a claude stub that records a launch
+    printf '#!/bin/bash\necho launched >> "%s"\n' "$TEST_TMPDIR/launched" > "$TEST_TMPDIR/claude"
+    chmod +x "$TEST_TMPDIR/claude"
+    echo "$TEST_TMPDIR/claude"
+}
+
+test_worktree_create_refuses_an_encrypted_base() {
+    local base_dir claude out rc=0
+    base_dir=$(create_test_session_with_git "myproj")
+    _encrypt_base_links "$base_dir"
+    git -C "$base_dir" add -A .cs
+    git -C "$base_dir" -c user.email=t@example.com -c user.name=t commit -qm "vault links"
+    claude=$(_fake_claude)
+    out=$(CLAUDE_CODE_BIN="$claude" "$CS_BIN" "myproj@fix-auth" < /dev/null 2>&1) || rc=$?
+    assert_eq "1" "$rc" "the create refuses" || return 1
+    assert_eq "Error: myproj: .cs/memory links into encrypted storage, and feature worktrees of an encrypted session are not supported yet." \
+        "$out" "names the base's vault link" || return 1
+    assert_not_exists "$CS_SESSIONS_ROOT/myproj@fix-auth" "no worktree on refusal" || return 1
+    assert_eq "" "$(git -C "$base_dir" branch --list cs/fix-auth)" "no task branch on refusal" || return 1
+    assert_not_exists "$TEST_TMPDIR/launched" "claude never starts" || return 1
+}
+
+test_worktree_create_refuses_an_encrypted_base_with_untracked_links() {
+    local base_dir out rc=0
+    base_dir=$(create_test_session_with_git "myproj")
+    _encrypt_base_links "$base_dir"
+    out=$("$CS_BIN" "myproj@fix-auth" < /dev/null 2>&1) || rc=$?
+    assert_eq "1" "$rc" "the create refuses" || return 1
+    assert_eq "Error: myproj: .cs/memory links into encrypted storage, and feature worktrees of an encrypted session are not supported yet." \
+        "$out" "names the base's vault link" || return 1
+    assert_not_exists "$CS_SESSIONS_ROOT/myproj@fix-auth" "no worktree on refusal" || return 1
+}
+
+test_worktree_open_refuses_once_its_base_is_encrypted() {
+    local base_dir claude out rc=0
+    base_dir=$(create_test_session_with_git "myproj")
+    cs_launch "myproj@fix-auth"
+    _encrypt_base_links "$base_dir"
+    claude=$(_fake_claude)
+    out=$(CLAUDE_CODE_BIN="$claude" "$CS_BIN" "myproj@fix-auth" < /dev/null 2>&1) || rc=$?
+    assert_eq "1" "$rc" "the open refuses" || return 1
+    assert_eq "Error: myproj: .cs/memory links into encrypted storage, and feature worktrees of an encrypted session are not supported yet." \
+        "$out" "names the base's vault link" || return 1
+    assert_not_exists "$TEST_TMPDIR/launched" "claude never starts" || return 1
+}
+
 test_worktree_create_refuses_dirty_base() {
     local base_dir
     base_dir=$(create_test_session_with_git "myproj")
@@ -733,6 +793,9 @@ run_test test_worktree_create_tracked_mode
 run_test test_worktree_create_refuses_dirty_base
 run_test test_worktree_open_refuses_a_locked_vault
 run_test test_worktree_create_refuses_a_locked_base_vault
+run_test test_worktree_create_refuses_an_encrypted_base
+run_test test_worktree_create_refuses_an_encrypted_base_with_untracked_links
+run_test test_worktree_open_refuses_once_its_base_is_encrypted
 run_test test_worktree_create_reuses_existing_branch
 run_test test_worktree_create_ignored_mode_bootstraps_cs
 run_test test_ignored_mode_worktree_starts_with_nothing_untracked

@@ -102,6 +102,18 @@ _refuse_unmounted_meta() {  # session_name, session_dir
     _refuse_plaintext_beside_private "$1" "$2"
 }
 
+# Feature worktrees of an encrypted session are not designed yet. cs -encrypt
+# links the four names relative to .cs/, so a checkout of them resolves inside
+# the worktree, where nothing is mounted; and a base whose .cs/ is ignored
+# gives the worktree plaintext files of its own. Refused by name until then.
+_refuse_worktree_of_encrypted_base() {  # base_name, base_dir
+    local sub
+    for sub in $CS_VAULT_LINKS; do
+        [ -L "$2/.cs/$sub" ] || continue
+        error "$1: .cs/$sub links into encrypted storage, and feature worktrees of an encrypted session are not supported yet."
+    done
+}
+
 # The cs content files a plain session keeps in .cs/local and an encrypted one
 # keeps behind .cs/private. The open refuses a plaintext copy of any of them,
 # and cs -encrypt moves each into the vault.

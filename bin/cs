@@ -3246,6 +3246,18 @@ _refuse_unmounted_meta() {  # session_name, session_dir
     _refuse_plaintext_beside_private "$1" "$2"
 }
 
+# Feature worktrees of an encrypted session are not designed yet. cs -encrypt
+# links the four names relative to .cs/, so a checkout of them resolves inside
+# the worktree, where nothing is mounted; and a base whose .cs/ is ignored
+# gives the worktree plaintext files of its own. Refused by name until then.
+_refuse_worktree_of_encrypted_base() {  # base_name, base_dir
+    local sub
+    for sub in $CS_VAULT_LINKS; do
+        [ -L "$2/.cs/$sub" ] || continue
+        error "$1: .cs/$sub links into encrypted storage, and feature worktrees of an encrypted session are not supported yet."
+    done
+}
+
 # The cs content files a plain session keeps in .cs/local and an encrypted one
 # keeps behind .cs/private. The open refuses a plaintext copy of any of them,
 # and cs -encrypt moves each into the vault.
@@ -9734,9 +9746,13 @@ main() {
             # The checkout carries the base's committed vault links; a locked
             # vault would leave setup writing through dangling ones.
             _refuse_unmounted_meta "$wt_base" "$base_dir"
+            _refuse_worktree_of_encrypted_base "$wt_base" "$base_dir"
             confirm_clean_worktree_base "$base_dir" "$wt_base"
             session_dir=$(create_worktree_session "$base_dir" "$wt_base" "$wt_task")
         else
+            # Checked on the base first: a worktree's own copies of its
+            # links dangle with nothing to mount, so "mount it" would mislead.
+            _refuse_worktree_of_encrypted_base "$wt_base" "$base_dir"
             # A worktree of an encrypted session carries its vault links too.
             _refuse_unmounted_meta "$session_name" "$session_dir"
             # The backfill a base session gets from migrate_session, which the

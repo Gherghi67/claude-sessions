@@ -404,9 +404,13 @@ main() {
             # The checkout carries the base's committed vault links; a locked
             # vault would leave setup writing through dangling ones.
             _refuse_unmounted_meta "$wt_base" "$base_dir"
+            _refuse_worktree_of_encrypted_base "$wt_base" "$base_dir"
             confirm_clean_worktree_base "$base_dir" "$wt_base"
             session_dir=$(create_worktree_session "$base_dir" "$wt_base" "$wt_task")
         else
+            # Checked on the base first: a worktree's own copies of its
+            # links dangle with nothing to mount, so "mount it" would mislead.
+            _refuse_worktree_of_encrypted_base "$wt_base" "$base_dir"
             # A worktree of an encrypted session carries its vault links too.
             _refuse_unmounted_meta "$session_name" "$session_dir"
             # The backfill a base session gets from migrate_session, which the
