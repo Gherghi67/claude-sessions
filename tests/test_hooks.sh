@@ -590,8 +590,8 @@ test_each_pane_is_titled_with_its_own_session_alone() {
 # window renames never reach; only iTerm's Python API sets it. Every claim and
 # release hands the window to hooks/cs-iterm-tab.py in the background, and only
 # when the terminal is iTerm2 and CS_NO_ITERM2 is unset. A stand-in python3
-# records its call and fails loudly: the hook must neither wait on it nor carry
-# its output.
+# records its call, then takes five seconds and fails loudly: the hook must
+# return without waiting on it and carry none of its output.
 _fake_tab_python() {
     FAKE_PY_PATH="$TEST_TMPDIR/pybin"
     FAKE_PY_CALLS="$TEST_TMPDIR/py-calls"
@@ -600,6 +600,7 @@ _fake_tab_python() {
 #!/bin/sh
 { printf '[%s]' "\$@"; printf '[%s]\n' "\$TMUX"; } >> "$FAKE_PY_CALLS"
 echo "stand-in python3 failing on purpose" >&2
+sleep 5
 exit 1
 EOF
     chmod +x "$FAKE_PY_PATH/python3"
@@ -616,10 +617,13 @@ test_a_claim_in_iterm_hands_the_window_to_the_tab_helper() {
     session_start_setup
     _real_tmux_window || return $?
     _fake_tab_python
-    local window out
+    local window out rc start
     window=$(_tt display-message -p -t "$TT_PANE_A" '#{window_id}')
-    out=$(_tt_tab_hook session-start.sh "$TT_PANE_A" current-session iTerm2 "")
-    assert_eq "0" "$?" "the hook succeeds while the helper fails" || { _tt kill-server; return 1; }
+    start=$SECONDS
+    out=$(_tt_tab_hook session-start.sh "$TT_PANE_A" current-session iTerm2 ""); rc=$?
+    assert_eq "0" "$rc" "the hook succeeds while the helper fails" || { _tt kill-server; return 1; }
+    assert_eq "1" "$(( SECONDS - start < 4 ))" \
+        "the hook returns while the five-second helper still runs" || { _tt kill-server; return 1; }
     _wait_for_file "$FAKE_PY_CALLS"
     assert_eq "[$HOOKS_DIR/cs-iterm-tab.py][$window][$TT_SOCK,1,0]" "$(cat "$FAKE_PY_CALLS" 2>/dev/null)" \
         "a claim runs the tab helper once on its window, on the same tmux server" || { _tt kill-server; return 1; }
@@ -634,9 +638,11 @@ test_a_claim_in_iterm_hands_the_window_to_the_tab_helper() {
 }
 
 # The helper itself, against real tmux on the private socket and a stand-in
-# for the iterm2 module (iTerm cannot run here): FAKE_ITERM_TABS lists the
-# tabs iTerm would report, as tmux window number and the tmux pane numbers of
-# its sessions, and every title set lands in FAKE_ITERM_LOG as "<tab> <title>".
+# for the iterm2 module (iTerm cannot run here). iTerm is attached to two tmux
+# servers: "here" answers for the test server through the real tmux, "there"
+# for some other server. FAKE_ITERM_TABS lists the tabs iTerm would report, as
+# attachment and window number. Setting a title logs "<tab> <title>" to
+# FAKE_ITERM_LOG and renames the tmux window, as iTerm does (measured);
 # FAKE_ITERM_ON_SET runs once, after the first set, to land a claim mid-run.
 _fake_iterm_module() {
     command -v python3 >/dev/null 2>&1 || return 77
@@ -646,21 +652,24 @@ _fake_iterm_module() {
     cat > "$FAKE_ITERM_DIR/iterm2/__init__.py" <<'EOF'
 import asyncio, json, os, subprocess
 
-class _Session:
-    def __init__(self, pane):
-        self._pane = pane
-    async def async_get_variable(self, name):
-        assert name == "tmuxWindowPane", name
-        return self._pane
+class _Attachment:
+    def __init__(self, connection_id, ours):
+        self.connection_id = connection_id
+        self._ours = ours
+    async def async_send_command(self, command):
+        if not self._ours:
+            return "99999 /elsewhere/tmux.sock\n"
+        return subprocess.run(["sh", "-c", "tmux " + command], capture_output=True, text=True, check=True).stdout
 
 class _Tab:
     def __init__(self, index, spec):
         self.tab_id = str(index)
+        self.tmux_connection_id = spec["conn"]
         self.tmux_window_id = spec["window"]
-        self.sessions = [_Session(p) for p in spec["panes"]]
     async def async_set_title(self, title):
         with open(os.environ["FAKE_ITERM_LOG"], "a") as log:
             log.write(f"{self.tab_id} {title}\n")
+        subprocess.run(["tmux", "rename-window", "-t", "@" + self.tmux_window_id, title], check=True)
         hook = os.environ.pop("FAKE_ITERM_ON_SET", "")
         if hook:
             subprocess.run(["sh", "-c", hook], check=True)
@@ -673,6 +682,9 @@ class _App:
     def __init__(self):
         specs = json.loads(os.environ["FAKE_ITERM_TABS"])
         self.terminal_windows = [_Window([_Tab(i, s) for i, s in enumerate(specs)])]
+
+async def async_get_tmux_connections(connection):
+    return [_Attachment("there", False), _Attachment("here", True)]
 
 async def async_get_app(connection):
     return _App()
@@ -691,33 +703,33 @@ test_the_tab_helper_titles_the_one_tab_showing_the_window() {
     session_start_setup
     _real_tmux_window || return $?
     _fake_iterm_module || { local rc=$?; _tt kill-server; return $rc; }
-    local w a b
-    w=$(_tt_num '#{window_id}'); a=${TT_PANE_A#%}; b=${TT_PANE_B#%}
+    local w
+    w=$(_tt_num '#{window_id}')
     _tt set-option -p -t "$TT_PANE_A" @cs_session current-session
     _tt set-option -p -t "$TT_PANE_B" @cs_session fignity
-    _run_tab_helper "[{\"window\": \"99\", \"panes\": [$a, $b]}, {\"window\": \"$w\", \"panes\": [$b, $a]}]" "@$w" \
+    _run_tab_helper "[{\"conn\": \"there\", \"window\": \"$w\"}, {\"conn\": \"here\", \"window\": \"$w\"}]" "@$w" \
         || { _tt kill-server; return 1; }
     assert_eq "1 cs: current-session | fignity" "$(cat "$FAKE_ITERM_LOG" 2>/dev/null)" \
-        "the tab showing the window's panes gets every session, in pane order; the other tab is untouched" \
+        "the tab showing this server's window gets every session, in pane order; the same window number on another server is untouched" \
         || { _tt kill-server; return 1; }
     _tt kill-server
 }
 
 # Window numbers are per tmux server, and iTerm can attach several: a tab is
-# the window's only when its panes are exactly the window's, and only when no
-# other tab also qualifies.
+# the window's only when its attachment answers for this server, and only when
+# no other tab also qualifies.
 test_the_tab_helper_leaves_an_unsure_match_alone() {
     session_start_setup
     _real_tmux_window || return $?
     _fake_iterm_module || { local rc=$?; _tt kill-server; return $rc; }
-    local w a b
-    w=$(_tt_num '#{window_id}'); a=${TT_PANE_A#%}; b=${TT_PANE_B#%}
+    local w
+    w=$(_tt_num '#{window_id}')
     _tt set-option -p -t "$TT_PANE_A" @cs_session current-session
-    _run_tab_helper "[{\"window\": \"$w\", \"panes\": [$a]}]" "@$w" || { _tt kill-server; return 1; }
-    _run_tab_helper "[{\"window\": \"$w\", \"panes\": [$a, $b]}, {\"window\": \"$w\", \"panes\": [$a, $b]}]" "@$w" \
+    _run_tab_helper "[{\"conn\": \"there\", \"window\": \"$w\"}]" "@$w" || { _tt kill-server; return 1; }
+    _run_tab_helper "[{\"conn\": \"here\", \"window\": \"$w\"}, {\"conn\": \"here\", \"window\": \"$w\"}]" "@$w" \
         || { _tt kill-server; return 1; }
     assert_file_not_exists "$FAKE_ITERM_LOG" \
-        "a tab with other panes, or two tabs that both match, get no title" || { _tt kill-server; return 1; }
+        "a tab on another server, or two tabs that both match, get no title" || { _tt kill-server; return 1; }
     _tt kill-server
 }
 
@@ -727,9 +739,9 @@ test_the_tab_helper_never_sets_an_empty_title() {
     session_start_setup
     _real_tmux_window || return $?
     _fake_iterm_module || { local rc=$?; _tt kill-server; return $rc; }
-    local w a b
-    w=$(_tt_num '#{window_id}'); a=${TT_PANE_A#%}; b=${TT_PANE_B#%}
-    _run_tab_helper "[{\"window\": \"$w\", \"panes\": [$a, $b]}]" "@$w" || { _tt kill-server; return 1; }
+    local w
+    w=$(_tt_num '#{window_id}')
+    _run_tab_helper "[{\"conn\": \"here\", \"window\": \"$w\"}]" "@$w" || { _tt kill-server; return 1; }
     assert_file_not_exists "$FAKE_ITERM_LOG" "no claim, no title" || { _tt kill-server; return 1; }
     _tt kill-server
 }
@@ -742,14 +754,37 @@ test_the_tab_helper_sets_again_when_a_claim_lands_mid_run() {
     session_start_setup
     _real_tmux_window || return $?
     _fake_iterm_module || { local rc=$?; _tt kill-server; return $rc; }
-    local w a b
-    w=$(_tt_num '#{window_id}'); a=${TT_PANE_A#%}; b=${TT_PANE_B#%}
+    local w
+    w=$(_tt_num '#{window_id}')
     _tt set-option -p -t "$TT_PANE_A" @cs_session current-session
     FAKE_ITERM_ON_SET="tmux -S '$TT_SOCK' set-option -p -t '$TT_PANE_B' @cs_session late" \
-        _run_tab_helper "[{\"window\": \"$w\", \"panes\": [$a, $b]}]" "@$w" || { _tt kill-server; return 1; }
+        _run_tab_helper "[{\"conn\": \"here\", \"window\": \"$w\"}]" "@$w" || { _tt kill-server; return 1; }
     assert_eq "0 cs: current-session
 0 cs: current-session | late" "$(cat "$FAKE_ITERM_LOG" 2>/dev/null)" \
         "the stale title is followed by the one the claims now make" || { _tt kill-server; return 1; }
+    assert_eq "cs: current-session | late" "$(_tt_window_name)" \
+        "and the window name the last set left agrees" || { _tt kill-server; return 1; }
+    _tt kill-server
+}
+
+# The last claim leaves while the helper sets a title: the release already
+# handed the window back (automatic-rename on), and the set's rename turned it
+# off again with a name no session holds. The helper hands it back once more.
+test_the_tab_helper_hands_the_window_back_when_the_last_claim_leaves_mid_run() {
+    session_start_setup
+    _real_tmux_window || return $?
+    _fake_iterm_module || { local rc=$?; _tt kill-server; return $rc; }
+    local w
+    w=$(_tt_num '#{window_id}')
+    _tt set-option -p -t "$TT_PANE_A" @cs_session current-session
+    FAKE_ITERM_ON_SET="tmux -S '$TT_SOCK' set-option -p -u -t '$TT_PANE_A' @cs_session" \
+        _run_tab_helper "[{\"conn\": \"here\", \"window\": \"$w\"}]" "@$w" || { _tt kill-server; return 1; }
+    assert_eq "0 cs: current-session" "$(cat "$FAKE_ITERM_LOG" 2>/dev/null)" \
+        "one title was set before the claim left" || { _tt kill-server; return 1; }
+    assert_eq "on" "$(_tt show-window-options -v -t "$TT_PANE_A" automatic-rename)" \
+        "the window names itself again" || { _tt kill-server; return 1; }
+    assert_eq "on" "$(_tt show-window-options -v -t "$TT_PANE_A" allow-rename)" \
+        "and programs may rename it again" || { _tt kill-server; return 1; }
     _tt kill-server
 }
 
@@ -2348,6 +2383,7 @@ run_test test_the_tab_helper_titles_the_one_tab_showing_the_window
 run_test test_the_tab_helper_leaves_an_unsure_match_alone
 run_test test_the_tab_helper_never_sets_an_empty_title
 run_test test_the_tab_helper_sets_again_when_a_claim_lands_mid_run
+run_test test_the_tab_helper_hands_the_window_back_when_the_last_claim_leaves_mid_run
 run_test test_a_session_ending_leaves_the_window_to_the_others
 run_test test_concurrent_claims_leave_the_name_the_claims_make
 run_test test_an_unmakeable_lock_still_names_the_window_in_bounded_time
