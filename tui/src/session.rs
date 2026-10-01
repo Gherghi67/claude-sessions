@@ -1028,9 +1028,6 @@ fn worktree_untracked(path: &Path) -> Result<Vec<String>, String> {
     Ok(paths)
 }
 
-/// Remove a session at `path` by whatever means its kind requires: symlinks
-/// are unlinked, worktree sessions are unregistered through git, and plain
-/// directories are removed outright.
 /// The links an encrypted session keeps into its vault, under `.cs/`.
 pub const VAULT_LINKS: [&str; 4] = ["memory", "plans", "claude-config", "private"];
 
@@ -1074,7 +1071,7 @@ fn mounted_vault_link(dir: &Path) -> Option<(&'static str, PathBuf)> {
 fn mount_under(dir: &Path, table: &str) -> Option<PathBuf> {
     use std::os::unix::fs::MetadataExt;
     let target = fs::metadata(dir).ok()?;
-    let is_dir = |p: &Path| {
+    let same_as_dir = |p: &Path| {
         fs::metadata(p)
             .map(|m| m.dev() == target.dev() && m.ino() == target.ino())
             .unwrap_or(false)
@@ -1087,7 +1084,7 @@ fn mount_under(dir: &Path, table: &str) -> Option<PathBuf> {
                 .filter_map(|(at, _)| text[at..].strip_prefix(" on "))
                 .find_map(|rest| {
                     let mnt = Path::new(rest);
-                    (mnt.is_absolute() && mnt.ancestors().any(is_dir)).then(|| mnt.to_path_buf())
+                    (mnt.is_absolute() && mnt.ancestors().any(same_as_dir)).then(|| mnt.to_path_buf())
                 })
         })
     })
@@ -1102,6 +1099,9 @@ fn read_mount_table() -> std::io::Result<String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
+/// Remove a session at `path` by whatever means its kind requires: symlinks
+/// are unlinked, worktree sessions are unregistered through git, and plain
+/// directories are removed outright.
 pub fn remove_session_path(root: &Path, name: &str, path: &Path) -> std::io::Result<()> {
     let is_link = path.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false);
     // remove_dir_all recurses into a mount, so a vault mounted inside the
