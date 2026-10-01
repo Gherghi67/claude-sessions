@@ -638,40 +638,40 @@ test_install_deploys_the_rotate_mod_and_uninstall_removes_it() {
 # rm -rf recurses into a mount, so deleting the session data while a volume is
 # mounted inside it would delete what the volume holds. The answers are:
 # continue (y), keep keychain secrets (n), delete session data (y). The
-# `mount` stub prints the table it is given.
-_uninstall_with_mounts() {  # case-name mount-stub-body; echoes the sessions root
-    local home="$TEST_TMPDIR/$1-home" root="$TEST_TMPDIR/$1-sessions" stub="$TEST_TMPDIR/$1-mount"
-    mkdir -p "$home/.claude" "$root/s1/.cs/vault-mnt" "$stub"
+# `mount` stub staged in stub-dir comes first on PATH.
+_uninstall_with_mounts() {  # case-name stub-dir
+    local home="$TEST_TMPDIR/$1-home" root="$TEST_TMPDIR/$1-sessions"
+    mkdir -p "$home/.claude" "$root/s1/.cs/vault-mnt"
     echo sealed > "$root/s1/.cs/vault-mnt/notes.md"
-    printf '#!/bin/sh\n%s\n' "$2" > "$stub/mount"
-    chmod +x "$stub/mount"
-    printf 'yny' | HOME="$home" CS_SESSIONS_ROOT="$root" PATH="$stub:$PATH" "$CS_BIN" -uninstall \
-        > "$TEST_TMPDIR/$1.out" 2>&1 || { echo "  FAIL: cs -uninstall exited non-zero" >&2; return 1; }
-    echo "$root"
+    printf 'yny' | HOME="$home" CS_SESSIONS_ROOT="$root" PATH="$2:$PATH" "$CS_BIN" -uninstall \
+        > "$TEST_TMPDIR/$1.out" 2>&1 || { echo "  FAIL: cs -uninstall exited non-zero"; return 1; }
 }
 
 test_uninstall_keeps_session_data_while_a_volume_is_mounted_inside() {
-    local root out
+    local root out stub="$TEST_TMPDIR/mount-stub"
     root="$TEST_TMPDIR/umount-mounted-sessions"
-    _uninstall_with_mounts umount-mounted "echo '/dev/disk9s1 on $root/s1/.cs/vault-mnt (apfs, local, nodev, nosuid, journaled)'" >/dev/null || return 1
+    _stub_mount_table "$stub" "/dev/disk9s1 on $root/s1/.cs/vault-mnt (apfs, local, nodev, nosuid, journaled)" || return 1
+    _uninstall_with_mounts umount-mounted "$stub" || return 1
     out=$(cat "$TEST_TMPDIR/umount-mounted.out")
     assert_file_exists "$root/s1/.cs/vault-mnt/notes.md" "the volume's contents survive" || return 1
     assert_output_contains "$out" "Kept $root: a volume is mounted inside it at $root/s1/.cs/vault-mnt" "says why the data stays" || return 1
 }
 
 test_uninstall_keeps_session_data_when_the_mount_table_cannot_be_read() {
-    local root out
+    local root out stub="$TEST_TMPDIR/mount-stub"
     root="$TEST_TMPDIR/umount-broken-sessions"
-    _uninstall_with_mounts umount-broken "echo 'mount: cannot read table' >&2; exit 1" >/dev/null || return 1
+    _stub_mount_unreadable "$stub" || return 1
+    _uninstall_with_mounts umount-broken "$stub" || return 1
     out=$(cat "$TEST_TMPDIR/umount-broken.out")
     assert_file_exists "$root/s1/.cs/vault-mnt/notes.md" "the data survives" || return 1
     assert_output_contains "$out" "Kept $root: cs could not read the mount table, so it cannot tell whether a volume is mounted inside it" "says why the data stays" || return 1
 }
 
 test_uninstall_deletes_session_data_with_no_volume_mounted_inside() {
-    local root
+    local root stub="$TEST_TMPDIR/mount-stub"
     root="$TEST_TMPDIR/umount-clear-sessions"
-    _uninstall_with_mounts umount-clear "echo '/dev/disk3s5 on /System/Volumes/Data (apfs, local, journaled)'" >/dev/null || return 1
+    _stub_mount_table "$stub" "/dev/disk3s5 on /System/Volumes/Data (apfs, local, journaled)" || return 1
+    _uninstall_with_mounts umount-clear "$stub" || return 1
     assert_not_exists "$root" "the answered yes deletes the session data" || return 1
 }
 

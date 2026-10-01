@@ -409,13 +409,6 @@ _make_vaulted_session() {  # name
     ln -s "$meta/vault-mnt/plans" "$meta/plans"
 }
 
-# Records each launch, so a test can tell a refusal from a launch.
-_make_launch_sentinel() {
-    printf '#!/bin/bash\necho launched >> "%s"\n' "$TEST_TMPDIR/launched" > "$TEST_TMPDIR/claude"
-    chmod +x "$TEST_TMPDIR/claude"
-    export CLAUDE_CODE_BIN="$TEST_TMPDIR/claude"
-}
-
 test_unmounted_storage_refuses_open() {
     _make_vaulted_session vt
     local meta="$CS_SESSIONS_ROOT/vt/.cs"

@@ -85,9 +85,8 @@ test_worktree_open_refuses_a_locked_vault() {
     local wt="$CS_SESSIONS_ROOT/myproj@fix-auth" out rc=0
     rm -rf "$wt/.cs/memory"
     ln -s "$TEST_TMPDIR/unmounted/memory" "$wt/.cs/memory"
-    printf '#!/bin/bash\necho launched >> "%s"\n' "$TEST_TMPDIR/launched" > "$TEST_TMPDIR/claude"
-    chmod +x "$TEST_TMPDIR/claude"
-    out=$(CLAUDE_CODE_BIN="$TEST_TMPDIR/claude" "$CS_BIN" "myproj@fix-auth" < /dev/null 2>&1) || rc=$?
+    _make_launch_sentinel
+    out=$("$CS_BIN" "myproj@fix-auth" < /dev/null 2>&1) || rc=$?
     assert_eq "1" "$rc" "the open refuses" || return 1
     assert_eq "Error: myproj@fix-auth: .cs/memory points at $TEST_TMPDIR/unmounted/memory, which is missing (encrypted storage not mounted?). Mount it, then reopen." \
         "$out" "names the dangling link" || return 1
@@ -96,7 +95,8 @@ test_worktree_open_refuses_a_locked_vault() {
 
 # Creating a worktree checks out the base's committed vault links; with the
 # vault locked they dangle, and setup would mkdir through them halfway
-# through registering the worktree. Refuse before git sees anything.
+# through registering the worktree. Refuse before git sees anything, and
+# refuse the encrypted base outright, since mounting it would only lead there.
 test_worktree_create_refuses_a_locked_base_vault() {
     local base_dir out rc=0
     base_dir=$(create_test_session_with_git "myproj")
@@ -106,8 +106,8 @@ test_worktree_create_refuses_a_locked_base_vault() {
     git -C "$base_dir" -c user.email=t@example.com -c user.name=t commit -qm "vault link"
     out=$("$CS_BIN" "myproj@fix-auth" < /dev/null 2>&1) || rc=$?
     assert_eq "1" "$rc" "the create refuses" || return 1
-    assert_eq "Error: myproj: .cs/memory points at $TEST_TMPDIR/unmounted/memory, which is missing (encrypted storage not mounted?). Mount it, then reopen." \
-        "$out" "names the base's dangling link" || return 1
+    assert_eq "Error: myproj: .cs/memory links into encrypted storage, and feature worktrees of an encrypted session are not supported yet." \
+        "$out" "refuses the encrypted base instead of asking to mount it" || return 1
     assert_not_exists "$CS_SESSIONS_ROOT/myproj@fix-auth" "no worktree on refusal" || return 1
     assert_eq "" "$(git -C "$base_dir" branch --list cs/fix-auth)" "no task branch on refusal" || return 1
 }
@@ -126,20 +126,14 @@ _encrypt_base_links() {  # base_dir; links shaped as cs -encrypt writes them, va
     echo sealed > "$base/.cs/vault-mnt/memory/narrative.md"
 }
 
-_fake_claude() {  # echoes a claude stub that records a launch
-    printf '#!/bin/bash\necho launched >> "%s"\n' "$TEST_TMPDIR/launched" > "$TEST_TMPDIR/claude"
-    chmod +x "$TEST_TMPDIR/claude"
-    echo "$TEST_TMPDIR/claude"
-}
-
 test_worktree_create_refuses_an_encrypted_base() {
-    local base_dir claude out rc=0
+    local base_dir out rc=0
     base_dir=$(create_test_session_with_git "myproj")
     _encrypt_base_links "$base_dir"
     git -C "$base_dir" add -A .cs
     git -C "$base_dir" -c user.email=t@example.com -c user.name=t commit -qm "vault links"
-    claude=$(_fake_claude)
-    out=$(CLAUDE_CODE_BIN="$claude" "$CS_BIN" "myproj@fix-auth" < /dev/null 2>&1) || rc=$?
+    _make_launch_sentinel
+    out=$("$CS_BIN" "myproj@fix-auth" < /dev/null 2>&1) || rc=$?
     assert_eq "1" "$rc" "the create refuses" || return 1
     assert_eq "Error: myproj: .cs/memory links into encrypted storage, and feature worktrees of an encrypted session are not supported yet." \
         "$out" "names the base's vault link" || return 1
@@ -160,12 +154,12 @@ test_worktree_create_refuses_an_encrypted_base_with_untracked_links() {
 }
 
 test_worktree_open_refuses_once_its_base_is_encrypted() {
-    local base_dir claude out rc=0
+    local base_dir out rc=0
     base_dir=$(create_test_session_with_git "myproj")
     cs_launch "myproj@fix-auth"
     _encrypt_base_links "$base_dir"
-    claude=$(_fake_claude)
-    out=$(CLAUDE_CODE_BIN="$claude" "$CS_BIN" "myproj@fix-auth" < /dev/null 2>&1) || rc=$?
+    _make_launch_sentinel
+    out=$("$CS_BIN" "myproj@fix-auth" < /dev/null 2>&1) || rc=$?
     assert_eq "1" "$rc" "the open refuses" || return 1
     assert_eq "Error: myproj: .cs/memory links into encrypted storage, and feature worktrees of an encrypted session are not supported yet." \
         "$out" "names the base's vault link" || return 1
@@ -454,26 +448,16 @@ test_retire_refuses_dirty_worktree() {
 }
 
 # git worktree remove --force recurses into a mount, so a volume mounted inside
-# the feature worktree would lose what it holds. A `mount` stub prints the
-# table it is given; echoes the stub's directory for PATH.
-_retire_mount_stub() {  # line...
-    local d="$TEST_TMPDIR/retire-mount"
-    mkdir -p "$d"
-    printf '%s\n' "$@" > "$d/table"
-    printf '#!/bin/sh\ncat "%s"\n' "$d/table" > "$d/mount"
-    chmod +x "$d/mount"
-    echo "$d"
-}
-
+# the feature worktree would lose what it holds.
 test_retire_refuses_a_volume_mounted_inside_the_worktree() {
-    local wt sha stub output status=0
+    local wt sha stub="$TEST_TMPDIR/retire-mount" output status=0
     create_test_session_with_git "myproj" >/dev/null
     cs_launch "myproj@fix-auth"
     wt="$CS_SESSIONS_ROOT/myproj@fix-auth"
     sha=$(land_feature myproj fix-auth) || { echo "  FAIL: integrate fixture"; return 1; }
     mkdir -p "$wt/.cs/vault-mnt"
     echo sealed > "$wt/.cs/vault-mnt/notes.md"
-    stub=$(_retire_mount_stub "/dev/disk9s1 on $wt/.cs/vault-mnt (apfs, local, nodev, nosuid, journaled)")
+    _stub_mount_table "$stub" "/dev/disk9s1 on $wt/.cs/vault-mnt (apfs, local, nodev, nosuid, journaled)" || return 1
     output=$(PATH="$stub:$PATH" "$CS_BIN" "myproj" -retire-feature "fix-auth" "$sha" 2>&1) || status=$?
     assert_eq "1" "$status" "retirement refuses" || return 1
     assert_eq "Error: The feature is landed, but its worktree has a volume mounted inside it at $wt/.cs/vault-mnt, and removing the worktree would delete what the volume holds. Unmount it, then run /finish fix-auth here again." \
@@ -482,15 +466,12 @@ test_retire_refuses_a_volume_mounted_inside_the_worktree() {
 }
 
 test_retire_refuses_when_the_mount_table_cannot_be_read() {
-    local wt sha d output status=0
+    local wt sha d="$TEST_TMPDIR/retire-mount-broken" output status=0
     create_test_session_with_git "myproj" >/dev/null
     cs_launch "myproj@fix-auth"
     wt="$CS_SESSIONS_ROOT/myproj@fix-auth"
     sha=$(land_feature myproj fix-auth) || { echo "  FAIL: integrate fixture"; return 1; }
-    d="$TEST_TMPDIR/retire-mount-broken"
-    mkdir -p "$d"
-    printf '#!/bin/sh\necho "mount: cannot read table" >&2\nexit 1\n' > "$d/mount"
-    chmod +x "$d/mount"
+    _stub_mount_unreadable "$d" || return 1
     output=$(PATH="$d:$PATH" "$CS_BIN" "myproj" -retire-feature "fix-auth" "$sha" 2>&1) || status=$?
     assert_eq "1" "$status" "retirement refuses" || return 1
     # The stub's own stderr line comes first; the refusal is the last line.
