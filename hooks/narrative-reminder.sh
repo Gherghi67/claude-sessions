@@ -431,7 +431,7 @@ if [ "$HOOK_EVENT" = "FileChanged" ]; then
 fi
 
 # Claude just finished a turn: raise the machine-local attention flag the
-# statusline blinks until the user next interacts. Cleared by scope-prompt.sh
+# statusline shows until the user next interacts. Cleared by scope-prompt.sh
 # on the next prompt and by session-start.sh at launch. Lives in .cs/local/
 # (per-machine state, never git-synced). Raised before the cooldown gates so
 # every turn end signals, not just the ones that remind.

@@ -1308,7 +1308,7 @@ test_sl_tmux_fake_when_server_field_malformed() {
 }
 
 # A pid reused between the ps read and the walk can make the table cyclic; the
-# walk must give up rather than spin on a once-a-second render path.
+# walk must give up rather than spin.
 test_sl_tmux_walk_terminates_on_cycle() {
     ( _load_sl_functions
       _make_ps_chain "500:400 400:500 2216:1"
@@ -1970,7 +1970,7 @@ test_limits_file_skipped_without_rate_limits() {
     assert_file_not_exists "$CS_SESSIONS_ROOT/limsess2/.cs/local/limits" "no limits file without rate_limits" || return 1
 }
 
-# Every render-time epoch read (limits stamp, countdown, pulse) goes through one
+# Every render-time epoch read (limits stamp, countdown) goes through one
 # shared clock; CS_STATUSLINE_NOW pins it, so the stamp reflects the pin rather
 # than a raw wall-clock fork.
 test_limits_stamp_uses_shared_clock() {
@@ -1984,7 +1984,7 @@ test_limits_stamp_uses_shared_clock() {
 
 # _sl_now initializes the shared clock in-process; an inherited _NOW from the
 # environment must NOT be trusted as already-computed (that would bypass the pin
-# and let a garbage value reach the stamp and the pulse arithmetic).
+# and let a garbage value reach the stamp).
 test_shared_clock_ignores_inherited_now() {
     export CLAUDE_SESSION_NAME="inhsess"
     mkdir -p "$CS_SESSIONS_ROOT/inhsess/.cs/local"
@@ -2019,7 +2019,7 @@ test_shared_clock_ignores_inherited_ready_flag() {
 
 # A leading-zero clock value (e.g. a pin of 08) passes a bare digit check but is
 # read as octal by bash arithmetic, aborting on an 8/9 digit. The clock must be
-# normalized to canonical base-10 before it reaches the stamp/countdown/pulse.
+# normalized to canonical base-10 before it reaches the stamp/countdown.
 test_shared_clock_normalizes_leading_zero_pin() {
     export CLAUDE_SESSION_NAME="zeropin"
     mkdir -p "$CS_SESSIONS_ROOT/zeropin/.cs/local"
@@ -2844,7 +2844,7 @@ run_test test_iso_epoch_refuses_a_non_utc_offset
 
 # M1: with no curl on the machine the cache is never written, so every render is
 # perpetually "due" — and each one forked a subshell plus a full bash load of
-# this script only to bail. Once a second, per open Fable session.
+# this script only to bail. On every render, per open Fable session.
 test_fable_segment_does_not_spawn_a_refresher_without_curl() {
     _load_sl_functions
     seed_usage_cache org-abc 86 "2026-08-29T03:59:59Z" 1787816000 1787816300
@@ -3363,7 +3363,7 @@ test_caps_unanswered_renders_square() {
 }
 
 # A directory where the answer file should be is not an answer: square ends,
-# and nothing on stderr, since the bar repaints every second.
+# and nothing on stderr, since the bar repaints on every Claude Code event.
 test_caps_path_that_is_a_directory_renders_square_and_silent() {
     export COLORTERM=truecolor
     export CS_TERM_BG_RGB="253;246;227"
@@ -3881,7 +3881,7 @@ make_full_render_fixture() {
     }')
 }
 
-# The bar repaints once a second; a render that has painted once before, in
+# The bar repaints on every event; a render that has painted once before, in
 # the same second, forks exactly two external commands: the interpreter and jq
 # for stdin. Every other fork is behind a cache (git line, tmux ancestry, org
 # id, fable fields) or a stamp cadence, and comes back at most once in its
@@ -3915,7 +3915,8 @@ run_test test_warm_render_forks_only_the_interpreter_and_jq
 
 
 # The git line is reused for GIT_CACHE_TTL seconds and re-read after: a change
-# to the tree shows within the TTL, and the clock is the pinned one.
+# to the tree shows at the first render past the TTL, and the clock is the
+# pinned one.
 test_git_line_is_cached_for_the_ttl_then_refreshed() {
     export CS_TERM_THEME=light FORCE_COLOR=0
     local work json
@@ -3935,7 +3936,7 @@ run_test test_git_line_is_cached_for_the_ttl_then_refreshed
 
 # The tmux-ancestry verdict is kept for TMUX_REAL_CACHE_TTL under the parent
 # pid and the TMUX claim: the walk (ps and awk) runs once per conversation,
-# not once per second, and a stale verdict is re-walked.
+# not on every render, and a stale verdict is re-walked.
 test_tmux_ancestry_verdict_is_cached_then_rewalked() {
     ( _load_sl_functions
       export TMUX="/tmp/fake,2216,0" PATH="$TEST_TMPDIR/fakebin:$PATH"
@@ -3971,7 +3972,7 @@ run_test test_unusable_ps_verdict_is_not_cached
 # A conversation's first render is the only one that has ever paid for the
 # ancestry walk, and it is the render Claude Code kills. It no longer waits:
 # the verdict is taken as real, the walk runs in a detached child under the
-# render's own parent identity, and the next render — a second later — reads
+# render's own parent identity, and the next render reads
 # what the child left. A foreign environment is corrected by then; a real one,
 # which is every pane cs launches, never sees a wrong palette at all.
 test_first_render_defers_the_ancestry_walk() {
@@ -4029,7 +4030,7 @@ test_the_deferred_walk_starts_from_the_parent_and_caches_real() {
 
 run_test test_the_deferred_walk_starts_from_the_parent_and_caches_real
 
-# A `ps` that never answers must not mint a walker a second. The render that
+# A `ps` that never answers must not mint a walker every render. The render that
 # spawns one marks the walk in flight, and every render inside
 # TMUX_WALK_MARK_TTL renders without spawning another; past the TTL one render
 # tries again, so a walk whose child died leaves nothing wedged.
@@ -4157,7 +4158,7 @@ test_org_id_is_cached_then_reread() {
 
 run_test test_org_id_is_cached_then_reread
 
-# An unchanged context is stamped once a minute, not once a second: the mv is
+# An unchanged context is stamped once a minute, not on every render: the mv is
 # a fork, and the heartbeat readers allow fifteen minutes. A changed value is
 # written at once.
 test_context_pct_rewritten_on_change_or_once_a_minute() {
@@ -4290,7 +4291,7 @@ test_refresher_reads_the_account_fresh() {
 run_test test_refresher_reads_the_account_fresh
 
 # The attached client's answer is kept for TMUX_CLIENT_CACHE_TTL: a theme
-# toggle shows within it, and the once-a-second repaint asks once in five.
+# toggle shows at the first render past it, and no render inside it asks again.
 test_tmux_client_answer_is_cached_for_the_ttl() {
     ( _load_sl_functions
       export TMUX="/tmp/fake,2216,0" PATH="$TEST_TMPDIR/fakebin:$PATH"
@@ -4312,7 +4313,7 @@ run_test test_tmux_client_answer_is_cached_for_the_ttl
 
 # A teammate's heartbeat touch keeps its own cadence record, so lead and
 # teammate renders alternating do not read each other's value as a change and
-# rewrite the file every second between them.
+# rewrite the file on every render between them.
 test_teammate_heartbeat_does_not_reset_the_lead_cadence() {
     export CLAUDE_SESSION_NAME=altsess
     local dir="$CS_SESSIONS_ROOT/altsess/.cs/local"
@@ -4459,7 +4460,7 @@ test_git_branch_shows_from_a_subdirectory_of_the_checkout() {
 
 run_test test_git_branch_shows_from_a_subdirectory_of_the_checkout
 
-# The bar repaints once a second in every open session, and an endpoint agent
+# The bar repaints on every event in every open session, and an endpoint agent
 # charges the machine for every process born, so what a warm render costs is
 # the number of processes it starts, not the number of programs it runs: a
 # command substitution and each side of a pipeline are processes too. The only

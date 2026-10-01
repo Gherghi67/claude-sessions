@@ -149,7 +149,7 @@ test_narrative_reminder_budget_line_covers_a_teammates_file() {
 }
 
 test_stop_raises_attention_marker() {
-    # Turn end raises the machine-local attention flag the statusline blinks
+    # Turn end raises the machine-local attention flag the statusline shows
     # until the user next interacts. Lives in .cs/local/ (never git-synced).
     rm -rf "$CLAUDE_SESSION_META_DIR/local"
     echo '{}' | bash "$HOOKS_DIR/narrative-reminder.sh" >/dev/null 2>&1 || true
