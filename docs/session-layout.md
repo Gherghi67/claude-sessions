@@ -93,6 +93,10 @@ in `.cs/private/` instead.
 | `wrapped` | The conversation a `/wrap` finished in (its `CLAUDE_CODE_SESSION_ID`), written by its last pass; the cs mod's band hides the wrap key while it names the conversation, and the next prompt empties it. |
 | `disabled` | Opts the directory out of cs's hooks entirely. Present, the hooks decline as if it were not a session, whichever front end opened it. Before hooks resolved a session from the directory, a `claude` started outside `cs` in a session folder was inert; this restores that on request instead of by accident. |
 | `pre-open` | An executable `cs <name>` runs before it opens an existing session, from the session directory on your terminal, so it can prompt (mounting the encrypted volume that `.cs/memory` and `.cs/plans` link into, for example). A non-zero exit aborts the open, and `cs` refuses a file that is not executable rather than skipping it. It lives here because this directory is never committed, so a cloned session cannot make `cs` run code. A session copied by a file sync (rsync, iCloud, Dropbox) carries it along, and `cs` runs it. Afterwards, if `.cs/memory` or `.cs/plans` is still a symlink to something missing, `cs` refuses to open the session and names the link, instead of creating plaintext directories in their place. |
+| `vault` | The path of the container `cs -encrypt` built, written only by `cs -encrypt`. The SessionEnd hook unmounts the vault only when this file exists. |
+| `vault-holders` | Process ids of every `cs` run that mounted or joined this session's vault. The volume unmounts only when none of them and no session lock is alive. |
+| `vault-waiter.pid` | The background waiter the SessionEnd hook leaves to unmount the vault once the lead conversation's Claude Code exits. An open that finds the vault mounted with nothing alive behind it stops this waiter first. |
+| `vault-detach.pid` | The `hdiutil detach` that waiter started, so a reopen can stop an unmount in flight. |
 | `queue/` | The walk-away task queue (`cs -queue`): one file per task, staged in `queue.tmp/` and renamed into place so the drain never reads a torn entry. The drain pops the lexically first file by moving it aside — atomic against a second drain. |
 | `queue.state` | Drain state machine for the queue: `idle`, `armed`, or `draining`. |
 | `queue.done` | Log of completed queued tasks, appended as each is drained. |
@@ -125,7 +129,7 @@ there.
 | `.cs/memory` | Auto-memory and the narratives. |
 | `.cs/plans` | Plans and specs. |
 | `.cs/claude-config` | Claude Code's config dir for this session. cs launches Claude Code with `CLAUDE_CONFIG_DIR` pointing here, so transcripts, prompt history, `.claude.json` and its backups never reach `~/.claude`. `CLAUDE_SECURESTORAGE_CONFIG_DIR` keeps the shell's login (empty selects the default keychain entry). On every launch cs links the shell's `settings.json`, `settings.local.json`, `CLAUDE.md`, `AGENTS.md`, `rules/`, `skills/`, `commands/`, `agents/`, `hooks/`, `plugins/`, `output-styles/`, `keybindings.json` and `vale/` into it, skipping any name the session already has. A setting you change inside the session (`/model`, `/config`) writes through the link into the shell's `settings.json`. The first launch seeds `.claude.json` from the shell's copy with `projects` emptied, since each project entry keeps that project's last prompt. cs reads the session's transcripts from `projects/` here, and the picker does not rename such a session, because its links and transcripts name its path. |
-| `.cs/private` | cs's own content files, which a plain session keeps in `.cs/local/`: `session.log`, `scope-prompt.trace`, `memory-index.snapshot`, `mail/`, the queue files (`queue/`, `queue.tmp/`, `queue.state`, `queue.done`, `queue.declined`), `notifications.jsonl`, `notifications.seen`, `failures`, `rewrite.trace`, the rotation handoffs (`handoffs/`), `pending-handoff`, checkpoints (`checkpoints/`) and, when `.cs/memory` is a link, the rotated narrative sections (`narrative-archive/`). Numbers the status line writes (`context-pct`, `limits`) and ids (`state`, `spawned-by`, `rotate-nudged`, `ctx-warned`) stay in `.cs/local/`. |
+| `.cs/private` | cs's own content files, which a plain session keeps in `.cs/local/`: `session.log`, `scope-prompt.trace`, `memory-index.snapshot`, `mail/`, the queue files (`queue/`, `queue.tmp/`, `queue.state`, `queue.done`, `queue.declined`, `queue.migrating`), `notifications.jsonl`, `notifications.seen`, `failures`, `rewrite.trace`, the rotation handoffs (`handoffs/`), `pending-handoff`, checkpoints (`checkpoints/`) and, when `.cs/memory` is a link, the rotated narrative sections (`narrative-archive/`). Numbers the status line writes (`context-pct`, `limits`) and ids (`state`, `spawned-by`, `rotate-nudged`, `ctx-warned`) stay in `.cs/local/`. |
 
 ### Encrypting a session with `cs -encrypt`
 
@@ -175,7 +179,8 @@ for the password.
 - `.cs/README.md` has no frontmatter for the tag
 
 If a move fails partway, it stops, lists what moved and what did not, and
-leaves the volume mounted so you can finish by hand. When it finishes, it lists
+leaves the volume mounted so you can finish by hand; until you unmount it,
+`cs -rm` and the picker's delete refuse to remove the session. When it finishes, it lists
 the copies it cannot reach: the session's transcripts in `~/.claude/projects/`,
 its lines in `~/.claude/history.jsonl`, its entries in `~/.claude.json` and that
 file's backups, `.cs/summary.md` and `.cs/brief.md`, git history, and backups.
@@ -194,6 +199,12 @@ its place:
 
 A regular file at any of the four names also refuses the open. cs cannot tell
 it from a locked vault, so the error names it.
+
+Feature worktrees of an encrypted session are not supported yet. Creating or
+opening one refuses even while the vault is mounted: a checkout of the links
+`cs -encrypt` writes (`vault-mnt/<name>`, relative) points inside the worktree,
+where nothing is mounted, and a base whose `.cs/` is ignored would give the
+worktree plaintext files of its own.
 
 Opening an encrypted session also refuses when a plaintext copy of a vault
 file is still outside it: any of the `.cs/private` files above left in
@@ -228,8 +239,10 @@ The mounted volume stays out of git and out of the session's removal:
 - The autosave snapshot skips `.cs/vault-mnt` and every link target inside the
   session directory. New `.gitignore` files ignore `.cs/vault-mnt/`.
 - `cs -rm` and the picker's delete refuse while a link resolves inside the
-  session directory, even with `--force`, because removing it would delete
-  what the vault holds. Unmount first.
+  session directory, or while the mount table shows any volume mounted inside
+  it (a `cs -encrypt` that stopped before linking leaves one), even with
+  `--force`, because removing it would delete what the volume holds. Unmount
+  first.
 - Unmounted, the session removes like any other, `.cs/` included. Keep the
   volume's container (a disk image, a cipher directory) outside the session
   directory, or at its root where `cs -rm --force` names it and asks for
@@ -243,9 +256,7 @@ context that names the handoff file and quotes the conversation.
 Not covered: copies that backups and filesystem snapshots already made,
 third-party hooks that write under `~/.claude` directly, `.cs/summary.md`
 unless you link it into the vault yourself, the brief `cs -spawn --brief`
-delivers (`.cs/brief.md`, staged in the sessions root's `.spawn/`), and
-feature worktrees (`base@task`) of an encrypted session beyond the locked-vault
-refusal.
+delivers (`.cs/brief.md`, staged in the sessions root's `.spawn/`).
 
 ## Merge policy
 
