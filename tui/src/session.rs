@@ -1067,9 +1067,10 @@ fn mounted_vault_link(dir: &Path) -> Option<(&'static str, PathBuf)> {
 /// source may hold " on " and a path " on ", " type " or " (". So each line
 /// is read the Linux way (cut at its last " type ") and then the macOS way,
 /// and in each every absolute path that follows an " on " is a candidate, as
-/// cs -rm reads it. Each candidate's ancestors are compared by device and
-/// inode, which see through letter case and symlinks where a path prefix
-/// would not.
+/// cs -rm reads it. Matches may overlap: a source ending in " on" shares its
+/// last space with the separator. Each candidate's ancestors are compared by
+/// device and inode, which see through letter case and symlinks where a path
+/// prefix would not.
 fn mount_under(dir: &Path, table: &str) -> Option<PathBuf> {
     use std::os::unix::fs::MetadataExt;
     let target = fs::metadata(dir).ok()?;
@@ -1082,10 +1083,12 @@ fn mount_under(dir: &Path, table: &str) -> Option<PathBuf> {
         let body = line.rsplit_once(" (").map_or(line, |(head, _)| head);
         let linux = body.rsplit_once(" type ").map(|(head, _)| head);
         linux.into_iter().chain(std::iter::once(body)).find_map(|text| {
-            text.match_indices(" on ").find_map(|(at, sep)| {
-                let mnt = Path::new(&text[at + sep.len()..]);
-                (mnt.is_absolute() && mnt.ancestors().any(is_dir)).then(|| mnt.to_path_buf())
-            })
+            text.char_indices()
+                .filter_map(|(at, _)| text[at..].strip_prefix(" on "))
+                .find_map(|rest| {
+                    let mnt = Path::new(rest);
+                    (mnt.is_absolute() && mnt.ancestors().any(is_dir)).then(|| mnt.to_path_buf())
+                })
         })
     })
 }
@@ -1949,16 +1952,21 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    // A mount source may itself hold " on " (an NFS export, an SMB share).
+    // A mount source may itself hold " on " (an NFS export, an SMB share), or
+    // end in " on", so that its " on" and the separator share one space.
     #[test]
     fn mount_under_reads_a_mount_whose_source_holds_on() {
         let root = std::env::temp_dir().join(format!("cs-mount-src-on-{}", std::process::id()));
         let dir = root.join("h1");
         let mnt = dir.join(".cs/vault-mnt");
         fs::create_dir_all(&mnt).unwrap();
-        let table = format!("host:/export on disk on {} (nfs)\n", mnt.display());
 
-        assert_eq!(mount_under(&dir, &table), Some(mnt.clone()));
+        for source in ["host:/export on disk", "host:/export on"] {
+            let macos = format!("{source} on {} (nfs)\n", mnt.display());
+            let linux = format!("{source} on {} type nfs (rw)\n", mnt.display());
+            assert_eq!(mount_under(&dir, &macos), Some(mnt.clone()), "{macos}");
+            assert_eq!(mount_under(&dir, &linux), Some(mnt.clone()), "{linux}");
+        }
         let _ = fs::remove_dir_all(&root);
     }
 

@@ -7507,24 +7507,26 @@ _session_foreign_entries() {  # session_dir
 # Linux "<dev> on <path> type <fs> (<opts>)", and neither escapes its fields:
 # a source may hold " on " and a path " on ", " type " or " (". So each line
 # is read the Linux way (cut at its last " type ") and then the macOS way, and
-# in each every absolute path that follows an " on " is a candidate. Each
+# in each every absolute path that follows an " on " is a candidate. Each cut
+# keeps the space after "on", so a source ending in " on", whose " on" shares
+# that space with the separator, still leaves the separator to find. Each
 # candidate's ancestors are compared with -ef, which sees through letter case
 # and symlinks where a string prefix would not.
 _mount_under() {  # dir
-    local dir="$1" line body text p
+    local dir="$1" line body text mnt p
     while IFS= read -r line; do
         body="${line% (*}"
         for text in "${body% type *}" "$body"; do
             while :; do
                 case "$text" in
-                    *" on "*) text="${text#* on }" ;;
+                    *" on "*) text="${text#* on}" ;;
                     *) break ;;
                 esac
-                case "$text" in /*) ;; *) continue ;; esac
-                p="$text"
+                case "$text" in " /"*) mnt="${text# }" ;; *) continue ;; esac
+                p="$mnt"
                 while [ -n "$p" ]; do
                     if [ "$p" -ef "$dir" ]; then
-                        printf '%s' "$text"
+                        printf '%s' "$mnt"
                         return 0
                     fi
                     p="${p%/*}"

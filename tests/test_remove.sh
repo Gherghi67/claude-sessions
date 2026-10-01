@@ -336,14 +336,20 @@ rc=0" "$out" "removal finishes" || return 1
     assert_not_exists "$dir" "the session without a mount is removed" || return 1
 }
 
+# In the last two lines the source ends in " on", so its " on" and the
+# separator share one space.
 test_remove_refuses_a_mount_whose_source_holds_on() {
-    local dir stub out
+    local dir stub out line
     dir=$(_half_encrypted_session h6)
-    stub=$(_mount_table "host:/export on disk on $dir/.cs/vault-mnt (nfs)")
-    out=$(_rm_within_30s "$stub" h6 --force --delete-files)
-    assert_eq "Error: Session 'h6' has a volume mounted inside it at $dir/.cs/vault-mnt. Removing the session would delete what the volume holds; unmount it, then retry.
-rc=1" "$out" "names the mount point" || return 1
-    assert_file_exists "$dir/.cs/vault-mnt/memory/narrative.md" "the volume's contents survive" || return 1
+    for line in "host:/export on disk on $dir/.cs/vault-mnt (nfs)" \
+        "host:/export on on $dir/.cs/vault-mnt (nfs)" \
+        "host:/export on on $dir/.cs/vault-mnt type nfs (rw)"; do
+        stub=$(_mount_table "$line")
+        out=$(_rm_within_30s "$stub" h6 --force --delete-files)
+        assert_eq "Error: Session 'h6' has a volume mounted inside it at $dir/.cs/vault-mnt. Removing the session would delete what the volume holds; unmount it, then retry.
+rc=1" "$out" "names the mount point: $line" || return 1
+        assert_file_exists "$dir/.cs/vault-mnt/memory/narrative.md" "the volume's contents survive: $line" || return 1
+    done
 }
 
 # macOS never prints " type <fs>", so a path holding " type " (here in the
