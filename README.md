@@ -502,7 +502,7 @@ README objective instead.
 ## Slash Commands
 
 - `/wrap` — The canonical end-of-session command: runs the `/sweep` memory pass, then the `/summary` narrative, then `cs -narrative rotate`
-- `/sweep` — Distill the session into durable auto-memory entries (strict bar) and sweep findings into the narrative; checks its `MEMORY.md` rewrites for removed links and the byte budget
+- `/sweep` — Distill the session into durable auto-memory entries (strict bar) and sweep findings into the narrative; checks its `MEMORY.md` rewrites for removed links and the byte budget; when a check could enforce a rule an entry states, adds a task to build that check and keeps the entry
 - `/summary` — Generate a narrative summary of the current session
 - `/checkpoint <label>` — Save a labelled state snapshot (narrative, changes, git HEAD)
 - `/queue <task>` — Add a task to this session's walk-away queue through `cs -queue add`, even mid-turn; `/queue` alone lists the queue and offers to start pending tasks (from the `cs` mod)
