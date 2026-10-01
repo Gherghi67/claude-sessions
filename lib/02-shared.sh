@@ -115,7 +115,7 @@ cs_handoff_dir() {  # meta_dir
 # claim at the same moment (a layout restore, two /clears) and a rename written
 # from a read before another pane's claim would drop that pane's name.
 cs_tmux_title_window() {  # pane, session name ("" releases the pane)
-    local pane="$1" name="$2" claims names lock
+    local pane="$1" name="$2" names lock
     [ -n "$pane" ] || return 0
     lock=$(_cs_tmux_title_lock "$pane")
     if [ -n "$name" ]; then
@@ -123,39 +123,35 @@ cs_tmux_title_window() {  # pane, session name ("" releases the pane)
     else
         tmux set-option -p -u -t "$pane" @cs_session 2>/dev/null || true
     fi
-    claims=$(tmux list-panes -t "$pane" -F '#{pane_id} #{@cs_session}' 2>/dev/null) || claims=""
-    names=$(printf '%s\n' "$claims" \
-        | awk 'NF > 1 && !seen[$2]++ { out = out (out == "" ? "" : " | ") $2 } END { print out }')
+    names=$(tmux list-panes -t "$pane" -F '#{@cs_session}' 2>/dev/null \
+        | awk 'NF && !seen[$0]++ { out = out (out == "" ? "" : " | ") $0 } END { print out }') || names=""
     if [ -n "$names" ]; then
-        _cs_tmux_title_claimed "$pane" "$names" "$claims"
+        tmux rename-window -t "$pane" "cs: $names" 2>/dev/null || true
+        tmux set-window-option -t "$pane" allow-rename off 2>/dev/null || true
+        tmux set-window-option -t "$pane" allow-set-title off 2>/dev/null || true
     else
         tmux set-window-option -t "$pane" automatic-rename on 2>/dev/null || true
         tmux set-window-option -t "$pane" allow-rename on 2>/dev/null || true
         tmux set-window-option -t "$pane" allow-set-title on 2>/dev/null || true
     fi
     [ -z "$lock" ] || { rm -f "$lock/pid"; rmdir "$lock" 2>/dev/null; } || true
+    _cs_iterm_tab_title "$pane"
 }
 
-# Names a claimed window "cs: <names>", locks it, and titles every claimed pane
-# "cs: <own> | <others>": iTerm's tmux integration shows the active pane's
-# title on the tab, not the window name, so each pane carries every session in
-# the window with its own first. One tmux call for all of it, since this runs
-# under the window's lock and a round trip per pane let six panes queue past
-# the lock's five-second wait. tmux stops a command list at the first error,
-# so allow-set-title (absent before tmux 3.5) goes last. Session names hold no
-# spaces (validate_session_name; a worktree adds only @), so a claim line
-# splits into pane id and name on its first space.
-_cs_tmux_title_claimed() {  # pane, names, claims ("<pane id> <session>" lines)
-    local cmd=(rename-window -t "$1" "cs: $2" \; set-window-option -t "$1" allow-rename off)
-    local id own others
-    while read -r id own; do
-        [ -n "$own" ] || continue
-        others=$(printf '%s\n' "$3" \
-            | awk -v own="$own" 'NF > 1 && $2 != own && !seen[$2]++ { out = out " | " $2 } END { print out }')
-        cmd+=(\; select-pane -t "$id" -T "cs: $own$others")
-    done <<< "$3"
-    cmd+=(\; set-window-option -t "$1" allow-set-title off)
-    tmux "${cmd[@]}" 2>/dev/null || true
+# Under iTerm's tmux integration the tab shows a title iTerm keeps for itself:
+# tmux window renames never reach it, and only iTerm's Python API sets it.
+# Hands the window to cs-iterm-tab.py in the background, after the lock is
+# released, since the helper takes about a second and reads the claims itself
+# when it runs. Its output is discarded and nothing waits on it, so a machine
+# without iTerm's API or the iterm2 python module goes without the tab title
+# and nothing else.
+_cs_iterm_tab_title() {  # pane
+    local helper window
+    [ "${LC_TERMINAL:-}" = iTerm2 ] && [ -z "${CS_NO_ITERM2:-}" ] || return 0
+    helper="${CS_HOOKS_DIR:-$HOME/.claude/hooks/cs}/cs-iterm-tab.py"
+    [ -f "$helper" ] && command -v python3 >/dev/null 2>&1 || return 0
+    window=$(tmux display-message -p -t "$1" '#{window_id}' 2>/dev/null) || return 0
+    ( python3 "$helper" "$window" </dev/null >/dev/null 2>&1 & )
 }
 
 # Takes the lock on a pane's window and prints its directory: a directory per

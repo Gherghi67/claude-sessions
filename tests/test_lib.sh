@@ -211,6 +211,10 @@ export CS_SCOPE_BUDGET_MS="600000"
 # so no suite has to remember to.
 unset TMUX TMUX_PANE
 export CS_TITLE_TTY="$HOME/title-tty"
+# A title claim under iTerm2 also runs the iTerm tab helper, which reaches the
+# developer's real iTerm through its Python API. Dropped here for the same
+# reason as TMUX; the tab-helper tests set it per call.
+unset LC_TERMINAL
 export CS_NO_UPDATE_CHECK=1
 # The binaries under review come first on PATH, so a test that runs
 # `cs-secrets` exercises this tree and not whatever install.sh last put in

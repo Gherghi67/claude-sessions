@@ -219,25 +219,19 @@ set_tab_title() {
     local outer_term
     outer_term=$(_detect_terminal)
 
-    # tmux with a known session and pane: cs_tmux_title_window titles every cs
-    # pane in the window, this one included. An OSC 0 here would reach tmux
-    # through the pty after those titles and reset this pane to its own name.
-    local titled_by_window=""
-    [ -n "${TMUX:-}" ] && [ -n "$session" ] && [ -n "${TMUX_PANE:-}" ] && titled_by_window=1
-
     # Standard xterm OSC 0: set window and tab title (also sets tmux pane title)
-    [ -n "$titled_by_window" ] || printf '\033]0;%s\007' "$title"
+    printf '\033]0;%s\007' "$title"
 
     # tmux: set window name and pane title, then lock both so Claude Code can't overwrite
     if [ -n "${TMUX:-}" ]; then
-        if [ -n "$titled_by_window" ]; then
+        if [ -n "$session" ] && [ -n "${TMUX_PANE:-}" ]; then
             cs_tmux_title_window "$TMUX_PANE" "$session"
         else
             tmux rename-window "$title" 2>/dev/null || true
-            # Aimed at this pane: untargeted, tmux picks the attached client's
-            # active pane, which need not be the one cs runs in.
-            tmux select-pane ${TMUX_PANE:+-t "$TMUX_PANE"} -T "$title" 2>/dev/null || true
         fi
+        # Aimed at this pane: untargeted, tmux picks the attached client's
+        # active pane, which need not be the one cs runs in.
+        tmux select-pane ${TMUX_PANE:+-t "$TMUX_PANE"} -T "$title" 2>/dev/null || true
         tmux set-window-option ${TMUX_PANE:+-t "$TMUX_PANE"} allow-rename off 2>/dev/null || true
         tmux set-window-option ${TMUX_PANE:+-t "$TMUX_PANE"} allow-set-title off 2>/dev/null || true
     fi

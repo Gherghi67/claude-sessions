@@ -567,23 +567,203 @@ test_two_cs_sessions_in_one_window_name_it_after_both() {
     _tt kill-server
 }
 
-# iTerm's tab shows the active pane's title, not the window name. Each cs pane
-# is therefore titled with its own session first and the window's other
-# sessions after it, so either pane being active shows both on the tab.
-test_each_pane_is_titled_with_its_own_session_first_then_the_others() {
+# The window name lists every cs session in the window; each pane's own title
+# (its bar under iTerm's tmux integration) names only the session it runs.
+test_each_pane_is_titled_with_its_own_session_alone() {
     session_start_setup
     _real_tmux_window || return $?
     _tt_hook session-start.sh "$TT_PANE_A" current-session startup
-    assert_eq "cs: current-session" "$(_tt display-message -p -t "$TT_PANE_A" '#{pane_title}')" \
-        "a lone session titles its pane with its own name" || { _tt kill-server; return 1; }
     _tt_hook session-start.sh "$TT_PANE_B" fignity startup || { _tt kill-server; return 1; }
-    assert_eq "cs: current-session | fignity" "$(_tt display-message -p -t "$TT_PANE_A" '#{pane_title}')" \
-        "the first pane gains the second session after its own" || { _tt kill-server; return 1; }
-    assert_eq "cs: fignity | current-session" "$(_tt display-message -p -t "$TT_PANE_B" '#{pane_title}')" \
-        "the second pane leads with its own session" || { _tt kill-server; return 1; }
+    assert_eq "cs: current-session | fignity" "$(_tt_window_name)" \
+        "the window lists both sessions" || { _tt kill-server; return 1; }
+    assert_eq "cs: current-session" "$(_tt display-message -p -t "$TT_PANE_A" '#{pane_title}')" \
+        "the first pane keeps its own session alone" || { _tt kill-server; return 1; }
+    assert_eq "cs: fignity" "$(_tt display-message -p -t "$TT_PANE_B" '#{pane_title}')" \
+        "the second pane keeps its own session alone" || { _tt kill-server; return 1; }
     _tt_hook session-end.sh "$TT_PANE_B" fignity user_exit || { _tt kill-server; return 1; }
     assert_eq "cs: current-session" "$(_tt display-message -p -t "$TT_PANE_A" '#{pane_title}')" \
-        "the pane left alone drops the session that ended" || { _tt kill-server; return 1; }
+        "a session ending elsewhere leaves this pane's title alone" || { _tt kill-server; return 1; }
+    _tt kill-server
+}
+
+# Under iTerm's tmux integration the tab shows a title iTerm holds, which tmux
+# window renames never reach; only iTerm's Python API sets it. Every claim and
+# release hands the window to hooks/cs-iterm-tab.py in the background, and only
+# when the terminal is iTerm2 and CS_NO_ITERM2 is unset. A stand-in python3
+# records its call and fails loudly: the hook must neither wait on it nor carry
+# its output.
+_fake_tab_python() {
+    FAKE_PY_PATH="$TEST_TMPDIR/pybin"
+    FAKE_PY_CALLS="$TEST_TMPDIR/py-calls"
+    mkdir -p "$FAKE_PY_PATH"
+    cat > "$FAKE_PY_PATH/python3" <<EOF
+#!/bin/sh
+{ printf '[%s]' "\$@"; printf '[%s]\n' "\$TMUX"; } >> "$FAKE_PY_CALLS"
+echo "stand-in python3 failing on purpose" >&2
+exit 1
+EOF
+    chmod +x "$FAKE_PY_PATH/python3"
+}
+_tt_tab_hook() {  # hook, pane, session name, LC_TERMINAL, CS_NO_ITERM2; prints the hook's output
+    echo '{"session_id":"s","source":"startup","cwd":"'"$CLAUDE_SESSION_DIR"'","hook_event_name":"x"}' \
+        | env -u CS_NO_ITERM2 ${5:+CS_NO_ITERM2="$5"} PATH="$FAKE_PY_PATH:$PATH" CS_HOOKS_DIR="$HOOKS_DIR" \
+          TMUX="$TT_SOCK,1,0" TMUX_PANE="$2" CLAUDE_SESSION_NAME="$3" LC_TERMINAL="$4" \
+          bash "$HOOKS_DIR/$1" 2>&1
+}
+_wait_for_file() { local i=0; while [ ! -s "$1" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done; }
+
+test_a_claim_in_iterm_hands_the_window_to_the_tab_helper() {
+    session_start_setup
+    _real_tmux_window || return $?
+    _fake_tab_python
+    local window out
+    window=$(_tt display-message -p -t "$TT_PANE_A" '#{window_id}')
+    out=$(_tt_tab_hook session-start.sh "$TT_PANE_A" current-session iTerm2 "")
+    assert_eq "0" "$?" "the hook succeeds while the helper fails" || { _tt kill-server; return 1; }
+    _wait_for_file "$FAKE_PY_CALLS"
+    assert_eq "[$HOOKS_DIR/cs-iterm-tab.py][$window][$TT_SOCK,1,0]" "$(cat "$FAKE_PY_CALLS" 2>/dev/null)" \
+        "a claim runs the tab helper once on its window, on the same tmux server" || { _tt kill-server; return 1; }
+    assert_output_not_contains "$out" "stand-in python3" \
+        "the helper's output never reaches the hook's" || { _tt kill-server; return 1; }
+    : > "$FAKE_PY_CALLS"
+    _tt_tab_hook session-end.sh "$TT_PANE_A" current-session iTerm2 "" >/dev/null
+    _wait_for_file "$FAKE_PY_CALLS"
+    assert_eq "[$HOOKS_DIR/cs-iterm-tab.py][$window][$TT_SOCK,1,0]" "$(cat "$FAKE_PY_CALLS" 2>/dev/null)" \
+        "a release runs it too, so the tab drops the session that left" || { _tt kill-server; return 1; }
+    _tt kill-server
+}
+
+# The helper itself, against real tmux on the private socket and a stand-in
+# for the iterm2 module (iTerm cannot run here): FAKE_ITERM_TABS lists the
+# tabs iTerm would report, as tmux window number and the tmux pane numbers of
+# its sessions, and every title set lands in FAKE_ITERM_LOG as "<tab> <title>".
+# FAKE_ITERM_ON_SET runs once, after the first set, to land a claim mid-run.
+_fake_iterm_module() {
+    command -v python3 >/dev/null 2>&1 || return 77
+    FAKE_ITERM_DIR="$TEST_TMPDIR/fake-iterm"
+    FAKE_ITERM_LOG="$TEST_TMPDIR/iterm-titles"
+    mkdir -p "$FAKE_ITERM_DIR/iterm2"
+    cat > "$FAKE_ITERM_DIR/iterm2/__init__.py" <<'EOF'
+import asyncio, json, os, subprocess
+
+class _Session:
+    def __init__(self, pane):
+        self._pane = pane
+    async def async_get_variable(self, name):
+        assert name == "tmuxWindowPane", name
+        return self._pane
+
+class _Tab:
+    def __init__(self, index, spec):
+        self.tab_id = str(index)
+        self.tmux_window_id = spec["window"]
+        self.sessions = [_Session(p) for p in spec["panes"]]
+    async def async_set_title(self, title):
+        with open(os.environ["FAKE_ITERM_LOG"], "a") as log:
+            log.write(f"{self.tab_id} {title}\n")
+        hook = os.environ.pop("FAKE_ITERM_ON_SET", "")
+        if hook:
+            subprocess.run(["sh", "-c", hook], check=True)
+
+class _Window:
+    def __init__(self, tabs):
+        self.tabs = tabs
+
+class _App:
+    def __init__(self):
+        specs = json.loads(os.environ["FAKE_ITERM_TABS"])
+        self.terminal_windows = [_Window([_Tab(i, s) for i, s in enumerate(specs)])]
+
+async def async_get_app(connection):
+    return _App()
+
+def run_until_complete(coro):
+    asyncio.run(coro(None))
+EOF
+}
+_run_tab_helper() {  # tabs json, window id
+    TMUX="$TT_SOCK,1,0" PYTHONPATH="$FAKE_ITERM_DIR" FAKE_ITERM_LOG="$FAKE_ITERM_LOG" FAKE_ITERM_TABS="$1" \
+        python3 "$HOOKS_DIR/cs-iterm-tab.py" "$2"
+}
+_tt_num() { _tt display-message -p -t "$TT_PANE_A" "$1" | tr -d '@%'; }
+
+test_the_tab_helper_titles_the_one_tab_showing_the_window() {
+    session_start_setup
+    _real_tmux_window || return $?
+    _fake_iterm_module || { local rc=$?; _tt kill-server; return $rc; }
+    local w a b
+    w=$(_tt_num '#{window_id}'); a=${TT_PANE_A#%}; b=${TT_PANE_B#%}
+    _tt set-option -p -t "$TT_PANE_A" @cs_session current-session
+    _tt set-option -p -t "$TT_PANE_B" @cs_session fignity
+    _run_tab_helper "[{\"window\": \"99\", \"panes\": [$a, $b]}, {\"window\": \"$w\", \"panes\": [$b, $a]}]" "@$w" \
+        || { _tt kill-server; return 1; }
+    assert_eq "1 cs: current-session | fignity" "$(cat "$FAKE_ITERM_LOG" 2>/dev/null)" \
+        "the tab showing the window's panes gets every session, in pane order; the other tab is untouched" \
+        || { _tt kill-server; return 1; }
+    _tt kill-server
+}
+
+# Window numbers are per tmux server, and iTerm can attach several: a tab is
+# the window's only when its panes are exactly the window's, and only when no
+# other tab also qualifies.
+test_the_tab_helper_leaves_an_unsure_match_alone() {
+    session_start_setup
+    _real_tmux_window || return $?
+    _fake_iterm_module || { local rc=$?; _tt kill-server; return $rc; }
+    local w a b
+    w=$(_tt_num '#{window_id}'); a=${TT_PANE_A#%}; b=${TT_PANE_B#%}
+    _tt set-option -p -t "$TT_PANE_A" @cs_session current-session
+    _run_tab_helper "[{\"window\": \"$w\", \"panes\": [$a]}]" "@$w" || { _tt kill-server; return 1; }
+    _run_tab_helper "[{\"window\": \"$w\", \"panes\": [$a, $b]}, {\"window\": \"$w\", \"panes\": [$a, $b]}]" "@$w" \
+        || { _tt kill-server; return 1; }
+    assert_file_not_exists "$FAKE_ITERM_LOG" \
+        "a tab with other panes, or two tabs that both match, get no title" || { _tt kill-server; return 1; }
+    _tt kill-server
+}
+
+# An empty title clears iTerm's and renames the tmux window to nothing, so a
+# window with no cs session left gets no title at all.
+test_the_tab_helper_never_sets_an_empty_title() {
+    session_start_setup
+    _real_tmux_window || return $?
+    _fake_iterm_module || { local rc=$?; _tt kill-server; return $rc; }
+    local w a b
+    w=$(_tt_num '#{window_id}'); a=${TT_PANE_A#%}; b=${TT_PANE_B#%}
+    _run_tab_helper "[{\"window\": \"$w\", \"panes\": [$a, $b]}]" "@$w" || { _tt kill-server; return 1; }
+    assert_file_not_exists "$FAKE_ITERM_LOG" "no claim, no title" || { _tt kill-server; return 1; }
+    _tt kill-server
+}
+
+# Two claims race: the helper of the first may set its title after the second
+# claim landed. Setting the title renames the tmux window too, so a stale set
+# would drop the newer session from both. The helper re-reads the claims after
+# each set and sets again until they agree.
+test_the_tab_helper_sets_again_when_a_claim_lands_mid_run() {
+    session_start_setup
+    _real_tmux_window || return $?
+    _fake_iterm_module || { local rc=$?; _tt kill-server; return $rc; }
+    local w a b
+    w=$(_tt_num '#{window_id}'); a=${TT_PANE_A#%}; b=${TT_PANE_B#%}
+    _tt set-option -p -t "$TT_PANE_A" @cs_session current-session
+    FAKE_ITERM_ON_SET="tmux -S '$TT_SOCK' set-option -p -t '$TT_PANE_B' @cs_session late" \
+        _run_tab_helper "[{\"window\": \"$w\", \"panes\": [$a, $b]}]" "@$w" || { _tt kill-server; return 1; }
+    assert_eq "0 cs: current-session
+0 cs: current-session | late" "$(cat "$FAKE_ITERM_LOG" 2>/dev/null)" \
+        "the stale title is followed by the one the claims now make" || { _tt kill-server; return 1; }
+    _tt kill-server
+}
+
+test_a_claim_outside_iterm_runs_no_tab_helper() {
+    session_start_setup
+    _real_tmux_window || return $?
+    _fake_tab_python
+    _tt_tab_hook session-start.sh "$TT_PANE_A" current-session "" "" >/dev/null
+    _tt_tab_hook session-start.sh "$TT_PANE_B" fignity iTerm2 1 >/dev/null
+    # Positive control on the same server: an iTerm2 claim does run it.
+    _tt_tab_hook session-start.sh "$TT_PANE_A" current-session iTerm2 "" >/dev/null
+    _wait_for_file "$FAKE_PY_CALLS"
+    assert_eq "1" "$(cat "$FAKE_PY_CALLS" 2>/dev/null | wc -l | tr -d ' ')" \
+        "neither a terminal other than iTerm2 nor CS_NO_ITERM2 runs the helper; the control does" || { _tt kill-server; return 1; }
     _tt kill-server
 }
 
@@ -733,10 +913,10 @@ test_a_launch_in_a_second_pane_joins_the_window_name() {
     while [ ! -e "$TEST_TMPDIR/launched" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
     assert_eq "cs: current-session | fignity" "$(_tt_window_name)" \
         "a cs launched in the other pane joins the window name" || { _tt kill-server; return 1; }
-    assert_eq "cs: fignity | current-session" "$(_tt display-message -p -t "$TT_PANE_B" '#{pane_title}')" \
-        "the launched pane's title leads with its own session, then the other" || { _tt kill-server; return 1; }
-    assert_eq "cs: current-session | fignity" "$(_tt display-message -p -t "$TT_PANE_A" '#{pane_title}')" \
-        "and the pane that was already running gains the new session" || { _tt kill-server; return 1; }
+    assert_eq "cs: fignity" "$(_tt display-message -p -t "$TT_PANE_B" '#{pane_title}')" \
+        "the pane's own title stays its session alone" || { _tt kill-server; return 1; }
+    assert_eq "cs: current-session" "$(_tt display-message -p -t "$TT_PANE_A" '#{pane_title}')" \
+        "and the pane already running keeps its own" || { _tt kill-server; return 1; }
     _tt kill-server
 }
 
@@ -2161,7 +2341,13 @@ run_test test_test_lib_drops_an_inherited_tmux_and_routes_the_title_to_a_file
 run_test test_session_start_teardown_keeps_the_title_off_the_terminal
 run_test test_session_start_reasserts_tab_title_through_tmux
 run_test test_two_cs_sessions_in_one_window_name_it_after_both
-run_test test_each_pane_is_titled_with_its_own_session_first_then_the_others
+run_test test_each_pane_is_titled_with_its_own_session_alone
+run_test test_a_claim_in_iterm_hands_the_window_to_the_tab_helper
+run_test test_a_claim_outside_iterm_runs_no_tab_helper
+run_test test_the_tab_helper_titles_the_one_tab_showing_the_window
+run_test test_the_tab_helper_leaves_an_unsure_match_alone
+run_test test_the_tab_helper_never_sets_an_empty_title
+run_test test_the_tab_helper_sets_again_when_a_claim_lands_mid_run
 run_test test_a_session_ending_leaves_the_window_to_the_others
 run_test test_concurrent_claims_leave_the_name_the_claims_make
 run_test test_an_unmakeable_lock_still_names_the_window_in_bounded_time
