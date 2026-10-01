@@ -288,8 +288,8 @@ test_sweep_adds_check_tasks_and_keeps_the_entry() {
     # becomes a task beside the entry, never a replacement for it.
     assert_file_contains "$COMMANDS_DIR/sweep.md" "Could a check carry it instead" \
         "sweep.md must ask whether a mechanical check could carry a rule" || return 1
-    assert_file_contains "$COMMANDS_DIR/sweep.md" "keep the memory entry as written" \
-        "sweep.md must keep the memory entry when a check counts, never replace it" || return 1
+    assert_file_contains "$COMMANDS_DIR/sweep.md" "add a task to build it and keep the memory entry as written" \
+        "sweep.md must add a task for the check and keep the memory entry, never replace it" || return 1
 }
 
 # ============================================================================
