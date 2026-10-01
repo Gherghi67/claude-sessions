@@ -976,7 +976,7 @@ _sgr() {
                 effort-max-3)  base=95 ;;
                 white)  base=97 ;;
                 brand)  base=33 ;;
-                brandshade) base=33 ;;
+                brandshade) base=31 ;;   # red, the way the 256 shade leans; brand's 33 would hide it
                 *)      base=90 ;;
             esac
             if [ "$kind" = "48" ]; then _SGR=$((base + 10)); else _SGR="$base"; fi ;;

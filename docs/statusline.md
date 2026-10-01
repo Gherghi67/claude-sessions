@@ -164,7 +164,7 @@ Color depth is detected per render, in priority order: `FORCE_COLOR=0`, `NO_COLO
 | `ink` | primary text | a 35% shade of the surface on a light surface, `white` on a dark one | 236/255 | 97 |
 | `ink2` | secondary text, dots, gauge labels | a 55% shade of the surface (lifted toward white on a dark surface), like `ink` | 241/250 | 37/97 |
 | `brand` | the mark | `217;119;87` | 173 | 33 |
-| `brandshade` | the mark while the attention marker exists | `184;101;74` | 167 | 33 |
+| `brandshade` | the mark while the attention marker exists | `184;101;74` | 167 | 31 |
 | `periwinkle` | the subagent rows' model capsule | light: `76;29;149`; dark: `196;181;253` | 55/147 | 35/95 |
 | `amber` | hot numbers, notes and mail counts | light: `180;83;9`; dark: `253;230;138` — light/dark by the measured `CS_TERM_BG_RGB`, by theme only when unmeasured | 130/221 | 33/93 |
 | `crit` | inverted capsule fill | light: `215;0;21`; dark: `255;69;58` | 160/203 | 31 |
