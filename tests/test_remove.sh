@@ -267,7 +267,8 @@ test_remove_reads_a_linux_mount_table() {
         "/dev/loop9 on $dir/.cs/vault-mnt type ext4 (rw,relatime)")
     out=$(PATH="$stub:$PATH" "$CS_BIN" -rm h2 --force --delete-files </dev/null 2>&1) || rc=$?
     assert_eq "1" "$rc" "removal refuses" || return 1
-    assert_output_contains "$out" "has a volume mounted inside it at $dir/.cs/vault-mnt." "names the mount point" || return 1
+    assert_eq "Error: Session 'h2' has a volume mounted inside it at $dir/.cs/vault-mnt. Removing the session would delete what the volume holds; unmount it, then retry." \
+        "$out" "names the mount point without the filesystem type" || return 1
     assert_file_exists "$dir/.cs/vault-mnt/memory/narrative.md" "the volume's contents survive" || return 1
 }
 
