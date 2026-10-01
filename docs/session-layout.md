@@ -242,7 +242,10 @@ The mounted volume stays out of git and out of the session's removal:
   session directory, or while the mount table shows any volume mounted inside
   it (a `cs -encrypt` that stopped before linking leaves one), even with
   `--force`, because removing it would delete what the volume holds. Unmount
-  first.
+  first. `/finish` does not retire a feature worktree with a volume mounted
+  inside it, and `cs -uninstall` keeps the sessions root, without asking,
+  while one is mounted anywhere inside it. All three also refuse when `mount`
+  cannot list the table.
 - Unmounted, the session removes like any other, `.cs/` included. Keep the
   volume's container (a disk image, a cipher directory) outside the session
   directory, or at its root where `cs -rm --force` names it and asks for
