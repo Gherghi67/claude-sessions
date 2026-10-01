@@ -567,6 +567,26 @@ test_two_cs_sessions_in_one_window_name_it_after_both() {
     _tt kill-server
 }
 
+# iTerm's tab shows the active pane's title, not the window name. Each cs pane
+# is therefore titled with its own session first and the window's other
+# sessions after it, so either pane being active shows both on the tab.
+test_each_pane_is_titled_with_its_own_session_first_then_the_others() {
+    session_start_setup
+    _real_tmux_window || return $?
+    _tt_hook session-start.sh "$TT_PANE_A" current-session startup
+    assert_eq "cs: current-session" "$(_tt display-message -p -t "$TT_PANE_A" '#{pane_title}')" \
+        "a lone session titles its pane with its own name" || { _tt kill-server; return 1; }
+    _tt_hook session-start.sh "$TT_PANE_B" fignity startup || { _tt kill-server; return 1; }
+    assert_eq "cs: current-session | fignity" "$(_tt display-message -p -t "$TT_PANE_A" '#{pane_title}')" \
+        "the first pane gains the second session after its own" || { _tt kill-server; return 1; }
+    assert_eq "cs: fignity | current-session" "$(_tt display-message -p -t "$TT_PANE_B" '#{pane_title}')" \
+        "the second pane leads with its own session" || { _tt kill-server; return 1; }
+    _tt_hook session-end.sh "$TT_PANE_B" fignity user_exit || { _tt kill-server; return 1; }
+    assert_eq "cs: current-session" "$(_tt display-message -p -t "$TT_PANE_A" '#{pane_title}')" \
+        "the pane left alone drops the session that ended" || { _tt kill-server; return 1; }
+    _tt kill-server
+}
+
 test_a_session_ending_leaves_the_window_to_the_others() {
     session_start_setup
     _real_tmux_window || return $?
@@ -713,8 +733,10 @@ test_a_launch_in_a_second_pane_joins_the_window_name() {
     while [ ! -e "$TEST_TMPDIR/launched" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
     assert_eq "cs: current-session | fignity" "$(_tt_window_name)" \
         "a cs launched in the other pane joins the window name" || { _tt kill-server; return 1; }
-    assert_eq "cs: fignity" "$(_tt display-message -p -t "$TT_PANE_B" '#{pane_title}')" \
-        "the pane's own title stays its session alone" || { _tt kill-server; return 1; }
+    assert_eq "cs: fignity | current-session" "$(_tt display-message -p -t "$TT_PANE_B" '#{pane_title}')" \
+        "the launched pane's title leads with its own session, then the other" || { _tt kill-server; return 1; }
+    assert_eq "cs: current-session | fignity" "$(_tt display-message -p -t "$TT_PANE_A" '#{pane_title}')" \
+        "and the pane that was already running gains the new session" || { _tt kill-server; return 1; }
     _tt kill-server
 }
 
@@ -2139,6 +2161,7 @@ run_test test_test_lib_drops_an_inherited_tmux_and_routes_the_title_to_a_file
 run_test test_session_start_teardown_keeps_the_title_off_the_terminal
 run_test test_session_start_reasserts_tab_title_through_tmux
 run_test test_two_cs_sessions_in_one_window_name_it_after_both
+run_test test_each_pane_is_titled_with_its_own_session_first_then_the_others
 run_test test_a_session_ending_leaves_the_window_to_the_others
 run_test test_concurrent_claims_leave_the_name_the_claims_make
 run_test test_an_unmakeable_lock_still_names_the_window_in_bounded_time

@@ -117,7 +117,7 @@ cs_handoff_dir() {  # meta_dir
 # claim at the same moment (a layout restore, two /clears) and a rename written
 # from a read before another pane's claim would drop that pane's name.
 cs_tmux_title_window() {  # pane, session name ("" releases the pane)
-    local pane="$1" name="$2" names lock
+    local pane="$1" name="$2" claims names lock
     [ -n "$pane" ] || return 0
     lock=$(_cs_tmux_title_lock "$pane")
     if [ -n "$name" ]; then
@@ -125,18 +125,39 @@ cs_tmux_title_window() {  # pane, session name ("" releases the pane)
     else
         tmux set-option -p -u -t "$pane" @cs_session 2>/dev/null || true
     fi
-    names=$(tmux list-panes -t "$pane" -F '#{@cs_session}' 2>/dev/null \
-        | awk 'NF && !seen[$0]++ { out = out (out == "" ? "" : " | ") $0 } END { print out }') || names=""
+    claims=$(tmux list-panes -t "$pane" -F '#{pane_id} #{@cs_session}' 2>/dev/null) || claims=""
+    names=$(printf '%s\n' "$claims" \
+        | awk 'NF > 1 && !seen[$2]++ { out = out (out == "" ? "" : " | ") $2 } END { print out }')
     if [ -n "$names" ]; then
-        tmux rename-window -t "$pane" "cs: $names" 2>/dev/null || true
-        tmux set-window-option -t "$pane" allow-rename off 2>/dev/null || true
-        tmux set-window-option -t "$pane" allow-set-title off 2>/dev/null || true
+        _cs_tmux_title_claimed "$pane" "$names" "$claims"
     else
         tmux set-window-option -t "$pane" automatic-rename on 2>/dev/null || true
         tmux set-window-option -t "$pane" allow-rename on 2>/dev/null || true
         tmux set-window-option -t "$pane" allow-set-title on 2>/dev/null || true
     fi
     [ -z "$lock" ] || { rm -f "$lock/pid"; rmdir "$lock" 2>/dev/null; } || true
+}
+
+# Names a claimed window "cs: <names>", locks it, and titles every claimed pane
+# "cs: <own> | <others>": iTerm's tmux integration shows the active pane's
+# title on the tab, not the window name, so each pane carries every session in
+# the window with its own first. One tmux call for all of it, since this runs
+# under the window's lock and a round trip per pane let six panes queue past
+# the lock's five-second wait. tmux stops a command list at the first error,
+# so allow-set-title (absent before tmux 3.5) goes last. Session names hold no
+# spaces (validate_session_name; a worktree adds only @), so a claim line
+# splits into pane id and name on its first space.
+_cs_tmux_title_claimed() {  # pane, names, claims ("<pane id> <session>" lines)
+    local cmd=(rename-window -t "$1" "cs: $2" \; set-window-option -t "$1" allow-rename off)
+    local id own others
+    while read -r id own; do
+        [ -n "$own" ] || continue
+        others=$(printf '%s\n' "$3" \
+            | awk -v own="$own" 'NF > 1 && $2 != own && !seen[$2]++ { out = out " | " $2 } END { print out }')
+        cmd+=(\; select-pane -t "$id" -T "cs: $own$others")
+    done <<< "$3"
+    cmd+=(\; set-window-option -t "$1" allow-set-title off)
+    tmux "${cmd[@]}" 2>/dev/null || true
 }
 
 # Takes the lock on a pane's window and prints its directory: a directory per

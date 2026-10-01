@@ -17,6 +17,9 @@ All notable changes to cs are documented here. Release notes are also available 
 - The rotation nudge at 65% context no longer names `.cs/handoffs/`, since an encrypted session keeps its handoffs elsewhere.
 - `cs -rm` names the files and folders in a session that cs did not create (anything beside `.cs/`, `.claude/`, the git files and the two `CLAUDE` files) before it asks to remove the session. `--force` refuses such a session and lists them; add `--delete-files` to remove it anyway. A worktree session (`base@task`) gets the same check for the files git does not track there, untracked or ignored, since those have no copy on the branch. An adopted session still loses only its link. The picker's delete confirm lists the same files, for one session or a marked batch, and does not open when the list cannot be read. Tab completion offers `--force` and `--delete-files` after `cs -rm`.
 
+### Fixes
+- Inside tmux, a tab whose panes run two cs sessions shows both names. iTerm's tmux integration titles the tab after the active pane, not the window, so each cs pane is now titled with its own session first and the others after it: `cs: claude-sessions | fignity` in one pane, `cs: fignity | claude-sessions` in the other. The window name and all pane titles go to tmux in one call, which keeps each claim inside the window lock's five-second wait.
+
 ## 2026.9.23
 
 ### Added
