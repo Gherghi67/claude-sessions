@@ -4,7 +4,7 @@ All notable changes to cs are documented here. Release notes are also available 
 
 <!-- New entries group changes under Keep-a-Changelog headings (Added / Changed / Removed / Fixes / Docs), or Features / Performance where those fit the release. -->
 
-## Unreleased
+## 2026.10.1
 
 ### Added
 - `cs -encrypt <name>` encrypts an existing, closed session on macOS. It creates an `hdiutil` encrypted sparse bundle outside the session directory, moves the session's private files into it, links the four vault names, and writes a `pre-open` that asks for the password in the terminal at every open. The SessionEnd hook unmounts the volume once the lead conversation's Claude Code exits, unless the session reopened. An open that stops before Claude Code starts unmounts the volume it mounted. See [docs/session-layout.md](docs/session-layout.md#encrypting-a-session-with-cs--encrypt).
