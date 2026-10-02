@@ -65,6 +65,15 @@ _set_local_state() {
     } > "$tmp" && mv "$tmp" "$state"
 }
 
+# Remove a key's line from a machine-local state file. A missing file or key is
+# a no-op. Atomic (tmp+mv), like _set_local_state.
+_unset_local_state() {
+    local state="$1" key="$2"
+    [ -f "$state" ] || return 0
+    local tmp="$state.tmp"
+    awk -v key="$key" 'index($0, key ":") != 1' "$state" > "$tmp" && mv "$tmp" "$state"
+}
+
 # Return the path to claude's per-cwd transcript directory. Symlinks in the
 # input are resolved via `pwd -P` so the encoding matches claude's own —
 # macOS mktemp returns /var/folders/... which is a symlink to

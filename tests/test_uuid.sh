@@ -127,8 +127,10 @@ EOF
     assert_file_not_contains "$session_dir/.cs/local/state" "^claude_session_id:" \
         "precondition: legacy session must lack claude_session_id" || return 1
 
-    # First resume backfills.
-    "$CS_BIN" legacy-session <<< "" >/dev/null 2>&1 || true
+    # First open backfills. With no transcript there is nothing to resume, so
+    # it does not ask: it starts the first conversation and records its id.
+    local output
+    output=$("$CS_BIN" legacy-session <<< "" 2>&1) || true
 
     assert_file_contains "$session_dir/.cs/local/state" "^claude_session_id:" \
         "lazy migration should backfill claude_session_id" || return 1
@@ -140,6 +142,12 @@ EOF
         echo "  FAIL: backfilled value is not a valid v4 UUID: '$backfilled'"
         return 1
     fi
+    if grep -q "Continue previous conversation" <<< "$output"; then
+        echo "  FAIL: a session with no conversation must not offer to resume: $output"
+        return 1
+    fi
+    assert_output_contains "$output" "--session-id $backfilled" \
+        "the first open starts the conversation it records" || return 1
 
     # Second resume must be idempotent: same value, no duplication.
     "$CS_BIN" legacy-session <<< "" >/dev/null 2>&1 || true

@@ -4,6 +4,11 @@ All notable changes to cs are documented here. Release notes are also available 
 
 <!-- New entries group changes under Keep-a-Changelog headings (Added / Changed / Removed / Fixes / Docs), or Features / Performance where those fit the release. -->
 
+## Unreleased
+
+### Fixes
+- The first `cs <name>` after `cs -adopt` no longer asks "Continue previous conversation?" in a project with no Claude Code conversation to resume. `cs -adopt` recorded an id for a conversation that did not exist yet, so the first open offered to resume it, the resume failed, and cs started fresh with "No previous conversation found". That open now starts a new conversation without asking, records it, and the launch card says `new`. A project Claude Code already ran in still opens on its newest conversation. Re-adopting the records a removed session left behind keeps the conversation they name; it used to be replaced with a new id, so the next open no longer resumed it.
+
 ## 2026.10.1
 
 ### Added

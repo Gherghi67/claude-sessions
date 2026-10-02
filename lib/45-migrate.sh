@@ -705,14 +705,14 @@ migrate_session() {
         else
             local _discovered
             _discovered=$(_discover_session_uuid_in "$_proj")
+            # No transcripts: a recorded UUID is left alone (claude hasn't
+            # written the jsonl yet, eg. the session was just created with
+            # --session-id but hasn't talked to the user), and so is an empty
+            # slot. An id allocated here would name no conversation, and the
+            # launch would offer to resume it; with none, the launch starts
+            # the first conversation and records its id.
             if [ -n "$_discovered" ]; then
                 _bind_uuid="$_discovered"
-            elif [ -z "$_existing" ]; then
-                # No transcripts and no recorded UUID — allocate fresh.
-                # A recorded UUID without transcripts is left alone: claude
-                # hasn't written the jsonl yet (eg. session was just created
-                # with --session-id but hasn't talked to the user).
-                _bind_uuid=$(_alloc_uuid)
             fi
         fi
 
