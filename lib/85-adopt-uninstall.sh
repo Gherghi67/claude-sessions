@@ -131,7 +131,7 @@ adopt_session() {
     local prior_binding
     prior_binding=$(_read_local_state "$target_dir/.cs/local/state" claude_session_id)
     create_session_structure "$target_dir"
-    if [ -n "$prior_binding" ]; then
+    if _is_uuid "$prior_binding"; then
         _set_local_state "$target_dir/.cs/local/state" claude_session_id "$prior_binding"
     else
         _unset_local_state "$target_dir/.cs/local/state" claude_session_id

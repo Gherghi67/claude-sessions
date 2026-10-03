@@ -524,6 +524,52 @@ test_readopt_without_local_state_starts_fresh_without_asking() {
         "claude starts the recorded conversation" || return 1
 }
 
+# A project that commits .cs/ brings its README frontmatter along. Adopt leaves
+# the conversation slot empty, so the first open's migration imported the
+# README's claude_session_id and the resume prompt passed it to claude unquoted:
+# whoever wrote the project chose words on claude's command line.
+test_adopt_ignores_a_committed_readme_id_that_is_not_a_uuid() {
+    local project_dir="$TEST_TMPDIR/my-project"
+    mkdir -p "$project_dir/.cs"
+    printf -- '---\nstatus: active\nclaude_session_id: --dangerously-skip-permissions --model x\n---\n# Session\n' \
+        > "$project_dir/.cs/README.md"
+    (cd "$project_dir" && printf 'y\n' | CS_ASSUME_TTY=1 "$CS_BIN" -adopt probe >/dev/null 2>&1) \
+        || { echo "  FAIL: re-adopt should succeed"; return 1; }
+    _adopt_claude_stub
+
+    local output
+    output=$("$CS_BIN" probe <<< "" 2>&1) || true
+
+    if grep -q "Continue previous conversation" <<< "$output"; then
+        echo "  FAIL: an id that is not a UUID must not be offered for resume: $output"; return 1
+    fi
+    local launches recorded
+    launches=$(cat "$TEST_TMPDIR/claude-args" 2>/dev/null)
+    assert_eq "1" "$(printf '%s\n' "$launches" | grep -c .)" "claude launches exactly once" || return 1
+    if grep -q -- '--dangerously-skip-permissions' <<< "$launches"; then
+        echo "  FAIL: the README's words reached claude's argv: $launches"; return 1
+    fi
+    recorded=$(_adopt_state_id "$project_dir")
+    [[ "$recorded" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] \
+        || { echo "  FAIL: the open must record a real conversation id: '$recorded'"; return 1; }
+    assert_output_contains "$launches" "--session-id $recorded" "claude starts the recorded conversation" || return 1
+}
+
+# Re-adopt puts back the conversation the records name, and only a conversation
+# id: words in the slot name nothing to resume.
+test_readopt_drops_a_prior_binding_that_is_not_a_uuid() {
+    local project_dir="$TEST_TMPDIR/my-project"
+    mkdir -p "$project_dir"
+    (cd "$project_dir" && "$CS_BIN" -adopt old-name >/dev/null 2>&1)
+    printf 'claude_session_id: --dangerously-skip-permissions\n' >> "$project_dir/.cs/local/state"
+    rm "$CS_SESSIONS_ROOT/old-name"
+
+    (cd "$project_dir" && printf 'y\n' | CS_ASSUME_TTY=1 "$CS_BIN" -adopt new-name >/dev/null 2>&1) \
+        || { echo "  FAIL: re-adopt should succeed"; return 1; }
+    assert_eq "" "$(_adopt_state_id "$project_dir")" \
+        "re-adopt keeps no id when the prior one is not a UUID" || return 1
+}
+
 # ============================================================================
 # Runner
 # ============================================================================
@@ -560,6 +606,8 @@ run_test test_first_launch_after_adopt_offers_the_projects_newest_conversation
 run_test test_second_launch_after_adopt_asks_and_resumes
 run_test test_readopt_keeps_the_prior_conversation_binding
 run_test test_readopt_without_local_state_starts_fresh_without_asking
+run_test test_adopt_ignores_a_committed_readme_id_that_is_not_a_uuid
+run_test test_readopt_drops_a_prior_binding_that_is_not_a_uuid
 
 # README frontmatter
 run_test test_readme_has_yaml_frontmatter

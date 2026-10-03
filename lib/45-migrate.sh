@@ -672,7 +672,9 @@ migrate_session() {
         local _legacy_uuid _legacy_color
         _legacy_uuid=$(awk '/^claude_session_id:/ { sub(/^claude_session_id:[[:space:]]*/, ""); gsub(/["\r]/, ""); print; exit }' "$readme")
         _legacy_color=$(awk '/^claude_session_color:/ { sub(/^claude_session_color:[[:space:]]*/, ""); gsub(/["\r]/, ""); print; exit }' "$readme")
-        if [ -n "$_legacy_uuid" ] && [ -z "$(_read_local_state "$_state" claude_session_id)" ]; then
+        # The README is whatever the clone or the adopted project committed, so
+        # only a UUID is taken as a conversation id.
+        if _is_uuid "$_legacy_uuid" && [ -z "$(_read_local_state "$_state" claude_session_id)" ]; then
             _set_local_state "$_state" claude_session_id "$_legacy_uuid"
         fi
         if [ -n "$_legacy_color" ] && [ -z "$(_read_local_state "$_state" claude_session_color)" ]; then

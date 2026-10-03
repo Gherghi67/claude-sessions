@@ -2869,6 +2869,13 @@ _alloc_uuid() {
     fi
 }
 
+# A conversation id goes onto claude's command line, and the README a clone or an
+# adopted project brings can say anything, so only a UUID counts as one. Same
+# pattern as hooks/session-start.sh's UUID_RE.
+_is_uuid() {
+    [[ "$1" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]
+}
+
 # The 8 colors claude's /color slash command accepts (verified against the
 # binary's own error message in claude 2.1.162). Anything else errors with
 # "Invalid color X". Notably absent: teal, magenta, white, black, gray, hex.
@@ -3834,7 +3841,9 @@ migrate_session() {
         local _legacy_uuid _legacy_color
         _legacy_uuid=$(awk '/^claude_session_id:/ { sub(/^claude_session_id:[[:space:]]*/, ""); gsub(/["\r]/, ""); print; exit }' "$readme")
         _legacy_color=$(awk '/^claude_session_color:/ { sub(/^claude_session_color:[[:space:]]*/, ""); gsub(/["\r]/, ""); print; exit }' "$readme")
-        if [ -n "$_legacy_uuid" ] && [ -z "$(_read_local_state "$_state" claude_session_id)" ]; then
+        # The README is whatever the clone or the adopted project committed, so
+        # only a UUID is taken as a conversation id.
+        if _is_uuid "$_legacy_uuid" && [ -z "$(_read_local_state "$_state" claude_session_id)" ]; then
             _set_local_state "$_state" claude_session_id "$_legacy_uuid"
         fi
         if [ -n "$_legacy_color" ] && [ -z "$(_read_local_state "$_state" claude_session_color)" ]; then
@@ -8359,9 +8368,12 @@ launch_claude_code() {
     # transcript on disk). Used for both the CS_CLAUDE_SESSION_ID env export
     # below and for the spawn args at exec time. Empty on an existing session
     # that has never had a conversation, such as the first open after
-    # cs -adopt; the launch below starts one and records it.
+    # cs -adopt; the launch below starts one and records it. A value that is
+    # not a UUID (written before ids were checked, or by hand) names no
+    # conversation and counts as empty.
     local claude_session_id claude_session_color
     claude_session_id=$(_read_local_state "$session_dir/.cs/local/state" claude_session_id)
+    _is_uuid "$claude_session_id" || claude_session_id=""
     claude_session_color=$(_read_local_state "$session_dir/.cs/local/state" claude_session_color)
 
     # Build the trailing positional prompt arg that applies the session's
@@ -9099,7 +9111,7 @@ adopt_session() {
     local prior_binding
     prior_binding=$(_read_local_state "$target_dir/.cs/local/state" claude_session_id)
     create_session_structure "$target_dir"
-    if [ -n "$prior_binding" ]; then
+    if _is_uuid "$prior_binding"; then
         _set_local_state "$target_dir/.cs/local/state" claude_session_id "$prior_binding"
     else
         _unset_local_state "$target_dir/.cs/local/state" claude_session_id

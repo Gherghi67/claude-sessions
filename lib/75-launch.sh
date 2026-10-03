@@ -230,9 +230,12 @@ launch_claude_code() {
     # transcript on disk). Used for both the CS_CLAUDE_SESSION_ID env export
     # below and for the spawn args at exec time. Empty on an existing session
     # that has never had a conversation, such as the first open after
-    # cs -adopt; the launch below starts one and records it.
+    # cs -adopt; the launch below starts one and records it. A value that is
+    # not a UUID (written before ids were checked, or by hand) names no
+    # conversation and counts as empty.
     local claude_session_id claude_session_color
     claude_session_id=$(_read_local_state "$session_dir/.cs/local/state" claude_session_id)
+    _is_uuid "$claude_session_id" || claude_session_id=""
     claude_session_color=$(_read_local_state "$session_dir/.cs/local/state" claude_session_color)
 
     # Build the trailing positional prompt arg that applies the session's
