@@ -8755,8 +8755,9 @@ EOF
         exec $CLAUDE_CODE_BIN --name "$session_name" --session-id "$claude_session_id" ${launch_prompt:+"$launch_prompt"}
     fi
 
-    # For existing sessions, ask if user wants to continue previous conversation
-    local continue_flag=""
+    # For existing sessions, ask if user wants to continue previous conversation.
+    # The answer sets the id to resume; it goes to claude as one quoted argument.
+    local resume_id=""
     if [ "$is_new" = "false" ]; then
         # cs records only the conversation it launched, so one started any other
         # way on this folder — a `/desktop` handoff, a claude opened on the
@@ -8856,7 +8857,7 @@ EOF
         case "$response" in
             [nN]|[nN][oO])
                 _disarm_rotation_marker "$session_dir" "$pending_handoff"
-                continue_flag=""
+                resume_id=""
                 ;;
             [rR])
                 if [ -n "$pending_handoff" ]; then
@@ -8874,7 +8875,7 @@ EOF
                 # r without a pending handoff was never offered: treat as the
                 # default resume answer, disarm included.
                 _disarm_rotation_marker "$session_dir"
-                continue_flag="--resume $claude_session_id"
+                resume_id="$claude_session_id"
                 ;;
             [dD])
                 # Nothing survives d: it retires the handoff it was offered, and
@@ -8897,7 +8898,7 @@ EOF
                 fi
                 # d without a pending handoff was never offered: treat as the
                 # default resume answer.
-                continue_flag="--resume $claude_session_id"
+                resume_id="$claude_session_id"
                 ;;
             *)
                 # Also the unattended spawn path, which takes this default
@@ -8908,18 +8909,18 @@ EOF
                 # resolve to a sibling Claude session the user ran in a
                 # different terminal between cs launches. A session reaching
                 # this prompt always has one (the unbound case started above).
-                continue_flag="--resume $claude_session_id"
+                resume_id="$claude_session_id"
                 ;;
         esac
         echo ""
     fi
 
-    if [ -n "$continue_flag" ]; then
+    if [ -n "$resume_id" ]; then
         # Try continuing previous conversation
         SECONDS=0
         local rc=0
         # shellcheck disable=SC2086
-        $CLAUDE_CODE_BIN --name "$session_name" $continue_flag ${launch_prompt:+"$launch_prompt"} || rc=$?
+        $CLAUDE_CODE_BIN --name "$session_name" --resume "$resume_id" ${launch_prompt:+"$launch_prompt"} || rc=$?
         if [ $rc -ne 0 ] && [ $SECONDS -lt 3 ]; then
             # Quick failure suggests no conversation to continue. Rebind so
             # the fresh transcript claude is about to create is tracked by
