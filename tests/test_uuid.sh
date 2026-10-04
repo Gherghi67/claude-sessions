@@ -165,15 +165,6 @@ EOF
 # exists for the session cwd, instead of allocating a fresh orphan UUID.
 # ============================================================================
 
-# Mirrors claude's per-project transcript dir encoding (see _claude_project_dir
-# in bin/cs): replace each '/' and '.' in the realpath'd cwd with '-'. Tests
-# seed transcripts at this path so the discovery helper finds them.
-_encode_cwd_for_claude_test() {
-    local resolved
-    resolved=$(cd "$1" && pwd -P)
-    printf '%s' "$resolved" | tr '/.' '--'
-}
-
 # Drop a fake claude transcript file at the location bin/cs's discovery helper
 # will look. Tests use this to simulate "claude has run here before".
 _seed_claude_transcript() {
@@ -276,6 +267,43 @@ test_lazy_migration_preserves_uuid_when_transcript_matches() {
         "recorded UUID with a matching transcript must not be rewritten" || return 1
 }
 
+# Claude Code names a project dir by replacing every character outside
+# [A-Za-z0-9] in the realpath'd cwd with '-'. Measured on 2.1.289: a one-turn
+# run in '.../scratchpad/enc_probe dir' created
+# '-private-tmp-...-scratchpad-enc-probe-dir'. A cwd with an underscore or a
+# space must resolve to that dir, or discovery looks where claude never writes.
+test_project_dir_encodes_underscore_and_space_like_claude() {
+    local cwd="$TEST_TMPDIR/enc_probe dir"
+    mkdir -p "$cwd"
+    (
+        # shellcheck source=lib/05-term.sh
+        source "$SCRIPT_DIR/../lib/05-term.sh"
+        # shellcheck source=lib/40-state.sh
+        source "$SCRIPT_DIR/../lib/40-state.sh"
+        local got
+        got=$(_claude_project_dir "$cwd")
+        case "$got" in
+            "$CS_TRANSCRIPTS_DIR"/*-enc-probe-dir) ;;
+            *)
+                echo "  FAIL: project dir does not end in -enc-probe-dir"
+                echo "    got: $got"
+                exit 1 ;;
+        esac
+        case "$got" in
+            *_*|*' '*)
+                echo "  FAIL: project dir still carries an underscore or a space"
+                echo "    got: $got"
+                exit 1 ;;
+        esac
+        [ "$got" = "$CS_TRANSCRIPTS_DIR/$(_encode_cwd_for_claude_test "$cwd")" ] || {
+            echo "  FAIL: the test seeder and _claude_project_dir disagree"
+            echo "    cs:     $got"
+            echo "    seeder: $CS_TRANSCRIPTS_DIR/$(_encode_cwd_for_claude_test "$cwd")"
+            exit 1
+        }
+    )
+}
+
 # A recorded conversation id is passed to claude as an argument, so only a UUID
 # counts as one; everything else is treated as no id at all.
 test_is_uuid_accepts_only_a_uuid() {
@@ -304,6 +332,7 @@ test_is_uuid_accepts_only_a_uuid() {
 echo "Running test_uuid.sh"
 echo ""
 run_test test_is_uuid_accepts_only_a_uuid
+run_test test_project_dir_encodes_underscore_and_space_like_claude
 run_test test_new_session_allocates_and_records_uuid
 run_test test_resume_uses_recorded_uuid
 run_test test_lazy_migration_backfills_uuid

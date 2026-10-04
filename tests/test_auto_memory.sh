@@ -127,7 +127,7 @@ EOF
 }
 
 test_migration_moves_existing_auto_memory() {
-    local session_dir="$CS_SESSIONS_ROOT/mem-session"
+    local session_dir="$CS_SESSIONS_ROOT/mem_session"
     mkdir -p "$session_dir/.cs/local"
     cat > "$session_dir/CLAUDE.md" << 'EOF'
 # Session Documentation Protocol
@@ -136,16 +136,14 @@ This is a Claude Code session managed by the cs tool. Session metadata lives in 
 EOF
     (cd "$session_dir" && git init -q && git add -A && git commit -q -m "init")
 
-    local real_path
-    real_path="$(cd "$session_dir" && pwd -P)"
     local encoded_path
-    encoded_path=$(echo "$real_path" | sed 's|/|-|g; s|\.|-|g')
+    encoded_path=$(_encode_cwd_for_claude_test "$session_dir")
     local old_memory_dir="$HOME/.claude/projects/${encoded_path}/memory"
     mkdir -p "$old_memory_dir"
     echo "build command: cargo test" > "$old_memory_dir/MEMORY.md"
     echo "debug notes here" > "$old_memory_dir/debugging.md"
 
-    "$CS_BIN" mem-session <<< "" 2>&1 || true
+    "$CS_BIN" mem_session <<< "" 2>&1 || true
 
     assert_exists "$session_dir/.cs/memory/MEMORY.md" \
         "MEMORY.md should be migrated to .cs/memory/" || return 1

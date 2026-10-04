@@ -3,8 +3,7 @@
 
 _claude_encode_path() {
     local p="$1"
-    p="${p//\//-}"
-    p="${p//./-}"
+    p="${p//[^A-Za-z0-9]/-}"
     printf '%s' "$p"
 }
 

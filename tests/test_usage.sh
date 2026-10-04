@@ -21,9 +21,8 @@ _json_lines() {
 # Write a transcript project dir for a session dir, echoing the project dir.
 # Uses the same symlink-resolved encoding as _claude_project_dir.
 _transcripts_for() {
-    local sdir="$1" resolved encoded
-    resolved=$( (cd "$sdir" && pwd -P) || printf '%s' "$sdir" )
-    encoded=$(echo "$resolved" | sed 's|/|-|g; s|\.|-|g')
+    local sdir="$1" encoded
+    encoded=$(_encode_cwd_for_claude_test "$sdir")
     local proj="$CS_TRANSCRIPTS_DIR/$encoded"
     mkdir -p "$proj"
     printf '%s' "$proj"
@@ -593,9 +592,8 @@ run_test test_usage_survives_wrong_shaped_entries
 # A session with .cs/claude-config runs Claude Code on that config dir, so its
 # transcripts live in the dir's projects/, under the same encoded name.
 _vault_transcripts_for() {
-    local sdir="$1" resolved encoded
-    resolved=$( (cd "$sdir" && pwd -P) || printf '%s' "$sdir" )
-    encoded=$(echo "$resolved" | sed 's|/|-|g; s|\.|-|g')
+    local sdir="$1" encoded
+    encoded=$(_encode_cwd_for_claude_test "$sdir")
     local proj="$sdir/.cs/claude-config/projects/$encoded"
     mkdir -p "$proj"
     printf '%s' "$proj"
@@ -604,7 +602,7 @@ _vault_transcripts_for() {
 # One transcript in the session's own config dir and a decoy under the shared
 # base: the scoped view reads the session's.
 test_usage_reads_an_encrypted_session_from_its_config() {
-    local sdir="$CS_SESSIONS_ROOT/vault-sess"
+    local sdir="$CS_SESSIONS_ROOT/vault_sess"
     mkdir -p "$sdir/.cs/local"
     local proj decoy
     proj=$(_vault_transcripts_for "$sdir")
@@ -616,7 +614,7 @@ EOF
 {"type":"assistant","requestId":"r2","timestamp":"$(_iso_mins_ago 5)","message":{"model":"m","usage":{"input_tokens":3000,"cache_creation_input_tokens":0,"output_tokens":300}}}
 EOF
     local output
-    output=$("$CS_BIN" -usage vault-sess 2>&1) || true
+    output=$("$CS_BIN" -usage vault_sess 2>&1) || true
     assert_output_contains "$output" "aaaa1111" "the session's own transcript should be read" || return 1
     assert_output_not_contains "$output" "dddd1111" "the shared base should not be read" || return 1
 }

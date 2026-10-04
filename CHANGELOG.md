@@ -4,6 +4,11 @@ All notable changes to cs are documented here. Release notes are also available 
 
 <!-- New entries group changes under Keep-a-Changelog headings (Added / Changed / Removed / Fixes / Docs), or Features / Performance where those fit the release. -->
 
+## Unreleased
+
+### Fixes
+- cs finds Claude Code's conversations for a session whose path has an underscore, a space or any other character outside letters, digits and `/` and `.`. Claude Code names the transcript folder by turning every such character into `-`; cs turned only `/` and `.`, so for a path like `~/.claude-sessions/my_project` it looked in a folder that does not exist, found no conversation, and the first open started a new one. The picker's rename moves the transcript folder under the same rule.
+
 ## 2026.10.2
 
 ### Fixes
