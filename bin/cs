@@ -2927,26 +2927,32 @@ _read_local_state() {
 
 # Write 'key: value' into a machine-local state file, replacing any existing
 # line for that key. Creates .cs/local/ and the file on first write. Atomic
-# (tmp+mv), idempotent.
+# (tmp+mv), idempotent. A write that fails (permissions, a full disk) ends cs
+# with the file named: the launch has already told the user what it was about
+# to start, and a silent miss leaves the next open resuming nothing.
 _set_local_state() {
     local state="$1" key="$2" value="$3"
-    mkdir -p "$(dirname "$state")"
+    mkdir -p "$(dirname "$state")" 2>/dev/null || error "could not create $(dirname "$state")"
     local tmp="$state.tmp"
     {
-        if [ -f "$state" ]; then
-            awk -v key="$key" 'index($0, key ":") != 1' "$state"
-        fi
-        printf '%s: %s\n' "$key" "$value"
-    } > "$tmp" && mv "$tmp" "$state"
+        {
+            if [ -f "$state" ]; then
+                awk -v key="$key" 'index($0, key ":") != 1' "$state"
+            fi
+            printf '%s: %s\n' "$key" "$value"
+        } > "$tmp" && mv "$tmp" "$state"
+    } 2>/dev/null || { rm -f "$tmp" 2>/dev/null; error "could not write $state"; }
 }
 
 # Remove a key's line from a machine-local state file. A missing file or key is
-# a no-op. Atomic (tmp+mv), like _set_local_state.
+# a no-op. Atomic (tmp+mv), like _set_local_state, and loud on the same
+# failures.
 _unset_local_state() {
     local state="$1" key="$2"
     [ -f "$state" ] || return 0
     local tmp="$state.tmp"
-    awk -v key="$key" 'index($0, key ":") != 1' "$state" > "$tmp" && mv "$tmp" "$state"
+    { awk -v key="$key" 'index($0, key ":") != 1' "$state" > "$tmp" && mv "$tmp" "$state"; } 2>/dev/null \
+        || { rm -f "$tmp" 2>/dev/null; error "could not write $state"; }
 }
 
 # Return the path to claude's per-cwd transcript directory. Symlinks in the
@@ -3087,14 +3093,21 @@ _timeline_rotated() {  # session_dir, from, to, reason, [handoff]
 # so cs's recorded UUID always tracks the conversation claude is about to
 # create — never orphaned. The CS_FRESH_REBIND signal lets session-start.sh
 # tailor its additionalContext (the user is starting fresh, not cold-booting).
+# With no recorded conversation to leave (the first open after cs -adopt, a
+# clone without its machine-local state) this is the session's first
+# conversation, not a rotation: no timeline event, no CS_FRESH_REBIND.
 _exec_fresh_rebind() {
     local session_dir="$1"
     local reason="${2:-declined-resume}"
     local handoff="${3:-}"
     local spawn_kick="${4:-}"
     local merge_kick="${5:-}"
+    # An adopted session's name is the link's, recorded in local state at the
+    # open; its directory is the project's. Every other session is its
+    # directory.
     local session_name
-    session_name=$(basename "$session_dir")
+    session_name=$(_read_local_state "$session_dir/.cs/local/state" session_name)
+    [ -n "$session_name" ] || session_name=$(basename "$session_dir")
     local old_uuid
     old_uuid=$(_read_local_state "$session_dir/.cs/local/state" claude_session_id)
     local new_uuid
@@ -3107,7 +3120,7 @@ _exec_fresh_rebind() {
     if [ -L "$session_dir/.cs/private" ] || [ -e "$session_dir/.cs/private" ]; then
         public_handoff=""
     fi
-    _timeline_rotated "$session_dir" "$old_uuid" "$new_uuid" "$reason" "$public_handoff"
+    [ -z "$old_uuid" ] || _timeline_rotated "$session_dir" "$old_uuid" "$new_uuid" "$reason" "$public_handoff"
     local session_color
     session_color=$(_read_local_state "$session_dir/.cs/local/state" claude_session_color)
     local color_arg=""
@@ -3128,7 +3141,7 @@ _exec_fresh_rebind() {
     fi
     local launch_prompt="${merge_kick:-${spawn_kick:-${handoff_arg:-$color_arg}}}"
     export CS_CLAUDE_SESSION_ID="$new_uuid"
-    export CS_FRESH_REBIND=1
+    [ -z "$old_uuid" ] || export CS_FRESH_REBIND=1
     # shellcheck disable=SC2086
     exec $CLAUDE_CODE_BIN --name "$session_name" --session-id "$new_uuid" ${launch_prompt:+"$launch_prompt"}
 }
@@ -3902,9 +3915,8 @@ migrate_session() {
             # No transcripts: a recorded UUID is left alone (claude hasn't
             # written the jsonl yet, eg. the session was just created with
             # --session-id but hasn't talked to the user), and so is an empty
-            # slot. An id allocated here would name no conversation, and the
-            # launch would offer to resume it; with none, the launch starts
-            # the first conversation and records its id.
+            # slot. Only a transcript on disk names a conversation; an empty
+            # slot is the launch's to fill when it starts the first one.
             if [ -n "$_discovered" ]; then
                 _bind_uuid="$_discovered"
             fi
@@ -6848,7 +6860,7 @@ _doctor_check_session_id_match() {
     local recorded
     recorded=$(_read_local_state "$state" claude_session_id)
     if [ -z "$recorded" ]; then
-        _doctor_warn "Session UUID: not recorded in .cs/local/state — next cs launch will backfill"
+        _doctor_warn "Session UUID: not recorded in .cs/local/state — the next cs launch binds the folder's newest conversation, or starts one and records it"
         return
     fi
     local current="${CLAUDE_CODE_SESSION_ID:-}"
@@ -8401,6 +8413,20 @@ launch_claude_code() {
         warn "ignoring claude_session_id in .cs/local/state: not a UUID, so it names no conversation"
         claude_session_id=""
     fi
+    # No recorded conversation does not mean no conversation: a feature
+    # worktree's open runs no migrate_session, so Phase 8 never looked, and a
+    # dropped non-UUID leaves the slot empty with the transcript still on disk.
+    # Look once at the folder's transcripts before calling the session unbound,
+    # so a real conversation is offered rather than abandoned.
+    if [ -z "$claude_session_id" ] && [ "$is_new" = "false" ]; then
+        local _found
+        _found=$(_discover_session_uuid_in "$(_claude_project_dir "$session_dir")")
+        if _is_uuid "$_found"; then
+            _set_local_state "$session_dir/.cs/local/state" claude_session_id "$_found"
+            warn "Bound claude_session_id in .cs/local/state to $_found"
+            claude_session_id="$_found"
+        fi
+    fi
     claude_session_color=$(_read_local_state "$session_dir/.cs/local/state" claude_session_color)
     if [ -n "$claude_session_color" ] && ! _is_session_color "$claude_session_color"; then
         warn "ignoring claude_session_color in .cs/local/state: not one of claude's colours"
@@ -8430,8 +8456,9 @@ launch_claude_code() {
     #
     # Skip when is_new=true: the UUID was just allocated by
     # create_session_structure milliseconds ago, so no other process can
-    # be holding it. Spares the ps fork on fresh-spawn.
-    if [ -n "$claude_session_id" ] && [ "$force" != "true" ] && [ "$is_new" != "true" ]; then
+    # be holding it. Spares the ps fork on fresh-spawn. An unbound session
+    # has no UUID to match, so only the --name half runs for it.
+    if [ "$force" != "true" ] && [ "$is_new" != "true" ]; then
         local _ps_out
         _ps_out=$("${CS_PS_BIN:-ps}" -Ao args= 2>/dev/null || true)
         # An in-app /clear rebinds the recorded UUID while the live process's
@@ -8448,16 +8475,18 @@ launch_claude_code() {
         # or with `=`.
         _ps_out="$_ps_out"$'\n'
         local _flag _hit=""
-        for _flag in "--session-id " "--session-id=" "--resume " "--resume=" " -r " "--parent-session-id " "--parent-session-id="; do
-            if [[ "$_ps_out" == *"$_flag$claude_session_id "* ]] \
-                || [[ "$_ps_out" == *"$_flag$claude_session_id"$'\n'* ]]; then
-                _hit=1; break
-            fi
-        done
+        if [ -n "$claude_session_id" ]; then
+            for _flag in "--session-id " "--session-id=" "--resume " "--resume=" " -r " "--parent-session-id " "--parent-session-id="; do
+                if [[ "$_ps_out" == *"$_flag$claude_session_id "* ]] \
+                    || [[ "$_ps_out" == *"$_flag$claude_session_id"$'\n'* ]]; then
+                    _hit=1; break
+                fi
+            done
+        fi
         if [ -n "$_hit" ] \
             || [[ "$_ps_out" == *"--name $session_name "* ]] \
             || [[ "$_ps_out" == *"--name $session_name"$'\n'* ]]; then
-            error "Session $session_name is already running elsewhere (UUID $claude_session_id). Use --force to override."
+            error "Session $session_name is already running elsewhere${claude_session_id:+ (UUID $claude_session_id)}. Use --force to override."
         fi
     fi
 
@@ -8771,23 +8800,13 @@ EOF
 
     cd "$session_dir"
 
-    # An existing session with no recorded conversation has nothing to resume:
-    # the first open after cs -adopt, or adopted records whose machine-local
-    # state did not travel. Asking offered a conversation that never existed,
-    # and with no id to resume the answer fell back to --continue, which picks
-    # up whatever claude last ran in this folder. Start it the way a new
-    # session starts: record an id and hand it to claude. Not a rotation, so
-    # no timeline event and no CS_FRESH_REBIND.
-    if [ "$is_new" = "false" ] && [ -z "$claude_session_id" ]; then
-        claude_session_id=$(_alloc_uuid)
-        _set_local_state "$session_dir/.cs/local/state" claude_session_id "$claude_session_id"
-        export CS_CLAUDE_SESSION_ID="$claude_session_id"
-        # shellcheck disable=SC2086
-        exec $CLAUDE_CODE_BIN --name "$session_name" --session-id "$claude_session_id" ${launch_prompt:+"$launch_prompt"}
-    fi
-
     # For existing sessions, ask if user wants to continue previous conversation.
     # The answer sets the id to resume; it goes to claude as one quoted argument.
+    # An existing session with no recorded conversation has nothing to resume:
+    # the first open after cs -adopt, or records whose machine-local state did
+    # not travel. It takes the fresh answer without asking, unless a rotation
+    # handoff is pending: that is the user's call, so the offer is made with
+    # the rows that apply.
     local resume_id=""
     if [ "$is_new" = "false" ]; then
         # cs records only the conversation it launched, so one started any other
@@ -8853,9 +8872,13 @@ EOF
             fi
         fi
         # A spawned launch is unattended: take the default (resume) instead
-        # of parking the tmux window on an interactive ask.
+        # of parking the tmux window on an interactive ask. Unbound, the
+        # default is fresh, and a pending handoff waits for an attended open.
         if [ -n "$spawn_kick" ]; then
             response=""
+            [ -n "$claude_session_id" ] || response="n"
+        elif [ -z "$claude_session_id" ] && [ -z "$pending_handoff" ]; then
+            response="n"
         else
             if [ -n "$pending_handoff" ]; then
                 # Answering blind is the hazard this label exists for: r arms
@@ -8869,10 +8892,16 @@ EOF
                 # One answer per row, key first, laid out like the already-open
                 # menu; the keys stay the letters the one-line ask used.
                 echo
-                _resume_menu_row y "$GREEN" 'resume' 'continue the previous conversation · default'
-                _resume_menu_row r "$GOLD" 'from handoff' 'fresh conversation that picks up the handoff'
-                _resume_menu_row n "$COMMENT" 'fresh' 'fresh conversation; the handoff waits for later'
-                _resume_menu_row d "$ORANGE" 'discard' 'retire the handoff, then resume'
+                if [ -n "$claude_session_id" ]; then
+                    _resume_menu_row y "$GREEN" 'resume' 'continue the previous conversation · default'
+                    _resume_menu_row r "$GOLD" 'from handoff' 'fresh conversation that picks up the handoff'
+                    _resume_menu_row n "$COMMENT" 'fresh' 'fresh conversation; the handoff waits for later'
+                    _resume_menu_row d "$ORANGE" 'discard' 'retire the handoff, then resume'
+                else
+                    _resume_menu_row r "$GOLD" 'from handoff' 'fresh conversation that picks up the handoff'
+                    _resume_menu_row n "$COMMENT" 'fresh' 'fresh conversation; the handoff waits for later · default'
+                    _resume_menu_row d "$ORANGE" 'discard' 'retire the handoff, then start fresh'
+                fi
                 echo
                 printf '    %b›%b ' "$GOLD" "$NC"
             else
@@ -8938,8 +8967,8 @@ EOF
                 # --resume <uuid>, never --continue: the uuid names the exact
                 # conversation, while --continue means "most recent" and may
                 # resolve to a sibling Claude session the user ran in a
-                # different terminal between cs launches. A session reaching
-                # this prompt always has one (the unbound case started above).
+                # different terminal between cs launches. Empty on an unbound
+                # session, which the fresh path below starts.
                 resume_id="$claude_session_id"
                 ;;
         esac
@@ -8967,14 +8996,13 @@ EOF
         # Fresh-spawn path. Three sub-cases:
         #   - is_new=true: pass --session-id <pre-allocated-uuid> so claude
         #     adopts the UUID create_session_structure wrote into README.
-        #   - is_new=false (user said N to resume): rebind to a fresh UUID
-        #     and pass --session-id <new> so cs stays bound to the new
-        #     conversation. Without rebind, next launch resumes the OLD
-        #     conversation while the fresh one becomes orphaned.
+        #   - is_new=false (user said N to resume, or the session has no
+        #     recorded conversation): rebind to a fresh UUID and pass
+        #     --session-id <new> so cs stays bound to the new conversation.
+        #     Without rebind, next launch resumes the OLD conversation while
+        #     the fresh one becomes orphaned.
         #   - is_new=true with no claude_session_id (create_session_structure
-        #     always writes one; handled defensively): naked exec. An
-        #     is_new=false session with none never gets here: it started
-        #     its first conversation before the resume prompt.
+        #     always writes one; handled defensively): naked exec.
         if [ "$is_new" = "true" ] && [ -n "$claude_session_id" ]; then
             # shellcheck disable=SC2086
             exec $CLAUDE_CODE_BIN --name "$session_name" --session-id "$claude_session_id" ${launch_prompt:+"$launch_prompt"}
@@ -9134,19 +9162,27 @@ adopt_session() {
     # create_session_structure writes CLAUDE.local.md, never CLAUDE.md — a
     # project's own CLAUDE.md is left untouched.
     #
-    # It also stages a conversation id for a brand-new session's first launch.
-    # An adopted directory already exists, so its first open is a reopen, and a
-    # staged id made that open ask to continue a conversation that never
-    # existed. A first adoption keeps no id (the launch records one when it
-    # starts the first conversation); re-adopted records keep the conversation
-    # they name, which the staged id used to replace.
-    local prior_binding
+    # It also stages a conversation id and a colour for a brand-new session's
+    # first launch. An adopted directory already exists, so its first open is
+    # a reopen: a first adoption keeps no id (the launch records one when it
+    # starts the first conversation), and re-adopted records keep the
+    # conversation and the colour they name. Only a UUID names a conversation
+    # and only one of claude's colours is a colour; anything else is dropped,
+    # and said.
+    local prior_binding prior_color
     prior_binding=$(_read_local_state "$target_dir/.cs/local/state" claude_session_id)
+    prior_color=$(_read_local_state "$target_dir/.cs/local/state" claude_session_color)
     create_session_structure "$target_dir"
     if _is_uuid "$prior_binding"; then
         _set_local_state "$target_dir/.cs/local/state" claude_session_id "$prior_binding"
     else
+        [ -z "$prior_binding" ] || warn "ignoring claude_session_id in .cs/local/state: not a UUID, so it names no conversation"
         _unset_local_state "$target_dir/.cs/local/state" claude_session_id
+    fi
+    if _is_session_color "$prior_color"; then
+        _set_local_state "$target_dir/.cs/local/state" claude_session_color "$prior_color"
+    elif [ -n "$prior_color" ]; then
+        warn "ignoring claude_session_color in .cs/local/state: not one of claude's colours"
     fi
 
     # An adopted session's name is the link's, not the directory's, and the link

@@ -715,7 +715,7 @@ _doctor_check_session_id_match() {
     local recorded
     recorded=$(_read_local_state "$state" claude_session_id)
     if [ -z "$recorded" ]; then
-        _doctor_warn "Session UUID: not recorded in .cs/local/state — next cs launch will backfill"
+        _doctor_warn "Session UUID: not recorded in .cs/local/state — the next cs launch binds the folder's newest conversation, or starts one and records it"
         return
     fi
     local current="${CLAUDE_CODE_SESSION_ID:-}"
