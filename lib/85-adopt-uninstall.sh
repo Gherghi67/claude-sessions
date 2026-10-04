@@ -323,10 +323,18 @@ adopt_worktrees() {  # [--dry-run]
         fi
         state="$wt_dir/.cs/local/state"
         if [ -d "$wt_dir/.cs" ]; then
-            # Its own unfinished work is a .cs/ it marked and never linked
-            # (the link is the last step). Anything else is someone's session.
+            # Three kinds of .cs/ can sit here. One this command marked and
+            # linked is a session, or was one until `cs -rm` took the link
+            # and left .cs/ behind as that verb does; neither is re-adopted,
+            # the second is named so the user knows how to get it back. One it
+            # marked and never linked died part-way and is finished below.
+            # Anything else is someone's session.
             if [ "$(_read_local_state "$state" git_bookkeeping)" != "exclude" ] || [ -e "$link" ] || [ -L "$link" ]; then
                 echo -e "${DIM}skip $wt_name: already carries .cs/${NC}"
+                continue
+            fi
+            if [ -n "$(_read_local_state "$state" adopted)" ]; then
+                echo -e "${DIM}skip $wt_name: removed with cs -rm (cs -adopt $session_name inside it re-adopts)${NC}"
                 continue
             fi
         fi
@@ -359,6 +367,9 @@ adopt_worktrees() {  # [--dry-run]
         _seed_readme_objective "$wt_dir/.cs/README.md" "$(_transcript_first_prompt "$proj/$uuid.jsonl")"
         mkdir -p "$SESSIONS_ROOT"
         ln -s "$wt_dir" "$link"
+        # Written last: its absence is what tells a half-done adoption apart
+        # from a session cs -rm removed.
+        _set_local_state "$state" adopted "$(date '+%Y-%m-%d')"
         adopted=$((adopted + 1))
         info "Adopted $wt_name as session '$session_name'"
     done

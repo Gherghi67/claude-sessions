@@ -253,10 +253,24 @@ test_rerun_finishes_an_adoption_that_lost_its_link() {
     (cd "$repo" && "$CS_BIN" -adopt --worktrees >/dev/null 2>&1) || { echo "  FAIL: adopt should succeed"; return 1; }
     # The state a run leaves when it dies after writing .cs/ and before linking.
     rm "$CS_SESSIONS_ROOT/repo.halfway"
+    sed -i.bak '/^adopted:/d' "$wt/.cs/local/state" && rm -f "$wt/.cs/local/state.bak"
     printf 'my note\n' >> "$wt/.cs/README.md"
     (cd "$repo" && "$CS_BIN" -adopt --worktrees >/dev/null 2>&1) || { echo "  FAIL: the re-run should succeed"; return 1; }
     [ -L "$CS_SESSIONS_ROOT/repo.halfway" ] || { echo "  FAIL: the re-run should register the session"; return 1; }
     assert_eq "my note" "$(tail -1 "$wt/.cs/README.md")" "the re-run keeps the README it found" || return 1
+}
+
+test_a_removed_session_is_not_adopted_again() {
+    local repo="$TEST_TMPDIR/repo"
+    _make_repo "$repo" retired
+    _seed_conversation "$repo/.claude/worktrees/retired" "$UUID_A" "Retire this one later"
+    (cd "$repo" && "$CS_BIN" -adopt --worktrees >/dev/null 2>&1) || { echo "  FAIL: adopt should succeed"; return 1; }
+    # cs -rm removes the link and keeps .cs/ by design.
+    rm "$CS_SESSIONS_ROOT/repo.retired"
+    local output
+    output=$(cd "$repo" && "$CS_BIN" -adopt --worktrees 2>&1) || true
+    assert_not_exists "$CS_SESSIONS_ROOT/repo.retired" "a removed session stays removed" || return 1
+    assert_output_contains "$output" "skip retired: removed with cs -rm" "the skip says how to get it back" || return 1
 }
 
 run_test test_refuses_outside_a_git_repo
@@ -272,5 +286,6 @@ run_test test_a_symlink_to_another_project_is_not_adopted
 run_test test_open_leaves_a_tracked_claude_md_with_cs_markers_alone
 run_test test_an_exclude_file_without_a_final_newline_keeps_its_last_rule
 run_test test_rerun_finishes_an_adoption_that_lost_its_link
+run_test test_a_removed_session_is_not_adopted_again
 
 report_results
