@@ -4,7 +4,7 @@ All notable changes to cs are documented here. Release notes are also available 
 
 <!-- New entries group changes under Keep-a-Changelog headings (Added / Changed / Removed / Fixes / Docs), or Features / Performance where those fit the release. -->
 
-## Unreleased
+## 2026.10.3
 
 ### Added
 - `cs -adopt --worktrees` registers the worktrees Claude Code creates with `claude --worktree` as sessions. Run inside the repo, it names each `.claude/worktrees/<name>/` that holds a conversation `<repo>.<name>`, binds it to that conversation, and seeds the Objective from its first prompt. The checkout is a live branch, so cs hides its files (`.cs/`, `.claude/settings.local.json`, `CLAUDE.local.md`) through the repo's `.git/info/exclude`, commits nothing, and leaves the tracked `CLAUDE.md` alone; an open of such a session skips the `.gitignore` and `.gitattributes` backfill other sessions get. cs skips a worktree with no conversation, one whose branch tracks a file cs rewrites at every open (`CLAUDE.local.md`, `.claude/settings.local.json`) or whose `.claude` is a symlink, and anything under `.claude/worktrees/` that is not a worktree of this repo. A re-run adopts only what is new, finishes an adoption that stopped part-way, and prunes the links of worktrees Claude Code has since deleted. `--dry-run` prints the plan and writes nothing. An open of such a session refuses, before it writes anything, if the branch has since started tracking one of those files. The separator is `.` because `@` names a feature worktree of a base session, which these are not.
