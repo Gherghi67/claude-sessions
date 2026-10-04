@@ -2001,7 +2001,7 @@ test_worktree_without_its_recorded_id_binds_the_folders_conversation() {
     state="$wt/.cs/local/state"
     awk 'index($0, "claude_session_id:") != 1' "$state" > "$state.tmp" && mv "$state.tmp" "$state"
     local proj
-    proj="$CS_TRANSCRIPTS_DIR/$(cd "$wt" && pwd -P | tr '/.' '--')"
+    proj="$CS_TRANSCRIPTS_DIR/$(_encode_cwd_for_claude_test "$wt")"
     mkdir -p "$proj"
     printf '{"type":"user","sessionId":"%s"}\n' "$uuid" > "$proj/$uuid.jsonl"
     local output

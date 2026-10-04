@@ -289,7 +289,9 @@ test_project_dir_encodes_underscore_and_space_like_claude() {
                 echo "    got: $got"
                 exit 1 ;;
         esac
-        case "$got" in
+        # The transcripts root itself may carry an underscore (CI's TMPDIR
+        # does); only the encoded leaf is under test.
+        case "${got##*/}" in
             *_*|*' '*)
                 echo "  FAIL: project dir still carries an underscore or a space"
                 echo "    got: $got"

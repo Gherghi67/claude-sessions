@@ -283,7 +283,7 @@ test_migration_never_records_a_readme_id_that_is_not_a_uuid() {
     local session_dir
     session_dir=$(_hostile_readme_session hostile-history)
     local proj uuid="44444444-4444-4444-8444-444444444444"
-    proj="$CS_TRANSCRIPTS_DIR/$(cd "$session_dir" && pwd -P | tr '/.' '--')"
+    proj="$CS_TRANSCRIPTS_DIR/$(_encode_cwd_for_claude_test "$session_dir")"
     mkdir -p "$proj"
     printf '{"type":"user","sessionId":"%s"}\n' "$uuid" > "$proj/$uuid.jsonl"
     _argv_claude_stub
