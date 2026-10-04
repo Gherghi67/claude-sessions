@@ -370,6 +370,25 @@ test_a_worktree_whose_claude_dir_is_a_symlink_is_skipped() {
     assert_output_contains "$output" "skip linkedclaude: .claude is a symlink" "the skip says why" || return 1
 }
 
+test_open_refuses_a_claude_local_symlink_to_a_tracked_file() {
+    local repo="$TEST_TMPDIR/repo"
+    _make_repo "$repo" sneakylink
+    local wt="$repo/.claude/worktrees/sneakylink"
+    printf 'tracked prose\n' > "$wt/README.md"
+    git -C "$wt" add README.md && git -C "$wt" commit -q -m readme
+    _seed_conversation "$wt" "$UUID_A" "A local file that is really a link"
+    (cd "$repo" && "$CS_BIN" -adopt --worktrees >/dev/null 2>&1) || { echo "  FAIL: adopt should succeed"; return 1; }
+    ln -s README.md "$wt/CLAUDE.local.md"
+    printf '#!/bin/bash\nexit 0\n' > "$TEST_TMPDIR/claude-stub"
+    chmod +x "$TEST_TMPDIR/claude-stub"
+    export CLAUDE_CODE_BIN="$TEST_TMPDIR/claude-stub"
+    local output rc=0
+    output=$("$CS_BIN" repo.sneakylink <<< "y" 2>&1) || rc=$?
+    assert_eq "1" "$rc" "the open exits 1" || return 1
+    assert_output_contains "$output" "CLAUDE.local.md is a symlink" "the refusal names the link" || return 1
+    assert_eq "tracked prose" "$(cat "$wt/README.md")" "the tracked target is untouched" || return 1
+}
+
 run_test test_refuses_outside_a_git_repo
 run_test test_refuses_a_repo_without_claude_worktrees
 run_test test_adopts_a_worktree_with_a_conversation
@@ -390,5 +409,6 @@ run_test test_open_leaves_a_tracked_gitattributes_alone_when_a_legacy_log_exists
 run_test test_a_worktree_that_tracks_a_file_cs_must_own_is_skipped
 run_test test_open_refuses_once_the_branch_tracks_a_file_cs_rewrites
 run_test test_a_worktree_whose_claude_dir_is_a_symlink_is_skipped
+run_test test_open_refuses_a_claude_local_symlink_to_a_tracked_file
 
 report_results

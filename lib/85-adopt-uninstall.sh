@@ -362,7 +362,7 @@ adopt_worktrees() {  # [--dry-run]
         tracked=$(_exclude_session_tracked_conflict "$wt_dir")
         if [ -n "$tracked" ]; then
             case "$tracked" in
-                *symlink) echo -e "${DIM}skip $wt_name: $tracked, and cs writes settings there${NC}" ;;
+                *symlink) echo -e "${DIM}skip $wt_name: $tracked, and cs writes through it at every open${NC}" ;;
                 *) echo -e "${DIM}skip $wt_name: $tracked is tracked on its branch, and cs would rewrite it at every open${NC}" ;;
             esac
             continue
