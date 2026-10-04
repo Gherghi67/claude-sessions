@@ -37,7 +37,7 @@ _make_repo() {  # repo_dir, worktree...
 
 # Claude's transcript dir for a worktree, as the lib encodes it.
 _wt_project_dir() {  # wt_dir
-    printf '%s' "$CS_TRANSCRIPTS_DIR/$(cd "$1" && pwd -P | tr '/.' '--')"
+    printf '%s' "$CS_TRANSCRIPTS_DIR/$(_encode_cwd_for_claude_test "$1")"
 }
 
 _seed_conversation() {  # wt_dir, uuid, first_prompt
