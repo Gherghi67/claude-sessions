@@ -357,11 +357,14 @@ adopt_worktrees() {  # [--dry-run]
             echo -e "${DIM}skip $wt_name: no conversation under $proj${NC}"
             continue
         fi
-        # An exclude hides only untracked files. If the branch tracks one of
-        # the paths cs writes on every open, the open would dirty it.
-        tracked=$(git -C "$wt_dir" ls-files -- .cs .claude/settings.local.json CLAUDE.local.md 2>/dev/null | head -1)
+        # The open refuses the same conflict; skipping here keeps a worktree
+        # from being registered as a session that can never open.
+        tracked=$(_exclude_session_tracked_conflict "$wt_dir")
         if [ -n "$tracked" ]; then
-            echo -e "${DIM}skip $wt_name: $tracked is tracked on its branch, and cs would rewrite it at every open${NC}"
+            case "$tracked" in
+                *symlink) echo -e "${DIM}skip $wt_name: $tracked, and cs writes settings there${NC}" ;;
+                *) echo -e "${DIM}skip $wt_name: $tracked is tracked on its branch, and cs would rewrite it at every open${NC}" ;;
+            esac
             continue
         fi
         validate_session_name "$session_name"

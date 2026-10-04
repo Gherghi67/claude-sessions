@@ -334,6 +334,42 @@ test_a_worktree_that_tracks_a_file_cs_must_own_is_skipped() {
     assert_output_contains "$output" "skip tracked: CLAUDE.local.md is tracked" "the skip names the tracked file" || return 1
 }
 
+test_open_refuses_once_the_branch_tracks_a_file_cs_rewrites() {
+    local repo="$TEST_TMPDIR/repo"
+    _make_repo "$repo" later
+    local wt="$repo/.claude/worktrees/later"
+    _seed_conversation "$wt" "$UUID_A" "The branch grows a local file later"
+    (cd "$repo" && "$CS_BIN" -adopt --worktrees >/dev/null 2>&1) || { echo "  FAIL: adopt should succeed"; return 1; }
+    printf 'committed later\n' > "$wt/CLAUDE.local.md"
+    # Adoption excluded it, so tracking it now takes -f, as a user would.
+    git -C "$wt" add -f CLAUDE.local.md && git -C "$wt" commit -q -m "track the local file"
+    printf '#!/bin/bash\nprintf launched > "%s/launched"\nexit 0\n' "$TEST_TMPDIR" > "$TEST_TMPDIR/claude-stub"
+    chmod +x "$TEST_TMPDIR/claude-stub"
+    export CLAUDE_CODE_BIN="$TEST_TMPDIR/claude-stub"
+    local output rc=0
+    output=$("$CS_BIN" repo.later <<< "y" 2>&1) || rc=$?
+    assert_eq "1" "$rc" "the open exits 1" || return 1
+    assert_output_contains "$output" "CLAUDE.local.md is tracked" "the refusal names the tracked file" || return 1
+    assert_not_exists "$TEST_TMPDIR/launched" "claude is not launched" || return 1
+    assert_eq "" "$(git -C "$wt" status --porcelain)" "nothing tracked changed" || return 1
+    assert_eq "committed later" "$(cat "$wt/CLAUDE.local.md")" "the tracked file is byte for byte as committed" || return 1
+}
+
+test_a_worktree_whose_claude_dir_is_a_symlink_is_skipped() {
+    local repo="$TEST_TMPDIR/repo"
+    _make_repo "$repo" linkedclaude
+    local wt="$repo/.claude/worktrees/linkedclaude"
+    mkdir -p "$wt/config/claude"
+    printf '{}\n' > "$wt/config/claude/settings.local.json"
+    ln -s config/claude "$wt/.claude"
+    git -C "$wt" add config .claude && git -C "$wt" commit -q -m "settings behind a symlink"
+    _seed_conversation "$wt" "$UUID_A" "A symlinked .claude directory"
+    local output
+    output=$(cd "$repo" && "$CS_BIN" -adopt --worktrees 2>&1) || true
+    assert_not_exists "$wt/.cs" "nothing is written into it" || return 1
+    assert_output_contains "$output" "skip linkedclaude: .claude is a symlink" "the skip says why" || return 1
+}
+
 run_test test_refuses_outside_a_git_repo
 run_test test_refuses_a_repo_without_claude_worktrees
 run_test test_adopts_a_worktree_with_a_conversation
@@ -352,5 +388,7 @@ run_test test_plain_adopt_inside_a_linked_worktree_refuses_and_commits_nothing
 run_test test_rerun_repairs_a_linked_adoption_that_lost_its_marker
 run_test test_open_leaves_a_tracked_gitattributes_alone_when_a_legacy_log_exists
 run_test test_a_worktree_that_tracks_a_file_cs_must_own_is_skipped
+run_test test_open_refuses_once_the_branch_tracks_a_file_cs_rewrites
+run_test test_a_worktree_whose_claude_dir_is_a_symlink_is_skipped
 
 report_results

@@ -26,6 +26,21 @@ cs_assert_local_untracked() {
     fi
 }
 
+# For a checkout cs hides itself in through info/exclude (git_bookkeeping:
+# exclude): the first path cs would rewrite at open that the branch tracks, or
+# ".claude is a symlink" when the directory cs writes settings into points
+# elsewhere. Empty when the open is safe. An exclude hides only untracked
+# files, so a tracked one here would be dirtied on every open; checked at
+# adoption to skip, and at every open to refuse, since the branch moves on.
+_exclude_session_tracked_conflict() {  # dir
+    local dir="$1"
+    if [ -L "$dir/.claude" ]; then
+        printf '.claude is a symlink'
+        return 0
+    fi
+    git -C "$dir" ls-files -- .cs .claude/settings.local.json CLAUDE.local.md 2>/dev/null | head -1
+}
+
 # True when cs created this session directory, and so owns its mode. Two ways to
 # fail: the directory sits outside the sessions root, or a symlink IN the root
 # resolves to it — an adopted session, whose target is the user's own project
@@ -474,6 +489,16 @@ migrate_session() {
 
     # Per-actor local state must never be committed; refuse if it has been.
     cs_assert_local_untracked "$session_dir"
+    if [ "$(_read_local_state "$session_dir/.cs/local/state" git_bookkeeping)" = "exclude" ]; then
+        local conflict
+        conflict=$(_exclude_session_tracked_conflict "$session_dir")
+        if [ -n "$conflict" ]; then
+            case "$conflict" in
+                *symlink) error "$conflict in $session_dir, and cs writes settings there. Replace it with a directory, or cs -rm the session." ;;
+                *) error "$conflict is tracked on the branch in $session_dir, and cs would rewrite it at every open. Stop tracking it, or cs -rm the session." ;;
+            esac
+        fi
+    fi
 
     # Backfill the merge attributes on existing sessions, and the .cs/local/
     # ignore rule on older sessions whose .gitignore predates it, so per-actor
