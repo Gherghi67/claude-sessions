@@ -130,7 +130,7 @@ _cs() {
     )
 
     # Determine context
-    local in_secrets=false in_update=false in_checkpoint=false in_queue=false in_narrative=false in_tag=false in_list=false has_session=false after_remove=false after_archive=false
+    local in_secrets=false in_update=false in_checkpoint=false in_queue=false in_narrative=false in_tag=false in_list=false has_session=false after_remove=false after_archive=false after_adopt=false
     local i word
 
     for ((i=2; i < CURRENT; i++)); do
@@ -144,10 +144,11 @@ _cs() {
             -tag) in_tag=true; in_secrets=false; in_update=false; in_checkpoint=false; in_queue=false; in_list=false; in_narrative=false ;;
             -list|-ls) in_list=true; in_secrets=false; in_update=false; in_checkpoint=false; in_queue=false; in_tag=false; in_narrative=false ;;
             -remove|-rm) after_remove=true ;;
+            -adopt) after_adopt=true ;;
             -archive|-unarchive|-encrypt) after_archive=true ;;
             -*) ;;
             *)
-                if ! $in_secrets && ! $after_remove && ! $in_update && ! $in_checkpoint && ! $in_queue && ! $in_narrative && ! $in_tag && ! $in_list && ! $after_archive; then
+                if ! $in_secrets && ! $after_remove && ! $after_adopt && ! $in_update && ! $in_checkpoint && ! $in_queue && ! $in_narrative && ! $in_tag && ! $in_list && ! $after_archive; then
                     has_session=true
                 fi
                 ;;
@@ -167,6 +168,21 @@ _cs() {
             )'
         fi
         _cs_sessions
+        return
+    fi
+
+    # Context: after -adopt. A new session name completes nothing; the options
+    # register Claude Code's worktrees instead.
+    if $after_adopt; then
+        if [[ "$words[CURRENT]" == -* ]]; then
+            local -a adopt_opts
+            if [[ "$words[CURRENT-1]" == "--worktrees" ]]; then
+                adopt_opts=('--dry-run:Print what would be adopted and write nothing')
+            else
+                adopt_opts=('--worktrees:Register .claude/worktrees/* here as <repo>.<worktree> sessions')
+            fi
+            _describe 'option' adopt_opts
+        fi
         return
     fi
 

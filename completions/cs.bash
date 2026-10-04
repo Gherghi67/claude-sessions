@@ -63,6 +63,7 @@ _cs_completions() {
     local in_list=false
     local has_session=false
     local after_remove=false
+    local after_adopt=false
     local after_archive=false
 
     for ((i=1; i < cword; i++)); do
@@ -133,6 +134,9 @@ _cs_completions() {
             -remove|-rm)
                 after_remove=true
                 ;;
+            -adopt)
+                after_adopt=true
+                ;;
             -archive|-unarchive|-encrypt)
                 after_archive=true
                 ;;
@@ -141,7 +145,7 @@ _cs_completions() {
                 ;;
             *)
                 # A non-flag word that's not a subcommand is likely a session name
-                if ! $in_secrets && ! $after_remove && ! $in_update && ! $in_checkpoint && ! $in_queue && ! $in_narrative && ! $in_tag && ! $in_list && ! $after_archive; then
+                if ! $in_secrets && ! $after_remove && ! $after_adopt && ! $in_update && ! $in_checkpoint && ! $in_queue && ! $in_narrative && ! $in_tag && ! $in_list && ! $after_archive; then
                     has_session=true
                 fi
                 ;;
@@ -159,6 +163,22 @@ _cs_completions() {
             COMPREPLY=( $(compgen -W "log thread --reply" -- "$cur") )
         fi
         _cs_add_session_matches "$cur"
+        return
+    fi
+
+    # Context: after -adopt. A new session name completes nothing; the options
+    # register Claude Code's worktrees instead.
+    if $after_adopt; then
+        COMPREPLY=()
+        case "$cur" in
+            -*)
+                if [[ "${words[cword-1]}" == "--worktrees" ]]; then
+                    COMPREPLY=($(compgen -W "--dry-run" -- "$cur"))
+                else
+                    COMPREPLY=($(compgen -W "--worktrees" -- "$cur"))
+                fi
+                ;;
+        esac
         return
     fi
 

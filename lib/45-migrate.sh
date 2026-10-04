@@ -146,6 +146,24 @@ _refuse_plaintext_beside_private() {  # session_name, session_dir
 }
 
 # Create session directory structure
+# The part of a session README every reader parses: the YAML frontmatter
+# (status, created, tags, aliases) and the `# Session: <name>` title, followed
+# by one blank line. Callers append their own body. The TUI, the hooks and
+# `cs -list` read these fields, so every session kind writes them here.
+_write_session_readme_head() {  # readme, name, tags_yaml, aliases_yaml
+    local readme="$1" name="$2" tags="$3" aliases="$4"
+    cat > "$readme" << EOF
+---
+status: active
+created: $(date '+%Y-%m-%d')
+tags: $tags
+aliases: $aliases
+---
+# Session: $name
+
+EOF
+}
+
 create_session_structure() {
     local session_dir="$1"
     local claude_session_id claude_session_color
@@ -164,15 +182,8 @@ create_session_structure() {
     # one caller that runs this against a directory that already carries one,
     # and its records must survive untouched.
     if [ ! -f "$session_dir/.cs/README.md" ]; then
-        cat > "$session_dir/.cs/README.md" << EOF
----
-status: active
-created: $(date '+%Y-%m-%d')
-tags: []
-aliases: ["$(basename "$session_dir")"]
----
-# Session: $(basename "$session_dir")
-
+        _write_session_readme_head "$session_dir/.cs/README.md" "$(basename "$session_dir")" "[]" "[\"$(basename "$session_dir")\"]"
+        cat >> "$session_dir/.cs/README.md" << EOF
 **Started:** $(date '+%Y-%m-%d %H:%M:%S')
 **Location:** $(hostname):$(pwd)
 
@@ -464,13 +475,18 @@ migrate_session() {
     # Per-actor local state must never be committed; refuse if it has been.
     cs_assert_local_untracked "$session_dir"
 
-    # Backfill the merge attributes on existing sessions.
-    setup_merge_attributes "$session_dir"
-
-    # Backfill the .cs/local/ ignore rule on older sessions whose .gitignore
-    # predates it, so per-actor local state never gets committed (which would
-    # otherwise trip cs_assert_local_untracked and block the next resume).
-    ensure_cs_gitignore_entries "$session_dir"
+    # Backfill the merge attributes on existing sessions, and the .cs/local/
+    # ignore rule on older sessions whose .gitignore predates it, so per-actor
+    # local state never gets committed (which would otherwise trip
+    # cs_assert_local_untracked and block the next resume). An adopted Claude
+    # Code worktree keeps cs's files out of git through the repo's common
+    # exclude instead (git_bookkeeping: exclude): nothing of cs's is committed
+    # there for attributes to govern, and an in-tree .gitignore or
+    # .gitattributes would be the one thing dirtying its PR branch.
+    if [ "$(_read_local_state "$session_dir/.cs/local/state" git_bookkeeping)" != "exclude" ]; then
+        setup_merge_attributes "$session_dir"
+        ensure_cs_gitignore_entries "$session_dir"
+    fi
 
     # Phase 1: Structural migration (flat layout -> .cs/ directory)
     if needs_cs_migration "$session_dir"; then

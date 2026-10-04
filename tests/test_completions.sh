@@ -443,6 +443,30 @@ test_zsh_rm_completes_its_flags() {
     assert_candidate "$out" "--delete-files" "zsh cs -rm <name> --<TAB> must offer --delete-files" || return 1
 }
 
+test_bash_adopt_completes_its_flags() {
+    put_built_cs_on_path
+    local out; out=$(bash_candidates_words "$BASH_COMP" cs -adopt --)
+    assert_candidate "$out" "--worktrees" "cs -adopt --<TAB> must offer --worktrees" || return 1
+    # --dry-run alone is a refused session name, so it is not offered there.
+    if grep -qxF -- "--dry-run" <<< "$out"; then
+        echo "  FAIL: cs -adopt --<TAB> must not offer --dry-run before --worktrees"; return 1
+    fi
+    out=$(bash_candidates_words "$BASH_COMP" cs -adopt --worktrees --)
+    assert_candidate "$out" "--dry-run" "cs -adopt --worktrees --<TAB> must offer --dry-run" || return 1
+}
+
+test_zsh_adopt_completes_its_flags() {
+    command -v zsh >/dev/null 2>&1 || { echo "    (zsh not installed, skipping)"; return 0; }
+    put_built_cs_on_path
+    local out; out=$(zsh_candidates_words cs -adopt --)
+    assert_candidate "$out" "--worktrees" "zsh cs -adopt --<TAB> must offer --worktrees" || return 1
+    if grep -qxF -- "--dry-run" <<< "$out"; then
+        echo "  FAIL: zsh cs -adopt --<TAB> must not offer --dry-run before --worktrees"; return 1
+    fi
+    out=$(zsh_candidates_words cs -adopt --worktrees --)
+    assert_candidate "$out" "--dry-run" "zsh cs -adopt --worktrees --<TAB> must offer --dry-run" || return 1
+}
+
 echo ""
 echo "cs completion drift tests"
 echo "========================="
@@ -508,6 +532,8 @@ run_test test_bash_archive_completes_beyond_first_name
 run_test test_zsh_msg_completes_target_session
 run_test test_zsh_rm_completes_beyond_first_name
 run_test test_zsh_rm_completes_its_flags
+run_test test_bash_adopt_completes_its_flags
+run_test test_zsh_adopt_completes_its_flags
 
 # Extract the SESSION subcommand arms — the second dispatch site, `cs <name>
 # -verb`, which is a different vocabulary from the top-level one above. The arms

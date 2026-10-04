@@ -237,6 +237,8 @@ This converts the current directory into a cs session in place:
 - Since the working directory doesn't change, the first `cs <name>` finds Claude Code's own transcripts for the folder and offers to resume the newest one; a project with none starts a new conversation without asking
 - Seeds the session Objective from the newest conversation's first prompt, with the rules the prompt hook applies to a live session (no slash commands, nothing under 8 characters, clipped at 100), so the picker shows what the project is about from the first open; a project with no conversation keeps the placeholder for the first prompt you type
 
+Working in worktrees Claude Code made with `claude --worktree`? Run `cs -adopt --worktrees` inside the repo and each `.claude/worktrees/<name>/` that holds a conversation becomes a session named `<repo>.<name>`, bound to that conversation and with its first prompt as the Objective. The checkout is a live branch, so cs hides its files through the repo's `.git/info/exclude` and commits nothing and leaves the tracked `CLAUDE.md` alone. cs skips a worktree with no conversation, a re-run adopts only what is new and prunes the links of worktrees Claude Code has since deleted, and `--dry-run` prints the plan and writes nothing.
+
 ## Session Structure
 
 ```
