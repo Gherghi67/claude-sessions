@@ -270,7 +270,54 @@ test_a_removed_session_is_not_adopted_again() {
     local output
     output=$(cd "$repo" && "$CS_BIN" -adopt --worktrees 2>&1) || true
     assert_not_exists "$CS_SESSIONS_ROOT/repo.retired" "a removed session stays removed" || return 1
-    assert_output_contains "$output" "skip retired: removed with cs -rm" "the skip says how to get it back" || return 1
+    assert_output_contains "$output" "skip retired: removed with cs -rm (delete its .cs/ to adopt it again)" "the skip says how to get it back" || return 1
+}
+
+test_plain_adopt_inside_a_linked_worktree_refuses_and_commits_nothing() {
+    local repo="$TEST_TMPDIR/repo"
+    _make_repo "$repo" linked
+    local wt="$repo/.claude/worktrees/linked"
+    printf 'scratch\n' > "$wt/unrelated.txt"
+    local before output rc=0
+    before=$(git -C "$wt" rev-parse HEAD)
+    output=$(cd "$wt" && "$CS_BIN" -adopt linked-by-hand 2>&1) || rc=$?
+    assert_eq "1" "$rc" "plain adopt inside a linked worktree exits 1" || return 1
+    assert_output_contains "$output" "cs -adopt --worktrees" "the refusal names the verb for worktrees" || return 1
+    assert_eq "$before" "$(git -C "$wt" rev-parse HEAD)" "no commit was made on the branch" || return 1
+    assert_eq "?? unrelated.txt" "$(git -C "$wt" status --porcelain)" "the unrelated file stays unstaged" || return 1
+    assert_not_exists "$wt/.cs" "nothing was written" || return 1
+}
+
+test_rerun_repairs_a_linked_adoption_that_lost_its_marker() {
+    local repo="$TEST_TMPDIR/repo"
+    _make_repo "$repo" marked
+    local wt="$repo/.claude/worktrees/marked"
+    _seed_conversation "$wt" "$UUID_A" "Mark me again please"
+    (cd "$repo" && "$CS_BIN" -adopt --worktrees >/dev/null 2>&1) || { echo "  FAIL: adopt should succeed"; return 1; }
+    # The state a run leaves when it dies between ln -s and the marker write.
+    sed -i.bak '/^adopted:/d' "$wt/.cs/local/state" && rm -f "$wt/.cs/local/state.bak"
+    (cd "$repo" && "$CS_BIN" -adopt --worktrees >/dev/null 2>&1) || { echo "  FAIL: the re-run should succeed"; return 1; }
+    grep -q '^adopted:' "$wt/.cs/local/state" || { echo "  FAIL: the re-run should write the missing marker"; return 1; }
+    rm "$CS_SESSIONS_ROOT/repo.marked"
+    (cd "$repo" && "$CS_BIN" -adopt --worktrees >/dev/null 2>&1) || true
+    assert_not_exists "$CS_SESSIONS_ROOT/repo.marked" "after that, a removed session stays removed" || return 1
+}
+
+test_open_leaves_a_tracked_gitattributes_alone_when_a_legacy_log_exists() {
+    local repo="$TEST_TMPDIR/repo"
+    _make_repo "$repo" legacy
+    local wt="$repo/.claude/worktrees/legacy"
+    printf '.cs/logs/session.log merge=union\n' > "$wt/.gitattributes"
+    git -C "$wt" add .gitattributes && git -C "$wt" commit -q -m "attrs"
+    _seed_conversation "$wt" "$UUID_A" "Legacy log in the tree"
+    (cd "$repo" && "$CS_BIN" -adopt --worktrees >/dev/null 2>&1) || { echo "  FAIL: adopt should succeed"; return 1; }
+    mkdir -p "$wt/.cs/logs" && printf 'old log\n' > "$wt/.cs/logs/session.log"
+    printf '#!/bin/bash\nexit 0\n' > "$TEST_TMPDIR/claude-stub"
+    chmod +x "$TEST_TMPDIR/claude-stub"
+    export CLAUDE_CODE_BIN="$TEST_TMPDIR/claude-stub"
+    "$CS_BIN" repo.legacy <<< "y" >/dev/null 2>&1 || true
+    assert_eq "" "$(git -C "$wt" status --porcelain)" "the open changes no tracked file" || return 1
+    assert_exists "$wt/.cs/local/session.log" "the legacy log still moves" || return 1
 }
 
 run_test test_refuses_outside_a_git_repo
@@ -287,5 +334,8 @@ run_test test_open_leaves_a_tracked_claude_md_with_cs_markers_alone
 run_test test_an_exclude_file_without_a_final_newline_keeps_its_last_rule
 run_test test_rerun_finishes_an_adoption_that_lost_its_link
 run_test test_a_removed_session_is_not_adopted_again
+run_test test_plain_adopt_inside_a_linked_worktree_refuses_and_commits_nothing
+run_test test_rerun_repairs_a_linked_adoption_that_lost_its_marker
+run_test test_open_leaves_a_tracked_gitattributes_alone_when_a_legacy_log_exists
 
 report_results

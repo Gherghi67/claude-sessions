@@ -562,7 +562,7 @@ migrate_session() {
         # that was the only line, so guard on presence and tolerate the exit code
         # rather than leaving the rule (and a stray .tmp) behind.
         local ga="$session_dir/.gitattributes"
-        if [ -f "$ga" ] && grep -q 'logs/session\.log merge=union' "$ga"; then
+        if [ "$tracked_tree_is_ours" = 1 ] && [ -f "$ga" ] && grep -q 'logs/session\.log merge=union' "$ga"; then
             { grep -v 'logs/session\.log merge=union' "$ga" > "$ga.tmp"; } 2>/dev/null || true
             mv "$ga.tmp" "$ga" 2>/dev/null || rm -f "$ga.tmp"
         fi

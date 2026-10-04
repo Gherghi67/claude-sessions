@@ -81,6 +81,13 @@ adopt_session() {
 
     validate_session_name "$session_name"
 
+    # A linked git worktree keeps a `.git` FILE, so the init path below would
+    # read it as "not a repo", `git init` over it and `git add -A` the user's
+    # PR branch. Claude Code's worktrees have their own verb.
+    if [ -f "$target_dir/.git" ]; then
+        error "$target_dir is a linked git worktree. For Claude Code's worktrees run cs -adopt --worktrees from the repo; plain cs -adopt would commit into this branch."
+    fi
+
     # A .cs/ directory with no session link is orphaned: `cs -rm`/the TUI's `d`
     # only ever remove the symlink, by design, so records survive a removal —
     # but re-adopting under the right name used to hit a flat "already a cs
@@ -330,11 +337,17 @@ adopt_worktrees() {  # [--dry-run]
             # marked and never linked died part-way and is finished below.
             # Anything else is someone's session.
             if [ "$(_read_local_state "$state" git_bookkeeping)" != "exclude" ] || [ -e "$link" ] || [ -L "$link" ]; then
+                # A run that died between ln -s and the marker left a linked
+                # session without one; without it a later cs -rm would be undone.
+                if [ "$(_read_local_state "$state" git_bookkeeping)" = "exclude" ] && [ -z "$(_read_local_state "$state" adopted)" ] \
+                    && [ -L "$link" ] && [ "$(readlink "$link")" = "$wt_dir" ] && [ "$dry_run" != 1 ]; then
+                    _set_local_state "$state" adopted "$(date '+%Y-%m-%d')"
+                fi
                 echo -e "${DIM}skip $wt_name: already carries .cs/${NC}"
                 continue
             fi
             if [ -n "$(_read_local_state "$state" adopted)" ]; then
-                echo -e "${DIM}skip $wt_name: removed with cs -rm (cs -adopt $session_name inside it re-adopts)${NC}"
+                echo -e "${DIM}skip $wt_name: removed with cs -rm (delete its .cs/ to adopt it again)${NC}"
                 continue
             fi
         fi
