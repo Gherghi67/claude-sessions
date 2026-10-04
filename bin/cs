@@ -3727,7 +3727,13 @@ migrate_session() {
     # exclude instead (git_bookkeeping: exclude): nothing of cs's is committed
     # there for attributes to govern, and an in-tree .gitignore or
     # .gitattributes would be the one thing dirtying its PR branch.
-    if [ "$(_read_local_state "$session_dir/.cs/local/state" git_bookkeeping)" != "exclude" ]; then
+    # The same sessions keep their tracked CLAUDE.md as the branch has it: the
+    # two CLAUDE.md migrations further down are skipped for them too.
+    local tracked_tree_is_ours=1
+    if [ "$(_read_local_state "$session_dir/.cs/local/state" git_bookkeeping)" = "exclude" ]; then
+        tracked_tree_is_ours=0
+    fi
+    if [ "$tracked_tree_is_ours" = 1 ]; then
         setup_merge_attributes "$session_dir"
         ensure_cs_gitignore_entries "$session_dir"
     fi
@@ -3836,7 +3842,9 @@ migrate_session() {
     # present" in CLAUDE.local.md is any cs sentinel at all, not just the
     # leading one — otherwise this fallback would re-append a duplicate
     # fresh template on top of it.
-    migrate_claude_md_to_local "$session_dir"
+    if [ "$tracked_tree_is_ours" = 1 ]; then
+        migrate_claude_md_to_local "$session_dir"
+    fi
     local claude_md="$session_dir/CLAUDE.md"
     local claude_local="$session_dir/CLAUDE.local.md"
     if ! { [ -f "$claude_local" ] && grep -q '<!-- cs:' "$claude_local"; } \
@@ -3851,7 +3859,9 @@ migrate_session() {
     fi
 
     # Phase 7: prune retired command-tracker artifacts.
-    prune_commands_artifacts "$session_dir"
+    if [ "$tracked_tree_is_ours" = 1 ]; then
+        prune_commands_artifacts "$session_dir"
+    fi
 
     # Phase 6: Add YAML frontmatter to README.md if missing
     local readme="$session_dir/.cs/README.md"
@@ -9321,6 +9331,10 @@ _append_exclude_once() {  # exclude_file, entry...
     local file="$1"; shift
     mkdir -p "$(dirname "$file")"
     [ -f "$file" ] || : > "$file"
+    # A last line with no newline would swallow the first entry appended to it.
+    if [ -s "$file" ] && [ -n "$(tail -c 1 "$file")" ]; then
+        printf '\n' >> "$file"
+    fi
     local entry
     for entry in "$@"; do
         grep -qxF -- "$entry" "$file" || printf '%s\n' "$entry" >> "$file"
@@ -9333,7 +9347,7 @@ _append_exclude_once() {  # exclude_file, entry...
 # session and a cs/<task> branch, which an adopted worktree has neither of.
 _bootstrap_adopted_worktree_meta() {  # wt_dir, session_name
     local wt_dir="$1" session_name="$2"
-    mkdir -p "$wt_dir/.cs"/{local,memory}
+    mkdir -p "$wt_dir/.cs/memory"
     _write_session_readme_head "$wt_dir/.cs/README.md" "$session_name" "[]" "[\"$session_name\"]"
     cat >> "$wt_dir/.cs/README.md" << EOF
 Claude Code worktree \`$(basename "$wt_dir")\`, adopted from $wt_dir.
@@ -9369,8 +9383,9 @@ EOF
 # would make cs look for a base session. No cs_base is recorded: these are
 # peers, and a base would fuse their task lists and keychain namespaces.
 #
-# A re-run adopts what is new, skips what carries .cs/ already, and prunes the
-# links it made for worktrees Claude Code has since deleted.
+# A re-run adopts what is new, skips what is already a session, finishes an
+# adoption that stopped before its link was made, and prunes the links it made
+# for worktrees Claude Code has since deleted.
 adopt_worktrees() {  # [--dry-run]
     local dry_run=0 arg
     for arg in "$@"; do
@@ -9406,15 +9421,30 @@ adopt_worktrees() {  # [--dry-run]
         fi
     done
 
-    local wt_dir wt_name session_name proj uuid adopted=0
+    local wt_dir wt_name session_name proj uuid adopted=0 wt_top wt_common state
     for wt_dir in "$wt_root"/*/; do
         wt_dir="${wt_dir%/}"
         [ -d "$wt_dir" ] || continue
         wt_name=$(basename "$wt_dir")
         session_name="$repo_name.$wt_name"
-        if [ -d "$wt_dir/.cs" ]; then
-            echo -e "${DIM}skip $wt_name: already carries .cs/${NC}"
+        link="$SESSIONS_ROOT/$session_name"
+        # Everything below writes into this directory, so it has to be a
+        # checkout of this repo: its own worktree root, on this repo's common
+        # git dir. A symlink to another project, or a plain folder, is neither.
+        wt_top=$(git -C "$wt_dir" rev-parse --show-toplevel 2>/dev/null) || wt_top=""
+        wt_common=$(cd "$wt_dir" && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P) || wt_common=""
+        if [ -L "$wt_dir" ] || [ -z "$wt_top" ] || ! [ "$wt_top" -ef "$wt_dir" ] || ! [ "$wt_common" -ef "$common" ]; then
+            echo -e "${DIM}skip $wt_name: not a worktree of $repo${NC}"
             continue
+        fi
+        state="$wt_dir/.cs/local/state"
+        if [ -d "$wt_dir/.cs" ]; then
+            # Its own unfinished work is a .cs/ it marked and never linked
+            # (the link is the last step). Anything else is someone's session.
+            if [ "$(_read_local_state "$state" git_bookkeeping)" != "exclude" ] || [ -e "$link" ] || [ -L "$link" ]; then
+                echo -e "${DIM}skip $wt_name: already carries .cs/${NC}"
+                continue
+            fi
         fi
         proj=$(_claude_project_dir "$wt_dir")
         uuid=$(_discover_session_uuid_in "$proj")
@@ -9423,7 +9453,6 @@ adopt_worktrees() {  # [--dry-run]
             continue
         fi
         validate_session_name "$session_name"
-        link="$SESSIONS_ROOT/$session_name"
         if [ -e "$link" ] || [ -L "$link" ]; then
             error "Session '$session_name' already exists: the same repo name in two places? ($(readlink "$link" 2>/dev/null || echo "$link"))"
         fi
@@ -9431,14 +9460,19 @@ adopt_worktrees() {  # [--dry-run]
             echo "would adopt $wt_name as '$session_name' (conversation $uuid)"
             continue
         fi
-        _bootstrap_adopted_worktree_meta "$wt_dir" "$session_name"
-        _set_local_state "$wt_dir/.cs/local/state" claude_session_id "$uuid"
-        _set_local_state "$wt_dir/.cs/local/state" session_name "$session_name"
-        # The repo's common exclude hides cs's files here; the open must not
-        # backfill an in-tree .gitignore or .gitattributes (see migrate_session).
-        _set_local_state "$wt_dir/.cs/local/state" git_bookkeeping exclude
-        _seed_readme_objective "$wt_dir/.cs/README.md" "$(_transcript_first_prompt "$proj/$uuid.jsonl")"
+        # Hidden before anything exists to hide, marked before anything else
+        # is written: a run that dies part-way leaves nothing git can see and
+        # a .cs/ the next run knows to finish.
         _append_exclude_once "$common/info/exclude" ".cs/" ".claude/settings.local.json" "CLAUDE.local.md"
+        mkdir -p "$wt_dir/.cs/local"
+        # The open reads this and keeps its hands off the tracked tree: no
+        # .gitignore or .gitattributes backfill, no CLAUDE.md migration (see
+        # migrate_session).
+        _set_local_state "$state" git_bookkeeping exclude
+        [ -f "$wt_dir/.cs/README.md" ] || _bootstrap_adopted_worktree_meta "$wt_dir" "$session_name"
+        _set_local_state "$state" claude_session_id "$uuid"
+        _set_local_state "$state" session_name "$session_name"
+        _seed_readme_objective "$wt_dir/.cs/README.md" "$(_transcript_first_prompt "$proj/$uuid.jsonl")"
         mkdir -p "$SESSIONS_ROOT"
         ln -s "$wt_dir" "$link"
         adopted=$((adopted + 1))

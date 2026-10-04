@@ -206,6 +206,59 @@ SCRIPT
         "the open's own files (settings.local.json, CLAUDE.local.md) stay out of git status" || return 1
 }
 
+test_a_symlink_to_another_project_is_not_adopted() {
+    local repo="$TEST_TMPDIR/repo" other="$TEST_TMPDIR/other-project"
+    _make_repo "$repo"
+    mkdir -p "$other"
+    ln -s "$other" "$repo/.claude/worktrees/sneaky"
+    _seed_conversation "$other" "$UUID_A" "Work that belongs to another project"
+    local output
+    output=$(cd "$repo" && "$CS_BIN" -adopt --worktrees 2>&1) || true
+    assert_not_exists "$other/.cs" "a directory outside the repo gets no .cs/" || return 1
+    assert_not_exists "$CS_SESSIONS_ROOT/repo.sneaky" "no session is registered for it" || return 1
+    assert_output_contains "$output" "skip sneaky: not a worktree of" "the skip says why" || return 1
+}
+
+test_open_leaves_a_tracked_claude_md_with_cs_markers_alone() {
+    local repo="$TEST_TMPDIR/repo"
+    _make_repo "$repo" marked
+    local wt="$repo/.claude/worktrees/marked"
+    printf '# Project rules\n\n## Discovered Commands\n\n- make test\n\n<!-- cs:session-protocol -->\nold protocol text\n' > "$wt/CLAUDE.md"
+    git -C "$wt" commit -q -am "rules with old cs markers"
+    _seed_conversation "$wt" "$UUID_A" "Tidy the release notes"
+    (cd "$repo" && "$CS_BIN" -adopt --worktrees >/dev/null 2>&1) || { echo "  FAIL: adopt should succeed"; return 1; }
+    printf '#!/bin/bash\nexit 0\n' > "$TEST_TMPDIR/claude-stub"
+    chmod +x "$TEST_TMPDIR/claude-stub"
+    export CLAUDE_CODE_BIN="$TEST_TMPDIR/claude-stub"
+    "$CS_BIN" repo.marked <<< "y" >/dev/null 2>&1 || true
+    assert_eq "" "$(git -C "$wt" status --porcelain)" "the open changes no tracked file" || return 1
+    assert_eq "- make test" "$(sed -n 5p "$wt/CLAUDE.md")" "the Discovered Commands section survives" || return 1
+}
+
+test_an_exclude_file_without_a_final_newline_keeps_its_last_rule() {
+    local repo="$TEST_TMPDIR/repo"
+    _make_repo "$repo" tidy
+    _seed_conversation "$repo/.claude/worktrees/tidy" "$UUID_A" "Tidy the release notes"
+    printf 'my-own-rule.tmp' > "$repo/.git/info/exclude"
+    (cd "$repo" && "$CS_BIN" -adopt --worktrees >/dev/null 2>&1) || { echo "  FAIL: adopt should succeed"; return 1; }
+    assert_eq "my-own-rule.tmp" "$(sed -n 1p "$repo/.git/info/exclude")" "the existing rule is unchanged" || return 1
+    assert_eq ".cs/" "$(sed -n 2p "$repo/.git/info/exclude")" "the .cs/ rule sits on its own line" || return 1
+}
+
+test_rerun_finishes_an_adoption_that_lost_its_link() {
+    local repo="$TEST_TMPDIR/repo"
+    _make_repo "$repo" halfway
+    local wt="$repo/.claude/worktrees/halfway"
+    _seed_conversation "$wt" "$UUID_A" "Finish the half done adoption"
+    (cd "$repo" && "$CS_BIN" -adopt --worktrees >/dev/null 2>&1) || { echo "  FAIL: adopt should succeed"; return 1; }
+    # The state a run leaves when it dies after writing .cs/ and before linking.
+    rm "$CS_SESSIONS_ROOT/repo.halfway"
+    printf 'my note\n' >> "$wt/.cs/README.md"
+    (cd "$repo" && "$CS_BIN" -adopt --worktrees >/dev/null 2>&1) || { echo "  FAIL: the re-run should succeed"; return 1; }
+    [ -L "$CS_SESSIONS_ROOT/repo.halfway" ] || { echo "  FAIL: the re-run should register the session"; return 1; }
+    assert_eq "my note" "$(tail -1 "$wt/.cs/README.md")" "the re-run keeps the README it found" || return 1
+}
+
 run_test test_refuses_outside_a_git_repo
 run_test test_refuses_a_repo_without_claude_worktrees
 run_test test_adopts_a_worktree_with_a_conversation
@@ -215,5 +268,9 @@ run_test test_rerun_adopts_nothing_twice_and_keeps_the_exclude_file
 run_test test_dry_run_writes_nothing
 run_test test_rerun_prunes_a_link_whose_worktree_is_gone
 run_test test_same_worktree_name_under_two_repos_opens_the_right_one
+run_test test_a_symlink_to_another_project_is_not_adopted
+run_test test_open_leaves_a_tracked_claude_md_with_cs_markers_alone
+run_test test_an_exclude_file_without_a_final_newline_keeps_its_last_rule
+run_test test_rerun_finishes_an_adoption_that_lost_its_link
 
 report_results

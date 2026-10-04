@@ -483,7 +483,13 @@ migrate_session() {
     # exclude instead (git_bookkeeping: exclude): nothing of cs's is committed
     # there for attributes to govern, and an in-tree .gitignore or
     # .gitattributes would be the one thing dirtying its PR branch.
-    if [ "$(_read_local_state "$session_dir/.cs/local/state" git_bookkeeping)" != "exclude" ]; then
+    # The same sessions keep their tracked CLAUDE.md as the branch has it: the
+    # two CLAUDE.md migrations further down are skipped for them too.
+    local tracked_tree_is_ours=1
+    if [ "$(_read_local_state "$session_dir/.cs/local/state" git_bookkeeping)" = "exclude" ]; then
+        tracked_tree_is_ours=0
+    fi
+    if [ "$tracked_tree_is_ours" = 1 ]; then
         setup_merge_attributes "$session_dir"
         ensure_cs_gitignore_entries "$session_dir"
     fi
@@ -592,7 +598,9 @@ migrate_session() {
     # present" in CLAUDE.local.md is any cs sentinel at all, not just the
     # leading one — otherwise this fallback would re-append a duplicate
     # fresh template on top of it.
-    migrate_claude_md_to_local "$session_dir"
+    if [ "$tracked_tree_is_ours" = 1 ]; then
+        migrate_claude_md_to_local "$session_dir"
+    fi
     local claude_md="$session_dir/CLAUDE.md"
     local claude_local="$session_dir/CLAUDE.local.md"
     if ! { [ -f "$claude_local" ] && grep -q '<!-- cs:' "$claude_local"; } \
@@ -607,7 +615,9 @@ migrate_session() {
     fi
 
     # Phase 7: prune retired command-tracker artifacts.
-    prune_commands_artifacts "$session_dir"
+    if [ "$tracked_tree_is_ours" = 1 ]; then
+        prune_commands_artifacts "$session_dir"
+    fi
 
     # Phase 6: Add YAML frontmatter to README.md if missing
     local readme="$session_dir/.cs/README.md"
