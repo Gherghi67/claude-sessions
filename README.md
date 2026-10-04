@@ -235,6 +235,7 @@ This converts the current directory into a cs session in place:
 - Writes the session protocol to `CLAUDE.local.md` (machine-local, gitignored, regenerated per machine); a project's existing `CLAUDE.md` is never touched
 - Initializes a git repo if one doesn't exist (preserves existing repos)
 - Since the working directory doesn't change, the first `cs <name>` finds Claude Code's own transcripts for the folder and offers to resume the newest one; a project with none starts a new conversation without asking
+- Seeds the session Objective from the newest conversation's first prompt, with the rules the prompt hook applies to a live session (no slash commands, nothing under 8 characters, clipped at 100), so the picker shows what the project is about from the first open; a project with no conversation keeps the placeholder for the first prompt you type
 
 ## Session Structure
 

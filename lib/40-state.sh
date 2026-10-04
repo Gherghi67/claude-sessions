@@ -199,6 +199,59 @@ _discover_session_uuid_in() {
     return 0
 }
 
+# The first prompt somebody typed into a conversation, as an Objective line:
+# whitespace collapsed, clipped to 100 characters with an ellipsis. Prints
+# nothing when the transcript holds no such prompt, or without jq. User records
+# also carry tool results, injected meta text and slash commands, which Claude
+# Code records as a <command-name> block indented across lines, so a record
+# counts only when its text, once collapsed, starts with none of `/`, `!` or
+# `<` and runs to 8 characters or more.
+# KEEP IN SYNC with the objective capture in hooks/scope-prompt.sh: the hook
+# applies the same rules to the prompt it is handed live.
+_transcript_first_prompt() {  # transcript_file
+    local file="$1"
+    [ -f "$file" ] || return 0
+    command -v jq >/dev/null 2>&1 || return 0
+    local candidates
+    candidates=$(jq -r -R '
+        fromjson? | select(.type == "user" and ((.isMeta // false) | not))
+        | .message.content
+        | if type == "string" then .
+          elif type == "array" then ([.[] | select(.type == "text") | .text] | join(" "))
+          else empty end
+        | gsub("[\\n\\r\\t]+"; " ") | gsub(" +"; " ")
+        | select(length > 0)' "$file" 2>/dev/null) || return 0
+    local line
+    while IFS= read -r line; do
+        line="${line# }"; line="${line% }"
+        case "$line" in /*|!*|'<'*) continue ;; esac
+        [ "${#line}" -ge 8 ] || continue
+        [ "${#line}" -gt 100 ] && line="${line:0:100}…"
+        printf '%s\n' "$line"
+        return 0
+    done <<< "$candidates"
+    return 0
+}
+
+# Replace the Objective placeholder (a whole line wrapped in [...] under
+# `## Objective`) with text, leaving every other line alone. A hand-written
+# objective has no placeholder and is never touched. tmp+mv keeps the write
+# atomic; ENVIRON sidesteps awk -v escape processing of arbitrary prompt text.
+_seed_readme_objective() {  # readme, text
+    local readme="$1" text="$2" tmp
+    [ -f "$readme" ] && [ -n "$text" ] || return 0
+    tmp=$(mktemp "${TMPDIR:-/tmp}/cs-objective.XXXXXX") || return 0
+    if OBJ="$text" awk '
+            /^## / { in_obj = ($0 ~ /^## Objective/) }
+            in_obj && /^\[.*\]$/ { print ENVIRON["OBJ"]; next }
+            { print }
+        ' "$readme" > "$tmp"; then
+        mv "$tmp" "$readme" || rm -f "$tmp"
+    else
+        rm -f "$tmp"
+    fi
+}
+
 # Terminate a JSONL file whose last line lost its newline to an interrupted
 # write, so the next `>>` starts a fresh line instead of splicing two records
 # onto one. The tolerant per-line reader (`fromjson? // empty` in

@@ -4,6 +4,11 @@ All notable changes to cs are documented here. Release notes are also available 
 
 <!-- New entries group changes under Keep-a-Changelog headings (Added / Changed / Removed / Fixes / Docs), or Features / Performance where those fit the release. -->
 
+## Unreleased
+
+### Added
+- `cs -adopt` seeds the session Objective from the project's newest conversation. It reads the first prompt somebody typed into the transcript Claude Code already keeps for the folder, with the rules the prompt hook applies to a live session: a slash command, a tool result, injected text and anything under 8 characters do not count, and the line clips at 100 characters. The picker and the status fallbacks read the Objective, so an adopted project shows its subject from the first open. A project with no conversation keeps the placeholder, and the first prompt typed after the open fills it as before.
+
 ## 2026.10.2
 
 ### Fixes

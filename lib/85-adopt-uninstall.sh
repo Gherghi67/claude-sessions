@@ -151,6 +151,19 @@ adopt_session() {
     # (hooks/cs-resolve.sh's _cs_session_name).
     _set_local_state "$target_dir/.cs/local/state" session_name "$session_name"
 
+    # A project Claude Code already ran in has said what it is about: its
+    # newest conversation's first prompt becomes the Objective, the line the
+    # picker previews and searches. The prompt hook does the same for a live
+    # session, so a project with no conversation keeps the placeholder for
+    # the first prompt typed after the open.
+    local adopt_proj adopt_uuid adopt_objective
+    adopt_proj=$(_claude_project_dir "$target_dir")
+    adopt_uuid=$(_discover_session_uuid_in "$adopt_proj")
+    if [ -n "$adopt_uuid" ]; then
+        adopt_objective=$(_transcript_first_prompt "$adopt_proj/$adopt_uuid.jsonl")
+        _seed_readme_objective "$target_dir/.cs/README.md" "$adopt_objective"
+    fi
+
     # Create symlink from sessions root
     mkdir -p "$SESSIONS_ROOT"
     ln -s "$target_dir" "$session_link"
