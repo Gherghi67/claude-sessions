@@ -71,26 +71,32 @@ _read_local_state() {
 
 # Write 'key: value' into a machine-local state file, replacing any existing
 # line for that key. Creates .cs/local/ and the file on first write. Atomic
-# (tmp+mv), idempotent.
+# (tmp+mv), idempotent. A write that fails (permissions, a full disk) ends cs
+# with the file named: the launch has already told the user what it was about
+# to start, and a silent miss leaves the next open resuming nothing.
 _set_local_state() {
     local state="$1" key="$2" value="$3"
-    mkdir -p "$(dirname "$state")"
+    mkdir -p "$(dirname "$state")" 2>/dev/null || error "could not create $(dirname "$state")"
     local tmp="$state.tmp"
     {
-        if [ -f "$state" ]; then
-            awk -v key="$key" 'index($0, key ":") != 1' "$state"
-        fi
-        printf '%s: %s\n' "$key" "$value"
-    } > "$tmp" && mv "$tmp" "$state"
+        {
+            if [ -f "$state" ]; then
+                awk -v key="$key" 'index($0, key ":") != 1' "$state"
+            fi
+            printf '%s: %s\n' "$key" "$value"
+        } > "$tmp" && mv "$tmp" "$state"
+    } 2>/dev/null || { rm -f "$tmp" 2>/dev/null; error "could not write $state"; }
 }
 
 # Remove a key's line from a machine-local state file. A missing file or key is
-# a no-op. Atomic (tmp+mv), like _set_local_state.
+# a no-op. Atomic (tmp+mv), like _set_local_state, and loud on the same
+# failures.
 _unset_local_state() {
     local state="$1" key="$2"
     [ -f "$state" ] || return 0
     local tmp="$state.tmp"
-    awk -v key="$key" 'index($0, key ":") != 1' "$state" > "$tmp" && mv "$tmp" "$state"
+    { awk -v key="$key" 'index($0, key ":") != 1' "$state" > "$tmp" && mv "$tmp" "$state"; } 2>/dev/null \
+        || { rm -f "$tmp" 2>/dev/null; error "could not write $state"; }
 }
 
 # Return the path to claude's per-cwd transcript directory. Symlinks in the
@@ -231,14 +237,21 @@ _timeline_rotated() {  # session_dir, from, to, reason, [handoff]
 # so cs's recorded UUID always tracks the conversation claude is about to
 # create — never orphaned. The CS_FRESH_REBIND signal lets session-start.sh
 # tailor its additionalContext (the user is starting fresh, not cold-booting).
+# With no recorded conversation to leave (the first open after cs -adopt, a
+# clone without its machine-local state) this is the session's first
+# conversation, not a rotation: no timeline event, no CS_FRESH_REBIND.
 _exec_fresh_rebind() {
     local session_dir="$1"
     local reason="${2:-declined-resume}"
     local handoff="${3:-}"
     local spawn_kick="${4:-}"
     local merge_kick="${5:-}"
+    # An adopted session's name is the link's, recorded in local state at the
+    # open; its directory is the project's. Every other session is its
+    # directory.
     local session_name
-    session_name=$(basename "$session_dir")
+    session_name=$(_read_local_state "$session_dir/.cs/local/state" session_name)
+    [ -n "$session_name" ] || session_name=$(basename "$session_dir")
     local old_uuid
     old_uuid=$(_read_local_state "$session_dir/.cs/local/state" claude_session_id)
     local new_uuid
@@ -251,7 +264,7 @@ _exec_fresh_rebind() {
     if [ -L "$session_dir/.cs/private" ] || [ -e "$session_dir/.cs/private" ]; then
         public_handoff=""
     fi
-    _timeline_rotated "$session_dir" "$old_uuid" "$new_uuid" "$reason" "$public_handoff"
+    [ -z "$old_uuid" ] || _timeline_rotated "$session_dir" "$old_uuid" "$new_uuid" "$reason" "$public_handoff"
     local session_color
     session_color=$(_read_local_state "$session_dir/.cs/local/state" claude_session_color)
     local color_arg=""
@@ -272,7 +285,7 @@ _exec_fresh_rebind() {
     fi
     local launch_prompt="${merge_kick:-${spawn_kick:-${handoff_arg:-$color_arg}}}"
     export CS_CLAUDE_SESSION_ID="$new_uuid"
-    export CS_FRESH_REBIND=1
+    [ -z "$old_uuid" ] || export CS_FRESH_REBIND=1
     # shellcheck disable=SC2086
     exec $CLAUDE_CODE_BIN --name "$session_name" --session-id "$new_uuid" ${launch_prompt:+"$launch_prompt"}
 }

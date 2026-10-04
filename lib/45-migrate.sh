@@ -721,9 +721,8 @@ migrate_session() {
             # No transcripts: a recorded UUID is left alone (claude hasn't
             # written the jsonl yet, eg. the session was just created with
             # --session-id but hasn't talked to the user), and so is an empty
-            # slot. An id allocated here would name no conversation, and the
-            # launch would offer to resume it; with none, the launch starts
-            # the first conversation and records its id.
+            # slot. Only a transcript on disk names a conversation; an empty
+            # slot is the launch's to fill when it starts the first one.
             if [ -n "$_discovered" ]; then
                 _bind_uuid="$_discovered"
             fi

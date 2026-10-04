@@ -910,6 +910,84 @@ test_offer_reads_provenance_from_the_private_log() {
         "a handoff this checkout wrote carries no foreign label" || return 1
 }
 
+# A session with no recorded conversation (the first open after cs -adopt, a
+# clone whose .cs/local did not travel) has nothing to resume, so it starts a
+# new conversation without asking. A pending handoff is still a choice the user
+# makes: the offer is made with the rows that apply, and resume is not one.
+_rot_unbound_session() {  # name
+    _rot_session "$1"
+    local state="$CS_SESSIONS_ROOT/$1/.cs/local/state"
+    awk 'index($0, "claude_session_id:") != 1' "$state" > "$state.tmp" && mv "$state.tmp" "$state"
+}
+
+test_unbound_session_with_a_pending_handoff_still_offers_it() {
+    _rot_unbound_session "rot-unbound-offer"
+    local dir="$CS_SESSIONS_ROOT/rot-unbound-offer"
+    _seed_handoff "$dir" "2026-07-16-test.md" "unconsumed"
+    local output
+    output=$("$CS_BIN" rot-unbound-offer <<< "n" 2>&1) || true
+    assert_output_contains "$output" "Rotation handoff pending: 2026-07-16-test.md" "the handoff is offered" || return 1
+    assert_output_not_contains "$output" "Continue previous conversation?" "nothing to resume, so no resume question" || return 1
+    local rows
+    rows=$(printf '%s\n' "$output" | grep -E '^    [yrnd]  ')
+    assert_eq "    r  from handoff    fresh conversation that picks up the handoff
+    n  fresh           fresh conversation; the handoff waits for later · default
+    d  discard         retire the handoff, then start fresh" "$rows" "the rows that apply, fresh as the default" || return 1
+    assert_file_contains "$dir/.cs/handoffs/2026-07-16-test.md" "status: unconsumed" "n leaves the handoff for later" || return 1
+    [ ! -f "$dir/.cs/local/pending-handoff" ] || { echo "  FAIL: n must not arm the marker"; return 1; }
+    assert_output_contains "$output" "STUB_ARGS: " "launch continues" || return 1
+    assert_output_contains "$output" "\-\-session-id " "a new conversation starts" || return 1
+    assert_output_not_contains "$output" "\-\-resume" "nothing to resume" || return 1
+}
+
+test_unbound_session_r_answer_arms_the_handoff() {
+    _rot_unbound_session "rot-unbound-r"
+    local dir="$CS_SESSIONS_ROOT/rot-unbound-r"
+    _seed_handoff "$dir" "2026-07-16-test.md" "unconsumed"
+    local output
+    output=$("$CS_BIN" rot-unbound-r <<< "r" 2>&1) || true
+    assert_eq "2026-07-16-test.md" "$(cat "$dir/.cs/local/pending-handoff" 2>/dev/null | tr -d '[:space:]')" \
+        "r arms the marker for the SessionStart hook" || return 1
+    local new
+    new=$(awk '/^claude_session_id:/ { print $2; exit }' "$dir/.cs/local/state")
+    [ -n "$new" ] || { echo "  FAIL: r must record the conversation it starts"; return 1; }
+    assert_output_contains "$output" "--session-id $new" "the new conversation is the recorded one" || return 1
+    assert_output_contains "$output" "Continue from the pending rotation handoff" "the handoff kick rides the launch" || return 1
+    if grep -q '"event":"rotated"' "$dir/.cs/timeline.jsonl" 2>/dev/null; then
+        echo "  FAIL: a first conversation rotates from nothing"; return 1
+    fi
+}
+
+# An armed marker on an unbound session: the default answer starts fresh and
+# disarms it, so the SessionStart hook never marks the handoff consumed under
+# a conversation nobody chose for it.
+test_unbound_session_default_answer_disarms_an_armed_marker() {
+    _rot_unbound_session "rot-unbound-armed"
+    local dir="$CS_SESSIONS_ROOT/rot-unbound-armed"
+    _seed_handoff "$dir" "2026-07-16-test.md" "unconsumed"
+    printf '2026-07-16-test.md\n' > "$dir/.cs/local/pending-handoff"
+    local output
+    output=$("$CS_BIN" rot-unbound-armed <<< "" 2>&1) || true
+    [ ! -f "$dir/.cs/local/pending-handoff" ] || { echo "  FAIL: the default answer must disarm the marker"; return 1; }
+    assert_file_contains "$dir/.cs/handoffs/2026-07-16-test.md" "status: unconsumed" "the handoff waits for later" || return 1
+    assert_output_contains "$output" "\-\-session-id " "a new conversation starts" || return 1
+}
+
+# A spawned launch is unattended: an unbound session starts fresh and leaves
+# the handoff pending rather than parking the window on the offer.
+test_unbound_spawned_launch_starts_fresh_and_keeps_the_handoff() {
+    _rot_unbound_session "rot-unbound-spawn"
+    local dir="$CS_SESSIONS_ROOT/rot-unbound-spawn"
+    _seed_handoff "$dir" "2026-07-16-test.md" "unconsumed"
+    mkdir -p "$CS_SESSIONS_ROOT/.spawn"
+    printf 'spawner\ndo the thing\n' > "$CS_SESSIONS_ROOT/.spawn/rot-unbound-spawn.seed"
+    local output
+    output=$("$CS_BIN" rot-unbound-spawn </dev/null 2>&1) || true
+    assert_output_not_contains "$output" "Rotation handoff pending" "an unattended launch asks nothing" || return 1
+    assert_output_contains "$output" "\-\-session-id " "a new conversation starts" || return 1
+    assert_file_contains "$dir/.cs/handoffs/2026-07-16-test.md" "status: unconsumed" "the handoff waits for an attended open" || return 1
+}
+
 test_discard_answer_dismisses_pending_handoff() {
     _rot_session "rot-d"
     local dir="$CS_SESSIONS_ROOT/rot-d"
@@ -1056,6 +1134,10 @@ run_test test_a_trailing_carriage_return_still_reads_as_local
 run_test test_armed_marker_outranks_a_later_sorting_orphan
 run_test test_stale_marker_falls_back_to_the_scan
 run_test test_launcher_marker_with_a_path_falls_back_to_the_scan
+run_test test_unbound_session_with_a_pending_handoff_still_offers_it
+run_test test_unbound_session_r_answer_arms_the_handoff
+run_test test_unbound_session_default_answer_disarms_an_armed_marker
+run_test test_unbound_spawned_launch_starts_fresh_and_keeps_the_handoff
 run_test test_discard_answer_dismisses_pending_handoff
 run_test test_discard_flip_spares_a_body_quote
 
