@@ -887,8 +887,11 @@ impl App {
                 .filter(|&i| tag_ok(&self.sessions[i]) && visible(&self.sessions[i]))
                 .collect();
         } else {
-            // Fuzzy match and collect (index, score, matched_indices)
-            let mut matches: Vec<(usize, i32, Vec<usize>)> = self
+            // Fuzzy match the name, else the objective, and collect
+            // (index, name_hit, score, matched_indices). An objective hit
+            // carries no indices: fuzzy_match's indices address the string it
+            // matched, and the row draws the name.
+            let mut matches: Vec<(usize, bool, i32, Vec<usize>)> = self
                 .sessions
                 .iter()
                 .enumerate()
@@ -896,15 +899,19 @@ impl App {
                     if !tag_ok(s) || !visible(s) {
                         return None;
                     }
-                    fuzzy_match(query, &s.name).map(|(score, indices)| (i, score, indices))
+                    if let Some((score, indices)) = fuzzy_match(query, &s.name) {
+                        return Some((i, true, score, indices));
+                    }
+                    let objective = s.objective.as_deref()?;
+                    fuzzy_match(query, objective).map(|(score, _)| (i, false, score, Vec::new()))
                 })
                 .collect();
 
-            // Sort by score descending (best matches first)
-            matches.sort_by(|a, b| b.1.cmp(&a.1));
+            // Name hits first, then by score descending (best matches first)
+            matches.sort_by(|a, b| b.1.cmp(&a.1).then(b.2.cmp(&a.2)));
 
-            self.filtered = matches.iter().map(|(i, _, _)| *i).collect();
-            for (i, _, indices) in matches {
+            self.filtered = matches.iter().map(|(i, _, _, _)| *i).collect();
+            for (i, _, _, indices) in matches {
                 if !indices.is_empty() {
                     self.fuzzy_indices.insert(i, indices);
                 }
@@ -2571,6 +2578,7 @@ mod tests {
                 tags: Vec::new(),
                 archived: false,
                 vault: None,
+                objective: None,
             },
             Session {
                 name: "beta".into(),
@@ -2587,6 +2595,7 @@ mod tests {
                 tags: Vec::new(),
                 archived: false,
                 vault: None,
+                objective: None,
             },
             Session {
                 name: "gamma".into(),
@@ -2603,6 +2612,7 @@ mod tests {
                 tags: Vec::new(),
                 archived: false,
                 vault: None,
+                objective: None,
             },
         ]
     }
@@ -2866,6 +2876,50 @@ mod tests {
         assert_eq!(app.filtered.len(), 3);
     }
 
+    fn session_about(name: &str, objective: &str) -> Session {
+        let mut s = session_with_tags(name, &[]);
+        s.objective = Some(objective.into());
+        s
+    }
+
+    // An adopted project or a harness-named worktree carries a name that says
+    // nothing about the work; the objective is the one field that does.
+    #[test]
+    fn filter_reaches_the_objective_when_the_name_misses() {
+        let mut app = App::new(vec![
+            session_about("brave-jang-0f6265", "Rewrite the electron UI shell"),
+            session_about("agent-a018e313", "Fix the login redirect"),
+        ]);
+        app.search_input.set("electron");
+        app.apply_filter_and_sort();
+        assert_eq!(app.filtered.len(), 1);
+        assert_eq!(app.sessions[app.filtered[0]].name, "brave-jang-0f6265");
+    }
+
+    // fuzzy_match's indices address the name string, so an objective hit must
+    // not highlight anything or the row would bold the wrong characters.
+    #[test]
+    fn objective_hit_highlights_nothing() {
+        let mut app = App::new(vec![session_about("brave-jang-0f6265", "Rewrite the electron UI shell")]);
+        app.search_input.set("electron");
+        app.apply_filter_and_sort();
+        assert_eq!(app.filtered, vec![0]);
+        assert!(!app.fuzzy_indices.contains_key(&0), "an objective match carries no highlight indices");
+    }
+
+    #[test]
+    fn name_hits_rank_before_objective_hits() {
+        let mut app = App::new(vec![
+            session_about("zzz-notes", "electron research"),
+            session_about("electron-app", "Ship v2"),
+        ]);
+        app.search_input.set("electron");
+        app.apply_filter_and_sort();
+        let names: Vec<&str> = app.filtered.iter().map(|&i| app.sessions[i].name.as_str()).collect();
+        assert_eq!(names, vec!["electron-app", "zzz-notes"]);
+        assert!(app.fuzzy_indices.contains_key(&1), "the name hit keeps its highlight");
+    }
+
     #[test]
     fn parse_tag_query_worked_examples() {
         assert_eq!(parse_tag_query("#api"), (vec!["api".into()], String::new()));
@@ -2896,6 +2950,7 @@ mod tests {
             tags: tags.iter().map(|t| t.to_string()).collect(),
             archived: false,
             vault: None,
+            objective: None,
         }
     }
 
@@ -2915,6 +2970,7 @@ mod tests {
             tags: Vec::new(),
             archived: true,
             vault: None,
+            objective: None,
         }
     }
 
@@ -3098,6 +3154,7 @@ mod tests {
             tags: Vec::new(),
             archived: false,
             vault: None,
+            objective: None,
         };
         // Insertion order deliberately differs from recency order.
         let app = App::new(vec![
@@ -4988,6 +5045,7 @@ mod tests {
             tags: Vec::new(),
             archived: false,
             vault: None,
+            objective: None,
         };
         vec![
             session("today-a", 0),

@@ -4,6 +4,11 @@ All notable changes to cs are documented here. Release notes are also available 
 
 <!-- New entries group changes under Keep-a-Changelog headings (Added / Changed / Removed / Fixes / Docs), or Features / Performance where those fit the release. -->
 
+## Unreleased
+
+### Added
+- The picker's `/` search reaches the objective. A session whose name misses the query stays in the list when the `## Objective` line of its `.cs/README.md` matches, after the name matches and without highlighting, since the highlight addresses the name. An adopted project named by its folder, or a worktree named by a tool, turns up when you search for the work instead of the folder name.
+
 ## 2026.10.2
 
 ### Fixes
