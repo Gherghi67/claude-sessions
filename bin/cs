@@ -3108,8 +3108,11 @@ _exec_fresh_rebind() {
     local session_name
     session_name=$(_read_local_state "$session_dir/.cs/local/state" session_name)
     [ -n "$session_name" ] || session_name=$(basename "$session_dir")
+    # Only a UUID names a conversation to leave; the launch ignores anything
+    # else in the slot, and so does the rotation record.
     local old_uuid
     old_uuid=$(_read_local_state "$session_dir/.cs/local/state" claude_session_id)
+    _is_uuid "$old_uuid" || old_uuid=""
     local new_uuid
     new_uuid=$(_alloc_uuid)
     _set_local_state "$session_dir/.cs/local/state" claude_session_id "$new_uuid"

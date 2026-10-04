@@ -320,6 +320,10 @@ test_launch_ignores_a_recorded_id_that_is_not_a_uuid() {
     recorded=$(_extract_state_value "$session_dir/.cs/local/state" claude_session_id)
     _assert_uuid "$recorded" "a real id replaces the recorded words" || return 1
     assert_output_contains "$launches" "<--session-id><$recorded>" "claude starts the recorded conversation" || return 1
+    # The words named no conversation, so there was none to rotate from.
+    if grep -q '"event":"rotated"' "$session_dir/.cs/timeline.jsonl" 2>/dev/null; then
+        echo "  FAIL: a first conversation rotates from nothing: $(grep rotated "$session_dir/.cs/timeline.jsonl")"; return 1
+    fi
 }
 
 # The README's claude_session_color rides the same import. The launch hands the
