@@ -3285,7 +3285,8 @@ _exclude_session_tracked_conflict() {  # dir
             return 0
         fi
     done
-    git -C "$dir" ls-files -- .cs .claude/settings.local.json CLAUDE.local.md 2>/dev/null | head -1
+    # The .tmp names are the fixed temp files cs writes through before its mv.
+    git -C "$dir" ls-files -- .cs .claude/settings.local.json .claude/settings.local.json.tmp CLAUDE.local.md CLAUDE.local.md.tmp 2>/dev/null | head -1
 }
 
 # True when cs created this session directory, and so owns its mode. Two ways to
