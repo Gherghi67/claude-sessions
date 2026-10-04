@@ -320,6 +320,20 @@ test_open_leaves_a_tracked_gitattributes_alone_when_a_legacy_log_exists() {
     assert_exists "$wt/.cs/local/session.log" "the legacy log still moves" || return 1
 }
 
+test_a_worktree_that_tracks_a_file_cs_must_own_is_skipped() {
+    local repo="$TEST_TMPDIR/repo"
+    _make_repo "$repo" tracked
+    local wt="$repo/.claude/worktrees/tracked"
+    printf 'committed local rules\n' > "$wt/CLAUDE.local.md"
+    git -C "$wt" add CLAUDE.local.md && git -C "$wt" commit -q -m "track the local file"
+    _seed_conversation "$wt" "$UUID_A" "A repo that tracks its local file"
+    local output
+    output=$(cd "$repo" && "$CS_BIN" -adopt --worktrees 2>&1) || true
+    assert_not_exists "$wt/.cs" "nothing is written into it" || return 1
+    assert_not_exists "$CS_SESSIONS_ROOT/repo.tracked" "no session is registered" || return 1
+    assert_output_contains "$output" "skip tracked: CLAUDE.local.md is tracked" "the skip names the tracked file" || return 1
+}
+
 run_test test_refuses_outside_a_git_repo
 run_test test_refuses_a_repo_without_claude_worktrees
 run_test test_adopts_a_worktree_with_a_conversation
@@ -337,5 +351,6 @@ run_test test_a_removed_session_is_not_adopted_again
 run_test test_plain_adopt_inside_a_linked_worktree_refuses_and_commits_nothing
 run_test test_rerun_repairs_a_linked_adoption_that_lost_its_marker
 run_test test_open_leaves_a_tracked_gitattributes_alone_when_a_legacy_log_exists
+run_test test_a_worktree_that_tracks_a_file_cs_must_own_is_skipped
 
 report_results

@@ -312,7 +312,7 @@ adopt_worktrees() {  # [--dry-run]
         fi
     done
 
-    local wt_dir wt_name session_name proj uuid adopted=0 wt_top wt_common state
+    local wt_dir wt_name session_name proj uuid adopted=0 wt_top wt_common state tracked
     for wt_dir in "$wt_root"/*/; do
         wt_dir="${wt_dir%/}"
         [ -d "$wt_dir" ] || continue
@@ -355,6 +355,13 @@ adopt_worktrees() {  # [--dry-run]
         uuid=$(_discover_session_uuid_in "$proj")
         if [ -z "$uuid" ]; then
             echo -e "${DIM}skip $wt_name: no conversation under $proj${NC}"
+            continue
+        fi
+        # An exclude hides only untracked files. If the branch tracks one of
+        # the paths cs writes on every open, the open would dirty it.
+        tracked=$(git -C "$wt_dir" ls-files -- .cs .claude/settings.local.json CLAUDE.local.md 2>/dev/null | head -1)
+        if [ -n "$tracked" ]; then
+            echo -e "${DIM}skip $wt_name: $tracked is tracked on its branch, and cs would rewrite it at every open${NC}"
             continue
         fi
         validate_session_name "$session_name"
