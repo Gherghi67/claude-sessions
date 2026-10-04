@@ -141,6 +141,16 @@ _stub_tools() {  # dir, tools...
     return 0
 }
 
+# Name claude's per-project transcript dir for a cwd the way Claude Code does:
+# realpath it, then replace every character outside [A-Za-z0-9] with '-'
+# (2.1.289: `.replace(/[^a-zA-Z0-9]/g,"-")`). Tests seed transcripts at this
+# name so cs's discovery (_claude_project_dir) finds them.
+_encode_cwd_for_claude_test() {  # cwd
+    local resolved
+    resolved=$(cd "$1" && pwd -P)
+    printf '%s' "$resolved" | sed 's/[^A-Za-z0-9]/-/g'
+}
+
 # Stage a `mount` into dir that prints the given lines as the mount table, for
 # a test that runs cs with dir first on PATH. Returns non-zero when the stub
 # cannot be staged.

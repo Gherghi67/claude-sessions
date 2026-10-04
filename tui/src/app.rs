@@ -2528,10 +2528,14 @@ pub mod test_home {
 }
 
 /// Claude stores conversations under ~/.claude/projects/ keyed by encoded absolute path.
-/// Path encoding: replace '/' and '.' with '-'.
+/// Path encoding: every character outside [A-Za-z0-9] becomes '-' (Claude Code
+/// 2.1.289: `.replace(/[^a-zA-Z0-9]/g,"-")`), so '_' and ' ' collapse too.
 fn rename_claude_projects_dir(old_session_path: &std::path::Path, new_session_path: &std::path::Path) {
     fn encode_path(p: &std::path::Path) -> String {
-        p.to_string_lossy().replace('/', "-").replace('.', "-")
+        p.to_string_lossy()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect()
     }
 
     let home = match claude_home() {
@@ -3846,14 +3850,23 @@ mod tests {
         let fake_projects = tmp.join(".claude/projects");
         let sessions = tmp.join("sessions");
 
-        let old_session = sessions.join("old-name");
-        let new_session = sessions.join("new-name");
+        let old_session = sessions.join("old_name");
+        let new_session = sessions.join("new_name");
 
-        // Create the fake Claude projects dir with encoded old path
+        // Claude Code names the projects dir by replacing every character
+        // outside [A-Za-z0-9] with '-' (measured on 2.1.289: 'enc_probe dir'
+        // became 'enc-probe-dir'), so the fixture is seeded under that name.
         fn encode_path(p: &std::path::Path) -> String {
-            p.to_string_lossy().replace('/', "-").replace('.', "-")
+            p.to_string_lossy()
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+                .collect()
         }
         let old_encoded = encode_path(&old_session);
+        assert!(
+            old_encoded.ends_with("-sessions-old-name"),
+            "fixture encoding drifted from claude's: {old_encoded}"
+        );
         let old_proj = fake_projects.join(&old_encoded);
         std::fs::create_dir_all(&old_proj).unwrap();
         // Put a marker file inside to verify it moved
