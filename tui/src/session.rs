@@ -61,6 +61,10 @@ pub struct Session {
     /// Present only for a session tagged `encrypted`: whether its vault is
     /// mounted right now.
     pub vault: Option<Vault>,
+    /// The README's Objective line, so `/` search reaches what a session is
+    /// about when its name does not say (an adopted project named by its
+    /// folder, a harness-named worktree). None while the placeholder stands.
+    pub objective: Option<String>,
 }
 
 /// The tag a session carries in its README frontmatter to declare that it
@@ -167,39 +171,43 @@ pub struct SessionPreview {
     pub contributors: Vec<String>,
 }
 
+/// The first non-empty line under `## Objective` in a session README. Both the
+/// preview pane and the row's searchable objective read it, so the two can
+/// never disagree.
+pub fn read_objective(readme: &str) -> Option<String> {
+    let mut after_objective = false;
+    for line in readme.lines() {
+        if line.starts_with("## Objective") {
+            after_objective = true;
+            continue;
+        }
+        if after_objective {
+            // End of the Objective section without real content.
+            if line.starts_with("## ") {
+                return None;
+            }
+            let trimmed = line.trim();
+            if !trimmed.is_empty() {
+                // The README template seeds a bracketed placeholder
+                // (`[Describe ...]`); treat any whole-line `[...]` as
+                // "not filled in", matching the session-start hook.
+                if trimmed.starts_with('[') && trimmed.ends_with(']') {
+                    return None;
+                }
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
+
 /// Load preview info for a session by reading .cs/ metadata files.
 pub fn load_preview(session_dir: &Path) -> SessionPreview {
     let cs_dir = session_dir.join(".cs");
 
-    // First non-empty line from README.md after "## Objective" or first content line
     let objective = fs::read_to_string(cs_dir.join("README.md"))
         .ok()
-        .and_then(|content| {
-            let mut after_objective = false;
-            for line in content.lines() {
-                if line.starts_with("## Objective") {
-                    after_objective = true;
-                    continue;
-                }
-                if after_objective {
-                    // End of the Objective section without real content.
-                    if line.starts_with("## ") {
-                        return None;
-                    }
-                    let trimmed = line.trim();
-                    if !trimmed.is_empty() {
-                        // The README template seeds a bracketed placeholder
-                        // (`[Describe ...]`); treat any whole-line `[...]` as
-                        // "not filled in", matching the session-start hook.
-                        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-                            return None;
-                        }
-                        return Some(trimmed.to_string());
-                    }
-                }
-            }
-            None
-        });
+        .and_then(|content| read_objective(&content));
 
     // Narrative headings from every actor's lab notebook (all ## headings, most
     // recent last within each file)
@@ -676,9 +684,12 @@ fn read_session(path: &Path, secret_counts: &HashMap<String, u32>) -> Session {
     } else {
         None
     };
-    let tags = fs::read_to_string(meta_dir.join("README.md"))
-        .map(|s| parse_frontmatter_tags(&s))
+    let readme = fs::read_to_string(meta_dir.join("README.md")).ok();
+    let tags = readme
+        .as_deref()
+        .map(parse_frontmatter_tags)
         .unwrap_or_default();
+    let objective = readme.as_deref().and_then(read_objective);
     let archived = meta_dir.join("archived").is_file();
     let vault = tags.iter().any(|t| t == ENCRYPTED_TAG).then(|| {
         if meta_dir.join("memory").exists() {
@@ -703,6 +714,7 @@ fn read_session(path: &Path, secret_counts: &HashMap<String, u32>) -> Session {
         tags,
         archived,
         vault,
+        objective,
     }
 }
 
@@ -2406,6 +2418,37 @@ mod tests {
         let sessions = scan_sessions_in(&root);
         let s = sessions.iter().find(|s| s.name == "tagged").unwrap();
         assert_eq!(s.tags, vec!["api", "infra"]);
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    // The searched objective and the previewed one come from the same reader,
+    // and the scan has to call it, or a correct read_objective searches nothing.
+    #[test]
+    fn scan_populates_the_objective_the_preview_shows() {
+        let root = std::env::temp_dir().join(format!("cs-test-objective-{}", std::process::id()));
+        let _guard = test_root::scoped(root.clone());
+        let dir = root.join("brave-jang-0f6265");
+        fs::create_dir_all(dir.join(".cs/local")).unwrap();
+        fs::write(
+            dir.join(".cs/README.md"),
+            "---\nstatus: active\n---\n# Session\n\n## Objective\n\nRewrite the electron UI shell\n\n## Outcome\n",
+        )
+        .unwrap();
+        let placeholder = root.join("fresh");
+        fs::create_dir_all(placeholder.join(".cs/local")).unwrap();
+        fs::write(
+            placeholder.join(".cs/README.md"),
+            "---\nstatus: active\n---\n## Objective\n\n[Describe what you're trying to accomplish in this session]\n\n## Outcome\n",
+        )
+        .unwrap();
+
+        let sessions = scan_sessions_in(&root);
+        let s = sessions.iter().find(|s| s.name == "brave-jang-0f6265").unwrap();
+        assert_eq!(s.objective.as_deref(), Some("Rewrite the electron UI shell"));
+        assert_eq!(s.objective, load_preview(&dir).objective);
+        let f = sessions.iter().find(|s| s.name == "fresh").unwrap();
+        assert!(f.objective.is_none(), "the template placeholder is not an objective");
 
         fs::remove_dir_all(&root).unwrap();
     }

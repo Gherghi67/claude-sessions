@@ -14,8 +14,7 @@ use unicode_width::UnicodeWidthStr;
 use ratatui::layout::Alignment;
 
 use crate::app::{
-    parse_tag_query, App, FlashKind, Focus, Mode, NotesFocus, SortColumn, SortDirection,
-    StatusLevel,
+    App, FlashKind, Focus, Mode, NotesFocus, SortColumn, SortDirection, StatusLevel,
 };
 use crate::theme::{self, Palette};
 
@@ -465,12 +464,6 @@ fn render_table(app: &mut App, frame: &mut Frame, area: Rect, preview_open: bool
 
     let header = Row::new(header_cells).bottom_margin(1);
 
-    // Dimming keys on the fuzzy remainder, not the raw search text: a
-    // tag-only query like "#api" has already narrowed `filtered` via the tag
-    // predicate and leaves no fuzzy match to dim against.
-    let (_, fuzzy_remainder) = parse_tag_query(app.search_input.text());
-    let is_searching = app.mode == Mode::Search && !fuzzy_remainder.is_empty();
-
     // One wall-clock read per frame, shared by every row's recency math and
     // the lock-square blink phase.
     let now = std::time::SystemTime::now();
@@ -491,8 +484,10 @@ fn render_table(app: &mut App, frame: &mut Frame, area: Rect, preview_open: bool
         .enumerate()
         .map(|(row_idx, &i)| {
             let s = &app.sessions[i];
-            // During search typing, dim rows that don't match
-            let dimmed = (is_searching && !app.fuzzy_indices.contains_key(&i)) || s.archived;
+            // Every row here passed the filter, by name or by objective; only
+            // a name hit carries highlight indices, so they say nothing about
+            // whether the row matched.
+            let dimmed = s.archived;
 
             // Recency heat: green when live, fading to grey when dormant. Computed
             // once and reused for the dot and the Age column.
@@ -2184,6 +2179,7 @@ mod tests {
             tags: Vec::new(),
             archived: false,
             vault: None,
+            objective: None,
         }]
     }
 
@@ -2207,6 +2203,7 @@ mod tests {
                 tags: Vec::new(),
                 archived: false,
                 vault: None,
+                objective: None,
             },
             Session {
                 name: "recent".into(),
@@ -2223,6 +2220,7 @@ mod tests {
                 tags: Vec::new(),
                 archived: false,
                 vault: None,
+                objective: None,
             },
         ]
     }
@@ -3662,6 +3660,7 @@ mod tests {
                 tags: Vec::new(),
                 archived: false,
                 vault: None,
+                objective: None,
             });
         }
         let mut app = App::new(sessions);
@@ -3805,6 +3804,43 @@ mod tests {
             name_fg, p.comment,
             "a tag-only query should not dim rows that already passed the tag filter"
         );
+    }
+
+    #[test]
+    fn objective_hit_is_not_dimmed_while_searching() {
+        // A row the filter kept on its objective alone records no highlight
+        // indices (they would address the wrong string), so dimming cannot
+        // key on fuzzy_indices or the one row that matched renders grey.
+        let mut sessions = one_session();
+        sessions[0].name = "brave-jang-0f6265".into();
+        sessions[0].objective = Some("Rewrite the electron UI shell".into());
+        let mut app = App::new(sessions);
+        app.theme = Palette::dark();
+        app.show_preview = false;
+        let p = app.theme;
+        app.mode = Mode::Search;
+        app.search_input.set("electron");
+        app.apply_filter_and_sort();
+        assert_eq!(app.filtered.len(), 1, "the objective should keep the session");
+
+        let backend = TestBackend::new(100, 24);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| render(&mut app, f)).unwrap();
+        let buf = term.backend().buffer();
+
+        let row_text = |y: u16| -> String {
+            (0..100u16)
+                .map(|x| buf.cell(ratatui::layout::Position::new(x, y)).unwrap().symbol())
+                .collect()
+        };
+        let session_y = (0..24u16)
+            .find(|&y| row_text(y).contains("brave-jang"))
+            .expect("the session row should render");
+        let name_x = (0..100u16)
+            .find(|&x| buf.cell(ratatui::layout::Position::new(x, session_y)).unwrap().symbol() == "b")
+            .expect("the session name should render");
+        let name_fg = buf.cell(ratatui::layout::Position::new(name_x, session_y)).unwrap().fg;
+        assert_ne!(name_fg, p.comment, "an objective hit is a match and must not render dimmed");
     }
 
     #[test]
@@ -4242,6 +4278,7 @@ mod tests {
             tags: Vec::new(),
             archived: true,
             vault: None,
+            objective: None,
         });
         v
     }

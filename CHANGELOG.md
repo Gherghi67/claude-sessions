@@ -6,6 +6,9 @@ All notable changes to cs are documented here. Release notes are also available 
 
 ## Unreleased
 
+### Added
+- The picker's `/` search reaches the objective. A session whose name misses the query stays in the list when the `## Objective` line of its `.cs/README.md` matches, after the name matches and without highlighting, since the highlight addresses the name. An adopted project named by its folder, or a worktree named by a tool, turns up when you search for the work instead of the folder name.
+
 ### Fixes
 - cs finds Claude Code's conversations for a session whose path has an underscore, a space or any other character outside letters, digits and `/` and `.`. Claude Code names the transcript folder by turning every such character into `-`; cs turned only `/` and `.`, so for a path like `~/.claude-sessions/my_project` it looked in a folder that does not exist, found no conversation, and the first open started a new one. The picker's rename moves the transcript folder under the same rule.
 
