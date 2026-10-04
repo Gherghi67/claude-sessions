@@ -226,17 +226,25 @@ launch_claude_code() {
     fi
 
     # Read the session's recorded UUID (allocated by create_session_structure
-    # on new sessions or backfilled by migrate_session Phase 8 from a
-    # transcript on disk). Used for both the CS_CLAUDE_SESSION_ID env export
-    # below and for the spawn args at exec time. Empty on an existing session
-    # that has never had a conversation, such as the first open after
-    # cs -adopt; the launch below starts one and records it. A value that is
-    # not a UUID (written before ids were checked, or by hand) names no
-    # conversation and counts as empty.
+    # on new sessions or bound by migrate_session Phase 8 to a transcript on
+    # disk). Used for both the CS_CLAUDE_SESSION_ID env export below and for
+    # the spawn args at exec time. Empty on an existing session that has never
+    # had a conversation, such as the first open after cs -adopt; the launch
+    # below starts one and records it. Both recorded values reach claude's
+    # argv, so each is checked here: a value that is not a UUID names no
+    # conversation and counts as empty, a colour claude would reject passes no
+    # colour. Neither is dropped without a line saying so.
     local claude_session_id claude_session_color
     claude_session_id=$(_read_local_state "$session_dir/.cs/local/state" claude_session_id)
-    _is_uuid "$claude_session_id" || claude_session_id=""
+    if [ -n "$claude_session_id" ] && ! _is_uuid "$claude_session_id"; then
+        warn "ignoring claude_session_id in .cs/local/state: not a UUID, so it names no conversation"
+        claude_session_id=""
+    fi
     claude_session_color=$(_read_local_state "$session_dir/.cs/local/state" claude_session_color)
+    if [ -n "$claude_session_color" ] && ! _is_session_color "$claude_session_color"; then
+        warn "ignoring claude_session_color in .cs/local/state: not one of claude's colours"
+        claude_session_color=""
+    fi
 
     # Build the trailing positional prompt arg that applies the session's
     # color at launch. Claude has no --color CLI flag (verified through

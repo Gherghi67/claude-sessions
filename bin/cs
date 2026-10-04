@@ -2881,6 +2881,18 @@ _is_uuid() {
 # "Invalid color X". Notably absent: teal, magenta, white, black, gray, hex.
 CS_VALID_COLORS=(red blue green yellow purple orange pink cyan)
 
+# True when $1 is one of CS_VALID_COLORS. The recorded colour becomes claude's
+# first prompt (`/color <value>`), so every reader checks it here before building
+# that prompt: a README frontmatter travels with a clone or an adopted project,
+# and a hand-edited state file can hold anything.
+_is_session_color() {
+    local c
+    for c in "${CS_VALID_COLORS[@]}"; do
+        [ "$1" = "$c" ] && return 0
+    done
+    return 1
+}
+
 # Pick a random color from CS_VALID_COLORS. Used at session creation to give
 # each cs session a distinct prompt-bar accent without user choice. Claude
 # defaults to teal; cs randomizes so parallel sessions are visually distinct
@@ -3099,7 +3111,7 @@ _exec_fresh_rebind() {
     local session_color
     session_color=$(_read_local_state "$session_dir/.cs/local/state" claude_session_color)
     local color_arg=""
-    [ -n "$session_color" ] && color_arg="/color $session_color"
+    _is_session_color "$session_color" && color_arg="/color $session_color"
     # A handoff kick makes the fresh conversation act on its first turn instead of
     # waiting for the user. It stays a bare trigger on purpose: the SessionStart
     # hook (which the same r answer arms via the pending-handoff marker) is the
@@ -3843,11 +3855,22 @@ migrate_session() {
         _legacy_color=$(awk '/^claude_session_color:/ { sub(/^claude_session_color:[[:space:]]*/, ""); gsub(/["\r]/, ""); print; exit }' "$readme")
         # The README is whatever the clone or the adopted project committed, so
         # only a UUID is taken as a conversation id.
-        if _is_uuid "$_legacy_uuid" && [ -z "$(_read_local_state "$_state" claude_session_id)" ]; then
-            _set_local_state "$_state" claude_session_id "$_legacy_uuid"
+        if [ -n "$_legacy_uuid" ] && [ -z "$(_read_local_state "$_state" claude_session_id)" ]; then
+            if _is_uuid "$_legacy_uuid"; then
+                _set_local_state "$_state" claude_session_id "$_legacy_uuid"
+            else
+                warn "ignoring claude_session_id in .cs/README.md: not a UUID, so it names no conversation"
+            fi
         fi
+        # The colour is claude's first prompt, so the same rule: only one of
+        # claude's own colours is taken; anything else leaves the slot empty for
+        # the backfill below.
         if [ -n "$_legacy_color" ] && [ -z "$(_read_local_state "$_state" claude_session_color)" ]; then
-            _set_local_state "$_state" claude_session_color "$_legacy_color"
+            if _is_session_color "$_legacy_color"; then
+                _set_local_state "$_state" claude_session_color "$_legacy_color"
+            else
+                warn "ignoring claude_session_color in .cs/README.md: not one of claude's colours"
+            fi
         fi
         local _tmp="$readme.tmp"
         awk -v re="$_fm_field_re" '
@@ -8364,17 +8387,25 @@ launch_claude_code() {
     fi
 
     # Read the session's recorded UUID (allocated by create_session_structure
-    # on new sessions or backfilled by migrate_session Phase 8 from a
-    # transcript on disk). Used for both the CS_CLAUDE_SESSION_ID env export
-    # below and for the spawn args at exec time. Empty on an existing session
-    # that has never had a conversation, such as the first open after
-    # cs -adopt; the launch below starts one and records it. A value that is
-    # not a UUID (written before ids were checked, or by hand) names no
-    # conversation and counts as empty.
+    # on new sessions or bound by migrate_session Phase 8 to a transcript on
+    # disk). Used for both the CS_CLAUDE_SESSION_ID env export below and for
+    # the spawn args at exec time. Empty on an existing session that has never
+    # had a conversation, such as the first open after cs -adopt; the launch
+    # below starts one and records it. Both recorded values reach claude's
+    # argv, so each is checked here: a value that is not a UUID names no
+    # conversation and counts as empty, a colour claude would reject passes no
+    # colour. Neither is dropped without a line saying so.
     local claude_session_id claude_session_color
     claude_session_id=$(_read_local_state "$session_dir/.cs/local/state" claude_session_id)
-    _is_uuid "$claude_session_id" || claude_session_id=""
+    if [ -n "$claude_session_id" ] && ! _is_uuid "$claude_session_id"; then
+        warn "ignoring claude_session_id in .cs/local/state: not a UUID, so it names no conversation"
+        claude_session_id=""
+    fi
     claude_session_color=$(_read_local_state "$session_dir/.cs/local/state" claude_session_color)
+    if [ -n "$claude_session_color" ] && ! _is_session_color "$claude_session_color"; then
+        warn "ignoring claude_session_color in .cs/local/state: not one of claude's colours"
+        claude_session_color=""
+    fi
 
     # Build the trailing positional prompt arg that applies the session's
     # color at launch. Claude has no --color CLI flag (verified through

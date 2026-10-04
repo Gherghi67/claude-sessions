@@ -674,11 +674,22 @@ migrate_session() {
         _legacy_color=$(awk '/^claude_session_color:/ { sub(/^claude_session_color:[[:space:]]*/, ""); gsub(/["\r]/, ""); print; exit }' "$readme")
         # The README is whatever the clone or the adopted project committed, so
         # only a UUID is taken as a conversation id.
-        if _is_uuid "$_legacy_uuid" && [ -z "$(_read_local_state "$_state" claude_session_id)" ]; then
-            _set_local_state "$_state" claude_session_id "$_legacy_uuid"
+        if [ -n "$_legacy_uuid" ] && [ -z "$(_read_local_state "$_state" claude_session_id)" ]; then
+            if _is_uuid "$_legacy_uuid"; then
+                _set_local_state "$_state" claude_session_id "$_legacy_uuid"
+            else
+                warn "ignoring claude_session_id in .cs/README.md: not a UUID, so it names no conversation"
+            fi
         fi
+        # The colour is claude's first prompt, so the same rule: only one of
+        # claude's own colours is taken; anything else leaves the slot empty for
+        # the backfill below.
         if [ -n "$_legacy_color" ] && [ -z "$(_read_local_state "$_state" claude_session_color)" ]; then
-            _set_local_state "$_state" claude_session_color "$_legacy_color"
+            if _is_session_color "$_legacy_color"; then
+                _set_local_state "$_state" claude_session_color "$_legacy_color"
+            else
+                warn "ignoring claude_session_color in .cs/README.md: not one of claude's colours"
+            fi
         fi
         local _tmp="$readme.tmp"
         awk -v re="$_fm_field_re" '

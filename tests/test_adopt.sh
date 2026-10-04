@@ -386,12 +386,13 @@ test_adopt_gitignores_the_vault_mount() {
 
 UUID_PRIOR="33333333-3333-4333-8333-333333333333"
 
-# A claude stub that records each launch's argv, one line per launch, and fails
+# A claude stub that records each launch's argv (one line per launch, each
+# argument in its own brackets so word boundaries are visible), and fails
 # a --resume at once, as claude does for an id that names no conversation.
 _adopt_claude_stub() {
     cat > "$TEST_TMPDIR/claude-stub" << SCRIPT
 #!/bin/bash
-printf '%s\n' "\$*" >> "$TEST_TMPDIR/claude-args"
+printf '<%s>' "\$@" >> "$TEST_TMPDIR/claude-args"; echo >> "$TEST_TMPDIR/claude-args"
 case "\$*" in *--resume*) exit 1 ;; esac
 exit 0
 SCRIPT
@@ -428,8 +429,8 @@ test_first_launch_after_adopt_starts_fresh_without_asking() {
     assert_eq "1" "$(printf '%s\n' "$launches" | grep -c .)" "claude launches exactly once" || return 1
     recorded=$(_adopt_state_id "$project_dir")
     [ -n "$recorded" ] || { echo "  FAIL: the launch must record the conversation it starts"; return 1; }
-    assert_output_contains "$launches" "--session-id $recorded" "claude starts the recorded conversation" || return 1
-    assert_output_contains "$launches" "--name probe" "the conversation is named after the session" || return 1
+    assert_output_contains "$launches" "<--session-id><$recorded>" "claude starts the recorded conversation" || return 1
+    assert_output_contains "$launches" "<--name><probe>" "the conversation is named after the session" || return 1
     if grep -qE -- '--resume|--continue' <<< "$launches"; then
         echo "  FAIL: nothing to resume, so no --resume or --continue: $launches"; return 1
     fi
@@ -453,7 +454,7 @@ test_first_launch_after_adopt_offers_the_projects_newest_conversation() {
     local output
     output=$("$CS_BIN" probe <<< "y" 2>&1) || true
     assert_output_contains "$output" "Continue previous conversation?" "an existing conversation is offered" || return 1
-    assert_output_contains "$(head -1 "$TEST_TMPDIR/claude-args")" "--resume $UUID_PRIOR" \
+    assert_output_contains "$(head -1 "$TEST_TMPDIR/claude-args")" "<--resume><$UUID_PRIOR>" \
         "the answer resumes the project's conversation" || return 1
 }
 
@@ -477,7 +478,7 @@ test_second_launch_after_adopt_asks_and_resumes() {
     local output
     output=$("$CS_BIN" probe <<< "y" 2>&1) || true
     assert_output_contains "$output" "Continue previous conversation?" "a bound session still asks" || return 1
-    assert_output_contains "$(cat "$TEST_TMPDIR/claude-args")" "--resume $first" \
+    assert_output_contains "$(cat "$TEST_TMPDIR/claude-args")" "<--resume><$first>" \
         "the answer resumes the conversation the first launch recorded" || return 1
 }
 
@@ -499,7 +500,7 @@ test_readopt_keeps_the_prior_conversation_binding() {
     local output
     output=$("$CS_BIN" new-name <<< "y" 2>&1) || true
     assert_output_contains "$output" "Continue previous conversation?" "the kept binding still asks" || return 1
-    assert_output_contains "$(head -1 "$TEST_TMPDIR/claude-args")" "--resume $UUID_PRIOR" \
+    assert_output_contains "$(head -1 "$TEST_TMPDIR/claude-args")" "<--resume><$UUID_PRIOR>" \
         "the answer resumes the kept conversation" || return 1
 }
 
@@ -520,7 +521,7 @@ test_readopt_without_local_state_starts_fresh_without_asking() {
     if grep -q "Continue previous conversation" <<< "$output"; then
         echo "  FAIL: records with no binding must not offer to resume: $output"; return 1
     fi
-    assert_output_contains "$(cat "$TEST_TMPDIR/claude-args")" "--session-id $(_adopt_state_id "$project_dir")" \
+    assert_output_contains "$(cat "$TEST_TMPDIR/claude-args")" "<--session-id><$(_adopt_state_id "$project_dir")>" \
         "claude starts the recorded conversation" || return 1
 }
 
@@ -552,7 +553,7 @@ test_adopt_ignores_a_committed_readme_id_that_is_not_a_uuid() {
     recorded=$(_adopt_state_id "$project_dir")
     [[ "$recorded" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] \
         || { echo "  FAIL: the open must record a real conversation id: '$recorded'"; return 1; }
-    assert_output_contains "$launches" "--session-id $recorded" "claude starts the recorded conversation" || return 1
+    assert_output_contains "$launches" "<--session-id><$recorded>" "claude starts the recorded conversation" || return 1
 }
 
 # Re-adopt puts back the conversation the records name, and only a conversation

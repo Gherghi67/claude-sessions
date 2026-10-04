@@ -25,6 +25,18 @@ _is_uuid() {
 # "Invalid color X". Notably absent: teal, magenta, white, black, gray, hex.
 CS_VALID_COLORS=(red blue green yellow purple orange pink cyan)
 
+# True when $1 is one of CS_VALID_COLORS. The recorded colour becomes claude's
+# first prompt (`/color <value>`), so every reader checks it here before building
+# that prompt: a README frontmatter travels with a clone or an adopted project,
+# and a hand-edited state file can hold anything.
+_is_session_color() {
+    local c
+    for c in "${CS_VALID_COLORS[@]}"; do
+        [ "$1" = "$c" ] && return 0
+    done
+    return 1
+}
+
 # Pick a random color from CS_VALID_COLORS. Used at session creation to give
 # each cs session a distinct prompt-bar accent without user choice. Claude
 # defaults to teal; cs randomizes so parallel sessions are visually distinct
@@ -243,7 +255,7 @@ _exec_fresh_rebind() {
     local session_color
     session_color=$(_read_local_state "$session_dir/.cs/local/state" claude_session_color)
     local color_arg=""
-    [ -n "$session_color" ] && color_arg="/color $session_color"
+    _is_session_color "$session_color" && color_arg="/color $session_color"
     # A handoff kick makes the fresh conversation act on its first turn instead of
     # waiting for the user. It stays a bare trigger on purpose: the SessionStart
     # hook (which the same r answer arms via the pending-handoff marker) is the
