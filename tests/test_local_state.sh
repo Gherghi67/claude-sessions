@@ -369,6 +369,29 @@ test_launch_ignores_a_recorded_color_that_is_not_a_color() {
     assert_output_contains "$output" "ignoring claude_session_color" "the open says what it dropped" || return 1
 }
 
+# The launch records the conversation it starts. When that write fails, cs says
+# so and launches nothing: a silent miss would leave the next open with nothing
+# to resume while a conversation ran.
+test_launch_stops_loudly_when_state_cannot_be_written() {
+    local session_dir
+    session_dir=$(create_test_session_with_git unwritable-state)
+    # No recorded conversation, so the open must record the one it starts.
+    local state="$session_dir/.cs/local/state"
+    mkdir -p "$session_dir/.cs/local"
+    : > "$state"
+    _argv_claude_stub
+    chmod 555 "$session_dir/.cs/local"
+
+    local output rc=0
+    output=$("$CS_BIN" unwritable-state <<< "" 2>&1) || rc=$?
+    chmod 755 "$session_dir/.cs/local"
+
+    [ "$rc" -ne 0 ] || { echo "  FAIL: a failed state write must end the launch"; return 1; }
+    assert_output_contains "$output" "Error: could not write $state" "the failure names the file" || return 1
+    assert_output_not_contains "$output" "Permission denied" "no bare shell error" || return 1
+    [ ! -f "$TEST_TMPDIR/claude-args" ] || { echo "  FAIL: claude must not launch unrecorded"; return 1; }
+}
+
 # ============================================================================
 # Cycle 3b: migration relocates the session log to machine-local .cs/local/
 # ============================================================================
@@ -609,4 +632,5 @@ run_test test_frontmatter_backfill_created_uses_git_date
 run_test test_migration_moves_session_log_into_private
 run_test test_clone_with_a_readme_color_that_is_not_a_color_gets_a_fresh_one
 run_test test_launch_ignores_a_recorded_color_that_is_not_a_color
+run_test test_launch_stops_loudly_when_state_cannot_be_written
 report_results

@@ -404,6 +404,20 @@ _adopt_state_id() {  # project_dir
     awk '/^claude_session_id:/ { print $2; exit }' "$1/.cs/local/state" 2>/dev/null
 }
 
+_adopt_state_color() {  # project_dir
+    awk '/^claude_session_color:/ { print $2; exit }' "$1/.cs/local/state" 2>/dev/null
+}
+
+# Write one key into a project's local state, replacing any line it already
+# holds; an append would leave two lines and the first-match reader blind to
+# the second.
+_adopt_write_state() {  # project_dir key value
+    local state="$1/.cs/local/state"
+    mkdir -p "$1/.cs/local"
+    { [ ! -f "$state" ] || awk -v key="$2" 'index($0, key ":") != 1' "$state"; printf '%s: %s\n' "$2" "$3"; } > "$state.tmp" \
+        && mv "$state.tmp" "$state"
+}
+
 # An adopted directory already exists, so its first open is a reopen. It used to
 # ask "Continue previous conversation?" for a conversation that never existed;
 # the default answer's --resume then failed and a fallback started fresh.
@@ -416,12 +430,8 @@ test_first_launch_after_adopt_starts_fresh_without_asking() {
     local output
     output=$("$CS_BIN" probe <<< "" 2>&1) || true
 
-    if grep -q "Continue previous conversation" <<< "$output"; then
-        echo "  FAIL: the first launch must not offer to resume: $output"; return 1
-    fi
-    if grep -q "No previous conversation found" <<< "$output"; then
-        echo "  FAIL: the first launch must not go through the resume-failed fallback: $output"; return 1
-    fi
+    assert_output_not_contains "$output" "Continue previous conversation" "the first launch offers nothing to resume" || return 1
+    assert_output_not_contains "$output" "No previous conversation found" "the first launch never takes the resume-failed fallback" || return 1
     assert_output_contains "$output" "(+ new)" "the card calls the first launch new" || return 1
 
     local launches recorded
@@ -431,9 +441,8 @@ test_first_launch_after_adopt_starts_fresh_without_asking() {
     [ -n "$recorded" ] || { echo "  FAIL: the launch must record the conversation it starts"; return 1; }
     assert_output_contains "$launches" "<--session-id><$recorded>" "claude starts the recorded conversation" || return 1
     assert_output_contains "$launches" "<--name><probe>" "the conversation is named after the session" || return 1
-    if grep -qE -- '--resume|--continue' <<< "$launches"; then
-        echo "  FAIL: nothing to resume, so no --resume or --continue: $launches"; return 1
-    fi
+    assert_output_not_contains "$launches" "<--resume>" "nothing to resume" || return 1
+    assert_output_not_contains "$launches" "<--continue>" "cs never passes --continue" || return 1
     if grep -q '"event":"rotated"' "$project_dir/.cs/timeline.jsonl" 2>/dev/null; then
         echo "  FAIL: the first conversation rotates from nothing"; return 1
     fi
@@ -488,13 +497,16 @@ test_readopt_keeps_the_prior_conversation_binding() {
     local project_dir="$TEST_TMPDIR/my-project"
     mkdir -p "$project_dir"
     (cd "$project_dir" && "$CS_BIN" -adopt old-name >/dev/null 2>&1)
-    printf 'claude_session_id: %s\n' "$UUID_PRIOR" >> "$project_dir/.cs/local/state"
+    _adopt_write_state "$project_dir" claude_session_id "$UUID_PRIOR"
+    _adopt_write_state "$project_dir" claude_session_color pink
     rm "$CS_SESSIONS_ROOT/old-name"
 
     (cd "$project_dir" && printf 'y\n' | CS_ASSUME_TTY=1 "$CS_BIN" -adopt new-name >/dev/null 2>&1) \
         || { echo "  FAIL: re-adopt should succeed"; return 1; }
     assert_eq "$UUID_PRIOR" "$(_adopt_state_id "$project_dir")" \
         "re-adopt keeps the recorded conversation" || return 1
+    assert_eq "pink" "$(_adopt_state_color "$project_dir")" \
+        "re-adopt keeps the recorded colour" || return 1
 
     _adopt_claude_stub
     local output
@@ -518,9 +530,7 @@ test_readopt_without_local_state_starts_fresh_without_asking() {
     _adopt_claude_stub
     local output
     output=$("$CS_BIN" new-name <<< "" 2>&1) || true
-    if grep -q "Continue previous conversation" <<< "$output"; then
-        echo "  FAIL: records with no binding must not offer to resume: $output"; return 1
-    fi
+    assert_output_not_contains "$output" "Continue previous conversation" "records with no binding offer nothing to resume" || return 1
     assert_output_contains "$(cat "$TEST_TMPDIR/claude-args")" "<--session-id><$(_adopt_state_id "$project_dir")>" \
         "claude starts the recorded conversation" || return 1
 }
@@ -541,15 +551,11 @@ test_adopt_ignores_a_committed_readme_id_that_is_not_a_uuid() {
     local output
     output=$("$CS_BIN" probe <<< "" 2>&1) || true
 
-    if grep -q "Continue previous conversation" <<< "$output"; then
-        echo "  FAIL: an id that is not a UUID must not be offered for resume: $output"; return 1
-    fi
+    assert_output_not_contains "$output" "Continue previous conversation" "an id that is not a UUID is never offered for resume" || return 1
     local launches recorded
     launches=$(cat "$TEST_TMPDIR/claude-args" 2>/dev/null)
     assert_eq "1" "$(printf '%s\n' "$launches" | grep -c .)" "claude launches exactly once" || return 1
-    if grep -q -- '--dangerously-skip-permissions' <<< "$launches"; then
-        echo "  FAIL: the README's words reached claude's argv: $launches"; return 1
-    fi
+    assert_output_not_contains "$launches" "dangerously-skip-permissions" "the README's words never reach claude's argv" || return 1
     recorded=$(_adopt_state_id "$project_dir")
     [[ "$recorded" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] \
         || { echo "  FAIL: the open must record a real conversation id: '$recorded'"; return 1; }
@@ -562,13 +568,15 @@ test_readopt_drops_a_prior_binding_that_is_not_a_uuid() {
     local project_dir="$TEST_TMPDIR/my-project"
     mkdir -p "$project_dir"
     (cd "$project_dir" && "$CS_BIN" -adopt old-name >/dev/null 2>&1)
-    printf 'claude_session_id: --dangerously-skip-permissions\n' >> "$project_dir/.cs/local/state"
+    _adopt_write_state "$project_dir" claude_session_id "--dangerously-skip-permissions"
     rm "$CS_SESSIONS_ROOT/old-name"
 
-    (cd "$project_dir" && printf 'y\n' | CS_ASSUME_TTY=1 "$CS_BIN" -adopt new-name >/dev/null 2>&1) \
-        || { echo "  FAIL: re-adopt should succeed"; return 1; }
+    local output
+    output=$(cd "$project_dir" && printf 'y\n' | CS_ASSUME_TTY=1 "$CS_BIN" -adopt new-name 2>&1) \
+        || { echo "  FAIL: re-adopt should succeed: $output"; return 1; }
     assert_eq "" "$(_adopt_state_id "$project_dir")" \
         "re-adopt keeps no id when the prior one is not a UUID" || return 1
+    assert_output_contains "$output" "ignoring claude_session_id in .cs/local/state" "re-adopt says what it dropped" || return 1
 }
 
 # ============================================================================

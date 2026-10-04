@@ -142,10 +142,7 @@ EOF
         echo "  FAIL: backfilled value is not a valid v4 UUID: '$backfilled'"
         return 1
     fi
-    if grep -q "Continue previous conversation" <<< "$output"; then
-        echo "  FAIL: a session with no conversation must not offer to resume: $output"
-        return 1
-    fi
+    assert_output_not_contains "$output" "Continue previous conversation" "a session with no conversation offers nothing to resume" || return 1
     assert_output_contains "$output" "--session-id $backfilled" \
         "the first open starts the conversation it records" || return 1
 
@@ -994,6 +991,24 @@ STUB
     echo "$stub"
 }
 
+# A session with no recorded conversation has no UUID to match, so the guard
+# used to skip entirely; the --name half needs no UUID.
+test_live_duplicate_detected_on_an_unbound_session() {
+    local launched="99999999-8888-4777-8666-555555555555"
+    _seed_doctor_session "test-session" "11111111-2222-4333-8444-555555555555" >/dev/null
+    local state="$CS_SESSIONS_ROOT/test-session/.cs/local/state"
+    awk 'index($0, "claude_session_id:") != 1' "$state" > "$state.tmp" && mv "$state.tmp" "$state"
+    local stub
+    stub=$(_seed_ps_stub_with_name "test-session" "$launched")
+
+    local output rc=0
+    output=$(CS_PS_BIN="$stub" "$CS_BIN" test-session <<< "" 2>&1) || rc=$?
+
+    [ "$rc" -ne 0 ] || { echo "  FAIL: a live claude --name must be detected with no recorded UUID"; return 1; }
+    assert_output_contains "$output" "already running" "the --name half of the guard still runs" || return 1
+    assert_output_not_contains "$output" "(UUID " "no UUID to name" || return 1
+}
+
 test_live_duplicate_detected_after_clear_rebind() {
     local recorded="11111111-2222-4333-8444-555555555555"
     local launched="99999999-8888-4777-8666-555555555555"
@@ -1034,6 +1049,7 @@ run_test test_live_duplicate_ignores_the_uuid_in_a_non_claude_argv
 run_test test_live_duplicate_refuses_a_short_resume_flag
 run_test test_live_duplicate_refuses_a_surviving_teammate
 run_test test_live_duplicate_refuses_the_equals_spelling
+run_test test_live_duplicate_detected_on_an_unbound_session
 run_test test_live_duplicate_detected_after_clear_rebind
 run_test test_live_duplicate_ignores_a_longer_sibling_name
 
