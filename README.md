@@ -234,7 +234,7 @@ This converts the current directory into a cs session in place:
 - Symlinks `~/.claude-sessions/<name>` to the current directory
 - Writes the session protocol to `CLAUDE.local.md` (machine-local, gitignored, regenerated per machine); a project's existing `CLAUDE.md` is never touched
 - Initializes a git repo if one doesn't exist (preserves existing repos)
-- Since the working directory doesn't change, `claude --continue` picks up previous conversations
+- Since the working directory doesn't change, the first `cs <name>` finds Claude Code's own transcripts for the folder and offers to resume the newest one; a project with none starts a new conversation without asking
 
 ## Session Structure
 
@@ -472,7 +472,7 @@ Every rotation, deliberate or not, appends a `rotated` event to
 `.cs/timeline.jsonl` with the old and new conversation UUIDs and a reason:
 `handoff` (a `/clear` or `r` rotation, naming the handoff), `declined-resume`
 (`n` at the resume prompt),
-`resume-failed` (`--resume`/`--continue` errored and cs fell back to fresh),
+`resume-failed` (`--resume` errored and cs fell back to fresh),
 or `rebind` (SessionStart found a UUID mismatch — Claude Code forked a new
 conversation, e.g. past its own context limit). `cs -conversations` reads
 this log and renders each conversation's `started` events (folded into a

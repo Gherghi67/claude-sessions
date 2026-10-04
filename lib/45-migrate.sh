@@ -672,11 +672,24 @@ migrate_session() {
         local _legacy_uuid _legacy_color
         _legacy_uuid=$(awk '/^claude_session_id:/ { sub(/^claude_session_id:[[:space:]]*/, ""); gsub(/["\r]/, ""); print; exit }' "$readme")
         _legacy_color=$(awk '/^claude_session_color:/ { sub(/^claude_session_color:[[:space:]]*/, ""); gsub(/["\r]/, ""); print; exit }' "$readme")
+        # The README is whatever the clone or the adopted project committed, so
+        # only a UUID is taken as a conversation id.
         if [ -n "$_legacy_uuid" ] && [ -z "$(_read_local_state "$_state" claude_session_id)" ]; then
-            _set_local_state "$_state" claude_session_id "$_legacy_uuid"
+            if _is_uuid "$_legacy_uuid"; then
+                _set_local_state "$_state" claude_session_id "$_legacy_uuid"
+            else
+                warn "ignoring claude_session_id in .cs/README.md: not a UUID, so it names no conversation"
+            fi
         fi
+        # The colour is claude's first prompt, so the same rule: only one of
+        # claude's own colours is taken; anything else leaves the slot empty for
+        # the backfill below.
         if [ -n "$_legacy_color" ] && [ -z "$(_read_local_state "$_state" claude_session_color)" ]; then
-            _set_local_state "$_state" claude_session_color "$_legacy_color"
+            if _is_session_color "$_legacy_color"; then
+                _set_local_state "$_state" claude_session_color "$_legacy_color"
+            else
+                warn "ignoring claude_session_color in .cs/README.md: not one of claude's colours"
+            fi
         fi
         local _tmp="$readme.tmp"
         awk -v re="$_fm_field_re" '
@@ -705,14 +718,13 @@ migrate_session() {
         else
             local _discovered
             _discovered=$(_discover_session_uuid_in "$_proj")
+            # No transcripts: a recorded UUID is left alone (claude hasn't
+            # written the jsonl yet, eg. the session was just created with
+            # --session-id but hasn't talked to the user), and so is an empty
+            # slot. Only a transcript on disk names a conversation; an empty
+            # slot is the launch's to fill when it starts the first one.
             if [ -n "$_discovered" ]; then
                 _bind_uuid="$_discovered"
-            elif [ -z "$_existing" ]; then
-                # No transcripts and no recorded UUID — allocate fresh.
-                # A recorded UUID without transcripts is left alone: claude
-                # hasn't written the jsonl yet (eg. session was just created
-                # with --session-id but hasn't talked to the user).
-                _bind_uuid=$(_alloc_uuid)
             fi
         fi
 

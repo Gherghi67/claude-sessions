@@ -13,10 +13,29 @@ _alloc_uuid() {
     fi
 }
 
+# A conversation id goes onto claude's command line, and the README a clone or an
+# adopted project brings can say anything, so only a UUID counts as one. Same
+# pattern as hooks/session-start.sh's UUID_RE.
+_is_uuid() {
+    [[ "$1" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]
+}
+
 # The 8 colors claude's /color slash command accepts (verified against the
 # binary's own error message in claude 2.1.162). Anything else errors with
 # "Invalid color X". Notably absent: teal, magenta, white, black, gray, hex.
 CS_VALID_COLORS=(red blue green yellow purple orange pink cyan)
+
+# True when $1 is one of CS_VALID_COLORS. The recorded colour becomes claude's
+# first prompt (`/color <value>`), so every reader checks it here before building
+# that prompt: a README frontmatter travels with a clone or an adopted project,
+# and a hand-edited state file can hold anything.
+_is_session_color() {
+    local c
+    for c in "${CS_VALID_COLORS[@]}"; do
+        [ "$1" = "$c" ] && return 0
+    done
+    return 1
+}
 
 # Pick a random color from CS_VALID_COLORS. Used at session creation to give
 # each cs session a distinct prompt-bar accent without user choice. Claude
@@ -52,17 +71,32 @@ _read_local_state() {
 
 # Write 'key: value' into a machine-local state file, replacing any existing
 # line for that key. Creates .cs/local/ and the file on first write. Atomic
-# (tmp+mv), idempotent.
+# (tmp+mv), idempotent. A write that fails (permissions, a full disk) ends cs
+# with the file named: the launch has already told the user what it was about
+# to start, and a silent miss leaves the next open resuming nothing.
 _set_local_state() {
     local state="$1" key="$2" value="$3"
-    mkdir -p "$(dirname "$state")"
+    mkdir -p "$(dirname "$state")" 2>/dev/null || error "could not create $(dirname "$state")"
     local tmp="$state.tmp"
     {
-        if [ -f "$state" ]; then
-            awk -v key="$key" 'index($0, key ":") != 1' "$state"
-        fi
-        printf '%s: %s\n' "$key" "$value"
-    } > "$tmp" && mv "$tmp" "$state"
+        {
+            if [ -f "$state" ]; then
+                awk -v key="$key" 'index($0, key ":") != 1' "$state"
+            fi
+            printf '%s: %s\n' "$key" "$value"
+        } > "$tmp" && mv "$tmp" "$state"
+    } 2>/dev/null || { rm -f "$tmp" 2>/dev/null; error "could not write $state"; }
+}
+
+# Remove a key's line from a machine-local state file. A missing file or key is
+# a no-op. Atomic (tmp+mv), like _set_local_state, and loud on the same
+# failures.
+_unset_local_state() {
+    local state="$1" key="$2"
+    [ -f "$state" ] || return 0
+    local tmp="$state.tmp"
+    { awk -v key="$key" 'index($0, key ":") != 1' "$state" > "$tmp" && mv "$tmp" "$state"; } 2>/dev/null \
+        || { rm -f "$tmp" 2>/dev/null; error "could not write $state"; }
 }
 
 # Return the path to claude's per-cwd transcript directory. Symlinks in the
@@ -203,16 +237,26 @@ _timeline_rotated() {  # session_dir, from, to, reason, [handoff]
 # so cs's recorded UUID always tracks the conversation claude is about to
 # create — never orphaned. The CS_FRESH_REBIND signal lets session-start.sh
 # tailor its additionalContext (the user is starting fresh, not cold-booting).
+# With no recorded conversation to leave (the first open after cs -adopt, a
+# clone without its machine-local state) this is the session's first
+# conversation, not a rotation: no timeline event, no CS_FRESH_REBIND.
 _exec_fresh_rebind() {
     local session_dir="$1"
     local reason="${2:-declined-resume}"
     local handoff="${3:-}"
     local spawn_kick="${4:-}"
     local merge_kick="${5:-}"
+    # An adopted session's name is the link's, recorded in local state at the
+    # open; its directory is the project's. Every other session is its
+    # directory.
     local session_name
-    session_name=$(basename "$session_dir")
+    session_name=$(_read_local_state "$session_dir/.cs/local/state" session_name)
+    [ -n "$session_name" ] || session_name=$(basename "$session_dir")
+    # Only a UUID names a conversation to leave; the launch ignores anything
+    # else in the slot, and so does the rotation record.
     local old_uuid
     old_uuid=$(_read_local_state "$session_dir/.cs/local/state" claude_session_id)
+    _is_uuid "$old_uuid" || old_uuid=""
     local new_uuid
     new_uuid=$(_alloc_uuid)
     _set_local_state "$session_dir/.cs/local/state" claude_session_id "$new_uuid"
@@ -223,11 +267,11 @@ _exec_fresh_rebind() {
     if [ -L "$session_dir/.cs/private" ] || [ -e "$session_dir/.cs/private" ]; then
         public_handoff=""
     fi
-    _timeline_rotated "$session_dir" "$old_uuid" "$new_uuid" "$reason" "$public_handoff"
+    [ -z "$old_uuid" ] || _timeline_rotated "$session_dir" "$old_uuid" "$new_uuid" "$reason" "$public_handoff"
     local session_color
     session_color=$(_read_local_state "$session_dir/.cs/local/state" claude_session_color)
     local color_arg=""
-    [ -n "$session_color" ] && color_arg="/color $session_color"
+    _is_session_color "$session_color" && color_arg="/color $session_color"
     # A handoff kick makes the fresh conversation act on its first turn instead of
     # waiting for the user. It stays a bare trigger on purpose: the SessionStart
     # hook (which the same r answer arms via the pending-handoff marker) is the
@@ -244,7 +288,7 @@ _exec_fresh_rebind() {
     fi
     local launch_prompt="${merge_kick:-${spawn_kick:-${handoff_arg:-$color_arg}}}"
     export CS_CLAUDE_SESSION_ID="$new_uuid"
-    export CS_FRESH_REBIND=1
+    [ -z "$old_uuid" ] || export CS_FRESH_REBIND=1
     # shellcheck disable=SC2086
     exec $CLAUDE_CODE_BIN --name "$session_name" --session-id "$new_uuid" ${launch_prompt:+"$launch_prompt"}
 }

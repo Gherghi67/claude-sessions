@@ -1991,12 +1991,40 @@ test_finish_warns_when_it_displaces_a_spawn_kick() {
 
 run_test test_finish_warns_when_it_displaces_a_spawn_kick
 
+# A worktree open runs no migrate_session, so Phase 8 never binds a transcript
+# for it. With the recorded id gone and a conversation on disk, the open offers
+# that conversation rather than starting a new one over it.
+test_worktree_without_its_recorded_id_binds_the_folders_conversation() {
+    create_test_session_with_git "myproj" > /dev/null
+    cs_launch "myproj@fix-auth"
+    local wt="$CS_SESSIONS_ROOT/myproj@fix-auth" state uuid="55555555-5555-4555-8555-555555555555"
+    state="$wt/.cs/local/state"
+    awk 'index($0, "claude_session_id:") != 1' "$state" > "$state.tmp" && mv "$state.tmp" "$state"
+    local proj
+    proj="$CS_TRANSCRIPTS_DIR/$(cd "$wt" && pwd -P | tr '/.' '--')"
+    mkdir -p "$proj"
+    printf '{"type":"user","sessionId":"%s"}\n' "$uuid" > "$proj/$uuid.jsonl"
+    local output
+    output=$("$CS_BIN" "myproj@fix-auth" <<< "" 2>&1 || true)
+    assert_output_contains "$output" "Bound claude_session_id in .cs/local/state to $uuid" "the open binds the transcript it found" || return 1
+    assert_output_contains "$output" "Continue previous conversation?" "a real conversation is offered" || return 1
+    assert_output_contains "$output" "--resume $uuid" "the default answer resumes it" || return 1
+    assert_eq "$uuid" "$(awk '/^claude_session_id:/ { print $2; exit }' "$state")" "the binding is recorded" || return 1
+}
+
+run_test test_worktree_without_its_recorded_id_binds_the_folders_conversation
+
 test_finish_yields_to_an_explicit_rotation_choice() {
     # r is the user explicitly choosing the rotation handoff at the prompt;
     # a merge armed moments earlier must not silently override that choice.
     local base_dir
     base_dir=$(create_test_session_with_git "myproj")
     cs_launch "myproj@fix-auth"
+    # The prompt belongs to a session with a conversation to resume; one with
+    # none starts its first without asking. Record the one the handoff's
+    # parent names.
+    mkdir -p "$base_dir/.cs/local"
+    printf 'claude_session_id: 00000000-0000-4000-8000-000000000000\n' >> "$base_dir/.cs/local/state"
     mkdir -p "$base_dir/.cs/handoffs"
     cat > "$base_dir/.cs/handoffs/2026-07-16-test.md" << 'EOF'
 ---
