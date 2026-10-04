@@ -26,6 +26,25 @@ cs_assert_local_untracked() {
     fi
 }
 
+# For a checkout cs hides itself in through info/exclude (git_bookkeeping:
+# exclude): the first path cs would rewrite at open that the branch tracks, or
+# "<path> is a symlink" when one of them points elsewhere (a write through it
+# lands on the target, which may be tracked). Empty when the open is safe. An
+# exclude hides only untracked files, so a tracked one here would be dirtied
+# on every open; checked at adoption to skip, and at every open to refuse,
+# since the branch moves on.
+_exclude_session_tracked_conflict() {  # dir
+    local dir="$1" p
+    for p in .claude .claude/settings.local.json CLAUDE.local.md .cs; do
+        if [ -L "$dir/$p" ]; then
+            printf '%s is a symlink' "$p"
+            return 0
+        fi
+    done
+    # The .tmp names are the fixed temp files cs writes through before its mv.
+    git -C "$dir" ls-files -- .cs .claude/settings.local.json .claude/settings.local.json.tmp CLAUDE.local.md CLAUDE.local.md.tmp 2>/dev/null | head -1
+}
+
 # True when cs created this session directory, and so owns its mode. Two ways to
 # fail: the directory sits outside the sessions root, or a symlink IN the root
 # resolves to it — an adopted session, whose target is the user's own project
@@ -146,6 +165,24 @@ _refuse_plaintext_beside_private() {  # session_name, session_dir
 }
 
 # Create session directory structure
+# The part of a session README every reader parses: the YAML frontmatter
+# (status, created, tags, aliases) and the `# Session: <name>` title, followed
+# by one blank line. Callers append their own body. The TUI, the hooks and
+# `cs -list` read these fields, so every session kind writes them here.
+_write_session_readme_head() {  # readme, name, tags_yaml, aliases_yaml
+    local readme="$1" name="$2" tags="$3" aliases="$4"
+    cat > "$readme" << EOF
+---
+status: active
+created: $(date '+%Y-%m-%d')
+tags: $tags
+aliases: $aliases
+---
+# Session: $name
+
+EOF
+}
+
 create_session_structure() {
     local session_dir="$1"
     local claude_session_id claude_session_color
@@ -164,15 +201,8 @@ create_session_structure() {
     # one caller that runs this against a directory that already carries one,
     # and its records must survive untouched.
     if [ ! -f "$session_dir/.cs/README.md" ]; then
-        cat > "$session_dir/.cs/README.md" << EOF
----
-status: active
-created: $(date '+%Y-%m-%d')
-tags: []
-aliases: ["$(basename "$session_dir")"]
----
-# Session: $(basename "$session_dir")
-
+        _write_session_readme_head "$session_dir/.cs/README.md" "$(basename "$session_dir")" "[]" "[\"$(basename "$session_dir")\"]"
+        cat >> "$session_dir/.cs/README.md" << EOF
 **Started:** $(date '+%Y-%m-%d %H:%M:%S')
 **Location:** $(hostname):$(pwd)
 
@@ -463,14 +493,35 @@ migrate_session() {
 
     # Per-actor local state must never be committed; refuse if it has been.
     cs_assert_local_untracked "$session_dir"
+    if [ "$(_read_local_state "$session_dir/.cs/local/state" git_bookkeeping)" = "exclude" ]; then
+        local conflict
+        conflict=$(_exclude_session_tracked_conflict "$session_dir")
+        if [ -n "$conflict" ]; then
+            case "$conflict" in
+                *symlink) error "$conflict in $session_dir, and cs writes through it at every open. Replace it with a real file or directory, or cs -rm the session." ;;
+                *) error "$conflict is tracked on the branch in $session_dir, and cs would rewrite it at every open. Stop tracking it, or cs -rm the session." ;;
+            esac
+        fi
+    fi
 
-    # Backfill the merge attributes on existing sessions.
-    setup_merge_attributes "$session_dir"
-
-    # Backfill the .cs/local/ ignore rule on older sessions whose .gitignore
-    # predates it, so per-actor local state never gets committed (which would
-    # otherwise trip cs_assert_local_untracked and block the next resume).
-    ensure_cs_gitignore_entries "$session_dir"
+    # Backfill the merge attributes on existing sessions, and the .cs/local/
+    # ignore rule on older sessions whose .gitignore predates it, so per-actor
+    # local state never gets committed (which would otherwise trip
+    # cs_assert_local_untracked and block the next resume). An adopted Claude
+    # Code worktree keeps cs's files out of git through the repo's common
+    # exclude instead (git_bookkeeping: exclude): nothing of cs's is committed
+    # there for attributes to govern, and an in-tree .gitignore or
+    # .gitattributes would be the one thing dirtying its PR branch.
+    # The same sessions keep their tracked CLAUDE.md as the branch has it: the
+    # two CLAUDE.md migrations further down are skipped for them too.
+    local tracked_tree_is_ours=1
+    if [ "$(_read_local_state "$session_dir/.cs/local/state" git_bookkeeping)" = "exclude" ]; then
+        tracked_tree_is_ours=0
+    fi
+    if [ "$tracked_tree_is_ours" = 1 ]; then
+        setup_merge_attributes "$session_dir"
+        ensure_cs_gitignore_entries "$session_dir"
+    fi
 
     # Phase 1: Structural migration (flat layout -> .cs/ directory)
     if needs_cs_migration "$session_dir"; then
@@ -540,7 +591,7 @@ migrate_session() {
         # that was the only line, so guard on presence and tolerate the exit code
         # rather than leaving the rule (and a stray .tmp) behind.
         local ga="$session_dir/.gitattributes"
-        if [ -f "$ga" ] && grep -q 'logs/session\.log merge=union' "$ga"; then
+        if [ "$tracked_tree_is_ours" = 1 ] && [ -f "$ga" ] && grep -q 'logs/session\.log merge=union' "$ga"; then
             { grep -v 'logs/session\.log merge=union' "$ga" > "$ga.tmp"; } 2>/dev/null || true
             mv "$ga.tmp" "$ga" 2>/dev/null || rm -f "$ga.tmp"
         fi
@@ -576,7 +627,9 @@ migrate_session() {
     # present" in CLAUDE.local.md is any cs sentinel at all, not just the
     # leading one — otherwise this fallback would re-append a duplicate
     # fresh template on top of it.
-    migrate_claude_md_to_local "$session_dir"
+    if [ "$tracked_tree_is_ours" = 1 ]; then
+        migrate_claude_md_to_local "$session_dir"
+    fi
     local claude_md="$session_dir/CLAUDE.md"
     local claude_local="$session_dir/CLAUDE.local.md"
     if ! { [ -f "$claude_local" ] && grep -q '<!-- cs:' "$claude_local"; } \
@@ -591,7 +644,9 @@ migrate_session() {
     fi
 
     # Phase 7: prune retired command-tracker artifacts.
-    prune_commands_artifacts "$session_dir"
+    if [ "$tracked_tree_is_ours" = 1 ]; then
+        prune_commands_artifacts "$session_dir"
+    fi
 
     # Phase 6: Add YAML frontmatter to README.md if missing
     local readme="$session_dir/.cs/README.md"

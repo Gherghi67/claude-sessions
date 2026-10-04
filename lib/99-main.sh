@@ -76,7 +76,12 @@ main() {
             return 0
             ;;
         -adopt)
-            adopt_session "${2:-}"
+            if [ "${2:-}" = "--worktrees" ]; then
+                shift 2
+                adopt_worktrees "$@"
+            else
+                adopt_session "${2:-}"
+            fi
             return 0
             ;;
         -complete) # hidden: shell-completion plumbing, not a user-facing command

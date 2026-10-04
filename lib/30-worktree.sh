@@ -25,15 +25,8 @@ cs_split_worktree_name() {
 bootstrap_worktree_meta() {
     local wt_dir="$1" base_name="$2" task="$3"
     mkdir -p "$wt_dir/.cs"/{local,memory}
-    cat > "$wt_dir/.cs/README.md" << EOF
----
-status: active
-created: $(date '+%Y-%m-%d')
-tags: [worktree]
-aliases: ["$base_name@$task"]
----
-# Session: $base_name@$task
-
+    _write_session_readme_head "$wt_dir/.cs/README.md" "$base_name@$task" "[worktree]" "[\"$base_name@$task\"]"
+    cat >> "$wt_dir/.cs/README.md" << EOF
 Feature worktree of session '$base_name' on branch cs/$task.
 
 ## Objective
