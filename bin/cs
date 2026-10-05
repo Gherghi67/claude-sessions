@@ -8771,6 +8771,7 @@ launch_claude_code() {
     if [ -n "${TMUX:-}" ]; then
         _tmux set-environment CLAUDE_CODE_TMUX_TRUECOLOR "$CLAUDE_CODE_TMUX_TRUECOLOR" 2>/dev/null || true
     fi
+    _iterm_tab_through_tmux
     # An adopted session's name lives only in the symlink pointing here, which a
     # hook walking up from the directory never sees. Record it on open, so
     # sessions adopted before cs wrote the key get it too. Only for those: an
@@ -9278,6 +9279,69 @@ EOF
             exec $CLAUDE_CODE_BIN --name "$session_name" ${launch_prompt:+"$launch_prompt"}
         fi
     fi
+}
+
+# Follow a chain of symlinks to the file at its end, portably (BSD readlink
+# has no -f before macOS 12.3). Prints the final path.
+_resolve_symlink_file() {  # path
+    local path="$1" target
+    while [ -L "$path" ]; do
+        target=$(readlink "$path") || break
+        case "$target" in
+            /*) path="$target" ;;
+            *)  path="$(dirname "$path")/$target" ;;
+        esac
+    done
+    printf '%s\n' "$path"
+}
+
+# Give a claude launched inside tmux under iTerm2 the tab it gets when iTerm2
+# runs it directly: the progress loader along the top of the tab and the
+# Claude icon beside its title. Neither reaches the tab on its own through tmux.
+#
+# Loader: Claude Code sends its progress escape (OSC 9;4, wrapped for tmux
+# passthrough) only when TERM_PROGRAM names iTerm.app at 3.6.6 or later, and
+# tmux replaces TERM_PROGRAM with its own name. iTerm2's real name and version
+# are still in LC_TERMINAL and LC_TERMINAL_VERSION, so claude gets those.
+# Claude Code also reads iTerm.app in TERM_PROGRAM with a TERM that is not
+# screen* or tmux* as tmux -CC; that holds only when the attached client is in
+# control mode, so in plain tmux with such a TERM claude keeps tmux's name.
+#
+# Icon: iTerm2 picks a tab's icon from the job's process name, and under tmux
+# that name is the one tmux reports, the basename of the executable file. The
+# native installer runs versions/<version> through a symlink, so the name is
+# the version number. A hard link named claude to the same file carries the
+# right name; it is refreshed whenever claude updates, and a launch that
+# cannot make it runs claude as before. Only the default CLAUDE_CODE_BIN is
+# linked: a user-chosen binary is run as given.
+_iterm_tab_through_tmux() {
+    [ -n "${TMUX:-}" ] && [ "${LC_TERMINAL:-}" = iTerm2 ] && [ -z "${CS_NO_ITERM2:-}" ] || return 0
+
+    if [ "${TERM_PROGRAM:-}" != iTerm.app ] && [ -n "${LC_TERMINAL_VERSION:-}" ]; then
+        local control_mode
+        control_mode=$(_tmux display-message -p '#{client_control_mode}' 2>/dev/null) || control_mode=""
+        case "$control_mode:${TERM:-}" in
+            1:*|*:screen*|*:tmux*)
+                export TERM_PROGRAM=iTerm.app
+                export TERM_PROGRAM_VERSION="$LC_TERMINAL_VERSION"
+                ;;
+        esac
+    fi
+
+    [ "$CLAUDE_CODE_BIN" = claude ] || return 0
+    local found real link
+    found=$(command -v claude 2>/dev/null) || return 0
+    real=$(_resolve_symlink_file "$found")
+    [ "$(basename "$real")" != claude ] || return 0
+    link="$HOME/.local/share/cs/bin/claude"
+    if ! [ "$link" -ef "$real" ]; then
+        mkdir -p "$(dirname "$link")" 2>/dev/null || return 0
+        # Link beside the target name and rename over it, so a concurrent
+        # launch never finds the name missing.
+        ln -f "$real" "$link.$$" 2>/dev/null || return 0
+        mv -f "$link.$$" "$link" 2>/dev/null || { rm -f "$link.$$"; return 0; }
+    fi
+    CLAUDE_CODE_BIN="$link"
 }
 
 # Run secrets subcommand
