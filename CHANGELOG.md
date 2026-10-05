@@ -4,7 +4,7 @@ All notable changes to cs are documented here. Release notes are also available 
 
 <!-- New entries group changes under Keep-a-Changelog headings (Added / Changed / Removed / Fixes / Docs), or Features / Performance where those fit the release. -->
 
-## Unreleased
+## 2026.10.4
 
 ### Fixes
 - cs no longer clobbers a file named `<file>.tmp` next to the session files it rewrites, and those files keep their mode. `settings.local.json`, `CLAUDE.md`, `CLAUDE.local.md`, `.gitattributes` and `.cs/local/state` were each rewritten through a fixed `<file>.tmp` name, so a file of yours with that name was overwritten, and the result came back with the umask's mode instead of its own. The temp file now has a unique name in the same folder and takes the destination's permission bits before the rename. The state file is also rewritten by the SessionStart hook, so the two writers now take turns on a lock beside it. The same holds for `.cs/README.md`, `.cs/memory/MEMORY.md`, the narrative and a rotation handoff. When one of these is a symlink, cs writes to the link's target and the link stays a link. The queue state, the presence line and the update-notes cache moved to a unique temp name too. A tracked `<file>.tmp` is no longer a reason for `cs -adopt --worktrees` to skip a worktree, or for an open to refuse one.
