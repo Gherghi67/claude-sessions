@@ -8771,6 +8771,7 @@ launch_claude_code() {
     if [ -n "${TMUX:-}" ]; then
         _tmux set-environment CLAUDE_CODE_TMUX_TRUECOLOR "$CLAUDE_CODE_TMUX_TRUECOLOR" 2>/dev/null || true
     fi
+    _iterm_tab_through_tmux
     # An adopted session's name lives only in the symlink pointing here, which a
     # hook walking up from the directory never sees. Record it on open, so
     # sessions adopted before cs wrote the key get it too. Only for those: an
@@ -9278,6 +9279,99 @@ EOF
             exec $CLAUDE_CODE_BIN --name "$session_name" ${launch_prompt:+"$launch_prompt"}
         fi
     fi
+}
+
+# Follow a chain of symlinks to the file at its end, portably (BSD readlink
+# has no -f before macOS 12.3). Prints the final path.
+_resolve_symlink_file() {  # path
+    local path="$1" target
+    while [ -L "$path" ]; do
+        target=$(readlink "$path") || break
+        case "$target" in
+            /*) path="$target" ;;
+            *)  path="$(dirname "$path")/$target" ;;
+        esac
+    done
+    printf '%s\n' "$path"
+}
+
+# Give a claude launched inside tmux under iTerm2 the tab it gets when iTerm2
+# runs it directly: the progress loader along the top of the tab and the
+# Claude icon beside its title. Neither reaches the tab on its own through tmux.
+#
+# Loader: Claude Code sends its progress escape (OSC 9;4, wrapped for tmux
+# passthrough) only when TERM_PROGRAM names iTerm.app at 3.6.6 or later, and
+# tmux replaces TERM_PROGRAM with its own name. iTerm2's real name and version
+# are still in LC_TERMINAL and LC_TERMINAL_VERSION, so claude gets those.
+# Claude Code also reads iTerm.app in TERM_PROGRAM with a TERM that is not
+# screen* or tmux* as tmux -CC; that holds only when the attached client is in
+# control mode, so in plain tmux with such a TERM claude keeps tmux's name.
+#
+# Icon: iTerm2 picks a tab's icon from the job's process name, and under tmux
+# that name is the one tmux reports, the basename of the executable file. The
+# native installer runs versions/<version> through a symlink, so the name is
+# the version number. A hard link named claude to the same file carries the
+# right name. It lives in a directory per version and goes when the installer
+# removes that version; a launch that cannot make it runs claude as before.
+# Only the default CLAUDE_CODE_BIN is linked, and only when it resolves to a
+# versions/<version> file: a user-chosen binary or another install is run as
+# given.
+_iterm_tab_through_tmux() {
+    [ -n "${TMUX:-}" ] && [ "${LC_TERMINAL:-}" = iTerm2 ] && [ -z "${CS_NO_ITERM2:-}" ] || return 0
+
+    if [ "${TERM_PROGRAM:-}" != iTerm.app ] && [ -n "${LC_TERMINAL_VERSION:-}" ]; then
+        local control_mode
+        control_mode=$(_tmux display-message -p '#{client_control_mode}' 2>/dev/null) || control_mode=""
+        case "$control_mode:${TERM:-}" in
+            1:*|*:screen*|*:tmux*)
+                export TERM_PROGRAM=iTerm.app
+                export TERM_PROGRAM_VERSION="$LC_TERMINAL_VERSION"
+                ;;
+        esac
+    fi
+
+    [ "$CLAUDE_CODE_BIN" = claude ] || return 0
+    local found real link
+    found=$(command -v claude 2>/dev/null) || return 0
+    real=$(_resolve_symlink_file "$found")
+    # Only the native installer's versions/<version> file is self-contained;
+    # an npm cli.js loads files beside it, which a hard link elsewhere loses.
+    case "$real" in
+        */versions/[0-9]*.[0-9]*.[0-9]*) ;;
+        *) return 0 ;;
+    esac
+    # Every launch site expands CLAUDE_CODE_BIN unquoted, since a user value
+    # may carry arguments, so a path with whitespace would split there.
+    local links="$HOME/.local/share/cs/claude"
+    case "$links" in *[[:space:]]*) return 0 ;; esac
+    # One directory per version: a launch that resolved this version runs it
+    # even if another launch links a newer one before this one execs.
+    link="$links/$(basename "$real")/claude"
+    if ! [ "$link" -ef "$real" ]; then
+        mkdir -p "$(dirname "$link")" 2>/dev/null || return 0
+        # Link beside the target name and rename over it, so a concurrent
+        # launch never finds the name missing.
+        ln -f "$real" "$link.$$" 2>/dev/null || return 0
+        mv -f "$link.$$" "$link" 2>/dev/null || { rm -f "$link.$$"; return 0; }
+    fi
+    # A launch marks the directory it picked; another launch may still be
+    # waiting to exec that link, at the resume prompt for one.
+    touch "$(dirname "$link")" 2>/dev/null || true
+    # A link keeps its file's data alive after the installer removes the
+    # version; drop those nobody has picked for a day. A claude still running
+    # from one keeps its copy. Two launches can prune the same directory, so
+    # a removal that finds it gone is not an error.
+    # Do not re-fix: a prune can still race a launch that picks the same
+    # directory between find and rm, but only if the installer removes that
+    # version's file in the same moment. It removes only versions that are
+    # no longer current, and a launch only picks the current one (Codex
+    # review round 3, accepted 2026-10-05).
+    local old
+    while IFS= read -r old; do
+        [ -e "$(dirname "$real")/$(basename "$old")" ] && continue
+        { rm -f "$old/claude"; rmdir "$old"; } 2>/dev/null || true
+    done < <(find "$links" -mindepth 1 -maxdepth 1 -type d -mtime +1 2>/dev/null)
+    CLAUDE_CODE_BIN="$link"
 }
 
 # Run secrets subcommand
