@@ -203,6 +203,39 @@ test_link_follows_a_claude_update() {
     assert_eq "claude" "$(basename "$(_launched "$out" argv0)")" "still under the name claude" || return 1
 }
 
+# Each version gets its own link, so a launch that resolved one version runs
+# that version even if another launch links a newer one before it execs.
+# A link outlives its version only until the installer removes that file.
+test_each_version_has_its_own_link() {
+    _tab_launch_env 1
+    local inst="$TEST_TMPDIR/inst" out old new
+    out=$("$CS_BIN" v-old <<< "" 2>&1) || true
+    old=$(_launched "$out" argv0)
+    printf '#!/usr/bin/env bash\necho "argv0=$0"\n' > "$inst/versions/10.0.0"
+    chmod +x "$inst/versions/10.0.0"
+    ln -sf ../versions/10.0.0 "$inst/bin/claude"
+    out=$("$CS_BIN" v-new <<< "" 2>&1) || true
+    new=$(_launched "$out" argv0)
+    [ "$old" != "$new" ] || { echo "  FAIL: both versions ran from one path: $old"; return 1; }
+    [ "$old" -ef "$inst/versions/9.9.9" ] || {
+        echo "  FAIL: linking 10.0.0 changed what $old runs"; return 1; }
+    rm "$inst/versions/9.9.9"
+    "$CS_BIN" v-pruned <<< "" > /dev/null 2>&1 || true
+    [ ! -e "$old" ] || { echo "  FAIL: $old kept a removed version alive"; return 1; }
+}
+
+# The launch sites expand CLAUDE_CODE_BIN unquoted (it may carry arguments),
+# so a link path with a space in it would be split; such a HOME gets no link.
+test_home_with_a_space_runs_claude_as_found() {
+    _tab_launch_env 1
+    export HOME="$TEST_TMPDIR/a home"
+    mkdir -p "$HOME"
+    local out
+    out=$("$CS_BIN" spacehome <<< "" 2>&1) || true
+    assert_eq "$TEST_TMPDIR/inst/bin/claude" "$(_launched "$out" argv0)" \
+        "a HOME with a space must not break the launch" || return 1
+}
+
 # The icon is cosmetic: a launch that cannot make the link runs claude anyway.
 test_unlinkable_claude_still_launches() {
     _tab_launch_env 1
@@ -245,6 +278,8 @@ run_test test_plain_tmux_keeps_tmux_name_unless_term_is_tmux
 run_test test_outside_iterm_launch_is_untouched
 run_test test_iterm_integrations_off_leaves_launch_untouched
 run_test test_link_follows_a_claude_update
+run_test test_each_version_has_its_own_link
+run_test test_home_with_a_space_runs_claude_as_found
 run_test test_unlinkable_claude_still_launches
 run_test test_user_chosen_claude_binary_is_run_as_given
 run_test test_stop_hook_bounces_dock_in_iterm

@@ -9311,10 +9311,11 @@ _resolve_symlink_file() {  # path
 # that name is the one tmux reports, the basename of the executable file. The
 # native installer runs versions/<version> through a symlink, so the name is
 # the version number. A hard link named claude to the same file carries the
-# right name; it is refreshed whenever claude updates, and a launch that
-# cannot make it runs claude as before. Only the default CLAUDE_CODE_BIN is
-# linked, and only when it resolves to a versions/<version> file: a
-# user-chosen binary or another install is run as given.
+# right name. It lives in a directory per version and goes when the installer
+# removes that version; a launch that cannot make it runs claude as before.
+# Only the default CLAUDE_CODE_BIN is linked, and only when it resolves to a
+# versions/<version> file: a user-chosen binary or another install is run as
+# given.
 _iterm_tab_through_tmux() {
     [ -n "${TMUX:-}" ] && [ "${LC_TERMINAL:-}" = iTerm2 ] && [ -z "${CS_NO_ITERM2:-}" ] || return 0
 
@@ -9339,7 +9340,13 @@ _iterm_tab_through_tmux() {
         */versions/[0-9]*.[0-9]*.[0-9]*) ;;
         *) return 0 ;;
     esac
-    link="$HOME/.local/share/cs/bin/claude"
+    # Every launch site expands CLAUDE_CODE_BIN unquoted, since a user value
+    # may carry arguments, so a path with whitespace would split there.
+    local links="$HOME/.local/share/cs/claude"
+    case "$links" in *[[:space:]]*) return 0 ;; esac
+    # One directory per version: a launch that resolved this version runs it
+    # even if another launch links a newer one before this one execs.
+    link="$links/$(basename "$real")/claude"
     if ! [ "$link" -ef "$real" ]; then
         mkdir -p "$(dirname "$link")" 2>/dev/null || return 0
         # Link beside the target name and rename over it, so a concurrent
@@ -9347,6 +9354,13 @@ _iterm_tab_through_tmux() {
         ln -f "$real" "$link.$$" 2>/dev/null || return 0
         mv -f "$link.$$" "$link" 2>/dev/null || { rm -f "$link.$$"; return 0; }
     fi
+    # A link keeps its file's data alive after the installer removes the
+    # version; drop those. A claude still running from one keeps its copy.
+    local old
+    for old in "$links"/*/claude; do
+        [ -e "$(dirname "$real")/$(basename "$(dirname "$old")")" ] && continue
+        rm -f "$old" 2>/dev/null && rmdir "$(dirname "$old")" 2>/dev/null
+    done
     CLAUDE_CODE_BIN="$link"
 }
 
