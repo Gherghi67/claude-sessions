@@ -197,3 +197,111 @@ _cs_tmux_title_lock() {  # pane
     echo "$$" > "$lock/pid" 2>/dev/null || true
     printf '%s\n' "$lock"
 }
+
+# Octal permission bits of a file, as chmod takes them (644). BSD and GNU stat
+# spell the flag differently, and `-f` means a file system on GNU, so the two
+# are never chained with ||.
+_cs_file_mode() {  # path
+    if [[ "${OSTYPE:-}" == darwin* ]]; then
+        stat -f %Lp "$1"
+    else
+        stat -c %a "$1"
+    fi
+}
+
+# Replace a file with a command's stdout, atomically: the output goes to a
+# uniquely named temp file in the same directory, which is renamed over the
+# destination only once the command has succeeded. The destination keeps the
+# permission bits it had, and a new file gets the umask's; the temp file takes
+# them BEFORE the rename, so a shared directory never sees a 0600 window. A
+# failed command, chmod or rename leaves the destination as it was, the temp
+# file removed, and returns the failing status. Callers that want a message
+# add it: hooks source this file, and `error` is cs's alone.
+# Usage: cs_write_atomic <dest> <command> [args...]
+cs_write_atomic() {  # dest, command [args...]
+    local dest="$1"; shift
+    (
+        local dir tmp mode
+        dir=$(dirname "$dest")
+        tmp=$(mktemp "$dir/.$(basename "$dest").XXXXXX") || exit 1
+        trap 'rm -f "$tmp"' EXIT
+        "$@" > "$tmp" || exit $?
+        if [ -f "$dest" ]; then
+            mode=$(_cs_file_mode "$dest") || exit 1
+        else
+            mode=$(printf '%o' $((0666 & ~0$(umask))))
+        fi
+        chmod "$mode" "$tmp" && mv -f "$tmp" "$dest"
+    )
+}
+
+# The machine-local state file (.cs/local/state) is rewritten whole from its
+# old contents, by cs and by the SessionStart hook, so two writers can lose
+# an update unless they take turns. The lock is a directory beside the file
+# holding the holder's pid (mkdir is atomic, and bash 3.2 has no flock). A
+# holder whose pid is gone died holding it and is taken over at once; an
+# empty pid file older than a second is a holder that died between the mkdir
+# and the write, taken over too. A live holder is waited for, but for no more
+# than five seconds: past that the write goes ahead without the lock, since a
+# launch or a hook must never stall on a lock a stray process holds. Prints
+# the lock directory when it holds it, nothing when it does not; a directory
+# that cannot take the lock (missing, read-only) is not waited on.
+_cs_local_state_lock() {  # state
+    local lock="$1.lock" holder deadline=$((SECONDS + 5)) empty_since=""
+    until mkdir "$lock" 2>/dev/null; do
+        [ -d "$lock" ] || return 0
+        [ "$SECONDS" -lt "$deadline" ] || return 0
+        holder=""
+        { read -r holder < "$lock/pid"; } 2>/dev/null || true
+        if [ -n "$holder" ]; then
+            empty_since=""
+            kill -0 "$holder" 2>/dev/null || { rm -f "$lock/pid"; rmdir "$lock" 2>/dev/null; }
+        else
+            : "${empty_since:=$SECONDS}"
+            if [ $((SECONDS - empty_since)) -ge 1 ]; then
+                rm -f "$lock/pid"; rmdir "$lock" 2>/dev/null
+                empty_since=""
+            fi
+        fi
+        sleep 0.05
+    done
+    echo "$$" > "$lock/pid" 2>/dev/null || true
+    printf '%s\n' "$lock"
+}
+
+_cs_local_state_unlock() {  # lock dir ("" when none was held)
+    [ -n "$1" ] || return 0
+    rm -f "$1/pid"; rmdir "$1" 2>/dev/null || true
+}
+
+# The state file's new contents: every line but the key's, then the key's new
+# line when a value is given. Three args set, two unset.
+_cs_local_state_render() {  # state, key [, value]
+    if [ -f "$1" ]; then
+        awk -v key="$2" 'index($0, key ":") != 1' "$1"
+    fi
+    [ $# -ge 3 ] && printf '%s: %s\n' "$2" "$3"
+    return 0
+}
+
+# Write 'key: value' into a machine-local state file, replacing any existing
+# line for that key, under the state lock. Returns non-zero when the write
+# failed; the file is then as it was.
+cs_local_state_set() {  # state, key, value
+    local lock rc=0
+    lock=$(_cs_local_state_lock "$1")
+    cs_write_atomic "$1" _cs_local_state_render "$1" "$2" "$3" || rc=$?
+    _cs_local_state_unlock "$lock"
+    return "$rc"
+}
+
+# Remove a key's line from a machine-local state file, under the state lock.
+# A missing file is a no-op.
+cs_local_state_unset() {  # state, key
+    [ -f "$1" ] || return 0
+    local lock rc=0
+    lock=$(_cs_local_state_lock "$1")
+    cs_write_atomic "$1" _cs_local_state_render "$1" "$2" || rc=$?
+    _cs_local_state_unlock "$lock"
+    return "$rc"
+}

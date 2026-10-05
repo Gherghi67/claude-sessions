@@ -346,6 +346,114 @@ _cs_tmux_title_lock() {  # pane
     echo "$$" > "$lock/pid" 2>/dev/null || true
     printf '%s\n' "$lock"
 }
+
+# Octal permission bits of a file, as chmod takes them (644). BSD and GNU stat
+# spell the flag differently, and `-f` means a file system on GNU, so the two
+# are never chained with ||.
+_cs_file_mode() {  # path
+    if [[ "${OSTYPE:-}" == darwin* ]]; then
+        stat -f %Lp "$1"
+    else
+        stat -c %a "$1"
+    fi
+}
+
+# Replace a file with a command's stdout, atomically: the output goes to a
+# uniquely named temp file in the same directory, which is renamed over the
+# destination only once the command has succeeded. The destination keeps the
+# permission bits it had, and a new file gets the umask's; the temp file takes
+# them BEFORE the rename, so a shared directory never sees a 0600 window. A
+# failed command, chmod or rename leaves the destination as it was, the temp
+# file removed, and returns the failing status. Callers that want a message
+# add it: hooks source this file, and `error` is cs's alone.
+# Usage: cs_write_atomic <dest> <command> [args...]
+cs_write_atomic() {  # dest, command [args...]
+    local dest="$1"; shift
+    (
+        local dir tmp mode
+        dir=$(dirname "$dest")
+        tmp=$(mktemp "$dir/.$(basename "$dest").XXXXXX") || exit 1
+        trap 'rm -f "$tmp"' EXIT
+        "$@" > "$tmp" || exit $?
+        if [ -f "$dest" ]; then
+            mode=$(_cs_file_mode "$dest") || exit 1
+        else
+            mode=$(printf '%o' $((0666 & ~0$(umask))))
+        fi
+        chmod "$mode" "$tmp" && mv -f "$tmp" "$dest"
+    )
+}
+
+# The machine-local state file (.cs/local/state) is rewritten whole from its
+# old contents, by cs and by the SessionStart hook, so two writers can lose
+# an update unless they take turns. The lock is a directory beside the file
+# holding the holder's pid (mkdir is atomic, and bash 3.2 has no flock). A
+# holder whose pid is gone died holding it and is taken over at once; an
+# empty pid file older than a second is a holder that died between the mkdir
+# and the write, taken over too. A live holder is waited for, but for no more
+# than five seconds: past that the write goes ahead without the lock, since a
+# launch or a hook must never stall on a lock a stray process holds. Prints
+# the lock directory when it holds it, nothing when it does not; a directory
+# that cannot take the lock (missing, read-only) is not waited on.
+_cs_local_state_lock() {  # state
+    local lock="$1.lock" holder deadline=$((SECONDS + 5)) empty_since=""
+    until mkdir "$lock" 2>/dev/null; do
+        [ -d "$lock" ] || return 0
+        [ "$SECONDS" -lt "$deadline" ] || return 0
+        holder=""
+        { read -r holder < "$lock/pid"; } 2>/dev/null || true
+        if [ -n "$holder" ]; then
+            empty_since=""
+            kill -0 "$holder" 2>/dev/null || { rm -f "$lock/pid"; rmdir "$lock" 2>/dev/null; }
+        else
+            : "${empty_since:=$SECONDS}"
+            if [ $((SECONDS - empty_since)) -ge 1 ]; then
+                rm -f "$lock/pid"; rmdir "$lock" 2>/dev/null
+                empty_since=""
+            fi
+        fi
+        sleep 0.05
+    done
+    echo "$$" > "$lock/pid" 2>/dev/null || true
+    printf '%s\n' "$lock"
+}
+
+_cs_local_state_unlock() {  # lock dir ("" when none was held)
+    [ -n "$1" ] || return 0
+    rm -f "$1/pid"; rmdir "$1" 2>/dev/null || true
+}
+
+# The state file's new contents: every line but the key's, then the key's new
+# line when a value is given. Three args set, two unset.
+_cs_local_state_render() {  # state, key [, value]
+    if [ -f "$1" ]; then
+        awk -v key="$2" 'index($0, key ":") != 1' "$1"
+    fi
+    [ $# -ge 3 ] && printf '%s: %s\n' "$2" "$3"
+    return 0
+}
+
+# Write 'key: value' into a machine-local state file, replacing any existing
+# line for that key, under the state lock. Returns non-zero when the write
+# failed; the file is then as it was.
+cs_local_state_set() {  # state, key, value
+    local lock rc=0
+    lock=$(_cs_local_state_lock "$1")
+    cs_write_atomic "$1" _cs_local_state_render "$1" "$2" "$3" || rc=$?
+    _cs_local_state_unlock "$lock"
+    return "$rc"
+}
+
+# Remove a key's line from a machine-local state file, under the state lock.
+# A missing file is a no-op.
+cs_local_state_unset() {  # state, key
+    [ -f "$1" ] || return 0
+    local lock rc=0
+    lock=$(_cs_local_state_lock "$1")
+    cs_write_atomic "$1" _cs_local_state_render "$1" "$2" || rc=$?
+    _cs_local_state_unlock "$lock"
+    return "$rc"
+}
 _claude_encode_path() {
     local p="$1"
     p="${p//[^A-Za-z0-9]/-}"
@@ -2499,18 +2607,13 @@ setup_auto_memory() {
     local memory_path="$session_dir/.cs/memory"
     mkdir -p "$session_dir/.claude"
     if [ -f "$settings_file" ] && command -v jq >/dev/null 2>&1; then
-        local current
-        current=$(cat "$settings_file")
         # Write through a temp file: redirecting jq's output onto the settings
         # file truncates it before jq parses, so one syntax error in a
         # hand-edited file would cost the user every setting it holds. A file
         # jq cannot read is left alone, like the no-jq case below.
-        if echo "$current" | { jq --arg m "$memory_path" \
+        if ! cs_write_atomic "$settings_file" jq --arg m "$memory_path" \
             '.autoMemoryDirectory = $m | .plansDirectory = ".cs/plans"' \
-            > "$settings_file.tmp"; } 2>/dev/null; then
-            mv "$settings_file.tmp" "$settings_file"
-        else
-            rm -f "$settings_file.tmp"
+            "$settings_file" 2>/dev/null; then
             # stderr, not stdout: create_worktree_session returns its directory
             # by echoing it, and lib/99-main.sh captures that in a command
             # substitution, so anything on stdout here lands inside the path.
@@ -2840,8 +2943,7 @@ migrate_claude_md_to_local() {
         else
             sed -n "${split_line},\$p" "$claude_md" > "$local_md"
         fi
-        printf '%s\n' "$head_text" > "$claude_md.tmp" \
-            && mv "$claude_md.tmp" "$claude_md"
+        cs_write_atomic "$claude_md" printf '%s\n' "$head_text"
         warn "Moved cs-managed sections from CLAUDE.md to CLAUDE.local.md; your own content stays in CLAUDE.md"
     fi
     return 0
@@ -2920,32 +3022,22 @@ _read_local_state() {
 
 # Write 'key: value' into a machine-local state file, replacing any existing
 # line for that key. Creates .cs/local/ and the file on first write. Atomic
-# (tmp+mv), idempotent. A write that fails (permissions, a full disk) ends cs
-# with the file named: the launch has already told the user what it was about
-# to start, and a silent miss leaves the next open resuming nothing.
+# and serialised against the SessionStart hook's writer (cs_local_state_set),
+# idempotent. A write that fails (permissions, a full disk) ends cs with the
+# file named: the launch has already told the user what it was about to
+# start, and a silent miss leaves the next open resuming nothing.
 _set_local_state() {
     local state="$1" key="$2" value="$3"
     mkdir -p "$(dirname "$state")" 2>/dev/null || error "could not create $(dirname "$state")"
-    local tmp="$state.tmp"
-    {
-        {
-            if [ -f "$state" ]; then
-                awk -v key="$key" 'index($0, key ":") != 1' "$state"
-            fi
-            printf '%s: %s\n' "$key" "$value"
-        } > "$tmp" && mv "$tmp" "$state"
-    } 2>/dev/null || { rm -f "$tmp" 2>/dev/null; error "could not write $state"; }
+    cs_local_state_set "$state" "$key" "$value" 2>/dev/null || error "could not write $state"
 }
 
 # Remove a key's line from a machine-local state file. A missing file or key is
-# a no-op. Atomic (tmp+mv), like _set_local_state, and loud on the same
+# a no-op. Atomic and locked like _set_local_state, and loud on the same
 # failures.
 _unset_local_state() {
     local state="$1" key="$2"
-    [ -f "$state" ] || return 0
-    local tmp="$state.tmp"
-    { awk -v key="$key" 'index($0, key ":") != 1' "$state" > "$tmp" && mv "$tmp" "$state"; } 2>/dev/null \
-        || { rm -f "$tmp" 2>/dev/null; error "could not write $state"; }
+    cs_local_state_unset "$state" "$key" 2>/dev/null || error "could not write $state"
 }
 
 # Return the path to claude's per-cwd transcript directory. Symlinks in the
@@ -3317,8 +3409,7 @@ _exclude_session_tracked_conflict() {  # dir
             return 0
         fi
     done
-    # The .tmp names are the fixed temp files cs writes through before its mv.
-    git -C "$dir" ls-files -- .cs .claude/settings.local.json .claude/settings.local.json.tmp CLAUDE.local.md CLAUDE.local.md.tmp 2>/dev/null | head -1
+    git -C "$dir" ls-files -- .cs .claude/settings.local.json CLAUDE.local.md 2>/dev/null | head -1
 }
 
 # True when cs created this session directory, and so owns its mode. Two ways to
@@ -3535,14 +3626,13 @@ prune_commands_artifacts() {
 
     local claude_md="$session_dir/CLAUDE.md"
     if [ -f "$claude_md" ] && grep -qE '@\.cs/commands\.md|^## Discovered Commands|^[0-9]+\. \*\*\.cs/commands\.md\*\*' "$claude_md"; then
-        local tmp="$claude_md.tmp"
-        awk '
+        cs_write_atomic "$claude_md" awk '
             /^## Discovered Commands[[:space:]]*$/ { in_section = 1; next }
             in_section && /^## / { in_section = 0 }
             in_section { next }
             /^[0-9]+\. \*\*\.cs\/commands\.md\*\*/ { next }
             { print }
-        ' "$claude_md" > "$tmp" && mv "$tmp" "$claude_md"
+        ' "$claude_md"
         removed=1
     fi
 
@@ -3700,8 +3790,7 @@ migrate_narrative_resume_wording() {
     # from its neighbour with a trailing \r, so the gate itself does not need
     # \r-tolerance — only the awk's line-for-line comparisons do.
     if [ -f "$f" ] && grep -qE "read all narrative\.\*\.md on resume to restore your|^Note: narratives are per-actor \(narrative\.<actor>\.md\) so co-developers never|on resume read the live narrative\.\*\.md \(rotation keeps|lab notebooks \(yours \+ teammates'\)" "$f"; then
-        tmp="$f.tmp"
-        awk '
+        cs_write_atomic "$f" awk '
             function strip(s) { sub(/\r$/, "", s); return s }
             function protocol_para() {
                 print "Append only to your own; on resume read your own in full, and a teammate narrative only"
@@ -3745,7 +3834,7 @@ migrate_narrative_resume_wording() {
                 print line1; print line2; print line3; print line4; next
             }
             { print }
-        ' "$f" > "$tmp" && mv "$tmp" "$f"
+        ' "$f"
     fi
 }
 
@@ -3863,13 +3952,12 @@ migrate_session() {
         cat "$session_dir/.cs/logs/session.log" >> "$log_dir/session.log"
         rm -f "$session_dir/.cs/logs/session.log"
         rmdir "$session_dir/.cs/logs" 2>/dev/null || true
-        # Drop the obsolete union rule for the relocated log. grep -v exits 1 when
-        # that was the only line, so guard on presence and tolerate the exit code
-        # rather than leaving the rule (and a stray .tmp) behind.
+        # Drop the obsolete union rule for the relocated log. awk, not grep -v:
+        # grep exits 1 when that was the only line, and an empty file is the
+        # right result there.
         local ga="$session_dir/.gitattributes"
         if [ "$tracked_tree_is_ours" = 1 ] && [ -f "$ga" ] && grep -q 'logs/session\.log merge=union' "$ga"; then
-            { grep -v 'logs/session\.log merge=union' "$ga" > "$ga.tmp"; } 2>/dev/null || true
-            mv "$ga.tmp" "$ga" 2>/dev/null || rm -f "$ga.tmp"
+            cs_write_atomic "$ga" awk '!/logs\/session\.log merge=union/' "$ga" 2>/dev/null || true
         fi
         warn "Moved .cs/logs/session.log to ${log_dir#"$session_dir"/}/session.log"
     fi
@@ -4104,8 +4192,7 @@ migrate_session() {
                 # State 2: legacy rules block — strip + insert note in place.
                 # NEW_BLOCK passed via env (not -v) so awk doesn't re-process
                 # C-style escapes in the markdown content.
-                local tmp="$claude_md_p9.tmp"
-                NEW_BLOCK=$(_emit_memory_note_block) awk '
+                NEW_BLOCK=$(_emit_memory_note_block) cs_write_atomic "$claude_md_p9" awk '
                     /<!-- cs:memory-rules -->/ {
                         print ENVIRON["NEW_BLOCK"]
                         stripping = 1
@@ -4113,7 +4200,7 @@ migrate_session() {
                     }
                     stripping && /^<!-- / { stripping = 0 }
                     !stripping { print }
-                ' "$claude_md_p9" > "$tmp" && mv "$tmp" "$claude_md_p9"
+                ' "$claude_md_p9"
                 warn "Retired auto-memory bucket guidance; replaced with cs:memory-note"
             # State 3: tombstone (sentinel without header) — preserve opt-out
             fi

@@ -53,6 +53,13 @@ fi
 if ! command -v cs_handoff_dir >/dev/null 2>&1; then
     cs_handoff_dir() { return 1; }
 fi
+# Nor can the state file be rewritten under its lock, and an unlocked rewrite
+# could lose cs's own update, so the state is left as it is and said so.
+if ! command -v cs_local_state_set >/dev/null 2>&1; then
+    cs_local_state_set() {
+        echo "session-start: cs-shared.sh is missing, so $2 was not recorded in $1" >&2
+    }
+fi
 if ! command -v cs_resolve_session >/dev/null 2>&1; then
     cs_resolve_session() {
         [ -n "${CLAUDE_SESSION_NAME:-}" ] && [ -n "${CLAUDE_SESSION_DIR:-}" ]
@@ -349,18 +356,11 @@ EOF
 # Set a key in the machine-local state file (.cs/local/state, gitignored —
 # these values differ per machine, so they must never reach the git-synced
 # README). Replaces any existing line for the key, collapses duplicates.
-# Atomic (tmp+mv). KEEP THE FORMAT IN SYNC WITH bin/cs's _set_local_state.
+# Atomic and serialised against cs's own writer through cs_local_state_set.
 STATE_FILE="$META_DIR/local/state"
 local_state_set() {
-    local key="$1" value="$2"
     mkdir -p "$META_DIR/local"
-    local tmp="$STATE_FILE.tmp"
-    {
-        if [ -f "$STATE_FILE" ]; then
-            awk -v key="$key" 'index($0, key ":") != 1' "$STATE_FILE"
-        fi
-        printf '%s: %s\n' "$key" "$value"
-    } > "$tmp" && mv "$tmp" "$STATE_FILE"
+    cs_local_state_set "$STATE_FILE" "$1" "$2"
 }
 
 # Bind claude_session_id in local state to the live conversation.

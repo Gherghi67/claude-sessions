@@ -397,6 +397,83 @@ test_launch_stops_loudly_when_state_cannot_be_written() {
 }
 
 # ============================================================================
+# Cycle 2b: state and .gitattributes rewrites use a unique temp name, keep the
+# destination's mode, and serialise on a lock
+# ============================================================================
+
+# Both writers (cs's _set_local_state and the SessionStart hook's) rewrite the
+# state file through a temp file in .cs/local. The name must be unique and the
+# file must keep its mode; the .gitattributes strip in the log migration gets
+# the same treatment.
+test_state_and_gitattributes_rewrites_leave_tmp_siblings_alone_and_keep_modes() {
+    local session_dir="$CS_SESSIONS_ROOT/tmpsib"
+    mkdir -p "$session_dir/.cs"/{logs,memory}
+    printf '# Session: tmpsib\n' > "$session_dir/.cs/README.md"
+    echo "# Session narrative" > "$session_dir/.cs/memory/narrative.md"
+    echo "# Session" > "$session_dir/CLAUDE.md"
+    printf 'Claude Code Session Log\n' > "$session_dir/.cs/logs/session.log"
+    printf '.cs/logs/session.log merge=union\n.cs/timeline.jsonl merge=union\n' > "$session_dir/.gitattributes"
+    (cd "$session_dir" && git init -q && git add -A && git commit -q -m "init")
+    # Untracked: a tracked .cs/local is refused, and the siblings stand for files
+    # the user keeps beside cs's.
+    printf 'USER-OWNED-GA\n' > "$session_dir/.gitattributes.tmp"
+    chmod 640 "$session_dir/.gitattributes"
+    local state="$session_dir/.cs/local/state"
+    mkdir -p "$session_dir/.cs/local"
+    printf 'session_name: tmpsib\n' > "$state"
+    printf 'USER-OWNED-STATE\n' > "$state.tmp"
+    chmod 640 "$state"
+
+    "$CS_BIN" tmpsib <<< "" >/dev/null 2>&1 || true
+
+    assert_file_not_contains "$session_dir/.gitattributes" "logs/session.log merge=union" "the union rule was stripped" || return 1
+    assert_eq "USER-OWNED-GA" "$(cat "$session_dir/.gitattributes.tmp")" ".gitattributes.tmp is untouched" || return 1
+    assert_eq "640" "$(_file_mode "$session_dir/.gitattributes")" ".gitattributes keeps its mode" || return 1
+    assert_file_contains "$state" "^claude_session_id:" "the launch recorded its conversation" || return 1
+    assert_eq "USER-OWNED-STATE" "$(cat "$state.tmp")" "state.tmp is untouched" || return 1
+    assert_eq "640" "$(_file_mode "$state")" "state keeps its mode" || return 1
+}
+
+# A state rewrite is a read-modify-write, so two writers (cs at launch and the
+# SessionStart hook) can lose an update unless they take turns. The lock is a
+# directory beside the file, .cs/local/state.lock, holding the holder's pid; a
+# live holder is waited for, up to five seconds, then the write goes ahead.
+test_state_write_waits_for_a_live_lock_holder() {
+    local session_dir
+    session_dir=$(create_test_session_with_git locked-state)
+    local state="$session_dir/.cs/local/state"
+    mkdir -p "$state.lock"
+    echo "$$" > "$state.lock/pid"
+    _argv_claude_stub
+
+    local start=$SECONDS
+    "$CS_BIN" locked-state <<< "" >/dev/null 2>&1 || true
+    local took=$((SECONDS - start))
+    rm -f "$state.lock/pid"; rmdir "$state.lock" 2>/dev/null
+
+    assert_file_contains "$state" "^claude_session_id:" "the write went ahead once the wait ran out" || return 1
+    [ "$took" -ge 4 ] || { echo "  FAIL: the writer must wait for a live holder (took ${took}s)"; return 1; }
+}
+
+test_state_write_takes_over_a_dead_holders_lock() {
+    local session_dir
+    session_dir=$(create_test_session_with_git stale-lock)
+    local state="$session_dir/.cs/local/state"
+    local dead
+    dead=$(sh -c 'echo $$')
+    mkdir -p "$state.lock"
+    echo "$dead" > "$state.lock/pid"
+    _argv_claude_stub
+
+    local start=$SECONDS
+    "$CS_BIN" stale-lock <<< "" >/dev/null 2>&1 || true
+
+    assert_file_contains "$state" "^claude_session_id:" "the write went through" || return 1
+    [ $((SECONDS - start)) -lt 4 ] || { echo "  FAIL: a dead holder's lock must be taken over at once, not waited out"; return 1; }
+    assert_not_exists "$state.lock" "the writer released the lock it took over" || return 1
+}
+
+# ============================================================================
 # Cycle 3b: migration relocates the session log to machine-local .cs/local/
 # ============================================================================
 
@@ -637,4 +714,7 @@ run_test test_migration_moves_session_log_into_private
 run_test test_clone_with_a_readme_color_that_is_not_a_color_gets_a_fresh_one
 run_test test_launch_ignores_a_recorded_color_that_is_not_a_color
 run_test test_launch_stops_loudly_when_state_cannot_be_written
+run_test test_state_and_gitattributes_rewrites_leave_tmp_siblings_alone_and_keep_modes
+run_test test_state_write_waits_for_a_live_lock_holder
+run_test test_state_write_takes_over_a_dead_holders_lock
 report_results

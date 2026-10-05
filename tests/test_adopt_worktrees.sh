@@ -391,14 +391,16 @@ test_a_worktree_that_tracks_a_file_cs_must_own_is_skipped() {
     assert_not_exists "$wt/.cs" "nothing is written into it" || return 1
     assert_not_exists "$CS_SESSIONS_ROOT/repo.tracked" "no session is registered" || return 1
     assert_output_contains "$output" "skip tracked: CLAUDE.local.md is tracked" "the skip names the tracked file" || return 1
-    # cs writes through a fixed .tmp sibling before the mv, so a tracked one is
-    # a tracked file cs would clobber too.
+    # A tracked <file>.tmp sibling is the user's own file: cs's temp names are
+    # unique, so it is neither a reason to skip nor touched by the adoption.
     git -C "$wt" rm -q --cached CLAUDE.local.md && rm "$wt/CLAUDE.local.md"
     mkdir -p "$wt/.claude" && printf '{}\n' > "$wt/.claude/settings.local.json.tmp"
     git -C "$wt" add .claude/settings.local.json.tmp && git -C "$wt" commit -q -m "track a tmp sibling"
     output=$(cd "$repo" && "$CS_BIN" -adopt --worktrees 2>&1) || true
-    assert_not_exists "$wt/.cs" "nothing is written into it either" || return 1
-    assert_output_contains "$output" "skip tracked: .claude/settings.local.json.tmp is tracked" "the skip names the tracked tmp sibling" || return 1
+    assert_exists "$wt/.cs" "the worktree is adopted" || return 1
+    assert_output_not_contains "$output" "skip tracked" "a tracked tmp sibling is no reason to skip" || return 1
+    assert_eq "{}" "$(cat "$wt/.claude/settings.local.json.tmp")" "the tracked tmp sibling is untouched" || return 1
+    assert_eq "" "$(git -C "$wt" status --porcelain -- .claude/settings.local.json.tmp)" "and stays clean" || return 1
 }
 
 test_open_refuses_once_the_branch_tracks_a_file_cs_rewrites() {
