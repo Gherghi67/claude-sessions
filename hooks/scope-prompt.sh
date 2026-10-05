@@ -84,8 +84,9 @@ if ! command -v cs_resolve_session >/dev/null 2>&1; then
         [ -n "${CLAUDE_SESSION_NAME:-}" ] && [ -n "${CLAUDE_SESSION_DIR:-}" ]
     }
 fi
-# Nor is the digest cursor advanced without the library's writer: a digest
-# then repeats, which is the harmless direction.
+# Nor is a file replaced whole without the library's writer: the digest cursor
+# stays, so a digest repeats, and the Objective placeholder waits for a later
+# prompt.
 if ! command -v cs_write_atomic >/dev/null 2>&1; then
     cs_write_atomic() { return 1; }
 fi
@@ -489,17 +490,13 @@ if [ "${CS_OBJECTIVE_CAPTURE_DISABLE:-}" != "1" ] \
         [ "${#_obj}" -gt 100 ] && _obj="${_obj:0:100}…"
         # ENVIRON sidesteps awk -v escape processing of arbitrary prompt text;
         # only the Objective-section placeholder line is replaced, all others
-        # pass through verbatim; tmp+mv keeps the write atomic.
-        _obj_tmp=$(mktemp 2>/dev/null) || _obj_tmp=""
-        if [ -n "$_obj_tmp" ] && { OBJ="$_obj" awk '
+        # pass through verbatim; the README is replaced whole and keeps its
+        # mode.
+        OBJ="$_obj" cs_write_atomic "$_obj_readme" awk '
                 /^## / { in_obj = ($0 ~ /^## Objective/) }
                 in_obj && /^\[.*\]$/ { print ENVIRON["OBJ"]; next }
                 { print }
-            ' "$_obj_readme" > "$_obj_tmp"; } 2>/dev/null; then
-            mv "$_obj_tmp" "$_obj_readme" 2>/dev/null || rm -f "$_obj_tmp" 2>/dev/null
-        else
-            [ -n "$_obj_tmp" ] && rm -f "$_obj_tmp" 2>/dev/null
-        fi
+            ' "$_obj_readme" 2>/dev/null || true
     fi
 fi
 _trace objective

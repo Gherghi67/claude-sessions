@@ -78,8 +78,8 @@ fi
 if ! command -v cs_private_dir >/dev/null 2>&1; then
     cs_private_dir() { return 1; }
 fi
-# Nor can the queue state be replaced whole without the library's writer, so a
-# state change fails instead of being written some lesser way.
+# Nor can the queue state be replaced whole without the library's writer; the
+# drain then reports the state it could not write and hands out nothing.
 if ! command -v cs_write_atomic >/dev/null 2>&1; then
     cs_write_atomic() { return 1; }
 fi
@@ -461,6 +461,16 @@ LOCAL="$META_DIR/local"
 QUEUE="$QDIR/queue"
 QSTATE_FILE="$QDIR/queue.state"
 
+# Record the queue state. A state that cannot be written ends this Stop with
+# the reason on stderr and nothing handed out: carrying on would inject a task
+# against a state the next Stop reads differently.
+_qstate_write() {  # state word
+    cs_write_atomic "$QSTATE_FILE" printf '%s\n' "$1" && return 0
+    echo "cs task queue: could not write $QSTATE_FILE" >&2
+    echo '{"decision": "approve"}'
+    exit 0
+}
+
 # Lexically first task file (the glob is sorted); rc 1 when none.
 _qfirst() {  # queue dir
     local f
@@ -563,7 +573,7 @@ if [ "$QLEN" -gt 0 ] && _mail_is_lead; then
         TASK=""
         _first=$(_qfirst "$QUEUE") || _first=""
         [ -n "$_first" ] && TASK=$(cat "$_first" 2>/dev/null || true)
-        cs_write_atomic "$QSTATE_FILE" printf 'draining\n'
+        _qstate_write draining
         rm -f "$QDIR/failures"
         _inbox_append --arg ts "$(date +%s)" --arg q "$QLEN" \
             '{ts: ($ts|tonumber), event: "drain_started", queued: ($q|tonumber)}'
@@ -590,7 +600,7 @@ $SCOPE"
                 '{ts: ($ts|tonumber), event: "task_done", task: $task}'
             NEWLEN=$(_qlen "$QUEUE")
             if [ "$NEWLEN" -le 0 ]; then
-                cs_write_atomic "$QSTATE_FILE" printf 'idle\n'
+                _qstate_write idle
                 DONE_COUNT=$(_qdone_len "$QDIR/queue.done")
                 _inbox_append --arg ts "$(date +%s)" --arg d "$DONE_COUNT" \
                     '{ts: ($ts|tonumber), event: "drain_finished", done: ($d|tonumber)}'
@@ -605,7 +615,7 @@ $SCOPE"
             if TRIP=$(_breaker_check); then
                 set -- $TRIP
                 REASON_KIND="$1"; READING="$2"; LIMIT="$3"
-                cs_write_atomic "$QSTATE_FILE" printf 'idle\n'
+                _qstate_write idle
                 _inbox_append --arg ts "$(date +%s)" --arg r "$REASON_KIND" \
                     --arg v "$READING" --arg l "$LIMIT" --arg n "$NEWLEN" \
                     '{ts: ($ts|tonumber), event: "breaker_tripped", reason: $r, reading: ($v|tonumber), limit: ($l|tonumber), remaining: ($n|tonumber)}'
@@ -630,7 +640,7 @@ $SCOPE"
             exit 0
         else
             # pop failed: disarm rather than re-inject the same task (fail-safe)
-            cs_write_atomic "$QSTATE_FILE" printf 'idle\n'
+            _qstate_write idle
         fi
     fi
 

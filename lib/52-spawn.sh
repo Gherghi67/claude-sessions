@@ -125,12 +125,12 @@ run_spawn() {
     if [ "${#tasks[@]}" -gt 0 ] || [ -n "$brief" ]; then
         local sdir="$SESSIONS_ROOT/.spawn" seed
         seed="$sdir/$name.seed"
-        # The check-then-write below is deliberately unlocked. The tmp+mv makes
-        # the write atomic, so two concurrent spawns of the same name resolve to
-        # last-writer-wins with no torn or interleaved seed. Adding a lock would
-        # buy nothing for that benign race. The temp names are fixed on purpose
-        # and are not to become unique ones: the publishing rename failing is
-        # how a run learns another spawn of this name took the pair.
+        # The check-then-write below is deliberately unlocked, and both temp
+        # names are fixed. Two spawns of one name started in the same instant
+        # can therefore both pass the check and publish, the later rename
+        # winning, and a seed can end up beside the other run's brief. One
+        # user spawning one name twice at once is the only way in, so it is
+        # left as it is.
         [ ! -f "$seed" ] || error "A pending spawn for $name exists: $seed"
         mkdir -p "$sdir"
         # Order: seed content first (to a temp file), brief second, seed

@@ -430,7 +430,9 @@ rm -f "$out" 2>/dev/null
 # did not set a status. Writing it would silently erase what the user typed.
 [ -n "${rewritten//[[:space:]]/}" ] || { _trace 'exit empty-rewrite'; exit 0; }
 
-# tmp+rename so a crash mid-write cannot leave a truncated buffer.
+# tmp+rename so a crash mid-write cannot leave a truncated buffer. The fixed
+# temp name is safe: the target is the one-off file Claude Code made for this
+# editor run, and nothing else writes beside it.
 { printf '%s' "$rewritten" > "$target.cs-tmp"; } 2>/dev/null || exit 0
 mv "$target.cs-tmp" "$target" 2>/dev/null || rm -f "$target.cs-tmp" 2>/dev/null
 _trace 'exit rewritten'

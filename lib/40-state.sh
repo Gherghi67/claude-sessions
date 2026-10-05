@@ -258,21 +258,18 @@ _transcript_first_prompt() {  # transcript_file
 
 # Replace the Objective placeholder (a whole line wrapped in [...] under
 # `## Objective`) with text, leaving every other line alone. A hand-written
-# objective has no placeholder and is never touched. tmp+mv keeps the write
-# atomic; ENVIRON sidesteps awk -v escape processing of arbitrary prompt text.
+# objective has no placeholder and is never touched. The README is replaced
+# whole and keeps its mode; ENVIRON sidesteps awk -v escape processing of
+# arbitrary prompt text. A README that cannot be rewritten keeps its
+# placeholder, and the first prompt of the session fills it.
 _seed_readme_objective() {  # readme, text
-    local readme="$1" text="$2" tmp
+    local readme="$1" text="$2"
     [ -f "$readme" ] && [ -n "$text" ] || return 0
-    tmp=$(mktemp "${TMPDIR:-/tmp}/cs-objective.XXXXXX") || return 0
-    if OBJ="$text" awk '
+    OBJ="$text" cs_write_atomic "$readme" awk '
             /^## / { in_obj = ($0 ~ /^## Objective/) }
             in_obj && /^\[.*\]$/ { print ENVIRON["OBJ"]; next }
             { print }
-        ' "$readme" > "$tmp"; then
-        mv "$tmp" "$readme" || rm -f "$tmp"
-    else
-        rm -f "$tmp"
-    fi
+        ' "$readme" || return 0
 }
 
 # Terminate a JSONL file whose last line lost its newline to an interrupted

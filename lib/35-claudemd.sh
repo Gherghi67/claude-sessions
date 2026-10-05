@@ -82,7 +82,7 @@ EOF
     # GNU sed and would abort session resume on Linux under set -e.
     if [ -f "$index" ] && grep -q '(narrative\.md)' "$index" 2>/dev/null; then
         cs_write_atomic "$index" sed '/(narrative\.md)/d' "$index" \
-            || error "could not rewrite $index"
+            || warn "could not rewrite $index; the stale narrative.md pointer stays"
     fi
 
     if [ ! -f "$index" ] || ! grep -q "(narrative\.$actor\.md)" "$index" 2>/dev/null; then
