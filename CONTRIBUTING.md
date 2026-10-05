@@ -158,6 +158,26 @@ lists the command files the installer and uninstaller delete.
 - No temporal names (`NewAPI`, `LegacyHandler`, `ImprovedParser`). Name things for what they do, not their history.
 - Test output must be clean. If a test intentionally triggers errors, capture and validate them.
 
+## Merging upstream releases
+
+agent-sessions follows hex/claude-sessions (`origin`). Merge each upstream release with:
+
+```bash
+scripts/sync-upstream.py start        # newest v* tag on origin/main; --to <tag> for another
+# resolve what it reports in the sync worktree it prints, then, there:
+scripts/sync-upstream.py continue
+git merge --ff-only sync/<tag>        # back in this checkout
+```
+
+Commit your work first: the merge starts from the last commit, and git only recognises a moved file once it is committed. `start` makes a worktree beside this checkout (outside any repository that encloses it) on a `sync/<tag>` branch and records a real merge with both parents. Before merging, it rewrites upstream into this fork's dialect, so the rebrand itself does not conflict:
+
+- Renames: `cs -x` becomes `ags -x`, `$CLAUDE_SESSION_*` becomes `${CS_SESSION_*:-${CLAUDE_SESSION_*:-}}`, `cs-statusline` becomes `ags-statusline`, and so on. They apply to the lines the fork renamed and the lines upstream adds; a line the fork kept stays as upstream wrote it.
+- Functions: a function the fork keeps in another `lib/` fragment gets upstream's change there.
+- Files: an upstream file the fork moved (`commands/*.md` to `skills/*/SKILL.md`, `bin/cs-statusline` to `bin/ags-statusline`) merges into the moved file.
+- Generated files (`bin/ags`, `bin/cs`, `hooks/cs-shared.sh`, `install.sh`) are never merged; `continue` rebuilds them.
+
+Prose (README, `docs/`, CHANGELOG) merges plainly, since the rebrand rewrote it by hand. What is left is where both sides changed the same lines. `continue` refuses while a conflict marker remains or a function is defined in two fragments, then runs `build.sh` and `tests/run_all.sh` (`--skip-tests` skips them) and commits. Nothing is pushed. When the rebrand renames something new, add the rule to `rename()` in the script so the next merge applies it.
+
 ## Releasing
 
 Releases are managed via the `/release` slash command. See `.claude/commands/release.md` for the full checklist, which covers version bumps, changelog, signing, and GitHub Release creation.
