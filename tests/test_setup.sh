@@ -207,7 +207,7 @@ EOF
     # and the rest of the user's credentials stay visible to the session. Every
     # tool is pointed at the profile through its own directory variable, and the
     # generic XDG roots are left alone so gh, git and friends keep their config.
-    assert_eq "$HOME"$'\n'"$PROFILE/.claude"$'\n'"$PROFILE/.codex"$'\n'"$PROFILE/.claude-sessions"$'\n'"$PROFILE/.local/bin"$'\n'"$PROFILE/.config/cs"$'\n'"$PROFILE/.cache/cs"$'\n'"$PROFILE/.cs-secrets"$'\n'unset "$output" || return 1
+    assert_eq "$HOME"$'\n'"$PROFILE/.claude"$'\n'"$PROFILE/.codex"$'\n'"$PROFILE/sessions"$'\n'"$PROFILE/.local/bin"$'\n'"$PROFILE/.config/cs"$'\n'"$PROFILE/.cache/cs"$'\n'"$PROFILE/.cs-secrets"$'\n'unset "$output" || return 1
     assert_eq 'stable cache' "$(cat "$HOME/.cache/cs/update-check")" || return 1
     assert_eq 'experimental cache' "$(cat "$PROFILE/.cache/cs/update-check")" || return 1
     local status=0
@@ -271,12 +271,116 @@ EOF
             cat "$TEST_TMPDIR/launch-output"
             return 1
         }
-    assert_dir "$PROFILE/.claude-sessions/first-test-session/.cs" || return 1
+    assert_dir "$PROFILE/sessions/first-test-session/.cs" || return 1
     # The claude the launcher starts keeps the user's HOME and reads its
     # configuration from the profile.
-    assert_eq "$PROFILE/.claude-sessions/first-test-session"$'\n'"$HOME"$'\n'"$PROFILE/.claude" "$(cat "$TEST_TMPDIR/launch.log")" || return 1
+    assert_eq "$PROFILE/sessions/first-test-session"$'\n'"$HOME"$'\n'"$PROFILE/.claude" "$(cat "$TEST_TMPDIR/launch.log")" || return 1
+    assert_not_exists "$PROFILE/.claude-sessions" || return 1
     stable_snapshot > "$TEST_TMPDIR/after"
     cmp "$TEST_TMPDIR/before" "$TEST_TMPDIR/after"
+}
+
+# Claude's transcript folder name for a working directory: every character
+# but a letter or digit becomes '-'.
+claude_project_key() {
+    printf '%s' "$1" | sed 's/[^A-Za-z0-9]/-/g'
+}
+
+# An earlier build kept the profile's sessions in .claude-sessions: a session
+# directory, a symlinked one, a worktree whose repository is a session beside
+# it, and a worktree of a repository outside the root.
+seed_old_profile_sessions() {
+    local home old
+    home=$(cd -P "$HOME" && pwd)
+    old="$PROFILE/.claude-sessions"
+    mkdir -p "$old/ask/.cs" "$home/work/linked/.cs" "$PROFILE/.codex" || return 1
+    printf 'ask notes\n' > "$old/ask/.cs/summary.md"
+    ln -s "$home/work/linked" "$old/linked"
+    git init -q "$old/base" && git -C "$old/base" commit -q --allow-empty -m init \
+        && git -C "$old/base" worktree add -q -b task "$old/base@task" || return 1
+    git init -q "$home/work/ext" && git -C "$home/work/ext" commit -q --allow-empty -m init \
+        && git -C "$home/work/ext" worktree add -q -b feature "$old/ext@feature" || return 1
+    local dir
+    for dir in "$old/ask" "$old/base@task" "$home/work/linked"; do
+        mkdir -p "$PROFILE/.claude/projects/$(claude_project_key "$dir")"
+        printf '{}\n' > "$PROFILE/.claude/projects/$(claude_project_key "$dir")/transcript.jsonl"
+    done
+    jq -n --arg ask "$old/ask" --arg linked "$home/work/linked" \
+        '{other: 1, projects: {($ask): {hasTrustDialogAccepted: true}, ($linked): {hasTrustDialogAccepted: true}}}' \
+        > "$PROFILE/.claude/.claude.json"
+    printf '[projects."%s"]\ntrust_level = "trusted"\n\n[projects."%s"]\ntrust_level = "trusted"\n' \
+        "$old/ask" "$home/work/linked" > "$PROFILE/.codex/config.toml"
+}
+
+test_setup_moves_an_existing_profile_sessions_root() {
+    stage_checkout
+    seed_old_profile_sessions || return 1
+    local home new projects
+    home=$(cd -P "$HOME" && pwd)
+    new="$PROFILE/sessions" projects="$PROFILE/.claude/projects"
+    run_setup --skip-tui-build || return 1
+    assert_file_contains "$TEST_TMPDIR/setup.log" 'Moved the profile sessions' || return 1
+    assert_not_exists "$PROFILE/.claude-sessions" || return 1
+    assert_eq 'ask notes' "$(cat "$new/ask/.cs/summary.md")" || return 1
+    assert_eq "$home/work/linked" "$(readlink "$new/linked")" || return 1
+    # Transcripts follow the directories that moved; a symlinked session's stay.
+    assert_file_exists "$projects/$(claude_project_key "$new/ask")/transcript.jsonl" || return 1
+    assert_file_exists "$projects/$(claude_project_key "$new/base@task")/transcript.jsonl" || return 1
+    assert_file_exists "$projects/$(claude_project_key "$home/work/linked")/transcript.jsonl" || return 1
+    assert_not_exists "$projects/$(claude_project_key "$PROFILE/.claude-sessions/ask")" || return 1
+    # Both worktrees stay connected to their repositories.
+    assert_eq task "$(git -C "$new/base@task" rev-parse --abbrev-ref HEAD)" || return 1
+    git -C "$new/base" worktree list --porcelain | grep -Fqx "worktree $new/base@task" \
+        || { echo "  FAIL: base does not list its moved worktree"; return 1; }
+    assert_eq feature "$(git -C "$new/ext@feature" rev-parse --abbrev-ref HEAD)" || return 1
+    git -C "$home/work/ext" worktree list --porcelain | grep -Fqx "worktree $new/ext@feature" \
+        || { echo "  FAIL: ext does not list its moved worktree"; return 1; }
+    # Trust follows the moved directory and nothing else.
+    assert_eq "$(printf '%s\n' "$home/work/linked" "$new/ask" | LC_ALL=C sort)" \
+        "$(jq -r '.projects | keys[]' "$PROFILE/.claude/.claude.json" | LC_ALL=C sort)" || return 1
+    assert_eq 1 "$(jq -r '.other' "$PROFILE/.claude/.claude.json")" || return 1
+    grep -Fqx "[projects.\"$new/ask\"]" "$PROFILE/.codex/config.toml" \
+        && grep -Fqx "[projects.\"$home/work/linked\"]" "$PROFILE/.codex/config.toml" \
+        || { cat "$PROFILE/.codex/config.toml"; echo "  FAIL: Codex trust not moved"; return 1; }
+    # A rerun finds nothing left to move.
+    run_setup --skip-tui-build || return 1
+    assert_file_not_contains "$TEST_TMPDIR/setup.log" 'Moved the profile sessions' || return 1
+    assert_eq 'ask notes' "$(cat "$new/ask/.cs/summary.md")"
+}
+
+test_setup_does_not_move_sessions_while_a_profile_command_runs() {
+    stage_checkout
+    mkdir -p "$PROFILE/.claude-sessions/ask/.cs" "$PROFILE/.local/bin"
+    printf '#!/bin/sh\nwhile :; do sleep 1; done\n' > "$PROFILE/.local/bin/ags"
+    chmod +x "$PROFILE/.local/bin/ags"
+    "$PROFILE/.local/bin/ags" ask &
+    local pid=$! tries=0 status=0
+    until ps -p "$pid" -o command= | grep -Fq "$PROFILE/.local/bin/ags"; do
+        tries=$((tries + 1))
+        [ "$tries" -lt 50 ] || { kill "$pid"; echo "  FAIL: fixture never started"; return 1; }
+        sleep 0.1
+    done
+    run_setup --skip-tui-build > /dev/null || status=$?
+    kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+    assert_eq 1 "$status" || return 1
+    assert_file_contains "$TEST_TMPDIR/setup.log" "^ *$pid .*/.local/bin/ags ask" || return 1
+    assert_dir "$PROFILE/.claude-sessions/ask/.cs" || return 1
+    assert_not_exists "$PROFILE/sessions" || return 1
+    # Refused before the build, so nothing was deployed.
+    assert_not_exists "$CHECKOUT/bin/ags" || return 1
+    assert_not_exists "$HOME/.local/bin/ags"
+}
+
+test_setup_does_not_merge_two_sessions_roots() {
+    stage_checkout
+    mkdir -p "$PROFILE/.claude-sessions/old-one/.cs" "$PROFILE/sessions/new-one/.cs"
+    local status=0
+    run_setup --skip-tui-build > /dev/null || status=$?
+    assert_eq 1 "$status" || return 1
+    assert_file_contains "$TEST_TMPDIR/setup.log" 'Both .* exist' || return 1
+    assert_dir "$PROFILE/.claude-sessions/old-one/.cs" || return 1
+    assert_dir "$PROFILE/sessions/new-one/.cs" || return 1
+    assert_not_exists "$PROFILE/sessions/old-one"
 }
 
 test_setup_missing_dependency_stops_before_install_or_shell_changes() {
@@ -313,6 +417,9 @@ run_test test_setup_respects_a_custom_zsh_startup_directory
 run_test test_setup_reinstall_remembers_a_codex_only_selection
 run_test test_setup_carries_the_users_claude_display_mode_into_the_profile
 run_test test_setup_keeps_a_display_mode_chosen_inside_the_profile
+run_test test_setup_moves_an_existing_profile_sessions_root
+run_test test_setup_does_not_move_sessions_while_a_profile_command_runs
+run_test test_setup_does_not_merge_two_sessions_roots
 run_test test_setup_missing_dependency_stops_before_install_or_shell_changes
 run_test test_setup_failed_picker_build_stops_before_deployment
 run_test test_setup_and_reinstall_preserve_the_entire_stable_install

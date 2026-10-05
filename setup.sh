@@ -56,6 +56,95 @@ case ",$CS_INSTALL_ENGINES," in
 esac
 [ -z "$missing" ] || fail "Install these prerequisites, then rerun setup.sh:$missing"
 
+# The profile's sessions lived in .claude-sessions, a name left from when every
+# session was a Claude one; the launcher now points CS_SESSIONS_ROOT at
+# sessions/. A running session holds the old path in its environment, so the
+# one-time move waits until no profile command runs.
+old_sessions="$profile_home/.claude-sessions"
+new_sessions="$profile_home/sessions"
+
+sessions_move_pending() {
+    [ -e "$old_sessions" ] || [ -L "$old_sessions" ]
+}
+
+check_sessions_move() {
+    if [ -e "$new_sessions" ] || [ -L "$new_sessions" ]; then
+        fail "Both $old_sessions and $new_sessions exist. Move the sessions you keep into sessions/, remove .claude-sessions, then rerun setup.sh."
+    fi
+    profile_bin="$(cd -P "$profile_home" && pwd)/.local/bin/"
+    # List the processes before searching them, so the search is not listed.
+    processes=$(ps -A -o pid= -o command=) || fail 'Could not list processes to check for running ags sessions.'
+    running=$(printf '%s\n' "$processes" | grep -F "$profile_bin" || true)
+    [ -z "$running" ] || fail "These ags processes still use $old_sessions:
+$running
+End them (bring a suspended one back with fg first), then rerun setup.sh."
+}
+
+# Claude names a transcript folder after the session's physical path, with
+# every character but a letter or digit turned into '-'.
+claude_project_key() {
+    printf '%s' "$1" | sed 's/[^A-Za-z0-9]/-/g'
+}
+
+rekey_moved_session() {  # old_dir new_dir old_root new_root
+    projects="$profile_home/.claude/projects"
+    from="$projects/$(claude_project_key "$1")"
+    to="$projects/$(claude_project_key "$2")"
+    if [ -d "$from" ] && [ ! -e "$to" ]; then
+        mv "$from" "$to" \
+            || printf 'Warning: could not move the Claude transcripts of %s from %s.\n' "$2" "$from" >&2
+    fi
+    # A linked worktree's .git file and its repository's record of it both hold
+    # absolute paths, and the repository may have moved along with it.
+    [ -f "$2/.git" ] || return 0
+    gitdir=$(sed -n 's/^gitdir: //p' "$2/.git")
+    case "$gitdir" in
+        "$3"/*) gitdir="$4/${gitdir#"$3"/}" ;;
+        /*) ;;
+        *) gitdir="$2/$gitdir" ;;
+    esac
+    git --git-dir="${gitdir%/worktrees/*}" worktree repair "$2" >/dev/null 2>&1 \
+        || printf 'Warning: could not repair the git worktree at %s; run git worktree repair there.\n' "$2" >&2
+}
+
+# Claude and Codex remember a trusted folder by its path.
+rekey_trusted_folders() {  # old_root new_root
+    claude_state="$profile_home/.claude/.claude.json"
+    if [ -f "$claude_state" ] && rekeyed=$(jq --arg old "$1/" --arg new "$2/" '
+            if (.projects | type) == "object" then
+                .projects |= with_entries(if (.key | startswith($old))
+                    then .key = $new + .key[($old | length):] else . end)
+            else . end' "$claude_state"); then
+        printf '%s\n' "$rekeyed" > "$claude_state"
+    fi
+    codex_config="$profile_home/.codex/config.toml"
+    if [ -f "$codex_config" ] && rekeyed=$(awk -v old="[projects.\"$1/" -v new="[projects.\"$2/" '
+            index($0, old) == 1 { $0 = new substr($0, length(old) + 1) } { print }' "$codex_config"); then
+        printf '%s\n' "$rekeyed" > "$codex_config"
+    fi
+}
+
+move_sessions_root() {
+    check_sessions_move
+    old_root=$(cd -P "$old_sessions" && pwd)
+    mv "$old_sessions" "$new_sessions"
+    new_root=$(cd -P "$new_sessions" && pwd)
+    printf 'Moved the profile sessions to %s\n' "$new_sessions"
+    # A .claude-sessions symlink moved only the link; its sessions kept their paths.
+    [ "$old_root" != "$new_root" ] || return 0
+    for session in "$new_sessions"/*; do
+        # Likewise a symlinked session: its directory stays where it is.
+        [ -d "$session" ] && [ ! -L "$session" ] || continue
+        rekey_moved_session "$old_root/${session##*/}" "$new_root/${session##*/}" "$old_root" "$new_root"
+    done
+    rekey_trusted_folders "$old_root" "$new_root"
+}
+
+# Refuse before the build; the move itself happens after the install succeeds.
+if sessions_move_pending; then
+    check_sessions_move
+fi
+
 printf 'Building agent-sessions from %s\n' "$checkout_dir"
 bash ./build.sh
 
@@ -104,6 +193,12 @@ if [ -f "$user_settings" ] && [ -f "$profile_settings" ] \
     && carried=$(jq --arg tui "$user_tui" '.tui = $tui' "$profile_settings" 2>/dev/null); then
     printf '%s\n' "$carried" > "$profile_settings"
     printf 'Carried your Claude display mode (tui: %s) into the profile.\n' "$user_tui"
+fi
+
+# Move the sessions just before the launchers that point at the new root, so
+# a failed install leaves the old launchers and the old root together.
+if sessions_move_pending; then
+    move_sessions_root
 fi
 
 # Expose only ags names. Replace wrapper files atomically rather than copying

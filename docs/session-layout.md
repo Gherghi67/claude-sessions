@@ -1,7 +1,8 @@
 # Session layout (`.cs/`)
 
-Every agent-sessions (`ags`) session is a directory under `~/.claude-sessions/` (override with
-`CS_SESSIONS_ROOT`). The directory itself is the workspace — the selected engine works on
+Every agent-sessions (`ags`) session is a directory under the sessions root:
+`~/.claude-sessions/` by default, `~/.local/share/agent-sessions/home/sessions/` in the
+profile setup installs (override either with `CS_SESSIONS_ROOT`). The directory itself is the workspace — the selected engine works on
 project files there. All session *metadata* lives in a single `.cs/`
 subdirectory, and the whole session directory is its own local git repo.
 
@@ -138,8 +139,9 @@ left untouched.
 
 ## Engine-local compatibility records
 
-The product rebrand retains `.cs/` and `~/.claude-sessions/`; no automatic data
-move occurs. `.cs/local/state` stores the selected `engine` and, once Claude has
+The product rebrand retains `.cs/` and the default root `~/.claude-sessions/`, and
+never moves a stable install's sessions. Only setup's profile renamed its root, from
+`.claude-sessions/` to `sessions/`; see [Migration](migration.md). `.cs/local/state` stores the selected `engine` and, once Claude has
 been prepared, `claude_session_id` and `claude_session_color`. Codex stores its
 independent exact ID in `.cs/local/codex-thread-id` and refreshes startup context
 in `.cs/local/codex-instructions.md`. These files remain machine-local.

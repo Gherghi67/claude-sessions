@@ -72,7 +72,7 @@ ags research-notes --engine codex
 ```
 
 This creates a workspace under
-`~/.local/share/agent-sessions/home/.claude-sessions/research-notes/` and
+`~/.local/share/agent-sessions/home/sessions/research-notes/` and
 starts Codex there. Running the same command later resumes that workspace.
 
 ## Resume and switch engines

@@ -35,7 +35,7 @@ fi
 # pointed at the profile through the directory variable it honours instead.
 export CLAUDE_CONFIG_DIR="$profile_home/.claude" CODEX_HOME="$profile_home/.codex"
 export CS_INSTALL_DIR="$profile_home/.local/bin"
-export CS_SESSIONS_ROOT="$profile_home/.claude-sessions" CS_CLAUDE_DIR="$profile_home/.claude"
+export CS_SESSIONS_ROOT="$profile_home/sessions" CS_CLAUDE_DIR="$profile_home/.claude"
 export CS_HOOKS_DIR="$profile_home/.claude/hooks/cs" CS_TRANSCRIPTS_DIR="$profile_home/.claude/projects"
 export CS_COMMANDS_DIR="$profile_home/.claude/commands" CS_SKILLS_DIR="$profile_home/.claude/skills"
 export CS_CONFIG_DIR="$profile_home/.config/cs" CS_CACHE_DIR="$profile_home/.cache/cs"
