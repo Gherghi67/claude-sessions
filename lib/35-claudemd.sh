@@ -10,18 +10,13 @@ setup_auto_memory() {
     local memory_path="$session_dir/.cs/memory"
     mkdir -p "$session_dir/.claude"
     if [ -f "$settings_file" ] && command -v jq >/dev/null 2>&1; then
-        local current
-        current=$(cat "$settings_file")
         # Write through a temp file: redirecting jq's output onto the settings
         # file truncates it before jq parses, so one syntax error in a
         # hand-edited file would cost the user every setting it holds. A file
         # jq cannot read is left alone, like the no-jq case below.
-        if echo "$current" | { jq --arg m "$memory_path" \
+        if ! cs_write_atomic "$settings_file" jq --arg m "$memory_path" \
             '.autoMemoryDirectory = $m | .plansDirectory = ".cs/plans"' \
-            > "$settings_file.tmp"; } 2>/dev/null; then
-            mv "$settings_file.tmp" "$settings_file"
-        else
-            rm -f "$settings_file.tmp"
+            "$settings_file" 2>/dev/null; then
             # stderr, not stdout: create_worktree_session returns its directory
             # by echoing it, and lib/99-main.sh captures that in a command
             # substitution, so anything on stdout here lands inside the path.
@@ -351,8 +346,7 @@ migrate_claude_md_to_local() {
         else
             sed -n "${split_line},\$p" "$claude_md" > "$local_md"
         fi
-        printf '%s\n' "$head_text" > "$claude_md.tmp" \
-            && mv "$claude_md.tmp" "$claude_md"
+        cs_write_atomic "$claude_md" printf '%s\n' "$head_text" || error "could not rewrite $claude_md"
         warn "Moved cs-managed sections from CLAUDE.md to CLAUDE.local.md; your own content stays in CLAUDE.md"
     fi
     return 0

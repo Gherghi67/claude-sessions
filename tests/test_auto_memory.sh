@@ -61,10 +61,9 @@ test_unparseable_settings_local_survives_merge() {
     local after
     after=$(cat "$settings")
     assert_eq "$before" "$after" "unparseable settings.local.json must be left intact" || return 1
-    if [ -e "$settings.tmp" ]; then
-        echo "  FAIL: left $settings.tmp behind"
-        return 1
-    fi
+    local leftover
+    leftover=$(find "$CS_SESSIONS_ROOT/test-session/.claude" -name '.settings.local.json.*' 2>/dev/null)
+    [ -z "$leftover" ] || { echo "  FAIL: left a temp file behind: $leftover"; return 1; }
     assert_output_not_contains "$out" "Could not parse" \
         "the complaint belongs on stderr, where a command substitution cannot capture it" || return 1
     # The absence above is only half the contract: with the warn deleted
@@ -934,9 +933,29 @@ echo "cs auto-memory tests"
 echo "===================="
 echo ""
 
+# cs rewrites settings.local.json through a temp file. The temp name must be
+# unique, so a user's own <file>.tmp sibling is never clobbered, and the
+# rewritten file must keep the mode the user gave it.
+test_settings_merge_leaves_a_tmp_sibling_alone_and_keeps_the_mode() {
+    "$CS_BIN" test-session <<< "" 2>&1 || true
+    local settings="$CS_SESSIONS_ROOT/test-session/.claude/settings.local.json"
+    assert_exists "$settings" "settings.local.json should exist" || return 1
+    printf 'USER-OWNED\n' > "$settings.tmp"
+    chmod 640 "$settings"
+    # Phase 4 re-runs the merge only when memory, plans or settings is missing.
+    rm -rf "$CS_SESSIONS_ROOT/test-session/.cs/plans"
+
+    "$CS_BIN" test-session <<< "" 2>&1 || true
+
+    assert_eq "USER-OWNED" "$(cat "$settings.tmp")" "the user's .tmp sibling is untouched" || return 1
+    assert_eq "640" "$(_file_mode "$settings")" "the rewritten file keeps its mode" || return 1
+    assert_file_contains "$settings" "autoMemoryDirectory" "the merge still happened" || return 1
+}
+
 run_test test_new_session_creates_memory_dir
 run_test test_new_session_creates_settings_local
 run_test test_unparseable_settings_local_survives_merge
+run_test test_settings_merge_leaves_a_tmp_sibling_alone_and_keeps_the_mode
 run_test test_settings_local_is_gitignored
 run_test test_adopt_creates_memory_dir
 run_test test_adopt_adds_settings_to_gitignore

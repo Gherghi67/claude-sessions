@@ -226,7 +226,53 @@ test_worktree_ignored_mode_excludes_local_md_via_clone_exclude() {
     fi
 }
 
+# Every CLAUDE.md / CLAUDE.local.md rewrite goes through a temp file in the
+# same directory. Its name must be unique, so a sibling the user named
+# <file>.tmp is never clobbered, and the rewritten file keeps its mode. The
+# fixture reaches all four rewrites: the Discovered Commands strip and the
+# head split on CLAUDE.md, the protocol-wording rewrite and the memory-rules
+# retirement on CLAUDE.local.md.
+test_migration_rewrites_leave_tmp_siblings_alone_and_keep_modes() {
+    local dir
+    dir=$(create_test_session "tmpsib")
+    printf '# User Head\n\n## Discovered Commands\n\n- make test\n\n<!-- cs:session-protocol -->\nold protocol .cs/\n' > "$dir/CLAUDE.md"
+    printf '<!-- cs:session-protocol -->\n# Session Documentation Protocol\n\nAppend only to your own; read all narrative.*.md on resume to restore your\nworking narrative and see teammates'"'"' in-progress findings.\n\n<!-- cs:memory-rules -->\n## Auto-memory bucket guidance\nold rules\n\n<!-- cs:wrap-cues -->\n' > "$dir/CLAUDE.local.md"
+    printf 'USER-OWNED-MD\n' > "$dir/CLAUDE.md.tmp"
+    printf 'USER-OWNED-LOCAL\n' > "$dir/CLAUDE.local.md.tmp"
+    chmod 640 "$dir/CLAUDE.md" "$dir/CLAUDE.local.md"
+
+    "$CS_BIN" "tmpsib" < /dev/null > /dev/null 2>&1 || true
+
+    assert_file_not_contains "$dir/CLAUDE.md" "Discovered Commands" "commands section stripped" || return 1
+    assert_file_not_contains "$dir/CLAUDE.md" "cs:session-protocol" "head split happened" || return 1
+    assert_file_not_contains "$dir/CLAUDE.local.md" "read all narrative" "protocol wording rewritten" || return 1
+    assert_file_not_contains "$dir/CLAUDE.local.md" "Auto-memory bucket guidance" "memory rules retired" || return 1
+    assert_eq "USER-OWNED-MD" "$(cat "$dir/CLAUDE.md.tmp")" "CLAUDE.md.tmp is untouched" || return 1
+    assert_eq "USER-OWNED-LOCAL" "$(cat "$dir/CLAUDE.local.md.tmp")" "CLAUDE.local.md.tmp is untouched" || return 1
+    assert_eq "640" "$(_file_mode "$dir/CLAUDE.md")" "CLAUDE.md keeps its mode" || return 1
+    assert_eq "640" "$(_file_mode "$dir/CLAUDE.local.md")" "CLAUDE.local.md keeps its mode" || return 1
+}
+
+# A CLAUDE.local.md that is a symlink is rewritten THROUGH the link: the target
+# gets the new text and keeps its mode, and the link stays a link.
+test_migration_rewrite_through_a_symlink_keeps_the_targets_mode() {
+    local dir
+    dir=$(create_test_session "linked")
+    printf '<!-- cs:session-protocol -->\n# Session Documentation Protocol\n\nAppend only to your own; read all narrative.*.md on resume to restore your\nworking narrative and see teammates'"'"' in-progress findings.\n\n<!-- cs:memory-note -->\nnote\n<!-- cs:wrap-cues -->\n' > "$dir/real-local.md"
+    chmod 640 "$dir/real-local.md"
+    ln -s real-local.md "$dir/CLAUDE.local.md"
+
+    "$CS_BIN" "linked" < /dev/null > /dev/null 2>&1 || true
+
+    assert_file_not_contains "$dir/CLAUDE.local.md" "read all narrative" "protocol wording rewritten" || return 1
+    assert_eq "640" "$(_file_mode "$dir/CLAUDE.local.md")" "the rewritten file keeps the target's mode" || return 1
+    [ -L "$dir/CLAUDE.local.md" ] || { echo "  FAIL: the symlink was replaced by a regular file"; return 1; }
+    assert_file_not_contains "$dir/real-local.md" "read all narrative" "the rewrite went through the link into the target" || return 1
+}
+
 run_test test_migrate_preserves_user_claude_md
+run_test test_migration_rewrites_leave_tmp_siblings_alone_and_keep_modes
+run_test test_migration_rewrite_through_a_symlink_keeps_the_targets_mode
 run_test test_migrate_claude_md_idempotent
 run_test test_create_path_writes_local_md
 run_test test_pure_cs_claude_md_moves_wholesale

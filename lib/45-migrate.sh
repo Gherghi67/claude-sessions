@@ -41,8 +41,7 @@ _exclude_session_tracked_conflict() {  # dir
             return 0
         fi
     done
-    # The .tmp names are the fixed temp files cs writes through before its mv.
-    git -C "$dir" ls-files -- .cs .claude/settings.local.json .claude/settings.local.json.tmp CLAUDE.local.md CLAUDE.local.md.tmp 2>/dev/null | head -1
+    git -C "$dir" ls-files -- .cs .claude/settings.local.json CLAUDE.local.md 2>/dev/null | head -1
 }
 
 # True when cs created this session directory, and so owns its mode. Two ways to
@@ -259,14 +258,13 @@ prune_commands_artifacts() {
 
     local claude_md="$session_dir/CLAUDE.md"
     if [ -f "$claude_md" ] && grep -qE '@\.cs/commands\.md|^## Discovered Commands|^[0-9]+\. \*\*\.cs/commands\.md\*\*' "$claude_md"; then
-        local tmp="$claude_md.tmp"
-        awk '
+        cs_write_atomic "$claude_md" awk '
             /^## Discovered Commands[[:space:]]*$/ { in_section = 1; next }
             in_section && /^## / { in_section = 0 }
             in_section { next }
             /^[0-9]+\. \*\*\.cs\/commands\.md\*\*/ { next }
             { print }
-        ' "$claude_md" > "$tmp" && mv "$tmp" "$claude_md"
+        ' "$claude_md" || error "could not rewrite $claude_md"
         removed=1
     fi
 
@@ -424,8 +422,7 @@ migrate_narrative_resume_wording() {
     # from its neighbour with a trailing \r, so the gate itself does not need
     # \r-tolerance — only the awk's line-for-line comparisons do.
     if [ -f "$f" ] && grep -qE "read all narrative\.\*\.md on resume to restore your|^Note: narratives are per-actor \(narrative\.<actor>\.md\) so co-developers never|on resume read the live narrative\.\*\.md \(rotation keeps|lab notebooks \(yours \+ teammates'\)" "$f"; then
-        tmp="$f.tmp"
-        awk '
+        cs_write_atomic "$f" awk '
             function strip(s) { sub(/\r$/, "", s); return s }
             function protocol_para() {
                 print "Append only to your own; on resume read your own in full, and a teammate narrative only"
@@ -469,7 +466,7 @@ migrate_narrative_resume_wording() {
                 print line1; print line2; print line3; print line4; next
             }
             { print }
-        ' "$f" > "$tmp" && mv "$tmp" "$f"
+        ' "$f" || error "could not rewrite $f"
     fi
 }
 
@@ -587,13 +584,12 @@ migrate_session() {
         cat "$session_dir/.cs/logs/session.log" >> "$log_dir/session.log"
         rm -f "$session_dir/.cs/logs/session.log"
         rmdir "$session_dir/.cs/logs" 2>/dev/null || true
-        # Drop the obsolete union rule for the relocated log. grep -v exits 1 when
-        # that was the only line, so guard on presence and tolerate the exit code
-        # rather than leaving the rule (and a stray .tmp) behind.
+        # Drop the obsolete union rule for the relocated log. awk, not grep -v:
+        # grep exits 1 when that was the only line, and an empty file is the
+        # right result there.
         local ga="$session_dir/.gitattributes"
         if [ "$tracked_tree_is_ours" = 1 ] && [ -f "$ga" ] && grep -q 'logs/session\.log merge=union' "$ga"; then
-            { grep -v 'logs/session\.log merge=union' "$ga" > "$ga.tmp"; } 2>/dev/null || true
-            mv "$ga.tmp" "$ga" 2>/dev/null || rm -f "$ga.tmp"
+            cs_write_atomic "$ga" awk '!/logs\/session\.log merge=union/' "$ga" 2>/dev/null || true
         fi
         warn "Moved .cs/logs/session.log to ${log_dir#"$session_dir"/}/session.log"
     fi
@@ -828,8 +824,7 @@ migrate_session() {
                 # State 2: legacy rules block — strip + insert note in place.
                 # NEW_BLOCK passed via env (not -v) so awk doesn't re-process
                 # C-style escapes in the markdown content.
-                local tmp="$claude_md_p9.tmp"
-                NEW_BLOCK=$(_emit_memory_note_block) awk '
+                NEW_BLOCK=$(_emit_memory_note_block) cs_write_atomic "$claude_md_p9" awk '
                     /<!-- cs:memory-rules -->/ {
                         print ENVIRON["NEW_BLOCK"]
                         stripping = 1
@@ -837,7 +832,7 @@ migrate_session() {
                     }
                     stripping && /^<!-- / { stripping = 0 }
                     !stripping { print }
-                ' "$claude_md_p9" > "$tmp" && mv "$tmp" "$claude_md_p9"
+                ' "$claude_md_p9" || error "could not rewrite $claude_md_p9"
                 warn "Retired auto-memory bucket guidance; replaced with cs:memory-note"
             # State 3: tombstone (sentinel without header) — preserve opt-out
             fi

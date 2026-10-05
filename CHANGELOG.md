@@ -7,6 +7,7 @@ All notable changes to cs are documented here. Release notes are also available 
 ## Unreleased
 
 ### Fixes
+- cs no longer clobbers a file named `<file>.tmp` next to one it rewrites, and a rewritten file keeps its mode. `settings.local.json`, `CLAUDE.md`, `CLAUDE.local.md`, `.gitattributes` and `.cs/local/state` were each rewritten through a fixed `<file>.tmp` name, so a file of yours with that name was overwritten, and the result came back with the umask's mode instead of its own. The temp file now has a unique name in the same folder and takes the destination's permission bits before the rename. The state file is also rewritten by the SessionStart hook, so the two writers now take turns on a lock beside it. A tracked `<file>.tmp` is no longer a reason for `cs -adopt --worktrees` to skip a worktree.
 - `cs -adopt --worktrees` finds the conversation of a worktree whose session has exited. Claude Code keeps a running `claude --worktree` session's transcript under the worktree's own folder and moves it into the parent repo's folder when the session ends, next to the parent's own conversations. cs read only the worktree's folder, so it skipped every finished worktree as "no conversation", which is the case the command exists for. It now reads the parent's folder too and takes the newest conversation whose worktree record names that worktree, so the parent's last conversation never gets bound to it, and the Objective comes from that file.
 
 ## 2026.10.3
