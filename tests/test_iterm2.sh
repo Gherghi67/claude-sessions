@@ -224,7 +224,23 @@ test_user_chosen_claude_binary_is_run_as_given() {
         "a CLAUDE_CODE_BIN the user set is never swapped for the link" || return 1
 }
 
+# An npm install resolves claude to a cli.js that loads files beside it; run
+# from a hard link elsewhere it would lose them. Only the native installer's
+# self-contained versions/<version> file is linked.
+test_npm_shaped_claude_is_not_linked() {
+    _tab_launch_env 1
+    local inst="$TEST_TMPDIR/inst"
+    mkdir -p "$inst/lib/node_modules/claude-code"
+    cp "$inst/versions/9.9.9" "$inst/lib/node_modules/claude-code/cli.js"
+    ln -sf ../lib/node_modules/claude-code/cli.js "$inst/bin/claude"
+    local out
+    out=$("$CS_BIN" npmclaude <<< "" 2>&1) || true
+    assert_eq "$inst/bin/claude" "$(_launched "$out" argv0)" \
+        "a claude that is not a versions/<version> file runs as found on PATH" || return 1
+}
+
 run_test test_launch_under_iterm_cc_shows_loader_and_icon
+run_test test_npm_shaped_claude_is_not_linked
 run_test test_plain_tmux_keeps_tmux_name_unless_term_is_tmux
 run_test test_outside_iterm_launch_is_untouched
 run_test test_iterm_integrations_off_leaves_launch_untouched

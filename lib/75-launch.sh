@@ -873,7 +873,8 @@ _resolve_symlink_file() {  # path
 # the version number. A hard link named claude to the same file carries the
 # right name; it is refreshed whenever claude updates, and a launch that
 # cannot make it runs claude as before. Only the default CLAUDE_CODE_BIN is
-# linked: a user-chosen binary is run as given.
+# linked, and only when it resolves to a versions/<version> file: a
+# user-chosen binary or another install is run as given.
 _iterm_tab_through_tmux() {
     [ -n "${TMUX:-}" ] && [ "${LC_TERMINAL:-}" = iTerm2 ] && [ -z "${CS_NO_ITERM2:-}" ] || return 0
 
@@ -892,7 +893,12 @@ _iterm_tab_through_tmux() {
     local found real link
     found=$(command -v claude 2>/dev/null) || return 0
     real=$(_resolve_symlink_file "$found")
-    [ "$(basename "$real")" != claude ] || return 0
+    # Only the native installer's versions/<version> file is self-contained;
+    # an npm cli.js loads files beside it, which a hard link elsewhere loses.
+    case "$real" in
+        */versions/[0-9]*.[0-9]*.[0-9]*) ;;
+        *) return 0 ;;
+    esac
     link="$HOME/.local/share/cs/bin/claude"
     if ! [ "$link" -ef "$real" ]; then
         mkdir -p "$(dirname "$link")" 2>/dev/null || return 0
