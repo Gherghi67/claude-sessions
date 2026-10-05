@@ -4,6 +4,11 @@ All notable changes to cs are documented here. Release notes are also available 
 
 <!-- New entries group changes under Keep-a-Changelog headings (Added / Changed / Removed / Fixes / Docs), or Features / Performance where those fit the release. -->
 
+## Unreleased
+
+### Fixes
+- `cs -adopt --worktrees` finds the conversation of a worktree whose session has exited. Claude Code keeps a running `claude --worktree` session's transcript under the worktree's own folder and moves it into the parent repo's folder when the session ends, next to the parent's own conversations. cs read only the worktree's folder, so it skipped every finished worktree as "no conversation", which is the case the command exists for. It now reads the parent's folder too and takes the newest conversation whose worktree record names that worktree, so the parent's last conversation never gets bound to it, and the Objective comes from that file.
+
 ## 2026.10.3
 
 ### Added
