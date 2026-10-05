@@ -14,7 +14,7 @@ _lint_repo() {  # baseline
     REPO="$TEST_TMPDIR/repo"
     mkdir -p "$REPO/bin" "$REPO/tests"
     local b
-    for b in cs cs-secrets cs-statusline cs-subagent-statusline; do
+    for b in ags ags-secrets ags-statusline ags-subagent-statusline; do
         printf '#!/usr/bin/env bash\ntrue\n' > "$REPO/bin/$b"
     done
     printf '#!/usr/bin/env bash\nunused=1\n' > "$REPO/one.sh"

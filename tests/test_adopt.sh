@@ -122,6 +122,21 @@ test_adopt_relinks_orphaned_records_interactively() {
     assert_eq "$before" "$after" "narrative file should be byte-identical after re-adopt" || return 1
 }
 
+# A first adoption stages no Claude conversation (there is none to continue),
+# but re-adopting orphaned records keeps the conversation they name.
+test_readopt_keeps_the_recorded_conversation() {
+    local project_dir="$TEST_TMPDIR/bound-project" recorded=11111111-2222-4333-8444-555555555555
+    mkdir -p "$project_dir"
+    (cd "$project_dir" && "$CS_BIN" -adopt first-name >/dev/null 2>&1) || return 1
+    local state="$project_dir/.cs/local/state"
+    { grep -v '^claude_session_id:' "$state" || true; printf 'claude_session_id: %s\n' "$recorded"; } > "$state.new"
+    mv "$state.new" "$state"
+    rm "$CS_SESSIONS_ROOT/first-name"
+    (cd "$project_dir" && printf 'y\n' | CS_ASSUME_TTY=1 "$CS_BIN" -adopt second-name >/dev/null 2>&1) || return 1
+    assert_eq "$recorded" "$(awk '/^claude_session_id:/ { print $2; exit }' "$project_dir/.cs/local/state")" \
+        "re-adoption keeps the recorded conversation" || return 1
+}
+
 test_adopt_orphaned_records_noninteractive_hints() {
     local project_dir="$TEST_TMPDIR/my-project"
     mkdir -p "$project_dir"
@@ -296,6 +311,33 @@ test_adopt_commits_only_its_own_bookkeeping() {
     assert_eq "user-file.txt" "$staged" "and it must still be staged afterwards" || return 1
 }
 
+# A linked worktree's .git is a file, not a directory. Adopt read that as "no
+# repo" and took the fresh-repo path inside the user's checkout: it replaced
+# the project .gitignore with cs's template, renamed the worktree's branch to
+# main, and wrote core.autocrlf into the config every worktree shares.
+test_adopt_into_git_worktree_keeps_branch_gitignore_and_config() {
+    local base_dir="$TEST_TMPDIR/base-repo" wt_dir="$TEST_TMPDIR/trial-wt"
+    mkdir -p "$base_dir"
+    (cd "$base_dir" && git init -q && git checkout -q -b base \
+        && git config user.email a@b.c && git config user.name A \
+        && printf '.env\n/node_modules/\n' > .gitignore \
+        && git add .gitignore && git commit -q -m "initial")
+    git -C "$base_dir" worktree add -q -b trial "$wt_dir" base
+
+    (cd "$wt_dir" && "$CS_BIN" -adopt trial-session) || return 1
+
+    assert_eq "trial" "$(git -C "$wt_dir" branch --show-current)" "the worktree keeps its branch" || return 1
+    if git -C "$base_dir" show-ref --verify --quiet refs/heads/main; then
+        echo "  FAIL: adopt created or renamed a branch to main"
+        return 1
+    fi
+    assert_file_contains "$wt_dir/.gitignore" '^\.env$' || return 1
+    assert_file_contains "$wt_dir/.gitignore" '^/node_modules/$' || return 1
+    assert_file_contains "$wt_dir/.gitignore" '^\.cs/local/$' || return 1
+    assert_eq "" "$(git -C "$base_dir" config --get core.autocrlf || true)" "the shared config gains no autocrlf" || return 1
+    assert_eq "Adopt as cs session: trial-session" "$(git -C "$wt_dir" log -1 --format=%s)" || return 1
+}
+
 # ============================================================================
 # README.md frontmatter
 # ============================================================================
@@ -382,6 +424,7 @@ run_test test_adopt_creates_claude_local_md_when_none_exists
 run_test test_adopt_leaves_existing_claude_md_untouched
 run_test test_adopt_refuses_a_directory_already_linked
 run_test test_adopt_relinks_orphaned_records_interactively
+run_test test_readopt_keeps_the_recorded_conversation
 run_test test_adopt_orphaned_records_noninteractive_hints
 run_test test_adopt_orphaned_records_decline_cancels
 run_test test_adopt_fails_if_session_name_exists
@@ -392,6 +435,7 @@ run_test test_adopt_preserves_existing_git_repo
 run_test test_adopt_inits_git_when_none_exists
 run_test test_adopt_into_git_repo_without_claude_md_stages_bookkeeping
 run_test test_adopt_commits_only_its_own_bookkeeping
+run_test test_adopt_into_git_worktree_keeps_branch_gitignore_and_config
 
 # README frontmatter
 run_test test_readme_has_yaml_frontmatter

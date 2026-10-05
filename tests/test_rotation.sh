@@ -7,25 +7,54 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/test_lib.sh"
 
 
+# This suite feeds answers through pipes. Keep those launches explicitly on
+# the interactive path; unattended launches are covered separately below.
+export CS_ASSUME_TTY=1
+
 HOOKS_DIR="$SCRIPT_DIR/../hooks"
 
 UUID_A="11111111-1111-4111-8111-111111111111"
 UUID_B="22222222-2222-4222-8222-222222222222"
 
-# Args-echoing claude stub; exits 1 on --resume when $1 = fail-resume.
+# Calls the real SessionStart hook for binding acknowledgement; optional mode
+# simulates a Claude failure after an exact resume was attempted.
 _stub_claude() {  # [fail-resume]
     local mode="${1:-}"
+    export CS_TEST_SESSION_START_HOOK="$HOOKS_DIR/session-start.sh"
     if [ "$mode" = "fail-resume" ]; then
         cat > "$TEST_TMPDIR/claude-stub" << 'SCRIPT'
 #!/bin/bash
-case "$*" in *--resume*) exit 1;; esac
 echo "STUB_ARGS: $*"
-exit 0
+session_id=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --session-id|--resume) session_id="${2:-}"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+if [ -n "$session_id" ] && [ "${CS_FRESH_REBIND:-}" = 1 ]; then
+    jq -nc --arg session_id "$session_id" --arg cwd "$CLAUDE_SESSION_DIR" \
+        '{session_id:$session_id,cwd:$cwd,source:"startup",hook_event_name:"SessionStart"}' \
+        | CLAUDE_PID=$$ bash "$CS_TEST_SESSION_START_HOOK" >/dev/null 2>&1
+fi
+exit 1
 SCRIPT
     else
         cat > "$TEST_TMPDIR/claude-stub" << 'SCRIPT'
 #!/bin/bash
 echo "STUB_ARGS: $*"
+session_id=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --session-id|--resume) session_id="${2:-}"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+if [ -n "$session_id" ] && [ "${CS_FRESH_REBIND:-}" = 1 ]; then
+    jq -nc --arg session_id "$session_id" --arg cwd "$CLAUDE_SESSION_DIR" \
+        '{session_id:$session_id,cwd:$cwd,source:"startup",hook_event_name:"SessionStart"}' \
+        | CLAUDE_PID=$$ bash "$CS_TEST_SESSION_START_HOOK" >/dev/null 2>&1
+fi
 exit 0
 SCRIPT
     fi
@@ -99,20 +128,76 @@ test_decline_resume_emits_declined_event() {
     assert_output_contains "$ev" "\"to\":\"$new\"" "new UUID recorded" || return 1
 }
 
-test_resume_failure_emits_resume_failed_event() {
+test_unattended_resume_failure_preserves_binding_without_lineage() {
     _rot_session "rot-fail"
     local dir="$CS_SESSIONS_ROOT/rot-fail"
+    local old status=0 output rotated
+    old=$(awk '/^claude_session_id:/ { print $2; exit }' "$dir/.cs/local/state")
     _stub_claude fail-resume
-    "$CS_BIN" rot-fail <<< "" >/dev/null 2>&1 || true
-    local ev
+    output=$(env -u CS_ASSUME_TTY "$CS_BIN" rot-fail </dev/null 2>&1) || status=$?
+    assert_eq 1 "$status" "an unattended failed resume returns Claude's failure" || return 1
+    assert_output_contains "$output" "Could not resume the recorded Claude conversation" \
+        "the failed exact resume is reported" || return 1
+    assert_eq "$old" "$(awk '/^claude_session_id:/ { print $2; exit }' "$dir/.cs/local/state")" \
+        "a failed resume preserves its binding" || return 1
+    assert_output_contains "$output" "STUB_ARGS: --name rot-fail --resume $old" \
+        "unattended startup resumes the recorded conversation exactly" || return 1
+    rotated=$(jq -c 'select(.event == "rotated")' "$dir/.cs/timeline.jsonl" 2>/dev/null || true)
+    assert_eq "" "$rotated" "a failed resume creates no fallback lineage" || return 1
+}
+
+# Adoption made a directory that already existed into a session, so its first
+# open is not "new" — and create_session_structure had staged a Claude id for
+# it anyway. The launch then asked "Continue previous conversation?" about a
+# conversation that never existed, and the default answer could only fail.
+test_adopted_project_first_launch_starts_fresh_without_asking() {
+    _stub_claude
+    local proj="$TEST_TMPDIR/adopted first launch" output new ev
+    mkdir -p "$proj"
+    (cd "$proj" && "$CS_BIN" -adopt rot-adopted >/dev/null 2>&1) || return 1
+    assert_eq "" "$(awk '/^claude_session_id:/ { print $2; exit }' "$proj/.cs/local/state")" \
+        "adoption records no conversation before one exists" || return 1
+    output=$(CS_ASSUME_TTY=1 "$CS_BIN" rot-adopted <<< "y" 2>&1) || { echo "$output"; return 1; }
+    if grep -q "Continue previous conversation" <<< "$output"; then
+        echo "  FAIL: asked to continue a conversation that never existed"
+        return 1
+    fi
+    assert_output_contains "$output" "(+ new)" "the card calls the first conversation new" || return 1
+    new=$(awk '/^claude_session_id:/ { print $2; exit }' "$proj/.cs/local/state")
+    [ -n "$new" ] || { echo "  FAIL: the first launch bound no conversation"; return 1; }
+    assert_output_contains "$output" "STUB_ARGS: --name rot-adopted --session-id $new" \
+        "the first launch starts the conversation it then records" || return 1
+    ev=$(jq -c 'select(.event == "rotated")' "$proj/.cs/timeline.jsonl" 2>/dev/null | tail -1)
+    assert_output_contains "$ev" '"reason":"fresh"' "recorded as a fresh start, not a declined resume" || return 1
+}
+
+# An explicit --fresh starts a new conversation. The card said "resuming" and
+# showed the previous conversation's context figure, and the timeline recorded
+# "declined-resume" for a question the user was never asked.
+test_fresh_launch_is_labelled_and_recorded_as_fresh() {
+    _rot_session "rot-fresh"
+    local dir="$CS_SESSIONS_ROOT/rot-fresh" output ev
+    printf '64\n' > "$dir/.cs/local/context-pct"
+    output=$("$CS_BIN" rot-fresh --fresh </dev/null 2>&1) || { echo "$output"; return 1; }
+    assert_output_contains "$output" "(+ fresh)" "the card says the launch is fresh" || return 1
+    if grep -q "resuming" <<< "$output"; then
+        echo "  FAIL: a fresh launch must not be labelled resuming"
+        return 1
+    fi
+    if grep -q "64% context used" <<< "$output"; then
+        echo "  FAIL: the previous conversation's context does not describe a fresh one"
+        return 1
+    fi
     ev=$(jq -c 'select(.event == "rotated")' "$dir/.cs/timeline.jsonl" 2>/dev/null | tail -1)
-    assert_output_contains "$ev" '"reason":"resume-failed"' "fast resume failure recorded" || return 1
+    assert_output_contains "$ev" '"reason":"fresh"' "an explicit --fresh is recorded as fresh" || return 1
 }
 
 run_test test_hook_mismatch_emits_rebind_event
 run_test test_hook_matching_uuid_emits_nothing
 run_test test_decline_resume_emits_declined_event
-run_test test_resume_failure_emits_resume_failed_event
+run_test test_adopted_project_first_launch_starts_fresh_without_asking
+run_test test_fresh_launch_is_labelled_and_recorded_as_fresh
+run_test test_unattended_resume_failure_preserves_binding_without_lineage
 
 # ============================================================================
 # Cycle 2: the rotate skill ships and is registered
@@ -684,8 +769,12 @@ test_rotate_answer_consumes_pending_handoff() {
     local new
     new=$(awk '/^claude_session_id:/ { print $2; exit }' "$dir/.cs/local/state")
     [ "$new" != "$old" ] || { echo "  FAIL: r must rebind to a fresh UUID"; return 1; }
-    assert_eq "2026-07-16-test.md" "$(cat "$dir/.cs/local/pending-handoff" 2>/dev/null | tr -d '[:space:]')" \
-        "marker names the handoff for the SessionStart hook" || return 1
+    assert_file_contains "$dir/.cs/handoffs/2026-07-16-test.md" "status: consumed" \
+        "the fresh SessionStart acknowledges and consumes the selected handoff" || return 1
+    assert_file_contains "$dir/.cs/handoffs/2026-07-16-test.md" "consumed_by: $new" \
+        "the new conversation is recorded as its consumer" || return 1
+    assert_not_exists "$dir/.cs/local/pending-handoff" \
+        "the SessionStart acknowledgement removes the pending marker" || return 1
     assert_output_contains "$output" "STUB_ARGS: " "stub launched" || return 1
     assert_output_contains "$output" "--session-id $new" "fresh conversation via --session-id" || return 1
     local ev
@@ -763,8 +852,14 @@ test_newest_of_multiple_handoffs_wins() {
     _seed_handoff "$dir" "2026-07-16-new.md" "unconsumed"
     local output
     output=$("$CS_BIN" rot-multi <<< "r" 2>&1) || true
-    assert_eq "2026-07-16-new.md" "$(cat "$dir/.cs/local/pending-handoff" 2>/dev/null | tr -d '[:space:]')" \
-        "lexicographically last basename wins" || return 1
+    local new
+    new=$(awk '/^claude_session_id:/ { print $2; exit }' "$dir/.cs/local/state")
+    assert_file_contains "$dir/.cs/handoffs/2026-07-16-new.md" "status: consumed" \
+        "the lexicographically latest handoff is selected and acknowledged" || return 1
+    assert_file_contains "$dir/.cs/handoffs/2026-07-16-new.md" "consumed_by: $new" \
+        "the new conversation consumed the selected handoff" || return 1
+    assert_not_exists "$dir/.cs/local/pending-handoff" \
+        "the acknowledgement removes its pending marker" || return 1
     assert_file_contains "$dir/.cs/handoffs/2026-07-14-old.md" "status: unconsumed" \
         "older handoff untouched" || return 1
 }
@@ -786,8 +881,14 @@ test_armed_marker_outranks_a_later_sorting_orphan() {
     output=$("$CS_BIN" rot-orphan <<< "r" 2>&1) || true
     assert_output_contains "$output" "2026-07-14-mine.md" \
         "the prompt names the armed handoff, not the orphan" || return 1
-    assert_eq "2026-07-14-mine.md" "$(cat "$dir/.cs/local/pending-handoff" 2>/dev/null | tr -d '[:space:]')" \
-        "r keeps the armed handoff" || return 1
+    # The stub runs the real SessionStart hook, so the fresh conversation
+    # consumes whichever handoff r armed; its consumer line is the evidence.
+    local new
+    new=$(awk '/^claude_session_id:/ { print $2; exit }' "$dir/.cs/local/state")
+    assert_file_contains "$dir/.cs/handoffs/2026-07-14-mine.md" "consumed_by: $new" \
+        "r rotates into the armed handoff" || return 1
+    assert_not_exists "$dir/.cs/local/pending-handoff" \
+        "the acknowledgement removes the marker r armed" || return 1
     assert_file_contains "$dir/.cs/handoffs/2026-07-16-orphan.md" "status: unconsumed" \
         "the orphan is left alone, not retired behind the user's back" || return 1
 }
@@ -802,15 +903,28 @@ test_stale_marker_falls_back_to_the_scan() {
     printf '%s\n' "2026-07-15-spent.md" > "$dir/.cs/local/pending-handoff"
     local output
     output=$("$CS_BIN" rot-stale-marker <<< "r" 2>&1) || true
-    assert_eq "2026-07-16-real.md" "$(cat "$dir/.cs/local/pending-handoff" 2>/dev/null | tr -d '[:space:]')" \
+    assert_output_contains "$output" "2026-07-16-real.md" \
         "a marker naming a consumed file falls back to the scan" || return 1
+    local new
+    new=$(awk '/^claude_session_id:/ { print $2; exit }' "$dir/.cs/local/state")
+    assert_file_contains "$dir/.cs/handoffs/2026-07-16-real.md" "consumed_by: $new" \
+        "the scan's pick is the handoff the fresh conversation consumes" || return 1
+    assert_file_not_contains "$dir/.cs/handoffs/2026-07-15-spent.md" "consumed_by:" \
+        "the spent handoff the marker named is not consumed again" || return 1
+    assert_not_exists "$dir/.cs/local/pending-handoff" \
+        "the stale marker does not survive the launch" || return 1
     _rot_session "rot-absent-marker"
     local dir2="$CS_SESSIONS_ROOT/rot-absent-marker"
     _seed_handoff "$dir2" "2026-07-16-real.md" "unconsumed"
     printf '%s\n' "2026-07-01-gone.md" > "$dir2/.cs/local/pending-handoff"
     output=$("$CS_BIN" rot-absent-marker <<< "r" 2>&1) || true
-    assert_eq "2026-07-16-real.md" "$(cat "$dir2/.cs/local/pending-handoff" 2>/dev/null | tr -d '[:space:]')" \
+    assert_output_contains "$output" "2026-07-16-real.md" \
         "a marker naming a missing file falls back to the scan" || return 1
+    new=$(awk '/^claude_session_id:/ { print $2; exit }' "$dir2/.cs/local/state")
+    assert_file_contains "$dir2/.cs/handoffs/2026-07-16-real.md" "consumed_by: $new" \
+        "the scan's pick is consumed when the marker named a missing file" || return 1
+    assert_not_exists "$dir2/.cs/local/pending-handoff" \
+        "the marker naming a missing file does not survive the launch" || return 1
 }
 
 # The launcher now reads the marker, so it inherits the same traversal guard the
@@ -822,8 +936,14 @@ test_launcher_marker_with_a_path_falls_back_to_the_scan() {
     printf '%s\n' "../../../etc/passwd" > "$dir/.cs/local/pending-handoff"
     local output
     output=$("$CS_BIN" rot-marker-path <<< "r" 2>&1) || true
-    assert_eq "2026-07-16-real.md" "$(cat "$dir/.cs/local/pending-handoff" 2>/dev/null | tr -d '[:space:]')" \
+    assert_output_contains "$output" "2026-07-16-real.md" \
         "a marker carrying a path is rejected and the scan wins" || return 1
+    local new
+    new=$(awk '/^claude_session_id:/ { print $2; exit }' "$dir/.cs/local/state")
+    assert_file_contains "$dir/.cs/handoffs/2026-07-16-real.md" "consumed_by: $new" \
+        "the scan's pick is what the fresh conversation consumes" || return 1
+    assert_not_exists "$dir/.cs/local/pending-handoff" \
+        "the path-carrying marker does not survive the launch" || return 1
 }
 
 # .cs/handoffs/ is shared and nothing retires a handoff written by another
@@ -2288,17 +2408,17 @@ test_launch_prints_the_force_notice_once_and_only_with_hooks_on() {
     out=$(env -u CLAUDE_CODE_ENABLE_FUNCTION_HOOKS -u CS_NO_FUNCTION_HOOKS XDG_CONFIG_HOME="$cfg" \
         "$CS_BIN" "notice-on" </dev/null 2>&1 || true)
     assert_output_contains "$out" "STUB_ARGS:" "the launch reached claude" || return 1
-    assert_output_contains "$out" "cs now rotates a conversation on its own" "a launch with hooks on announces the forcing" || return 1
+    assert_output_contains "$out" "ags now rotates a conversation on its own" "a launch with hooks on announces the forcing" || return 1
     assert_file_exists "$cfg/cs/rotate-force-notice" "and records it" || return 1
     out=$(env -u CLAUDE_CODE_ENABLE_FUNCTION_HOOKS -u CS_NO_FUNCTION_HOOKS XDG_CONFIG_HOME="$cfg" \
         "$CS_BIN" "notice-again" </dev/null 2>&1 || true)
     assert_output_contains "$out" "STUB_ARGS:" "the second launch reached claude" || return 1
-    assert_output_not_contains "$out" "cs now rotates" "the second launch on the machine is quiet" || return 1
+    assert_output_not_contains "$out" "ags now rotates" "the second launch on the machine is quiet" || return 1
     rm -f "$cfg/cs/rotate-force-notice"
     out=$(env -u CLAUDE_CODE_ENABLE_FUNCTION_HOOKS CS_NO_FUNCTION_HOOKS=1 XDG_CONFIG_HOME="$cfg" \
         "$CS_BIN" "notice-nohooks" </dev/null 2>&1 || true)
     assert_output_contains "$out" "STUB_ARGS:" "the opted-out launch reached claude" || return 1
-    assert_output_not_contains "$out" "cs now rotates" "a launch without function hooks announces nothing" || return 1
+    assert_output_not_contains "$out" "ags now rotates" "a launch without function hooks announces nothing" || return 1
     [ ! -f "$cfg/cs/rotate-force-notice" ] || { echo "  FAIL: the marker was spent by a launch that forces nothing"; return 1; }
 }
 

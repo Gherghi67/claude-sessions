@@ -95,7 +95,7 @@ test_narrative_reminder_flags_a_narrative_over_budget() {
     local output
     output=$(echo '{}' | CS_NARRATIVE_MAX_BYTES=2048 bash "$HOOKS_DIR/narrative-reminder.sh")
     assert_output_contains "$output" "narrative.alice.md is 2 KB, over the 2 KB budget" "names the file and the budget" || return 1
-    assert_output_contains "$output" "cs -narrative rotate" "points at the rotation" || return 1
+    assert_output_contains "$output" "ags -narrative rotate" "points at the rotation" || return 1
 }
 
 # The same octal trap as SessionStart's: `08` passes _num_or and aborts the
@@ -303,7 +303,7 @@ test_subagent_context_points_to_secret_store() {
     # improvises instead of using the session secret store.
     local output
     output=$(echo '{}' | bash "$HOOKS_DIR/subagent-context.sh")
-    assert_output_contains "$output" "cs -secrets set" \
+    assert_output_contains "$output" "ags -secrets set" \
         "the secrets rule must point the subagent at the session secret store" || return 1
 }
 
@@ -524,7 +524,7 @@ test_session_start_reasserts_tab_title_through_tmux() {
     echo '{"session_id":"s","source":"clear","cwd":"'"$CLAUDE_SESSION_DIR"'","hook_event_name":"SessionStart"}' \
         | PATH="$FAKE_TMUX_PATH:$PATH" TMUX="/tmp/tmux-1000/default,1234,0" TMUX_PANE="%3" \
           bash "$HOOKS_DIR/session-start.sh" >/dev/null 2>&1 || return 1
-    assert_file_contains "$FAKE_TMUX_CALLS" "^\[select-pane\]\[-t\]\[%3\]\[-T\]\[cs: current-session\]$" \
+    assert_file_contains "$FAKE_TMUX_CALLS" "^\[select-pane\]\[-t\]\[%3\]\[-T\]\[ags: current-session\]$" \
         "the pane title is re-asserted on the hook's own pane, as one argument" || return 1
     # The window name itself is composed from every pane's claim; the real-tmux
     # tests below read it back. Here: the claim is this pane's, the name whole.
@@ -556,13 +556,13 @@ test_two_cs_sessions_in_one_window_name_it_after_both() {
     session_start_setup
     _real_tmux_window || return $?
     _tt_hook session-start.sh "$TT_PANE_A" current-session startup || { _tt kill-server; return 1; }
-    assert_eq "cs: current-session" "$(_tt_window_name)" "one session names the window alone" || { _tt kill-server; return 1; }
+    assert_eq "ags: current-session" "$(_tt_window_name)" "one session names the window alone" || { _tt kill-server; return 1; }
     _tt_hook session-start.sh "$TT_PANE_B" fignity startup || { _tt kill-server; return 1; }
-    assert_eq "cs: current-session | fignity" "$(_tt_window_name)" \
+    assert_eq "ags: current-session | fignity" "$(_tt_window_name)" \
         "a second session in the same window joins the name, in pane order" || { _tt kill-server; return 1; }
     # A /clear restarts a conversation in its pane: the name does not repeat.
     _tt_hook session-start.sh "$TT_PANE_A" current-session clear || { _tt kill-server; return 1; }
-    assert_eq "cs: current-session | fignity" "$(_tt_window_name)" \
+    assert_eq "ags: current-session | fignity" "$(_tt_window_name)" \
         "a session re-asserting its own pane is listed once" || { _tt kill-server; return 1; }
     _tt kill-server
 }
@@ -573,7 +573,7 @@ test_a_session_ending_leaves_the_window_to_the_others() {
     _tt_hook session-start.sh "$TT_PANE_A" current-session startup
     _tt_hook session-start.sh "$TT_PANE_B" fignity startup
     _tt_hook session-end.sh "$TT_PANE_A" current-session user_exit || { _tt kill-server; return 1; }
-    assert_eq "cs: fignity" "$(_tt_window_name)" \
+    assert_eq "ags: fignity" "$(_tt_window_name)" \
         "the session that ended leaves the name; the other keeps it" || { _tt kill-server; return 1; }
     _tt_hook session-end.sh "$TT_PANE_B" fignity user_exit || { _tt kill-server; return 1; }
     assert_eq "on" "$(_tt show-window-options -v -t "$TT_PANE_A" automatic-rename)" \
@@ -601,7 +601,7 @@ test_concurrent_claims_leave_the_name_the_claims_make() {
             ( TMUX="$TT_SOCK,1,0" bash -c '. "$1"; cs_tmux_title_window "$2" "$3"' _ "$HOOKS_DIR/cs-shared.sh" "$p" "s$i" ) &
         done
         wait
-        want="cs: $(_tt list-panes -t "$TT_PANE_A" -F '#{@cs_session}' | awk '{ out = out (NR > 1 ? " | " : "") $0 } END { print out }')"
+        want="ags: $(_tt list-panes -t "$TT_PANE_A" -F '#{@cs_session}' | awk '{ out = out (NR > 1 ? " | " : "") $0 } END { print out }')"
         got=$(_tt_window_name)
         assert_eq "$want" "$got" "round $round: concurrent claims name the window after every claim" || { _tt kill-server; return 1; }
         for p in $panes; do
@@ -636,7 +636,7 @@ test_an_unmakeable_lock_still_names_the_window_in_bounded_time() {
     fi
     wait "$pid" 2>/dev/null
     assert_eq "1" "$(( SECONDS - start <= 8 ))" "the wait is bounded near five seconds" || { _tt kill-server; return 1; }
-    assert_eq "cs: solo" "$(_tt_window_name)" "the name is written without the lock" || { _tt kill-server; return 1; }
+    assert_eq "ags: solo" "$(_tt_window_name)" "the name is written without the lock" || { _tt kill-server; return 1; }
     _tt kill-server
 }
 
@@ -648,11 +648,11 @@ test_a_launch_cleanup_releases_its_pane_and_keeps_the_others_title() {
     _real_tmux_window || return $?
     _tt_hook session-start.sh "$TT_PANE_A" current-session startup
     local lib="$SCRIPT_DIR/../lib"
-    _tt respawn-pane -k -t "$TT_PANE_B" "bash -c '. \"$lib/02-shared.sh\"; . \"$lib/05-term.sh\"; set_tab_title \"cs: fignity\" \"\" fignity; reset_tab_title; touch \"$TEST_TMPDIR/cleaned\"; sleep 600'" \
+    _tt respawn-pane -k -t "$TT_PANE_B" "bash -c '. \"$lib/02-shared.sh\"; . \"$lib/05-term.sh\"; set_tab_title \"ags: fignity\" \"\" fignity; reset_tab_title; touch \"$TEST_TMPDIR/cleaned\"; sleep 600'" \
         || { _tt kill-server; return 1; }
     local i=0
     while [ ! -e "$TEST_TMPDIR/cleaned" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
-    assert_eq "cs: current-session" "$(_tt_window_name)" \
+    assert_eq "ags: current-session" "$(_tt_window_name)" \
         "the cleaned-up launch leaves the window to the session still running" || { _tt kill-server; return 1; }
     assert_eq "" "$(_tt show-options -p -v -t "$TT_PANE_B" @cs_session 2>/dev/null)" \
         "and holds no claim on its pane" || { _tt kill-server; return 1; }
@@ -670,7 +670,7 @@ test_a_claim_after_the_last_release_locks_the_titles_again() {
     _tt_hook session-start.sh "$TT_PANE_A" current-session startup
     _tt_hook session-end.sh "$TT_PANE_A" current-session clear
     _tt_hook session-start.sh "$TT_PANE_A" current-session clear || { _tt kill-server; return 1; }
-    assert_eq "cs: current-session" "$(_tt_window_name)" "the window is named again" || { _tt kill-server; return 1; }
+    assert_eq "ags: current-session" "$(_tt_window_name)" "the window is named again" || { _tt kill-server; return 1; }
     assert_eq "off" "$(_tt show-window-options -v -t "$TT_PANE_A" allow-rename)" \
         "the claim locks the window name against Claude Code's own titles" || { _tt kill-server; return 1; }
     # allow-set-title arrived in tmux 3.5; an older server (ubuntu-latest has
@@ -692,7 +692,7 @@ test_a_non_lead_end_leaves_the_pane_claimed() {
     echo '{"session_id":"s","source":"other","cwd":"'"$CLAUDE_SESSION_DIR"'","hook_event_name":"SessionEnd"}' \
         | TMUX="$TT_SOCK,1,0" TMUX_PANE="$TT_PANE_A" CS_LEAD_PID=1 CLAUDE_PID=99999 \
           bash "$HOOKS_DIR/session-end.sh" >/dev/null 2>&1 || { _tt kill-server; return 1; }
-    assert_eq "cs: current-session" "$(_tt_window_name)" \
+    assert_eq "ags: current-session" "$(_tt_window_name)" \
         "the lead's session still names the window" || { _tt kill-server; return 1; }
     assert_eq "current-session" "$(_tt show-options -p -v -t "$TT_PANE_A" @cs_session)" \
         "and still holds its pane's claim" || { _tt kill-server; return 1; }
@@ -707,13 +707,13 @@ test_a_launch_in_a_second_pane_joins_the_window_name() {
     _real_tmux_window || return $?
     _tt_hook session-start.sh "$TT_PANE_A" current-session startup
     local lib="$SCRIPT_DIR/../lib"
-    _tt respawn-pane -k -t "$TT_PANE_B" "bash -c '. \"$lib/02-shared.sh\"; . \"$lib/05-term.sh\"; set_tab_title \"cs: fignity\" \"\" fignity; touch \"$TEST_TMPDIR/launched\"; sleep 600'" \
+    _tt respawn-pane -k -t "$TT_PANE_B" "bash -c '. \"$lib/02-shared.sh\"; . \"$lib/05-term.sh\"; set_tab_title \"ags: fignity\" \"\" fignity; touch \"$TEST_TMPDIR/launched\"; sleep 600'" \
         || { _tt kill-server; return 1; }
     local i=0
     while [ ! -e "$TEST_TMPDIR/launched" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
-    assert_eq "cs: current-session | fignity" "$(_tt_window_name)" \
+    assert_eq "ags: current-session | fignity" "$(_tt_window_name)" \
         "a cs launched in the other pane joins the window name" || { _tt kill-server; return 1; }
-    assert_eq "cs: fignity" "$(_tt display-message -p -t "$TT_PANE_B" '#{pane_title}')" \
+    assert_eq "ags: fignity" "$(_tt display-message -p -t "$TT_PANE_B" '#{pane_title}')" \
         "the pane's own title stays its session alone" || { _tt kill-server; return 1; }
     _tt kill-server
 }
@@ -738,7 +738,7 @@ test_session_start_reasserts_tab_title_on_the_terminal_device() {
         | bash "$HOOKS_DIR/session-start.sh" >/dev/null 2>&1 || return 1
     assert_file_exists "$CS_TITLE_TTY" "the title escape is written to the terminal device" || return 1
     local expected
-    expected=$(printf '\033]0;cs: current-session\007' | od -An -c | tr -s ' ')
+    expected=$(printf '\033]0;ags: current-session\007' | od -An -c | tr -s ' ')
     assert_eq "$expected" "$(od -An -c < "$CS_TITLE_TTY" | tr -s ' ')" \
         "the device receives exactly one OSC 0 title escape" || return 1
 }
@@ -772,7 +772,7 @@ test_session_start_warns_about_an_over_budget_narrative() {
     assert_output_contains "$context" "NARRATIVE OVER BUDGET" "the warning is loud" || return 1
     assert_output_contains "$context" "narrative.alice.md is 2 KB, over the 2 KB budget" \
         "the file and its size are named" || return 1
-    assert_output_contains "$context" "yours: run \`cs -narrative rotate\` BEFORE reading it in full (the Read tool refuses a file over 256 KiB)" \
+    assert_output_contains "$context" "yours: run \`ags -narrative rotate\` BEFORE reading it in full (the Read tool refuses a file over 256 KiB)" \
         "the actor's own file is told to rotate before the full read" || return 1
     assert_output_not_contains "$context" "narrative.bob.md is" "a file within budget is not named" || return 1
 }
@@ -792,7 +792,7 @@ test_session_start_names_a_teammate_narrative_over_budget_as_theirs() {
         "the teammate's file is named" || return 1
     assert_output_contains "$context" "not yours: read it only from the line the digest names" \
         "the teammate's file is theirs to rotate" || return 1
-    assert_output_not_contains "$context" "run \`cs -narrative rotate\` BEFORE" \
+    assert_output_not_contains "$context" "run \`ags -narrative rotate\` BEFORE" \
         "the rotate instruction is for the actor's own file only" || return 1
 }
 
@@ -914,7 +914,7 @@ test_session_start_worktree_block_needs_at_shaped_name() {
     local output
     output=$(echo '{"session_id":"s","source":"startup","cwd":"'"$CLAUDE_SESSION_DIR"'","hook_event_name":"SessionStart"}' \
         | CLAUDE_SESSION_NAME="myproj" bash "$HOOKS_DIR/session-start.sh" 2>/dev/null)
-    assert_output_not_contains "$output" "cs -rm" \
+    assert_output_not_contains "$output" "ags -rm" \
         "no destructive command suggestions without a parseable name" || return 1
     assert_output_not_contains "$output" "feature worktree" \
         "no worktree block when the name shape does not parse" || return 1
@@ -941,7 +941,7 @@ test_session_start_worktree_abandon_is_user_gated() {
     output=$(echo '{"session_id":"s","source":"clear","cwd":"'"$CLAUDE_SESSION_DIR"'","hook_event_name":"SessionStart"}' \
         | CLAUDE_SESSION_NAME="myproj@fix-auth" bash "$HOOKS_DIR/session-start.sh" 2>/dev/null)
     context=$(echo "$output" | jq -r '.hookSpecificOutput.additionalContext')
-    assert_output_contains "$context" "ask the user to run: cs -rm" \
+    assert_output_contains "$context" "ask the user to run: ags -rm" \
         "the destructive abandon command must be gated behind the user, like the merge command" || return 1
     assert_output_contains "$context" "never run this yourself" \
         "the abandon command must warn Claude not to self-serve the worktree deletion" || return 1
@@ -1255,7 +1255,7 @@ test_session_start_includes_sibling_sessions() {
         session_start_teardown
         return 1
     fi
-    if ! grep -q "cs -msg" <<< "$context"; then
+    if ! grep -q "ags -msg" <<< "$context"; then
         echo "  FAIL: sibling block should name cs -msg as the way to reach another session"
         session_start_teardown
         return 1
@@ -1332,7 +1332,7 @@ test_session_start_sibling_line_carries_the_send_syntax() {
         | bash "$HOOKS_DIR/session-start.sh" 2>/dev/null)
     context=$(echo "$output" | jq -r '.hookSpecificOutput.additionalContext')
 
-    if ! grep -q 'cs -msg <session> "<body>"' <<< "$context"; then
+    if ! grep -q 'ags -msg <session> "<body>"' <<< "$context"; then
         echo "  FAIL: the sibling line must carry the full send form, not just the verb"
         session_start_teardown
         return 1
@@ -2610,10 +2610,9 @@ test_session_end_survives_an_unset_home() {
 
 run_test test_session_end_survives_an_unset_home
 
-# Before hooks resolved a session from the directory, a second front end never
-# reached SessionEnd for a session it did not launch. Now closing a desktop
-# conversation on a directory a CLI session is live in would remove that
-# session's lock, so `cs <name>` opens a duplicate with no collision menu.
+# Exported session identity alone does not prove its launcher has exited. A
+# second front end can inherit these variables while the live run still owns
+# the lock, so SessionEnd must leave that PID for launcher cleanup.
 test_session_end_spares_a_live_sessions_lock() {
     local proj="$TEST_TMPDIR/lockheld"
     mkdir -p "$proj/.cs/local"
@@ -2621,9 +2620,12 @@ test_session_end_spares_a_live_sessions_lock() {
     # $$ is this test runner: a PID that is definitely alive.
     printf '%s\n' "$$" > "$proj/.cs/session.lock"
 
-    # The real scenario: another front end resolves by WALKING the directory,
-    # so no session env is set. A cs launch (env path) still clears its own lock.
-    env -i PATH="$PATH" HOME="$TEST_TMPDIR" CLAUDE_PROJECT_DIR="$proj" \
+    # Model an env-resolved hook without the launcher's token sidecar. The
+    # numeric PID is live; SessionEnd cannot use its own environment as proof
+    # that the session has ended.
+    env -i PATH="$PATH" HOME="$TEST_TMPDIR" \
+        CLAUDE_SESSION_NAME=lockheld CLAUDE_SESSION_DIR="$proj" \
+        CLAUDE_SESSION_META_DIR="$proj/.cs" \
         /bin/bash "$HOOKS_DIR/session-end.sh" \
         <<< "{\"session_id\":\"11111111-2222-4333-8444-555555555555\",\"cwd\":\"$proj\",\"source\":\"user_exit\"}" \
         >/dev/null 2>&1 || true

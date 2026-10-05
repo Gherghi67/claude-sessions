@@ -657,7 +657,7 @@ test_no_session_errors() {
         echo "  FAIL: Should fail without session name"
         return 1
     fi
-    assert_output_contains "$output" "No session specified. Set CLAUDE_SESSION_NAME or use --session" || return 1
+    assert_output_contains "$output" "No session specified. Set CS_SESSION_NAME or use --session" || return 1
 }
 
 test_picker_selects_numbered_session() {
@@ -732,7 +732,7 @@ test_picker_eof_aborts_despite_default() {
             echo "  FAIL: EOF should abort even with a CWD default"
             exit 1
         fi
-        assert_output_contains "$out" "No session specified. Set CLAUDE_SESSION_NAME or use --session" || exit 1
+        assert_output_contains "$out" "No session specified. Set CS_SESSION_NAME or use --session" || exit 1
     ) || return 1
 }
 
@@ -756,12 +756,12 @@ test_picker_rejects_invalid_choice() {
         echo "  FAIL: out-of-range choice should error"
         return 1
     fi
-    assert_output_contains "$out" "No session specified. Set CLAUDE_SESSION_NAME or use --session" || return 1
+    assert_output_contains "$out" "No session specified. Set CS_SESSION_NAME or use --session" || return 1
     if out=$(printf '\n' | CS_ASSUME_TTY=1 "$CS_SECRETS_BIN" list 2>&1); then
         echo "  FAIL: empty input with no default should error"
         return 1
     fi
-    assert_output_contains "$out" "No session specified. Set CLAUDE_SESSION_NAME or use --session" || return 1
+    assert_output_contains "$out" "No session specified. Set CS_SESSION_NAME or use --session" || return 1
 }
 
 test_picker_empty_root_errors() {
@@ -771,7 +771,7 @@ test_picker_empty_root_errors() {
         echo "  FAIL: empty sessions root should error"
         return 1
     fi
-    assert_output_contains "$out" "No session specified. Set CLAUDE_SESSION_NAME or use --session" || return 1
+    assert_output_contains "$out" "No session specified. Set CS_SESSION_NAME or use --session" || return 1
     assert_output_not_contains "$out" "Pick one" || return 1
 }
 
@@ -1512,6 +1512,18 @@ echo "================"
 echo ""
 
 # Backend
+test_neutral_session_name_takes_precedence_with_legacy_fallback() {
+    export CS_SESSION_NAME=neutral-session
+    "$CS_SECRETS_BIN" set neutral-key neutral-value >/dev/null 2>&1 || return 1
+    assert_eq neutral-value "$("$CS_SECRETS_BIN" get neutral-key)" || return 1
+    unset CS_SESSION_NAME
+    local output
+    output=$("$CS_SECRETS_BIN" list 2>&1) || return 1
+    assert_output_not_contains "$output" neutral-key 'neutral and legacy session stores must stay separate' || return 1
+    "$CS_SECRETS_BIN" set legacy-key legacy-value >/dev/null 2>&1 || return 1
+    assert_eq legacy-value "$("$CS_SECRETS_BIN" get legacy-key)"
+}
+
 run_test test_backend_shows_encrypted
 run_test test_backend_override_via_env
 run_test test_backend_wsl_defaults_encrypted_not_keychain
@@ -1623,4 +1635,5 @@ run_test test_export_file_atomic_preserves_prior_on_encrypt_failure
 run_test test_encrypted_stale_lock_fails_loud_not_reaped
 run_test test_keychain_export_does_not_require_cs_secrets_dir
 
+run_test test_neutral_session_name_takes_precedence_with_legacy_fallback
 report_results

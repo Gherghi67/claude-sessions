@@ -40,7 +40,7 @@ test_a_lone_separator_reads_as_no_arguments() {
     local out
     out=$(_cs --)
 
-    assert_output_contains "$out" "cs -list" \
+    assert_output_contains "$out" "ags -list" \
         "'cs --' alone should behave as bare cs" || return 1
     assert_output_not_contains "$out" "Unknown command" \
         "a lone separator is not a command" || return 1

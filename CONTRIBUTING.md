@@ -1,15 +1,15 @@
-# Contributing to cs
+# Contributing to agent-sessions
 
-Practical guide for adding hooks, commands, and other contributions to cs.
+Practical guide for adding hooks, commands, and other contributions to agent-sessions.
 
 ## Development Setup
 
 ```bash
-git clone https://github.com/hex/claude-sessions.git
-cd claude-sessions
+git clone https://github.com/hex/claude-sessions.git agent-sessions
+cd agent-sessions
 ```
 
-The `cs` command is **assembled** from ordered fragments in `lib/*.sh` into the
+The `ags` command is **assembled** from ordered fragments in `lib/*.sh` into the
 single `bin/cs` that ships. **Edit the `lib/` fragments, never `bin/cs` directly**,
 then rebuild and commit the regenerated `bin/cs`:
 
@@ -22,6 +22,14 @@ fragment has a numeric prefix (`00`, `05`, …, `99`) that fixes its position; t
 `bin/cs` blob stays byte-identical whether you edit a fragment or the assembled
 file, so a build is transparent. Hooks live in `hooks/`, commands in `commands/`,
 and tests in `tests/`.
+
+The upstream URL remains unchanged during the rebrand. `ags` and `ags-tui` are
+the primary user-facing executable names; `cs` and old companion names remain
+compatibility aliases. The generated shell implementation continues to build to
+`bin/cs` internally; the installer exposes the public aliases. Shared workspace/storage/context
+fragments and namespaced adapter fragments are described in
+[Engine adapters](docs/engine-adapters.md). Keep native configuration and parsers
+inside their adapter; build.sh still produces a standalone shell executable.
 
 ## Running Tests
 

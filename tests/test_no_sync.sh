@@ -9,14 +9,14 @@ test_sync_global_command_removed() {
     local out ec
     out=$("$CS_BIN" -sync 2>&1); ec=$?
     [ "$ec" -ne 0 ] || { echo "  FAIL: 'cs -sync' should exit non-zero"; return 1; }
-    assert_output_contains "$out" "Unknown command" "'cs -sync' must report an unknown command" || return 1
+    assert_output_contains "$out" "Unknown command" "'ags -sync' must report an unknown command" || return 1
 }
 
 test_remote_global_command_removed() {
     local out ec
     out=$("$CS_BIN" -remote 2>&1); ec=$?
     [ "$ec" -ne 0 ] || { echo "  FAIL: 'cs -remote' should exit non-zero"; return 1; }
-    assert_output_contains "$out" "Unknown command" "'cs -remote' must report an unknown command" || return 1
+    assert_output_contains "$out" "Unknown command" "'ags -remote' must report an unknown command" || return 1
 }
 
 test_session_on_flag_removed() {

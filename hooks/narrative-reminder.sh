@@ -119,7 +119,7 @@ _num_or() {  # value, default -> prints value if a plain integer, else default
 }
 
 # The queue is a directory of one file per task (written via tmp+rename by
-# cs -queue add / task-kind mail), so the drain can never read a torn entry.
+# ags -queue add / task-kind mail), so the drain can never read a torn entry.
 _qlen() {  # queue dir
     local f n=0
     for f in "$1"/*; do
@@ -135,7 +135,7 @@ _qlen() {  # queue dir
 # own top-level Stop — the agent_id guard above catches in-process subagents,
 # not tmux ones — and cs is neither its process nor its parent, so CS_LEAD_PID
 # is absent from its environment. Ungated, one arrival wakes the lead and every
-# idle teammate, each racing to cs -msg where the first mv wins, so a teammate
+# idle teammate, each racing to ags -msg where the first mv wins, so a teammate
 # can consume mail the lead then never sees. A session opened straight from a
 # front end is not a cs launch either and likewise does not wake; it is attended
 # by definition, and the prompt digest carries its mail.
@@ -147,7 +147,7 @@ _mail_is_lead() {
 
 # Populate the MAIL_* globals. The re-wake guard is a snapshot of the filenames
 # already discharged, not a count and not a high-water mark: unread drops to
-# zero whenever cs -msg moves files to cur/, and filenames are not ordered by
+# zero whenever ags -msg moves files to cur/, and filenames are not ordered by
 # arrival (same-second order is by unpadded pid). Set membership needs neither
 # property.
 _mail_scan() {
@@ -176,7 +176,7 @@ _mail_scan() {
         # forged document reads as text: over-waking is the safe direction.
         # One jq per document, reading both fields it needs. The sender rides
         # along free: a count says work arrived but not whose, and the recipient
-        # would otherwise spend a turn on `cs -msg` just to learn whether it can
+        # would otherwise spend a turn on `ags -msg` just to learn whether it can
         # wait. Truncated and stripped of separators inside jq so a forged or
         # hand-written document cannot smuggle a newline or a comma into the
         # rendered line, and coerced to a string so a numeric field cannot error
@@ -259,7 +259,7 @@ _mail_count_wake() {
         && mv "$MAILDIR/wakes.tmp.$$" "$MAILDIR/wakes" 2>/dev/null || true
 }
 
-MAIL_REASON_TAIL="Run cs -msg to read it. Reply only if the message needs an answer; never reply merely to acknowledge."
+MAIL_REASON_TAIL="Run ags -msg to read it. Reply only if the message needs an answer; never reply merely to acknowledge."
 
 # --- CwdChanged: re-arm the maildir watch -------------------------------------
 # A cwd change REPLACES the session's dynamic watch list with whatever the
@@ -291,7 +291,7 @@ fi
 # Claude Code wraps in a system-reminder and enqueues — so it reaches a session
 # with nobody at the keyboard, as data the model trusts rather than as fabricated
 # input. This branch sits above the attention flag and the iTerm2 bounce on
-# purpose: a watched file changing is not a finished turn, and cs -msg moving
+# purpose: a watched file changing is not a finished turn, and ags -msg moving
 # mail to cur/ fires one event per message.
 #
 # Every command below is guarded, because under errexit an incidental failure
@@ -476,8 +476,12 @@ _notify_spawner() {  # message
     [ -s "$QDIR/spawned-by" ] || return 0
     local spawner=""
     IFS= read -r spawner < "$QDIR/spawned-by" || true
-    if [ -n "$spawner" ] && command -v cs >/dev/null 2>&1; then
-        cs -msg "$spawner" -k notify "$1" >/dev/null 2>&1 || true
+    local session_bin="${AGS_BIN:-${CS_BIN:-}}"
+    if [ -z "$session_bin" ]; then
+        session_bin=$(command -v ags 2>/dev/null || command -v cs 2>/dev/null || true)
+    fi
+    if [ -n "$spawner" ] && [ -n "$session_bin" ]; then
+        "$session_bin" -msg "$spawner" -k notify "$1" >/dev/null 2>&1 || true
     fi
 }
 
@@ -543,7 +547,7 @@ if [ "$QLEN" -gt 0 ] && _mail_is_lead; then
         rm -f "$QDIR/failures"
         _inbox_append --arg ts "$(date +%s)" --arg q "$QLEN" \
             '{ts: ($ts|tonumber), event: "drain_started", queued: ($q|tonumber)}'
-        REASON="cs task queue: starting a walk-away run. Work through the queued tasks one at a time; I will hand you the next after each finishes. Mirror the whole queue into your native task list now: run \`cs -queue list\` to see every queued item (this message shows only the first), create one task each, and mark each completed as you finish it. When a task is done, mark it completed and simply end your turn; the next task is delivered automatically on the next turn. Do not read or edit the queue yourself.
+        REASON="cs task queue: starting a walk-away run. Work through the queued tasks one at a time; I will hand you the next after each finishes. Mirror the whole queue into your native task list now: run \`ags -queue list\` to see every queued item (this message shows only the first), create one task each, and mark each completed as you finish it. When a task is done, mark it completed and simply end your turn; the next task is delivered automatically on the next turn. Do not read or edit the queue yourself.
 
 First task: $TASK
 
@@ -589,7 +593,7 @@ $SCOPE"
                 # spawned-by, so the eventual real drain still reports.
                 _notify_spawner "breaker tripped: $REASON_KIND ($READING >= $LIMIT), $NEWLEN task(s) remaining"
                 rm -f "$QDIR/failures"
-                REASON="cs task queue: circuit breaker tripped — $REASON_KIND at $READING (threshold $LIMIT). The queue is parked with $NEWLEN task(s) remaining; nothing was lost. Summarize the walk-away run so far and anything that needs the user's attention. They can re-arm with: cs -queue start."
+                REASON="cs task queue: circuit breaker tripped — $REASON_KIND at $READING (threshold $LIMIT). The queue is parked with $NEWLEN task(s) remaining; nothing was lost. Summarize the walk-away run so far and anything that needs the user's attention. They can re-arm with: ags -queue start."
                 jq -nc --arg r "$REASON" '{decision:"block", reason:$r}'
                 exit 0
             fi
@@ -631,7 +635,7 @@ $SCOPE"
                 *) CTX_LINE=" Context is at ${CTX}%."
                    [ "$CTX" -ge 60 ] && COMPACT=" Context is heavy: offer a third option 'Compact first'. If chosen, run no queue command and tell the user to run /compact; you will be asked again afterward." ;;
             esac
-            REASON="cs task queue: $QLEN task(s) are queued for a walk-away run.$CTX_LINE$COMPACT Use AskUserQuestion to ask whether to work through them now (options: Start / Not yet). On Start, run: cs -queue start (then stop; I will hand you each task). On Not yet, run: cs -queue defer."
+            REASON="cs task queue: $QLEN task(s) are queued for a walk-away run.$CTX_LINE$COMPACT Use AskUserQuestion to ask whether to work through them now (options: Start / Not yet). On Start, run: ags -queue start (then stop; I will hand you each task). On Not yet, run: ags -queue defer."
             jq -nc --arg r "$REASON" '{decision:"block", reason:$r}'
             exit 0
         fi
@@ -750,7 +754,7 @@ for _nf in "$META_DIR"/memory/narrative*.md; do
     _sz=$(wc -c < "$_nf" 2>/dev/null | tr -d ' ' || echo 0)
     case "$_sz" in ''|*[!0-9]*) _sz=0 ;; esac
     if [ -n "$NARRATIVE_MAX" ] && [ "$_sz" -gt "$NARRATIVE_MAX" ]; then
-        NARRATIVE_OVER="${NARRATIVE_OVER} $(basename "$_nf") is $((_sz / 1024)) KB, over the $((NARRATIVE_MAX / 1024)) KB budget — if it is yours, run \`cs -narrative rotate\` before appending."
+        NARRATIVE_OVER="${NARRATIVE_OVER} $(basename "$_nf") is $((_sz / 1024)) KB, over the $((NARRATIVE_MAX / 1024)) KB budget — if it is yours, run \`ags -narrative rotate\` before appending."
     fi
 done
 
@@ -855,7 +859,7 @@ echo "$CURRENT_TIME" > "$COOLDOWN_FILE"
 # condition the model must evaluate is one it will not.
 COMMIT_CADENCE=" Batch narrative appends: commit them at a handoff or wrap, never one commit per append. Uncommitted appends are safe — autosave snapshots every edit to a shadow ref."
 
-REASON="Narrative check. Update only your own narrative (run \`cs -whoami\` if unsure which actor you are; never edit a teammate's narrative). Newest on disk is $NARRATIVE_FILE. (1) If recent work disproved or superseded one of your entries, append a dated correction that names it — never rewrite or delete earlier sections. (2) Append any new findings as plain dated notes. If nothing needs changing, say so in one line and stop.${COMMIT_CADENCE}${NARRATIVE_OVER}${ADVISOR_NUDGE}"
+REASON="Narrative check. Update only your own narrative (run \`ags -whoami\` if unsure which actor you are; never edit a teammate's narrative). Newest on disk is $NARRATIVE_FILE. (1) If recent work disproved or superseded one of your entries, append a dated correction that names it — never rewrite or delete earlier sections. (2) Append any new findings as plain dated notes. If nothing needs changing, say so in one line and stop.${COMMIT_CADENCE}${NARRATIVE_OVER}${ADVISOR_NUDGE}"
 
 jq -nc --arg r "$REASON" '{decision: "block", reason: $r}'
 

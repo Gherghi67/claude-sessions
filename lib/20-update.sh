@@ -1,5 +1,5 @@
 # ABOUTME: Release verification (SHA-256 + minisign) and the self-update mechanism.
-# ABOUTME: Backs 'cs -update' and the non-blocking update-available notice.
+# ABOUTME: Backs 'ags -update' and the non-blocking update-available notice.
 
 # --- Release verification ---
 
@@ -24,7 +24,7 @@ verify_checksum() {
 verify_signature() {
     local file="$1" sigfile="$2"
     local ms_bin
-    ms_bin=$(command -v minisign 2>/dev/null) || ms_bin="$HOME/.local/bin/minisign"
+    ms_bin=$(command -v minisign 2>/dev/null) || ms_bin="${CS_INSTALL_DIR:-$HOME/.local/bin}/minisign"
     [ -x "$ms_bin" ] || return 0
     "$ms_bin" -Vm "$file" -P "$CS_SIGN_PUBKEY" -x "$sigfile" >/dev/null 2>&1
 }
@@ -258,7 +258,7 @@ check_update() {
 
     if version_greater "$remote_version" "$VERSION"; then
         echo ""
-        info "Update available. Run 'cs -update' to install."
+        info "Update available. Run 'ags -update' to install."
         local notes
         if notes=$(fetch_remote_changelog); then
             changelog_span "$notes" "$VERSION" | render_changelog
@@ -291,9 +291,9 @@ do_update() {
 
     echo ""
     if [ "$is_upgrade" = true ]; then
-        echo -e "   ${COMMENT}Updating${NC} cs ${COMMENT}from${NC} ${RUST}$VERSION${NC} ${COMMENT}→${NC} ${GREEN}$remote_version${NC}"
+        echo -e "   ${COMMENT}Updating${NC} ags ${COMMENT}from${NC} ${RUST}$VERSION${NC} ${COMMENT}→${NC} ${GREEN}$remote_version${NC}"
     else
-        echo -e "   ${COMMENT}Reinstalling${NC} cs ${GREEN}$VERSION${NC}"
+        echo -e "   ${COMMENT}Reinstalling${NC} ags ${GREEN}$VERSION${NC}"
     fi
     echo ""
 
@@ -335,11 +335,11 @@ do_update() {
     rm -rf "$tmpdir"
 
     # Clear update cache so notification disappears
-    rm -f "$HOME/.cache/cs/update-check"
+    rm -f "$UPDATE_CACHE"
 
     # Show release notes for the installed version
     local new_version
-    new_version=$(grep '^VERSION=' "$HOME/.local/bin/cs" 2>/dev/null | head -1 | cut -d'"' -f2)
+    new_version=$(grep '^VERSION=' "${CS_INSTALL_DIR:-$HOME/.local/bin}/ags" 2>/dev/null | head -1 | cut -d'"' -f2)
     if [ -n "$new_version" ]; then
         local changelog
         local script_dir
@@ -360,7 +360,7 @@ do_update() {
 }
 
 # Check for updates periodically and notify (non-blocking)
-UPDATE_CACHE="$HOME/.cache/cs/update-check"
+UPDATE_CACHE="${CS_CACHE_DIR:-$HOME/.cache/cs}/update-check"
 UPDATE_CHECK_INTERVAL=3600  # 1 hour in seconds
 UPDATE_AVAILABLE=""  # Set by check_update_notify if update available
 

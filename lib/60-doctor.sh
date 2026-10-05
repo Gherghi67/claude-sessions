@@ -1,5 +1,5 @@
 # ABOUTME: Health checks for keychain, hooks, shadow ref, memory, statusline, and tokens.
-# ABOUTME: Backs 'cs -doctor' / 'cs -diag'.
+# ABOUTME: Backs 'ags -doctor' / 'ags -diag'.
 
 _doctor_ok()   { printf "  ${GREEN}[ OK ]${NC} %s\n" "$1"; }
 _doctor_warn() { printf "  ${YELLOW}[WARN]${NC} %s\n" "$1"; DOCTOR_WARN=$((DOCTOR_WARN+1)); }
@@ -38,13 +38,13 @@ _doctor_check_settings_valid() {
 _doctor_check_keychain() {
     local script
     if ! script=$(find_secrets_script); then
-        _doctor_warn "Keychain: cs-secrets binary not found on PATH"
+        _doctor_warn "Keychain: ags-secrets binary not found on PATH"
         return
     fi
     local backend_line
     backend_line=$("$script" backend 2>/dev/null | grep '^Storage backend:' | head -1 || true)
     if [ -z "$backend_line" ]; then
-        _doctor_fail "Keychain: cs-secrets backend check failed"
+        _doctor_fail "Keychain: ags-secrets backend check failed"
         return
     fi
     _doctor_ok "Keychain: ${backend_line#Storage backend: }"
@@ -131,7 +131,7 @@ _doctor_check_hook_drift() {
     local hooks_dir="$HOOKS_DEPLOY_DIR"
     local commands_dir="${CS_COMMANDS_DIR:-$HOME/.claude/commands}"
     local skills_dir="${CS_SKILLS_DIR:-$HOME/.claude/skills}"
-    [ -d "hooks" ] && [ -f "install.sh" ] && [ -f "bin/cs" ] || return 0
+    [ -d "hooks" ] && [ -f "install.sh" ] && [ -f "bin/ags" ] || return 0
 
     # Those three names are not proof this checkout produced the install. Any
     # directory holding them passes, and a scratch copy of the repo is an
@@ -146,8 +146,8 @@ _doctor_check_hook_drift() {
     # every check after this one would silently never print. A machine with
     # nothing installed has no stamp, which is the ordinary case, not an error.
     local src_version="" deployed_version=""
-    [ -f "bin/cs" ] &&
-        src_version=$(sed -n 's/^VERSION="\([^"]*\)".*/\1/p' bin/cs 2>/dev/null | head -1)
+    [ -f "bin/ags" ] &&
+        src_version=$(sed -n 's/^VERSION="\([^"]*\)".*/\1/p' bin/ags 2>/dev/null | head -1)
     [ -f "$hooks_dir/.version" ] &&
         deployed_version=$(tr -d '[:space:]' < "$hooks_dir/.version" 2>/dev/null)
     [ -n "$src_version" ] && [ "$src_version" = "$deployed_version" ] || return 0
@@ -222,7 +222,7 @@ _doctor_check_iterm2() {
 #   - a pending .seed for a session that does not exist blocks re-spawning
 #     that name until it is removed,
 #   - a spawned-by pointer at a deleted session sends the drain notify nowhere,
-#   - a tmux session named 'cs' without the @cs_managed stamp is one cs -spawn
+#   - a tmux session named 'cs' without the @cs_managed stamp is one ags -spawn
 #     will refuse to reuse.
 _doctor_check_spawn() {
     local spawn_dir="$SESSIONS_ROOT/.spawn"
@@ -245,7 +245,7 @@ _doctor_check_spawn() {
         clean=0
     fi
     if [ ${#orphan[@]} -gt 0 ]; then
-        _doctor_warn "Spawn seeds: pending seed(s) with no session: ${orphan[*]} (cs -spawn refuses these names until the seed is removed)"
+        _doctor_warn "Spawn seeds: pending seed(s) with no session: ${orphan[*]} (ags -spawn refuses these names until the seed is removed)"
         clean=0
     fi
 
@@ -266,14 +266,14 @@ _doctor_check_spawn() {
 
     if command -v "${CS_TMUX_BIN:-tmux}" >/dev/null 2>&1 && _tmux has-session -t =cs 2>/dev/null; then
         if ! _cs_tmux_managed; then
-            _doctor_warn "tmux: a session named 'cs' exists but is not cs-managed (@cs_managed unset); cs -spawn will refuse to use it"
+            _doctor_warn "tmux: a session named 'cs' exists but is not cs-managed (@cs_managed unset); ags -spawn will refuse to use it"
             clean=0
         fi
     fi
 
     # An `if` (not `[ ... ] && ...`) so the function returns 0 even when a
     # warning fired: under `set -e` a non-zero return here would abort the
-    # whole `cs -doctor` run before its later checks and the summary.
+    # whole `ags -doctor` run before its later checks and the summary.
     if [ "$clean" = "1" ]; then
         _doctor_ok "Spawn: no stale seeds, dangling spawned-by links, or foreign 'cs' tmux session"
     fi
@@ -290,7 +290,7 @@ _doctor_check_deployed_version() {
     deployed=$(cat "$stamp" 2>/dev/null || true)
     [ -n "$deployed" ] || return 0
     if [ "$deployed" = "$VERSION" ]; then
-        _doctor_ok "Deployed version: artifacts stamped $deployed match cs $VERSION"
+        _doctor_ok "Deployed version: artifacts stamped $deployed match ags $VERSION"
     else
         _doctor_warn "Deployed version: artifacts stamped $deployed but cs is $VERSION (run install.sh)"
     fi
@@ -385,7 +385,7 @@ _doctor_check_worktrees() {
 }
 
 _doctor_check_shadow_ref() {
-    local dir="${CLAUDE_SESSION_DIR:-$PWD}"
+    local dir="${CS_SESSION_DIR:-${CLAUDE_SESSION_DIR:-$PWD}}"
     if ! git -C "$dir" rev-parse --git-dir >/dev/null 2>&1; then
         _doctor_warn "Shadow ref: session directory is not a git repo"
         return
@@ -398,7 +398,7 @@ _doctor_check_shadow_ref() {
     # launch id and goes stale after the first /clear, so it comes last.
     local uuid ref=""
     uuid="${CLAUDE_CODE_SESSION_ID:-}"
-    [ -n "$uuid" ] || uuid=$(_read_local_state "${CLAUDE_SESSION_META_DIR:-$dir/.cs}/local/state" claude_session_id)
+    [ -n "$uuid" ] || uuid=$(_read_local_state "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-$dir/.cs}}/local/state" claude_session_id)
     [ -n "$uuid" ] || uuid="${CS_CLAUDE_SESSION_ID:-}"
     if [[ "$uuid" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
         ref="refs/worktree/cs/session/$uuid"
@@ -489,14 +489,14 @@ _doctor_check_statusline() {
     # statusline itself is genuinely optional.
     local gating="context-pct is never written, so the rotation nudge and the queue context breaker stay inert"
     if [ -z "$cmd" ]; then
-        _doctor_warn "Statusline: not registered — $gating (enable with: cs -statusline enable)"
+        _doctor_warn "Statusline: not registered — $gating (enable with: ags -statusline enable)"
         return
     fi
     case "$cmd" in
-        */cs-statusline)
+        */ags-statusline|*/cs-statusline)
             local bin="${cmd/#\~/$HOME}"
             if [ -x "$bin" ]; then
-                _doctor_ok "Statusline: cs-statusline registered and executable"
+                _doctor_ok "Statusline: ags-statusline registered and executable"
             else
                 _doctor_fail "Statusline: registered as $cmd but the binary is missing or not executable"
             fi
@@ -507,12 +507,12 @@ _doctor_check_statusline() {
             [ -f "$caps_file" ] && [ -r "$caps_file" ] && { IFS= read -r caps < "$caps_file"; } 2>/dev/null
             case "$caps" in
                 on)  _doctor_ok "Statusline caps: rounded (this machine's font has the Powerline caps)" ;;
-                off) _doctor_ok "Statusline caps: square (answered off; cs -statusline caps ask to revisit)" ;;
-                *)   _doctor_warn "Statusline caps: square until answered — run: cs -statusline caps ask" ;;
+                off) _doctor_ok "Statusline caps: square (answered off; ags -statusline caps ask to revisit)" ;;
+                *)   _doctor_warn "Statusline caps: square until answered — run: ags -statusline caps ask" ;;
             esac
             ;;
         *)
-            _doctor_warn "Statusline: using a non-cs status line ($cmd) — $gating"
+            _doctor_warn "Statusline: using a foreign status line ($cmd) — $gating"
             ;;
     esac
 }
@@ -525,27 +525,27 @@ _doctor_check_subagent_statusline() {
         cmd=$(jq -r '.subagentStatusLine.command // ""' "$settings" 2>/dev/null) || cmd=""
     fi
     if [ -z "$cmd" ]; then
-        _doctor_ok "Subagent statusline: not registered (optional; enable with: cs -statusline enable)"
+        _doctor_ok "Subagent statusline: not registered (optional; enable with: ags -statusline enable)"
         return
     fi
     case "$cmd" in
-        */cs-subagent-statusline)
+        */ags-subagent-statusline|*/cs-subagent-statusline)
             local bin="${cmd/#\~/$HOME}"
             if [ -x "$bin" ]; then
-                _doctor_ok "Subagent statusline: cs-subagent-statusline registered and executable"
+                _doctor_ok "Subagent statusline: ags-subagent-statusline registered and executable"
             else
                 _doctor_fail "Subagent statusline: registered as $cmd but the binary is missing or not executable"
             fi
             ;;
         *)
-            _doctor_ok "Subagent statusline: using a non-cs row renderer ($cmd)"
+            _doctor_ok "Subagent statusline: using a foreign row renderer ($cmd)"
             ;;
     esac
 }
 
 _doctor_check_token_cost() {
     local proj_dir
-    proj_dir=$(_claude_project_dir "${CLAUDE_SESSION_DIR:-$PWD}")
+    proj_dir=$(_claude_project_dir "${CS_SESSION_DIR:-${CLAUDE_SESSION_DIR:-$PWD}}")
 
     local files=("$proj_dir"/*.jsonl)
     if [ ! -e "${files[0]:-}" ]; then
@@ -560,7 +560,7 @@ _doctor_check_token_cost() {
 }
 
 _doctor_check_auto_memory() {
-    local dir="$CLAUDE_SESSION_META_DIR/memory"
+    local dir="${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/memory"
     if [ ! -d "$dir" ]; then
         _doctor_warn "Auto-memory: $dir does not exist"
         return
@@ -572,17 +572,17 @@ _doctor_check_auto_memory() {
     fi
 }
 
-# A narrative past CS_NARRATIVE_MAX_BYTES is what `cs -narrative rotate` exists
+# A narrative past CS_NARRATIVE_MAX_BYTES is what `ags -narrative rotate` exists
 # for; doctor only reports, it never rotates.
 _doctor_check_narrative_size() {
-    local dir="$CLAUDE_SESSION_META_DIR/memory"
+    local dir="${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/memory"
     local max over=0 f sz
     max=$(_narrative_budget "${CS_NARRATIVE_MAX_BYTES:-}" "$CS_NARRATIVE_MAX_DEFAULT")
     for f in "$dir"/narrative*.md; do
         [ -f "$f" ] || continue
         sz=$(wc -c < "$f" 2>/dev/null | tr -d ' ' || echo 0)
         if [ "$sz" -gt "$max" ]; then
-            _doctor_warn "Narrative: $(basename "$f") is $((sz / 1024)) KB (budget $((max / 1024)) KB) — run cs -narrative rotate"
+            _doctor_warn "Narrative: $(basename "$f") is $((sz / 1024)) KB (budget $((max / 1024)) KB) — run ags -narrative rotate"
             over=$((over + 1))
         fi
     done
@@ -606,7 +606,7 @@ _doctor_check_hook_authority() {
     echo ""
     echo "  Authority — hooks that inject into the model's context:"
     local disabled_all=""
-    if [ -n "${CLAUDE_SESSION_META_DIR:-}" ] && [ -f "${CLAUDE_SESSION_META_DIR}/local/disabled" ]; then
+    if [ -n "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ] && [ -f "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/disabled" ]; then
         disabled_all=1
     fi
     # The hooks read their switch as `= "1"`, so the row must too: an exported
@@ -636,7 +636,7 @@ _doctor_check_hook_authority() {
 # deliberately per-clone and never global — cs does not write to ~/.gitconfig —
 # so a clone cs has not launched in is out of reach; this names the one it can see.
 _doctor_check_merge_driver() {
-    local dir="${CLAUDE_SESSION_DIR:-}"
+    local dir="${CS_SESSION_DIR:-${CLAUDE_SESSION_DIR:-}}"
     [ -n "$dir" ] || return 0
     git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || return 0
     grep -q 'merge=ours' "$dir/.gitattributes" 2>/dev/null || return 0
@@ -647,13 +647,13 @@ _doctor_check_merge_driver() {
     fi
 }
 
-# `cs <base> -integrate-feature` takes <git-dir>/cs/integrate.lock for the
+# `ags <base> -integrate-feature` takes <git-dir>/cs/integrate.lock for the
 # length of a landing, and the autosave hook skips its snapshot while it
 # exists. A lock left behind by a killed integrate silences this checkout's
 # autosave with nothing on screen to say why, so name it and the one command
 # that clears it.
 _doctor_check_integrate_lock() {
-    local dir="${CLAUDE_SESSION_DIR:-}"
+    local dir="${CS_SESSION_DIR:-${CLAUDE_SESSION_DIR:-}}"
     [ -n "$dir" ] || return 0
     local git_dir lock
     git_dir=$(_git_path_abs "$dir" --git-dir) || return 0
@@ -711,7 +711,7 @@ _doctor_check_integrate_lock() {
 }
 
 _doctor_check_session_id_match() {
-    local state="$CLAUDE_SESSION_META_DIR/local/state"
+    local state="${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/state"
     local recorded
     recorded=$(_read_local_state "$state" claude_session_id)
     if [ -z "$recorded" ]; then
@@ -742,7 +742,7 @@ _doctor_check_session_id_match() {
 _doctor_check_mod() {  # mod name
     local mod="$1" claude_dir="${CS_CLAUDE_DIR:-$HOME/.claude}"
     [ -d "$claude_dir/skills/$mod" ] || return 0
-    local beat="$CLAUDE_SESSION_META_DIR/local/$mod.heartbeat" stamp=""
+    local beat="${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/$mod.heartbeat" stamp=""
     if [ -f "$beat" ] && [ -r "$beat" ]; then
         { IFS= read -r stamp < "$beat"; } 2>/dev/null || stamp=""
     fi
@@ -757,9 +757,13 @@ run_doctor() {
     local DOCTOR_FAIL=0
     local DOCTOR_WARN=0
 
-    echo "cs doctor - running health checks"
+    echo "ags doctor - running health checks"
     echo ""
 
+    local engine session_dir
+    session_dir="${CS_SESSION_DIR:-${CLAUDE_SESSION_DIR:-$PWD}}"
+    engine=$(_session_engine "$session_dir" "") || return $?
+    if [ "$engine" = claude ]; then
     _doctor_check_settings_valid
     _doctor_check_keychain
     _doctor_check_hooks_registered
@@ -774,7 +778,7 @@ run_doctor() {
     _doctor_check_spawn
     _doctor_check_hook_authority
 
-    if [ -n "${CLAUDE_SESSION_META_DIR:-}" ] && [ -d "${CLAUDE_SESSION_META_DIR:-}" ]; then
+    if [ -n "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ] && [ -d "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ]; then
         _doctor_check_shadow_ref
         _doctor_check_merge_driver
         _doctor_check_integrate_lock
@@ -785,6 +789,42 @@ run_doctor() {
         _doctor_check_token_cost
         _doctor_check_mod cs
         _doctor_check_mod cs-update
+    fi
+
+    else
+        _doctor_check_keychain
+        local missing dependency capabilities binding
+        if missing=$(cs_engine_call "$engine" dependencies); then
+            if [ -n "$missing" ]; then
+                while IFS= read -r dependency; do
+                    _doctor_fail "Codex dependency missing: $dependency"
+                done <<< "$missing"
+            else
+                _doctor_ok "Codex dependencies available"
+            fi
+        else
+            _doctor_fail "Codex dependency probe failed"
+        fi
+        capabilities=$(cs_engine_call "$engine" capabilities) || return $?
+        _doctor_ok "Codex integration capabilities: ${capabilities//$'\n'/, }"
+        echo "  Codex hooks, automatic queue delivery, and usage observations are unavailable."
+        if [ -d "$session_dir/.cs" ]; then
+            if binding=$(cs_binding_read "$session_dir" codex); then
+                if [ -z "$binding" ]; then
+                    _doctor_ok "Codex binding: not created yet"
+                elif _codex_thread_id_valid "$binding"; then
+                    _doctor_ok "Codex binding: $binding"
+                else
+                    _doctor_fail "Codex binding is invalid; repair before launching"
+                fi
+            else
+                _doctor_fail "Codex binding cannot be read"
+            fi
+            _doctor_check_merge_driver
+            _doctor_check_integrate_lock
+            _doctor_check_worktrees
+            _doctor_check_narrative_size
+        fi
     fi
 
     echo ""

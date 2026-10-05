@@ -12,7 +12,7 @@ records into the base, remove the worktree, delete the branch) runs in the
 same ritual, but only once the feature conversation is closed: a directory
 cannot be removed from under a running Claude, so while that conversation is
 still open the skill says so plainly and the user closes it and runs
-`/finish <task>` again. Abandoning a feature instead is `cs -rm <base>@<task>`,
+`/finish <task>` again. Abandoning a feature instead is `ags -rm <base>@<task>`,
 the user's own call.
 
 ## Detect the context
@@ -25,11 +25,11 @@ workspace and read its `key: value` lines.
    Integrate mutates the base and runs only from the base's own conversation;
    this session stays open.
 2. **`role: base` with a task** — the invocation named a feature
-   (`/finish fix-auth`, which is what `cs <base> -finish <feature>` arms from
+   (`/finish fix-auth`, which is what `ags <base> -finish <feature>` arms from
    the TUI picker). Follow **The ritual** below with the keys `prepare`
    printed. An `error:` line is a stop: print it and stop.
 3. **`role: base`, `cs_session: yes`, no task** — a cs base session with no
-   feature named. Run `cs <base> -features`, show the list, and ask which
+   feature named. Run `ags <base> -features`, show the list, and ask which
    feature to finish (AskUserQuestion). Never enter **Plain branch** from a
    cs session, whatever branch it is on: that path checks out another branch
    and deletes the current one.
@@ -81,7 +81,7 @@ what creates them and fold it into the gate: `-- sh -c 'npm ci && npm test'`.
      before any local integrate. Never treat a gh failure as no PR.
    - `skipped` — origin is not GitHub; say so, local path.
 3. **Local path.** Run, from the base session:
-   `cs <base> -integrate-feature <task> <sha> -- <gate command words>`.
+   `ags <base> -integrate-feature <task> <sha> -- <gate command words>`.
    cs merges base HEAD and `<sha>` in a temporary detached worktree, runs
    the gate there, and fast-forwards the base onto the result; a red gate,
    a conflict, or a base that moved leaves the base untouched and the
@@ -90,7 +90,7 @@ what creates them and fold it into the gate: `-- sh -c 'npm ci && npm test'`.
    `integrated <task> <sha> -> <result>` or `already-integrated <task> <sha>`.
 4. **PR path.** `git fetch origin`. Confirm `base_branch` equals
    `pr_base_ref`; if not, stop and say which branch to check out. Then
-   `cs <base> -integrate-feature <task> <pr_merge_commit> --from-remote -- <gate command words>`.
+   `ags <base> -integrate-feature <task> <pr_merge_commit> --from-remote -- <gate command words>`.
    Add `--ci-green` after `--from-remote` only when `prepare` reported
    `pr_checks: success`; with `failure`, `pending`, `none` (no checks ran,
    or every one of them was skipped), `unknown` (its `pr_checks_reason`
@@ -119,11 +119,11 @@ what creates them and fold it into the gate: `-- sh -c 'npm ci && npm test'`.
    `~/.claude/skills/finish/scripts/finish.sh report <base> <task> <sha>`
    and read its `retire:` key.
 6. **Retire.** The worktree goes through one entry and nothing else:
-   - `retire: ready` — run `cs <base> -retire-feature <task> <sha>`.
+   - `retire: ready` — run `ags <base> -retire-feature <task> <sha>`.
    - `retire: not-landed` — the branch is not an ancestor of base (a squash
      or rebase landing). When `pr_state` is `MERGED` AND `pr_head_oid`
      equals the captured `sha`, that is the PR's evidence the work is in:
-     run `cs <base> -retire-feature <task> <sha> --force`. A `pr_head_oid`
+     run `ags <base> -retire-feature <task> <sha> --force`. A `pr_head_oid`
      that differs means the PR landed an older or newer tip than the
      worktree holds, so the branch may carry work the PR never had: print
      both shas and stop. Any other `pr_state`: print `retire_note` and
@@ -185,7 +185,7 @@ re-running gates. Never bypass, skip, or weaken a gate.
 - Never push, to any remote — publishing is the user's decision.
 - Never delete anything in a cs session yourself: no `git worktree remove`,
   no `git branch -d` and never `git branch -D` on a cs branch. Removal
-  happens only inside `cs <base> -retire-feature`, which refuses over an
+  happens only inside `ags <base> -retire-feature`, which refuses over an
   open conversation, dirt, or a branch the base lacks. (**Plain branch** on
   an ordinary checkout may `git branch -d` a merged branch after green
   gates.)

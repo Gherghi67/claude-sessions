@@ -32,10 +32,9 @@ create_lock_test_session() {
 }
 
 # A picker on PATH, for the tests that assert the session-manager row or a
-# keypress number below it. The row is gated on a resolvable `cs-tui`, and CI
-# never builds one (bin/cs-tui is untracked), so a test that assumes the host
-# has one is asserting the developer's machine. Selecting nothing keeps
-# run_tui's exit path clean; callers that care record the call themselves.
+# keypress number below it. The row is gated on a resolvable picker, and a host
+# may have either public or compatibility name installed. Selecting nothing
+# keeps run_tui's exit path clean; callers that care record the call themselves.
 _stub_picker_dir() {
     local dir="$TEST_TMPDIR/stubbin"
     mkdir -p "$dir"
@@ -43,7 +42,11 @@ _stub_picker_dir() {
 #!/usr/bin/env bash
 exit 0
 STUB
-    chmod +x "$dir/cs-tui"
+    cat > "$dir/ags-tui" << 'STUB'
+#!/usr/bin/env bash
+exec "$(dirname "$0")/cs-tui" "$@"
+STUB
+    chmod +x "$dir/cs-tui" "$dir/ags-tui"
     printf '%s\n' "$dir"
 }
 
@@ -54,7 +57,7 @@ _path_without_picker() {
     local out="" d
     while IFS= read -r d; do
         [ -n "$d" ] || continue
-        [ -x "$d/cs-tui" ] && continue
+        { [ -x "$d/ags-tui" ] || [ -x "$d/cs-tui" ]; } && continue
         out="${out:+$out:}$d"
     done <<< "$(printf '%s' "$PATH" | tr ':' '\n')"
     PATH="$out" command -v cs-tui >/dev/null 2>&1 && return 1
@@ -147,7 +150,7 @@ test_force_overrides_live_lock() {
     fi
 }
 
-test_lock_cleaned_on_session_end() {
+test_session_end_preserves_a_live_lock_from_env_only() {
     create_lock_test_session "test-session"
 
     local meta_dir="$CS_SESSIONS_ROOT/test-session/.cs"
@@ -166,7 +169,10 @@ test_lock_cleaned_on_session_end() {
     # that looked like a flake.
     echo '{"session_id": "test-123"}' | CS_RESOLVED_FROM=env "$SCRIPT_DIR/../hooks/session-end.sh"
 
-    assert_not_exists "$meta_dir/session.lock" "Lock should be cleaned up by session-end hook" || return 1
+    assert_exists "$meta_dir/session.lock" \
+        "SessionEnd cannot prove the live launcher has finished from exported session env alone" || return 1
+    assert_eq "$$" "$(cat "$meta_dir/session.lock")" \
+        "the live launcher's PID must remain unchanged" || return 1
 }
 
 # The other half of that branch, which nothing covered — which is why the
@@ -549,7 +555,7 @@ run_test test_lock_created_on_launch
 run_test test_lock_prevents_duplicate_session
 run_test test_stale_lock_is_reclaimed
 run_test test_force_overrides_live_lock
-run_test test_lock_cleaned_on_session_end
+run_test test_session_end_preserves_a_live_lock_from_env_only
 run_test test_session_end_leaves_a_live_lock_it_does_not_own
 run_test test_session_end_clears_a_stale_lock_even_when_walked_in
 run_test test_lock_contains_valid_pid

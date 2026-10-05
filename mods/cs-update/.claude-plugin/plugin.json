@@ -1,13 +1,13 @@
 {
   "name": "cs-update",
   "version": "0.1.0",
-  "description": "Release notes for a pending cs update, once per launch, with 1 to install it in place; /cs-update reopens the pane.",
-  "author": { "name": "cs" },
+  "description": "Release notes for a pending agent-sessions update, once per launch, with 1 to install it in place; /ags-update reopens the pane.",
+  "author": { "name": "agent-sessions" },
   "userConfig": {
     "showReleaseNotes": {
       "type": "boolean",
       "title": "Release notes pane",
-      "description": "When a newer cs is available, open its release notes once per launch. Off, /cs-update still opens them on demand.",
+      "description": "When a newer agent-sessions release is available, open its release notes once per launch. Off, /ags-update still opens them on demand.",
       "required": false,
       "default": true
     }

@@ -109,10 +109,10 @@ _cs_find_session_root() {  # start_dir
     return 1
 }
 
-# True when the claude a hook fires for is the conversation cs launched. cs
-# starts claude two ways: the exec arms replace cs's own process, so claude
-# carries cs's pid; the resume arm runs claude as a child, since it needs the
-# exit status, and there claude's parent is cs. Anything else is not the lead:
+# True when the claude a hook fires for is the conversation cs launched.
+# Supervised runs keep claude directly below the launcher; legacy exec runs
+# carry the launcher's PID. Keep both process checks during migration, then
+# require modern runs to match their current lease too. Others are not the lead:
 # a tmux teammate (tmux starts it, and CS_LEAD_PID is absent from its
 # environment), a `claude -p` run from inside the session (its parent is a
 # shell), a front end that walked in from the directory. Both variables must be
@@ -120,6 +120,14 @@ _cs_find_session_root() {  # start_dir
 # hook may ask more than once, and the resume-arm answer costs a ps fork.
 _CS_IS_LEAD=""
 cs_is_lead() {
+    # A matching process relationship alone can describe a previous forced
+    # owner. Recheck the token every call; never memoize lease ownership.
+    local meta="${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}"
+    if [ -n "${CS_RUN_ID:-}" ] || [ -f "$meta/local/run-lease.json" ]; then
+        command -v cs_run_lease_owned >/dev/null 2>&1 || return 1
+        [ "${CS_RUN_ENGINE:-}" = claude ] && cs_run_lease_owned "$meta" || return 1
+        [ "${CS_LEAD_PID:-}" = "${CS_RUN_OWNER_PID:-}" ] || return 1
+    fi
     if [ -z "$_CS_IS_LEAD" ]; then
         _CS_IS_LEAD=0
         if [ -n "${CS_LEAD_PID:-}" ] && [ -n "${CLAUDE_PID:-}" ]; then
@@ -169,7 +177,7 @@ _cs_session_is_enabled() {  # session_dir
     return 0
 }
 
-# The name a session is known by is not always its basename: `cs -adopt` links
+# The name a session is known by is not always its basename: `ags -adopt` links
 # a chosen name at an unrelated project path, and the link is invisible from the
 # directory this walk arrives at. Adoption records the name in machine-local
 # state, and opening an adopted session through cs rewrites it there, so a

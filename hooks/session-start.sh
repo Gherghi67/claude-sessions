@@ -63,6 +63,13 @@ cs_resolve_session "$INPUT" || exit 0
 SESSION_DIR="${CLAUDE_SESSION_DIR:-}"
 META_DIR="${CLAUDE_SESSION_META_DIR:-$SESSION_DIR/.cs}"
 
+# A forced successor owns this workspace now. An inherited run token is not
+# authority to mutate its bindings or consume its pending handoff.
+if [ -n "${CS_RUN_ID:-}" ]; then
+    command -v cs_run_lease_owned >/dev/null 2>&1 || exit 0
+    cs_run_lease_owned "$META_DIR" || exit 0
+fi
+
 # Build the surface-once digest from unseen inbox lines. Sets DIGEST (may be
 # empty) and DIGEST_PENDING, the cursor value that _commit_digest spends once
 # the digest has actually been printed — surfacing is at-most-once even when
@@ -87,7 +94,7 @@ _build_digest() {  # meta_local_dir
             "cs queue while you were away: \($done) task(s) done" +
             (if $trip != null then "; breaker tripped: \($trip.reason) (\($trip.reading) >= \($trip.limit)), \($trip.remaining) remaining" else "" end) +
             (if $fin > 0 then "; drain finished" else "" end) +
-            ". Run cs -queue log for detail."
+            ". Run ags -queue log for detail."
         end' 2>/dev/null) || DIGEST=""
     DIGEST_PENDING="$total"
 }
@@ -268,7 +275,7 @@ fi # end startup/resume guard
 # Export environment variables for the session via CLAUDE_ENV_FILE, for the
 # launch cs made and for a teammate. A teammate reaches the session by walking
 # the directory it was spawned into, and needs the contract in its own
-# environment: `cs -secrets`, `cs -msg`, `cs -queue` and the status line all
+# environment: `ags -secrets`, `ags -msg`, `ags -queue` and the status line all
 # read the session from there. It is still not the launch, so it carries the
 # marker out with it -- session-end.sh reads that to decide whether the lock is
 # this conversation's to remove, and a teammate's exit must not strip the
@@ -304,7 +311,7 @@ else
     ACTOR_RAW="unresolved"
     ACTOR_SLUG="unknown"
     ACTOR_NOTE="
-Actor unresolved: cs-shared.sh is missing or broken beside this hook, so the actor rules could not run. Run ./install.sh from the cs checkout (or cs -update) to redeploy the hooks, then cs -whoami."
+Actor unresolved: cs-shared.sh is missing or broken beside this hook, so the actor rules could not run. Run ./install.sh from the agent-sessions checkout (or ags -update) to redeploy the hooks, then ags -whoami."
 fi
 
 # Provide context to Claude about the session
@@ -328,7 +335,7 @@ Key files to maintain:
 - .cs/README.md: Update objective and outcome
 - .cs/memory/narrative.$ACTOR_SLUG.md: append findings as you go; on resume read it in full; of a teammate narrative only the lines the resume digest names (older sections: .cs/narrative-archive/<actor>/, grep on demand)
 
-Secrets: never write credentials to project files — feed the value to 'cs -secrets set <name>' on stdin via a file redirect (argv, pipes and heredocs are all logged verbatim); retrieve with 'cs -secrets get <name>'. See CLAUDE.local.md, Secure Secrets Handling.
+Secrets: never write credentials to project files — feed the value to 'ags -secrets set <name>' on stdin via a file redirect (argv, pipes and heredocs are all logged verbatim); retrieve with 'ags -secrets get <name>'. See CLAUDE.local.md, Secure Secrets Handling.
 
 See CLAUDE.local.md in the session directory for complete documentation protocol.
 EOF
@@ -339,16 +346,24 @@ EOF
 # README). Replaces any existing line for the key, collapses duplicates.
 # Atomic (tmp+mv). KEEP THE FORMAT IN SYNC WITH bin/cs's _set_local_state.
 STATE_FILE="$META_DIR/local/state"
-local_state_set() {
-    local key="$1" value="$2"
-    mkdir -p "$META_DIR/local"
-    local tmp="$STATE_FILE.tmp"
+_cs_hook_local_state_set() {
+    local key="$1" value="$2" tmp
+    mkdir -p "$META_DIR/local" || return 1
+    tmp=$(mktemp "$STATE_FILE.XXXXXX") || return 1
     {
         if [ -f "$STATE_FILE" ]; then
             awk -v key="$key" 'index($0, key ":") != 1' "$STATE_FILE"
         fi
         printf '%s: %s\n' "$key" "$value"
-    } > "$tmp" && mv "$tmp" "$STATE_FILE"
+    } > "$tmp" && mv "$tmp" "$STATE_FILE" || { rm -f "$tmp"; return 1; }
+}
+
+local_state_set() {
+    if [ -n "${CS_RUN_ID:-}" ]; then
+        cs_run_with_lease "$META_DIR" _cs_hook_local_state_set "$@"
+    else
+        _cs_hook_local_state_set "$@"
+    fi
 }
 
 # Bind claude_session_id in local state to the live conversation.
@@ -397,21 +412,37 @@ UUID_RE='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F
 # claude process with its own top-level SessionStart (the agent_id check above
 # catches in-process subagents, not tmux-backed ones), and a front end that
 # walked in from the directory is not a cs launch at all — either taking the
-# slot leaves `cs <name>` resuming a conversation nobody opened, and stamps the
+# slot leaves `ags <name>` resuming a conversation nobody opened, and stamps the
 # timeline with a lineage that never happened.
 #
-# cs_is_lead (cs-resolve.sh) says which claude is the launch; the resume arm's
-# claude is cs's child because it needs the exit status to fall through to a
-# fresh rebind when there is nothing to resume. Without the library nothing is
-# the lead: declining the slot is the safe side.
+# cs_is_lead validates native process ancestry and, for supervised launches,
+# the current run lease. The guarded acknowledgement checks ownership again
+# while holding the same lock used by a forced successor.
 IS_LEAD=0
 if command -v cs_is_lead >/dev/null 2>&1 && cs_is_lead; then
     IS_LEAD=1
 fi
-if [ "$IS_LEAD" = 1 ] && [[ "$SESSION_ID" =~ $UUID_RE ]]; then
+_cs_acknowledge_claude_binding() {
     RECORDED_UUID=$(awk '/^claude_session_id:/ { print $2; exit }' "$STATE_FILE" 2>/dev/null || true)
-    if [ "$RECORDED_UUID" != "$SESSION_ID" ]; then
-        local_state_set claude_session_id "$SESSION_ID"
+    local pending="$META_DIR/local/pending-binding-claude.json" pending_match=0
+    local transition_reason="rebind" transition_handoff="$ROTATION_HANDOFF"
+    local transition_from="$RECORDED_UUID" lineage_recorded=0
+    [ -z "$transition_handoff" ] || transition_reason="handoff"
+    if [ -n "${CS_RUN_ID:-}" ] && [ -f "$pending" ]; then
+        if jq -e --arg run "$CS_RUN_ID" '.run_id == $run' "$pending" >/dev/null 2>&1; then
+            # Native SessionStart is the acknowledgement, not a successful
+            # process spawn. Refuse mismatched IDs or an intervening rebind.
+            jq -e --arg id "$SESSION_ID" --arg old "$RECORDED_UUID" \
+                '.engine == "claude" and .candidate_id == $id and (.previous_id == $old or .candidate_id == $old)' \
+                "$pending" >/dev/null 2>&1 || return 1
+            pending_match=1
+            transition_from=$(jq -r .previous_id "$pending") || return 1
+            transition_reason=$(jq -r '.reason' "$pending") || return 1
+            transition_handoff=$(jq -r '.handoff // ""' "$pending") || return 1
+        fi
+    fi
+    if [ "$RECORDED_UUID" != "$SESSION_ID" ] || [ "$pending_match" = 1 ]; then
+        _cs_hook_local_state_set claude_session_id "$SESSION_ID" || return 1
         echo "$(date '+%Y-%m-%d %H:%M:%S') - Rebound claude_session_id: ${RECORDED_UUID:-none} -> $SESSION_ID" >> "$META_DIR/local/session.log"
         # Named literally: TIMELINE_FILE is not assigned until further down.
         _cs_terminate_jsonl "$META_DIR/timeline.jsonl" 2>/dev/null || true
@@ -420,14 +451,29 @@ if [ "$IS_LEAD" = 1 ] && [[ "$SESSION_ID" =~ $UUID_RE ]]; then
         # (/clear) and carries the handoff name; otherwise it is one cs
         # discovered — CC's context-limit fork, or a manual resume of a
         # different conversation. Shape shared with bin/cs's _timeline_rotated.
+        # Replay after an interrupted binding write must neither lose nor
+        # duplicate its lineage. The pending record keeps the predecessor.
+        if [ "$pending_match" = 1 ] && [ -f "$META_DIR/timeline.jsonl" ]; then
+            if jq -eRs --arg run "$CS_RUN_ID" --arg to "$SESSION_ID" '
+                [split("\n")[] | fromjson? | select(.event == "rotated" and
+                 .engine == "claude" and .run_id == $run and .to == $to)] | length > 0
+            ' "$META_DIR/timeline.jsonl" >/dev/null 2>&1; then lineage_recorded=1; fi
+        fi
+        if [ "$lineage_recorded" = 0 ]; then
         { jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-               --arg from "${RECORDED_UUID:-}" \
+               --arg from "$transition_from" \
                --arg to "$SESSION_ID" \
-               --arg handoff "$ROTATION_HANDOFF" \
-               '{ts: $ts, event: "rotated", from: $from, to: $to,
-                 reason: (if $handoff == "" then "rebind" else "handoff" end)}
+               --arg handoff "$transition_handoff" --arg reason "$transition_reason" \
+               --arg run_id "${CS_RUN_ID:-}" \
+               '{ts: $ts, event: "rotated", engine: "claude", run_id: $run_id, from: $from, to: $to,
+                 reason: $reason}
                 + (if $handoff == "" then {} else {handoff: $handoff} end)' \
-            >> "$META_DIR/timeline.jsonl"; } 2>/dev/null || true
+            >> "$META_DIR/timeline.jsonl"; } 2>/dev/null || {
+                # Keep an acknowledged pending transition until its lineage
+                # is durable; the next acknowledgement can finish it.
+                [ "$pending_match" = 0 ] || return 1
+            }
+        fi
         # Follow the autosave ref to the new UUID so a future crash of this
         # (continued) conversation is recoverable under its live identity. A
         # rebind is a clean continuation, so there is no crash to recover here.
@@ -454,11 +500,23 @@ if [ "$IS_LEAD" = 1 ] && [[ "$SESSION_ID" =~ $UUID_RE ]]; then
             fi
         fi
     fi
+    _cs_hook_local_state_set engine claude || return 1
+    if [ "$pending_match" = 1 ]; then
+        rm -f "$pending" || return 1
+    fi
+    return 0
+}
+if [ "$IS_LEAD" = 1 ] && [[ "$SESSION_ID" =~ $UUID_RE ]]; then
+    if [ -n "${CS_RUN_ID:-}" ]; then
+        cs_run_with_lease "$META_DIR" _cs_acknowledge_claude_binding || exit 0
+    else
+        _cs_acknowledge_claude_binding || exit 0
+    fi
 fi
 
 # Append structured event to timeline.jsonl (machine-readable narrative log).
 # Runs after the rebind block above so a rebind's rotated event lands before
-# this conversation's started event — cs -conversations renders file order.
+# this conversation's started event — ags -conversations renders file order.
 TIMELINE_FILE="$META_DIR/timeline.jsonl"
 TIMELINE_BRANCH=$(git -C "$SESSION_DIR" branch --show-current 2>/dev/null || echo "")
 _cs_terminate_jsonl "$TIMELINE_FILE" 2>/dev/null || true
@@ -467,7 +525,8 @@ _cs_terminate_jsonl "$TIMELINE_FILE" 2>/dev/null || true
        --arg source "$SOURCE" \
        --arg session_id "$SESSION_ID" \
        --arg branch "$TIMELINE_BRANCH" \
-       '{ts: $ts, event: $event, source: $source, session_id: $session_id, branch: $branch}' \
+       --arg run_id "${CS_RUN_ID:-}" --arg role "$(if [ "$IS_LEAD" = 1 ]; then echo lead; else echo external; fi)" \
+       '{ts: $ts, event: $event, engine: "claude", run_id: $run_id, role: $role, source: $source, session_id: $session_id, branch: $branch}' \
     >> "$TIMELINE_FILE"; } 2>/dev/null || true
 
 # Update last_resumed in local state on resume
@@ -497,7 +556,7 @@ fi
 # skips it. Same value the launch set, so no new consent is asked. Lead only:
 # Claude Code titles a teammate's pane with the agent's name, and the tab this
 # repairs is the launched conversation's.
-_title="cs: $CLAUDE_SESSION_NAME"
+_title="ags: $CLAUDE_SESSION_NAME"
 if [ "$IS_LEAD" != 1 ]; then
     :
 elif [ -n "${TMUX:-}" ]; then
@@ -539,7 +598,7 @@ for _nf in "$META_DIR"/memory/narrative.*.md; do
     [ "$_sz" -gt "$NARRATIVE_MAX" ] || continue
     _nb=$(basename "$_nf")
     if [ "$_nb" = "narrative.$ACTOR_SLUG.md" ]; then
-        _whose="yours: run \`cs -narrative rotate\` BEFORE reading it in full (the Read tool refuses a file over 256 KiB)"
+        _whose="yours: run \`ags -narrative rotate\` BEFORE reading it in full (the Read tool refuses a file over 256 KiB)"
     else
         _whose="not yours: read it only from the line the digest names, never whole"
     fi
@@ -687,7 +746,7 @@ NUMSTAT
             # supplying it, which costs a help call every time it is used. This
             # block is already conditional on siblings existing, so it appears
             # exactly when there is somewhere to send to.
-            DYNAMIC="${DYNAMIC}Other Sessions — when a request substantially matches one of these objectives, not merely its vocabulary, ask via AskUserQuestion whether to hand it over before starting the work here. Offer both: do it here, or send it there. Be picky, the way the wrap-up cue is: a request that only brushes a sibling's subject belongs here, and a prompt that fires on every overlap becomes the block nobody reads.${_NL}${SIBLINGS}To hand one a task or note: cs -msg <session> \"<body>\"${_NL}Add --kind notify|task|text|result (default text; a task kind lands in that session's walk-away queue).${_NL}"
+            DYNAMIC="${DYNAMIC}Other Sessions — when a request substantially matches one of these objectives, not merely its vocabulary, ask via AskUserQuestion whether to hand it over before starting the work here. Offer both: do it here, or send it there. Be picky, the way the wrap-up cue is: a request that only brushes a sibling's subject belongs here, and a prompt that fires on every overlap becomes the block nobody reads.${_NL}${SIBLINGS}To hand one a task or note: ags -msg <session> \"<body>\"${_NL}Add --kind notify|task|text|result (default text; a task kind lands in that session's walk-away queue).${_NL}"
         fi
     fi
 
@@ -709,7 +768,7 @@ fi
 # (the awareness must survive /clear and compaction).
 TASK_BRANCH=$(awk '/^task_branch:/ { print $2; exit }' "$STATE_FILE" 2>/dev/null || true)
 # The commands below embed the session name; without its <base>@<task>
-# shape they would misfire (cs -rm on a bare name deletes a whole session),
+# shape they would misfire (ags -rm on a bare name deletes a whole session),
 # so an unparseable name gets no block at all.
 if [ -n "$TASK_BRANCH" ] && [[ "$CLAUDE_SESSION_NAME" == *@* ]]; then
     CS_BASE=$(awk '/^cs_base:/ { print $2; exit }' "$STATE_FILE" 2>/dev/null || true)
@@ -721,7 +780,7 @@ if [ -n "$TASK_BRANCH" ] && [[ "$CLAUDE_SESSION_NAME" == *@* ]]; then
 This session is a feature worktree of session '$CS_BASE' on branch $TASK_BRANCH. Work and commit here as normal; the checkout is disposable once the feature is integrated.
 
 To integrate this feature, ask the user to run /finish $TASK_NAME in session $CS_BASE: it merges a captured commit into the base after the gates pass there, then retires this worktree — fuses the session records (timeline, narrative) into the base and removes the worktree and branch. That removal needs this conversation closed first: a directory cannot be removed from under a running Claude, so /finish says so, the user closes this session themselves, and runs /finish $TASK_NAME again in $CS_BASE. Say that plainly when the user asks; never try to close, exit or remove anything from here.
-Do NOT merge $TASK_BRANCH into the base branch manually and do not delete the branch — that bypasses the record fuse and the cleanup. To abandon the feature instead, ask the user to run: cs -rm $CLAUDE_SESSION_NAME — never run this yourself; it deletes this worktree and its session records."
+Do NOT merge $TASK_BRANCH into the base branch manually and do not delete the branch — that bypasses the record fuse and the cleanup. To abandon the feature instead, ask the user to run: ags -rm $CLAUDE_SESSION_NAME — never run this yourself; it deletes this worktree and its session records."
 fi
 
 # Consume the rotation resolved above: flip the handoff's frontmatter to

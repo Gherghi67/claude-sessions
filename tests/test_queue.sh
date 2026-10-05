@@ -383,7 +383,7 @@ test_drain_armed_mentions_queue_list() {
     qseed "task one" "task two" "task three"
     printf 'armed\n' > "$(QDIR)/queue.state"
     local out; out=$(drain)
-    assert_output_contains "$out" "cs -queue list" \
+    assert_output_contains "$out" "ags -queue list" \
         "mirror instruction must name cs -queue list (the message shows only the first task)" || return 1
 }
 
@@ -533,7 +533,7 @@ test_drain_narrative_reminder_scopes_to_own() {
     touch -t 202001010000 "$CLAUDE_SESSION_META_DIR/memory/narrative.colleague.md"
     local out; out=$(drain)
     assert_output_contains "$out" '"block"' "stale narrative blocks with a reminder" || return 1
-    assert_output_contains "$out" "cs -whoami" "reminder tells the agent how to resolve its own actor" || return 1
+    assert_output_contains "$out" "ags -whoami" "reminder tells the agent how to resolve its own actor" || return 1
     assert_output_contains "$out" "teammate" "reminder must warn against editing a teammate's narrative" || return 1
 }
 

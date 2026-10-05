@@ -38,6 +38,14 @@ test_mod_is_deployed_by_the_installer_and_checked_by_doctor() {
     assert_file_contains "$SCRIPT_DIR/../lib/60-doctor.sh" "_doctor_check_mod cs-update" "doctor has a row for it" || return 1
 }
 
+test_primary_and_legacy_slash_commands_share_the_update_handler() {
+    assert_file_contains "$MOD/hooks/register.tsx" "export const UPDATE_COMMAND = 'ags-update'" "ags-update is the primary command" || return 1
+    assert_file_contains "$MOD/hooks/register.tsx" "export const LEGACY_UPDATE_COMMAND = 'cs-update'" "cs-update remains a compatibility command" || return 1
+    assert_file_contains "$MOD/hooks/register.tsx" "on('command.run', { command: 'ags-update' }, handleUpdateCommand)" "the primary command uses the shared handler" || return 1
+    assert_file_contains "$MOD/hooks/register.tsx" "on('command.run', { command: 'cs-update' }, handleUpdateCommand)" "the legacy command uses the same handler" || return 1
+    assert_file_contains "$MOD/test/register.test.ts" "expect(hooks\\['command.run:ags-update'\\]).toBe(hooks\\['command.run:cs-update'\\])" "the unit test checks both hooks resolve to the same function" || return 1
+}
+
 test_mod_unit_tests_pass_under_bun() {
     if ! command -v bun >/dev/null 2>&1; then
         echo "    SKIP: bun not on PATH"
@@ -65,15 +73,17 @@ test_mod_validate_inventories_the_hooks_and_calls() {
         echo "    SKIP: this claude ($(claude --version 2>/dev/null | head -1)) does not inventory function hooks"
         return 77
     fi
-    assert_output_contains "$out" 'env reads: CS_BIN, CS_UPDATE_AVAILABLE, HOME' "the mod reads the launch verdict and nothing else" || return 1
+    assert_output_contains "$out" 'env reads: AGS_BIN, CS_BIN, CS_CACHE_DIR, CS_UPDATE_AVAILABLE, HOME' "the mod reads canonical and legacy executable paths, the cache root and the launch verdict" || return 1
     assert_output_contains "$out" '$.process.run (via runUpdate)' "the update runs in one place" || return 1
-    assert_output_contains "$out" 'command.run{command=cs-update}' "the reopen command is hooked" || return 1
+    assert_output_contains "$out" 'command.run{command=ags-update}' "the primary reopen command is hooked" || return 1
+    assert_output_contains "$out" 'command.run{command=cs-update}' "the legacy reopen command is hooked" || return 1
     assert_output_not_contains "$out" '$.http.fetch' "no network in the mod" || return 1
 }
 
 run_test test_mod_manifest_names_the_plugin_its_module_and_the_config_field
 run_test test_mod_reads_the_cache_file_bash_writes
 run_test test_mod_is_deployed_by_the_installer_and_checked_by_doctor
+run_test test_primary_and_legacy_slash_commands_share_the_update_handler
 run_test test_mod_unit_tests_pass_under_bun
 run_test test_mod_validate_inventories_the_hooks_and_calls
 

@@ -1,4 +1,4 @@
-# ABOUTME: launch_claude_code: the resume/name/color-aware claude exec path.
+# ABOUTME: Claude launch preparation and native invocation under the shared run controller.
 # ABOUTME: The final step of opening any session.
 
 # True when a handoff's YAML frontmatter (line 1 "---" through the next "---")
@@ -57,7 +57,7 @@ _handoff_is_local() {  # handoff_file, session_dir
 # line's caps answer; an unwritable config dir prints the notice every launch
 # rather than aborting the launch, which is the harmless half of the trade.
 _rotate_force_notice_file() {
-    echo "${XDG_CONFIG_HOME:-$HOME/.config}/cs/rotate-force-notice"
+    echo "${CS_CONFIG_DIR:-$HOME/.config/cs}/rotate-force-notice"
 }
 
 # Mirrors forceThreshold() in mods/cs/hooks/register.tsx: unset is the
@@ -86,7 +86,7 @@ _rotate_force_notice() {
     [ -n "$pct" ] || return 0
     f="$(_rotate_force_notice_file)"
     [ -f "$f" ] && return 0
-    printf '%s\n' "cs now rotates a conversation on its own once it ends a turn past ${pct}% context: it writes a handoff, then counts down 20 seconds to the /clear (press 1 to go now, type anything to stop it)."
+    printf '%s\n' "ags now rotates a conversation on its own once it ends a turn past ${pct}% context: it writes a handoff, then counts down 20 seconds to the /clear (press 1 to go now, type anything to stop it)."
     printf '%s\n' "To turn that off, export CS_ROTATE_FORCE_CTX=off; to move it, set a percentage. Said once per machine."
     mkdir -p "$(dirname "$f")" 2>/dev/null && { printf '%s\n' "notified" > "$f"; } 2>/dev/null || true
 }
@@ -134,12 +134,47 @@ _resume_menu_row() {  # key color label consequence
         "$BOLD" "$2" "$1" "$NC" "$WHITE" "$3" "$NC" "$DIM" "$4" "$NC"
 }
 
+_cs_claude_adapter_dependencies() {
+    # Preserve the existing binary-plus-arguments override.
+    local claude_bin="${CLAUDE_CODE_BIN%% *}"
+    command -v "$claude_bin" >/dev/null 2>&1 || printf '%s\n' claude-code
+    return 0
+}
+
+_cs_claude_adapter_capabilities() {
+    # These describe this integration, not every feature a runtime may offer.
+    printf '%s\n' launch exact_resume startup_context feature_finish
+}
+
+_claude_native_id_valid() {  # native conversation ID
+    [[ "$1" =~ ^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$ ]]
+}
+
+_cs_claude_adapter_launch() {
+    _launch_claude_bound "$@"
+}
+
 launch_claude_code() {
+    cs_launch_session claude "$@"
+}
+
+_launch_claude_bound() {
+    # Claude Code downgrades its branding (logo, "thinking" animation) and statusline
+    # truecolor to a muted palette when it detects tmux, regardless of actual color
+    # support (anthropics/claude-code#35148). cs owns the environment before it execs
+    # claude, so it restores the documented override here for every launch path,
+    # unless the user has already set the variable themselves. (`if`, not `[ ] &&`,
+    # so the false branch does not trip `set -e` at top level.)
+    if [ -z "${CLAUDE_CODE_TMUX_TRUECOLOR+x}" ]; then
+        export CLAUDE_CODE_TMUX_TRUECOLOR=1
+    fi
+
     local session_name="$1"
     local session_dir="$2"
     local is_new="$3"
     local force="${4:-}"
     local merge_feature="${5:-}"
+    local intent="${6:-auto}"
 
     # Terminal theme (and its real background RGB when known) for the statusline
     # and hooks, detected while cs still owns the tty and reused by the session
@@ -150,21 +185,9 @@ launch_claude_code() {
     # (colors were first set at startup, defaulting to dark).
     setup_palette
 
-    # Acquire session lock before anything else
-    acquire_session_lock "$session_dir/.cs" "$force" "$session_name"
-    # A force chosen at the collision menu is equivalent to --force for the
-    # rest of the launch.
+    # The core acquired the lease and exported this run's session context.
+    # A force selected in its collision menu also bypasses native duplicates.
     [ "${CS_COLLISION_FORCE:-}" = "1" ] && force="true"
-    trap 'reset_tab_title; release_session_lock "'"$session_dir/.cs"'"' EXIT
-    trap 'reset_tab_title; release_session_lock "'"$session_dir/.cs"'"; exit 130' INT TERM
-
-    # Opening an archived session revives it. Placed after lock acquisition so
-    # a cancelled collision menu leaves the marker in place; the removal is
-    # left uncommitted, like every cs edit to session content.
-    if [ -f "$session_dir/.cs/archived" ]; then
-        rm -f "$session_dir/.cs/archived"
-        info "Unarchived: $session_name"
-    fi
 
     # Read the session's recorded UUID (allocated by create_session_structure
     # on new sessions or backfilled by migrate_session Phase 8 on legacy ones).
@@ -172,7 +195,11 @@ launch_claude_code() {
     # spawn args at exec time. Empty only if the state file is somehow
     # missing — exec paths fall back gracefully.
     local claude_session_id claude_session_color
-    claude_session_id=$(_read_local_state "$session_dir/.cs/local/state" claude_session_id)
+    claude_session_id=$(cs_binding_read "$session_dir" claude) || return 1
+    if [ -n "$claude_session_id" ] && ! _claude_native_id_valid "$claude_session_id"; then
+        printf 'Error: Invalid Claude conversation binding in %s/.cs/local/state; repair it before launching.\n' "$session_dir" >&2
+        return 1
+    fi
     claude_session_color=$(_read_local_state "$session_dir/.cs/local/state" claude_session_color)
 
     # Build the trailing positional prompt arg that applies the session's
@@ -230,9 +257,7 @@ launch_claude_code() {
     fi
 
     # Set environment variables
-    export CLAUDE_SESSION_NAME="$session_name"
-    export CLAUDE_SESSION_DIR="$session_dir"
-    export CLAUDE_SESSION_META_DIR="$session_dir/.cs"
+    cs_export_session_context "$session_name" "$session_dir"
     # A pane claude opens itself (an agent-team teammate) is started by the
     # tmux server, which hands it the server's session environment, not the
     # lead's: the truecolor override cs exported for claude never reaches it,
@@ -250,7 +275,7 @@ launch_claude_code() {
     # stale the moment the directory was renamed — outranking a basename that
     # is still right.
     if [ -L "$SESSIONS_ROOT/$session_name" ]; then
-        _set_local_state "$session_dir/.cs/local/state" session_name "$session_name"
+        cs_run_with_lease "$session_dir/.cs" _cs_set_local_state_unlocked "$session_dir/.cs/local/state" session_name "$session_name" || return 1
     fi
     # Prompt rewriting rides Claude Code's external-editor round-trip: ctrl+g
     # writes the composer buffer to a temp file, runs $EDITOR on it, and replaces
@@ -301,14 +326,8 @@ launch_claude_code() {
     if [ -n "$claude_session_id" ]; then
         export CS_CLAUDE_SESSION_ID="$claude_session_id"
     fi
-    # The pid this shell hands to claude. Every exec arm below replaces this
-    # process image, so the launched claude keeps this pid, and Claude Code
-    # stamps CLAUDE_PID with the pid of whichever claude fires a hook. Equality
-    # of the two is therefore the test for "this conversation is the one cs
-    # launched" — the session's single claude_session_id slot is its to rebind,
-    # and no other claude's. Identity has to be the process, not the
-    # environment: children inherit every exported variable, so a teammate or a
-    # headless `claude -p` carries this value while owning a different pid.
+    # Hooks identify the lead by the supervised native process's direct
+    # parent and this run's lease; descendants cannot inherit ownership.
     export CS_LEAD_PID=$$
 
     # Where this cs is, for the mods: `$.process.run` takes no shell and the
@@ -317,6 +336,7 @@ launch_claude_code() {
     local self_bin
     self_bin="$(cd "$(dirname "$0")" && pwd -P)/$(basename "$0")"
     export CS_BIN="$self_bin"
+    export AGS_BIN="$self_bin"
 
     # The cs-update mod draws the pending release's notes and runs the update
     # from inside the session. It gets the launch's verdict, never its own:
@@ -329,7 +349,7 @@ launch_claude_code() {
         export CS_UPDATE_AVAILABLE="$UPDATE_AVAILABLE"
     fi
 
-    # Spawn seed: tasks and a brief staged by cs -spawn for this session.
+    # Spawn seed: tasks and a brief staged by ags -spawn for this session.
     # Consumed here, after the already-running guard and before any exec arm,
     # so a window that died before launching self-heals on the session's next
     # open. A stale seed (>1h) is set aside with its brief, never silently
@@ -344,7 +364,7 @@ launch_claude_code() {
         if [ "$_age" -gt 3600 ]; then
             mv "$_seed" "$_seed.stale" 2>/dev/null || true
             [ ! -f "$_brief" ] || mv "$_brief" "$_brief.stale" 2>/dev/null || true
-            warn "Stale spawn seed set aside: $_seed.stale (re-run cs -spawn if still wanted)"
+            warn "Stale spawn seed set aside: $_seed.stale (re-run ags -spawn if still wanted)"
         else
             local _spawner="" _line _n=0 _first=1 _has_brief=0
             # The brief moves in before any task is queued, and a move that
@@ -383,7 +403,7 @@ launch_claude_code() {
                 fi
                 if [ -n "$_spawner" ]; then
                     printf '%s\n' "$_spawner" > "$session_dir/.cs/local/spawned-by"
-                    spawn_kick="Spawned by $_spawner. $_work Send results with: cs -msg $_spawner -k result \"...\""
+                    spawn_kick="Spawned by $_spawner. $_work Send results with: ags -msg $_spawner -k result \"...\""
                 else
                     spawn_kick="$_work"
                 fi
@@ -404,11 +424,17 @@ launch_claude_code() {
     # the /color re-apply for this one launch (color returns next open).
     local launch_prompt="${merge_kick:-${spawn_kick:-$color_arg}}"
 
-    # Status indicator
+    # Status indicator. An engine's first conversation in an existing
+    # workspace (no binding yet) and an explicit --fresh both start a new
+    # conversation; labelling them "resuming" also put the previous
+    # conversation's context figure on the card.
     local status_icon status_text
-    if [ "$is_new" = "true" ]; then
+    if [ "$is_new" = "true" ] || [ -z "$claude_session_id" ]; then
         status_icon="+"
         status_text="new"
+    elif [ "$intent" = fresh ]; then
+        status_icon="+"
+        status_text="fresh"
     else
         status_icon="↻"
         status_text="resuming"
@@ -416,8 +442,9 @@ launch_claude_code() {
 
     # Count secrets for this session
     local secret_count=0
-    if command -v cs-secrets >/dev/null 2>&1; then
-        secret_count=$(cs-secrets list 2>/dev/null | grep -c "^  - " 2>/dev/null) || secret_count=0
+    local secrets_bin
+    if secrets_bin=$(find_secrets_script); then
+        secret_count=$("$secrets_bin" list 2>/dev/null | grep -c "^  - " 2>/dev/null) || secret_count=0
         # Ensure it's a valid integer
         [[ "$secret_count" =~ ^[0-9]+$ ]] || secret_count=0
     fi
@@ -439,7 +466,7 @@ launch_claude_code() {
     local bars=("$BAR1" "$BAR2" "$BAR3" "$BAR4" "$BAR5" "$BAR6")
 
     echo ""
-    echo -e "${bars[$((bar_idx < ${#bars[@]} ? bar_idx : ${#bars[@]} - 1))]}${NC} ${ORANGE}cs${NC} ${GREEN}$VERSION${NC}"; ((++bar_idx))
+    echo -e "${bars[$((bar_idx < ${#bars[@]} ? bar_idx : ${#bars[@]} - 1))]}${NC} ${ORANGE}ags${NC} ${GREEN}$VERSION${NC}"; ((++bar_idx))
     echo -e "${bars[$((bar_idx < ${#bars[@]} ? bar_idx : ${#bars[@]} - 1))]}${NC} ${WHITE}${BOLD}$session_name${NC} ${COMMENT}($status_icon $status_text)${NC} ${DIM}${ICON_HOST} $(hostname -s)${NC}"; ((++bar_idx))
     echo -e "${bars[$((bar_idx < ${#bars[@]} ? bar_idx : ${#bars[@]} - 1))]}${NC} ${GOLD}$session_dir${NC}"; ((++bar_idx))
     # Secrets and context are one short fact each, so they share a row rather
@@ -477,8 +504,8 @@ launch_claude_code() {
         # The update block continues the card's bar stack rather than starting
         # its own column: same bar, same one-space gutter, so it reads as the
         # last fact about this session and not as a separate widget.
-        echo -e "${bars[$((bar_idx < ${#bars[@]} ? bar_idx : ${#bars[@]} - 1))]}${NC} ${BOLD}${YELLOW}${ICON_UP}${NC} ${BOLD}${GREEN}$UPDATE_AVAILABLE${NC} ${BOLD}${COMMENT}available${NC} ${BOLD}${DIM}(you have $VERSION — run${NC} ${BOLD}${GOLD}cs -update${NC}${BOLD}${DIM})${NC}"; ((++bar_idx))
-        local notes_cache="$HOME/.cache/cs/update-notes-$UPDATE_AVAILABLE"
+        echo -e "${bars[$((bar_idx < ${#bars[@]} ? bar_idx : ${#bars[@]} - 1))]}${NC} ${BOLD}${YELLOW}${ICON_UP}${NC} ${BOLD}${GREEN}$UPDATE_AVAILABLE${NC} ${BOLD}${COMMENT}available${NC} ${BOLD}${DIM}(you have $VERSION — run${NC} ${BOLD}${GOLD}ags -update${NC}${BOLD}${DIM})${NC}"; ((++bar_idx))
+        local notes_cache="${CS_CACHE_DIR:-$HOME/.cache/cs}/update-notes-$UPDATE_AVAILABLE"
         # The cs-update mod draws these same notes in full inside the session
         # once function hooks are on, so printing them here too would be a
         # second copy of the same list. This card is the fallback for when
@@ -533,25 +560,31 @@ EOF
     # name hash only if no color is recorded.
     local _tab_color
     _tab_color=$(_session_color_rgb "$claude_session_color")
-    set_tab_title "cs: $session_name" "${_tab_color:-auto:$session_name}" "$session_name"
+    set_tab_title "ags: $session_name" "${_tab_color:-auto:$session_name}" "$session_name"
 
-    cd "$session_dir"
+    cd "$session_dir" || return 1
+
+    # An engine first opened in an existing workspace has no acknowledged
+    # native conversation. Stage its initial identity without attempting resume.
+    if [ -z "$claude_session_id" ]; then
+        _exec_fresh_rebind "$session_dir" fresh "" "$spawn_kick" "$merge_kick"
+        return $?
+    fi
 
     # For existing sessions, ask if user wants to continue previous conversation
     local continue_flag=""
-    if [ "$is_new" = "false" ]; then
+    if [ "$is_new" = "false" ] && [ "$intent" != fresh ]; then
         # cs records only the conversation it launched, so one started any other
         # way on this folder — a `/desktop` handoff, a claude opened on the
         # directory — leaves the recorded uuid naming an older conversation.
-        # That uuid still resolves, so `--resume` SUCCEEDS and the quick-failure
-        # fallback below never fires: the launch would continue a superseded
+        # That uuid still resolves, so `--resume` can succeed: the launch would continue a superseded
         # prefix with nothing said. Name the newer one rather than switching to
         # it, which would hand the session to whatever was last opened here.
         if [ -n "$claude_session_id" ]; then
             local _proj _newest
             _proj=$(_claude_project_dir "$session_dir")
-            # Only when the recorded conversation is real. A recorded uuid with
-            # no transcript is the orphan case migrate_session already repairs,
+            # Suggest a newer conversation only when the recorded transcript
+            # exists. Missing transcripts never authorize replacing a binding,
             # and reporting the repair target as a rival would be nonsense.
             if [ -f "$_proj/$claude_session_id.jsonl" ]; then
                 _newest=$(_discover_session_uuid_in "$_proj")
@@ -598,7 +631,7 @@ EOF
         fi
         # A spawned launch is unattended: take the default (resume) instead
         # of parking the tmux window on an interactive ask.
-        if [ -n "$spawn_kick" ]; then
+        if [ "$intent" = resume ] || [ -n "$spawn_kick" ] || ! cs_interactive; then
             response=""
         else
             if [ -n "$pending_handoff" ]; then
@@ -643,9 +676,10 @@ EOF
                     # over resuming; a merge armed moments earlier must not
                     # silently override the choice they just made.
                     if [ -n "$merge_kick" ]; then
-                        warn "Rotation handoff takes this launch; re-run: cs $session_name -finish $merge_feature"
+                        warn "Rotation handoff takes this launch; re-run: ags $session_name -finish $merge_feature"
                     fi
                     _exec_fresh_rebind "$session_dir" handoff "$(basename "$pending_handoff")" "$spawn_kick" ""
+                    return $?
                 fi
                 # r without a pending handoff was never offered: treat as the
                 # default resume answer, disarm included.
@@ -702,40 +736,35 @@ EOF
     fi
 
     if [ -n "$continue_flag" ]; then
-        # Try continuing previous conversation
-        SECONDS=0
+        # Resume errors keep the exact binding. Creating a replacement is
+        # an explicit --fresh choice, independent of how quickly native exit occurs.
         local rc=0
         # shellcheck disable=SC2086
-        $CLAUDE_CODE_BIN --name "$session_name" $continue_flag ${launch_prompt:+"$launch_prompt"} || rc=$?
-        if [ $rc -ne 0 ] && [ $SECONDS -lt 3 ]; then
-            # Quick failure suggests no conversation to continue. Rebind so
-            # the fresh transcript claude is about to create is tracked by
-            # cs (otherwise the recorded claude_session_id keeps pointing at
-            # a transcript that doesn't resolve, and the next launch repeats
-            # the same failure).
-            echo -e "${DIM}No previous conversation found. Starting fresh...${NC}"
-            echo ""
-            _exec_fresh_rebind "$session_dir" resume-failed "" "$spawn_kick" "$merge_kick"
+        cs_run_child $CLAUDE_CODE_BIN --name "$session_name" $continue_flag ${launch_prompt:+"$launch_prompt"} || rc=$?
+        if [ "$rc" -ne 0 ]; then
+            printf 'Could not resume the recorded Claude conversation; binding preserved. Retry or run: ags %s --engine claude --fresh\n' "$session_name" >&2
         fi
-        exit $rc
+        return "$rc"
     else
         # Fresh-spawn path. Three sub-cases:
         #   - is_new=true: pass --session-id <pre-allocated-uuid> so claude
         #     adopts the UUID create_session_structure wrote into README.
-        #   - is_new=false (user said N to resume): rebind to a fresh UUID
-        #     and pass --session-id <new> so cs stays bound to the new
-        #     conversation. Without rebind, next launch resumes the OLD
-        #     conversation while the fresh one becomes orphaned.
+        #   - is_new=false (fresh intent): stage a fresh UUID and pass it to
+        #     native startup. SessionStart acknowledges and commits it.
         #   - is_new=false with no claude_session_id (shouldn't happen
         #     post-Phase-8 but handled defensively): naked exec.
         if [ "$is_new" = "true" ] && [ -n "$claude_session_id" ]; then
             # shellcheck disable=SC2086
-            exec $CLAUDE_CODE_BIN --name "$session_name" --session-id "$claude_session_id" ${launch_prompt:+"$launch_prompt"}
+            cs_run_child $CLAUDE_CODE_BIN --name "$session_name" --session-id "$claude_session_id" ${launch_prompt:+"$launch_prompt"}
         elif [ "$is_new" = "false" ]; then
-            _exec_fresh_rebind "$session_dir" declined-resume "" "$spawn_kick" "$merge_kick"
+            _disarm_rotation_marker "$session_dir"
+            # An explicit --fresh never asked anything, so it is not a decline.
+            local _rebind_reason=declined-resume
+            [ "$intent" = fresh ] && _rebind_reason=fresh
+            _exec_fresh_rebind "$session_dir" "$_rebind_reason" "" "$spawn_kick" "$merge_kick"
         else
             # shellcheck disable=SC2086
-            exec $CLAUDE_CODE_BIN --name "$session_name" ${launch_prompt:+"$launch_prompt"}
+            cs_run_child $CLAUDE_CODE_BIN --name "$session_name" ${launch_prompt:+"$launch_prompt"}
         fi
     fi
 }

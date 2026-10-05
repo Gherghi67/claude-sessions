@@ -168,7 +168,7 @@ test_wrap_cues_wording_parity_between_emit_and_migrate() {
     # and the legacy-session migration heredoc (45-migrate.sh). They must not drift —
     # otherwise new and migrated sessions get different wrap-up guidance.
     local emit="$SCRIPT_DIR/../lib/35-claudemd.sh"
-    local migrate="$SCRIPT_DIR/../lib/45-migrate.sh"
+    local migrate="$SCRIPT_DIR/../lib/46-claude-workspace.sh"
     assert_file_contains "$emit" "Strong signals (sufficient on their own" \
         "the template must carry the recast strong-signal wording" || return 1
     assert_file_contains "$migrate" "Strong signals (sufficient on their own" \

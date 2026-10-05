@@ -1,4 +1,4 @@
-# ABOUTME: cs -usage: per-session token attribution over the 5-hour and weekly
+# ABOUTME: ags -usage: per-session token attribution over the 5-hour and weekly
 # ABOUTME: rate-limit windows, computed on demand from Claude Code transcripts.
 
 # Epoch seconds -> ISO-8601 UTC without timezone suffix, so it lexicographically
@@ -294,9 +294,9 @@ run_usage() {
     while [ $# -gt 0 ]; do
         case "$1" in
             --all) all_flag=1; shift ;;
-            -*) error "Unknown usage option: $1. Use 'cs -usage [--all] [<session>]'" ;;
+            -*) error "Unknown usage option: $1. Use 'ags -usage [--all] [<session>]'" ;;
             *)
-                [ -z "$target" ] || error "Unknown usage option: $1. Use 'cs -usage [--all] [<session>]'"
+                [ -z "$target" ] || error "Unknown usage option: $1. Use 'ags -usage [--all] [<session>]'"
                 target="$1"; shift ;;
         esac
     done

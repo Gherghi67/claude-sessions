@@ -1,5 +1,5 @@
 # ABOUTME: Rotates the current actor's narrative once it passes its byte budget: the
-# ABOUTME: oldest '## ' sections move verbatim to .cs/narrative-archive/. Backs 'cs -narrative'.
+# ABOUTME: oldest '## ' sections move verbatim to .cs/narrative-archive/. Backs 'ags -narrative'.
 
 # One line per '## ' heading: the heading's byte offset, a space, the heading.
 # LC_ALL=C makes awk's length() count bytes, so offsets survive multibyte text
@@ -29,11 +29,11 @@ EOF
 # Archive the oldest sections of this actor's narrative when the file is over
 # CS_NARRATIVE_MAX_BYTES, leaving a tail of about CS_NARRATIVE_KEEP_BYTES.
 rotate_narrative() {
-    if [ -z "${CLAUDE_SESSION_META_DIR:-}" ] || [ ! -d "${CLAUDE_SESSION_META_DIR}" ]; then
-        error "cs -narrative rotate must be run from inside a cs session"
+    if [ -z "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ] || [ ! -d "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ]; then
+        error "ags -narrative rotate must be run from inside a cs session"
     fi
-    local meta_dir="$CLAUDE_SESSION_META_DIR"
-    local session_dir="${CLAUDE_SESSION_DIR:-$(dirname "$meta_dir")}"
+    local meta_dir="${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}"
+    local session_dir="${CS_SESSION_DIR:-${CLAUDE_SESSION_DIR:-$(dirname "$meta_dir")}}"
     local actor
     actor=$(cs_actor_slug "$session_dir")
     local live="$meta_dir/memory/narrative.$actor.md"
@@ -124,7 +124,7 @@ rotate_narrative() {
     if ! cmp -s <(head -c "$cut" "$snap") <(head -c "$cut" "$live"); then
         rm -f "$snap"
         [ "$created" -eq 1 ] && rm -f "$chunk"
-        error "narrative.$actor.md changed during rotation; run cs -narrative rotate again"
+        error "narrative.$actor.md changed during rotation; run ags -narrative rotate again"
     fi
     local live_tmp="$meta_dir/memory/.narrative.$actor.md.tmp"
     { [ "$head_end" -gt 0 ] && head -c "$head_end" "$snap"; tail -c +$((cut + 1)) "$live"; } > "$live_tmp"
@@ -185,7 +185,7 @@ rotate_narrative() {
     echo "rotated $sections sections (${archived_kb} KB) -> .cs/narrative-archive/$actor/$(basename "$chunk"); live file now ${now_kb} KB"
 }
 
-# Dispatcher for cs -narrative
+# Dispatcher for ags -narrative
 run_narrative() {
     local sub="${1:-}"
     case "$sub" in
@@ -194,10 +194,10 @@ run_narrative() {
             ;;
         *)
             # Names both forms: this dispatcher is reached from inside a
-            # session AND from `cs <name> -narrative`, and a message that
+            # session AND from `ags <name> -narrative`, and a message that
             # prescribes only the first sends a caller who correctly named a
             # session off to rotate whichever one their shell is standing in.
-            error "Usage: cs -narrative rotate   |   cs <name> -narrative rotate"
+            error "Usage: ags -narrative rotate   |   ags <name> -narrative rotate"
             ;;
     esac
 }

@@ -32,7 +32,7 @@ _transcripts_for() {
 test_usage_subcommand_exists() {
     local output
     output=$("$CS_BIN" -usage 2>&1) || true
-    assert_output_not_contains "$output" "Unknown command" "cs -usage should be a recognized verb" || return 1
+    assert_output_not_contains "$output" "Unknown command" "ags -usage should be a recognized verb" || return 1
     assert_output_contains "$output" "windows are rolling" "no-limits-file header states rolling windows" || return 1
 }
 

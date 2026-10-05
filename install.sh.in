@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ABOUTME: Installation script for cs (Claude Code session manager)
+# ABOUTME: Installation script for agent-sessions (ags command, with cs compatibility)
 # ABOUTME: Installs binaries, hooks, commands, skills, and shell completions
 # ABOUTME: build.sh splices lib/01-manifests.sh in at the marker to write install.sh.
 
@@ -47,8 +47,7 @@ installed() {
 }
 
 show_banner() {
-    # Smooth gradient: rust (#e64a19) → gold (#ffc107)
-    local GT='\033[38;2;230;74;25mc\033[38;2;232;83;24ml\033[38;2;234;91;22ma\033[38;2;235;100;21mu\033[38;2;237;108;20md\033[38;2;239;117;19me\033[38;2;241;125;17m-\033[38;2;243;134;16ms\033[38;2;245;142;15me\033[38;2;246;151;14ms\033[38;2;248;159;12ms\033[38;2;250;168;11mi\033[38;2;252;176;10mo\033[38;2;254;185;9mn\033[38;2;255;193;7ms'
+    local GT="${ORANGE}agent-sessions"
     echo ""
     echo -e "   ${RUST}╭───────────────────────╮${NC}"
     echo -e "   ${RUST}│${NC}    ${GT}${NC}    ${GOLD}│${NC}"
@@ -58,6 +57,12 @@ show_banner() {
 
 # Configuration
 INSTALL_DIR="${HOME}/.local/bin"
+# The global cs installation belongs to the stable tool. Only an alias already
+# owned by this installer may be refreshed. setup.sh deploys to a separate HOME.
+if { [ -e "$INSTALL_DIR/cs" ] || [ -L "$INSTALL_DIR/cs" ]; } \
+    && { [ ! -L "$INSTALL_DIR/cs" ] || [ "$(readlink "$INSTALL_DIR/cs")" != ags ]; }; then
+    error "Existing cs installation detected. Run sh setup.sh for an isolated ags install."
+fi
 HOOKS_PARENT_DIR="${HOME}/.claude/hooks"
 HOOKS_DIR="${HOOKS_PARENT_DIR}/cs"
 COMMANDS_DIR="${HOME}/.claude/commands"
@@ -72,15 +77,29 @@ if [ -f "$HOME/.zshrc" ]; then
 fi
 CLAUDE_SETTINGS="${HOME}/.claude/settings.json"
 SESSIONS_DIR="${HOME}/.claude-sessions"
+# Omitted selection reuses the previous install; old installs retain both.
+INSTALL_CONFIG="$INSTALL_DIR/.cs-install-engines"
+INSTALL_ENGINES="${CS_INSTALL_ENGINES:-}"
+if [ -z "$INSTALL_ENGINES" ] && [ -f "$INSTALL_CONFIG" ]; then
+    INSTALL_ENGINES=$(cat "$INSTALL_CONFIG")
+fi
+INSTALL_ENGINES="${INSTALL_ENGINES:-claude,codex}"
+case "$INSTALL_ENGINES" in
+    claude|codex|claude,codex|codex,claude) ;;
+    *) error "CS_INSTALL_ENGINES must be claude, codex, or claude,codex" ;;
+esac
+_install_has_engine() { [[ ",$INSTALL_ENGINES," == *,$1,* ]]; }
+
 # Payload ref: `cs -update` pins this to the release tag (v<version>) so the
 # downloaded scripts/hooks match the verified installer; a fresh curl|bash
 # install defaults to main.
 REPO_URL="https://raw.githubusercontent.com/hex/claude-sessions/${CS_INSTALL_REF:-main}"
 RELEASES_URL="https://github.com/hex/claude-sessions/releases/download"
-CS_URL="${REPO_URL}/bin/cs"
-CS_SECRETS_URL="${REPO_URL}/bin/cs-secrets"
-CS_STATUSLINE_URL="${REPO_URL}/bin/cs-statusline"
-CS_SUBAGENT_STATUSLINE_URL="${REPO_URL}/bin/cs-subagent-statusline"
+AGS_URL="${REPO_URL}/bin/ags"
+AGS_SECRETS_URL="${REPO_URL}/bin/ags-secrets"
+AGS_CODEX_THREAD_URL="${REPO_URL}/bin/ags-codex-thread"
+AGS_STATUSLINE_URL="${REPO_URL}/bin/ags-statusline"
+AGS_SUBAGENT_STATUSLINE_URL="${REPO_URL}/bin/ags-subagent-statusline"
 
 # @@CS_MANIFESTS@@
 
@@ -91,17 +110,17 @@ CS_SUBAGENT_STATUSLINE_URL="${REPO_URL}/bin/cs-subagent-statusline"
 CS_HOOK_FILES=("${CS_HOOK_LIBS[@]}" "${CS_HOOKS[@]}")
 
 # Completion URLs for web install
-COMPLETION_BASH_URL="${REPO_URL}/completions/cs.bash"
-COMPLETION_ZSH_URL="${REPO_URL}/completions/_cs"
+COMPLETION_BASH_URL="${REPO_URL}/completions/ags.bash"
+COMPLETION_ZSH_URL="${REPO_URL}/completions/_ags"
 
 # Minisign public key for verifying signed releases
 CS_SIGN_PUBKEY="RWQvs3IVdvrS8PJs0V0gwdJGPw/x5waQ6z6iqPQm90JfpxfcsSy9b9Vo"
 
 # Detect if running from cloned repo or web install
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
-if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/bin/cs" ]; then
+if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/bin/ags" ]; then
     # Running from cloned repo
-    CS_SOURCE="$SCRIPT_DIR/bin/cs"
+    AGS_SOURCE="$SCRIPT_DIR/bin/ags"
     HOOKS_SOURCE="$SCRIPT_DIR/hooks"
     COMMANDS_SOURCE="$SCRIPT_DIR/commands"
     INSTALL_METHOD="local"
@@ -111,9 +130,9 @@ else
 fi
 
 # Check for Claude Code
-if ! command -v claude >/dev/null 2>&1; then
+if _install_has_engine claude && ! command -v claude >/dev/null 2>&1; then
     warn "Claude Code (claude) not found in PATH"
-    warn "Please install Claude Code before using cs"
+    warn "Install Claude Code for Claude sessions, or use --engine codex with Codex CLI"
     warn "Visit: https://github.com/anthropics/claude-code"
     echo ""
 fi
@@ -124,72 +143,96 @@ show_banner
 # Create install directory if needed
 mkdir -p "$INSTALL_DIR"
 
-# Install cs script
-installed "cs" "$INSTALL_DIR/cs"
+# Install canonical ags command. The cs name remains a symlink for existing
+# shell history, scripts and integrations; both names run the same entrypoint.
+installed "ags" "$INSTALL_DIR/ags"
 
 if [ "$INSTALL_METHOD" = "local" ]; then
     # Install from local clone
-    cp "$CS_SOURCE" "$INSTALL_DIR/cs"
+    cp "$AGS_SOURCE" "$INSTALL_DIR/ags"
 else
     # Download from GitHub
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$CS_URL" -o "$INSTALL_DIR/cs" || error "Failed to download cs script"
+        curl -fsSL "$AGS_URL" -o "$INSTALL_DIR/ags" || error "Failed to download ags script"
     elif command -v wget >/dev/null 2>&1; then
-        wget -q "$CS_URL" -O "$INSTALL_DIR/cs" || error "Failed to download cs script"
+        wget -q "$AGS_URL" -O "$INSTALL_DIR/ags" || error "Failed to download ags script"
     else
         error "Neither curl nor wget found. Please install one of them."
     fi
 fi
 
-chmod +x "$INSTALL_DIR/cs"
+chmod +x "$INSTALL_DIR/ags"
+ln -sfn ags "$INSTALL_DIR/cs"
 
 # Install cs-secrets utility
-installed "cs-secrets" "$INSTALL_DIR/cs-secrets"
+installed "ags-secrets" "$INSTALL_DIR/ags-secrets"
 
 if [ "$INSTALL_METHOD" = "local" ]; then
-    cp "$SCRIPT_DIR/bin/cs-secrets" "$INSTALL_DIR/cs-secrets"
+    cp "$SCRIPT_DIR/bin/ags-secrets" "$INSTALL_DIR/ags-secrets"
 else
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$CS_SECRETS_URL" -o "$INSTALL_DIR/cs-secrets" || error "Failed to download cs-secrets"
+        curl -fsSL "$AGS_SECRETS_URL" -o "$INSTALL_DIR/ags-secrets" || error "Failed to download ags-secrets"
     elif command -v wget >/dev/null 2>&1; then
-        wget -q "$CS_SECRETS_URL" -O "$INSTALL_DIR/cs-secrets" || error "Failed to download cs-secrets"
+        wget -q "$AGS_SECRETS_URL" -O "$INSTALL_DIR/ags-secrets" || error "Failed to download ags-secrets"
     fi
 fi
 
-chmod +x "$INSTALL_DIR/cs-secrets"
+chmod +x "$INSTALL_DIR/ags-secrets"
+ln -sfn ags-secrets "$INSTALL_DIR/cs-secrets"
 
-# Install cs-statusline (Claude Code status line)
-installed "cs-statusline" "$INSTALL_DIR/cs-statusline"
+if _install_has_engine codex; then
+# Install the optional Codex runtime's no-model thread bootstrap helper.
+# Python is required only when a user selects the Codex engine.
+installed "ags-codex-thread" "$INSTALL_DIR/ags-codex-thread"
+if [ "$INSTALL_METHOD" = "local" ]; then
+    cp "$SCRIPT_DIR/bin/ags-codex-thread" "$INSTALL_DIR/ags-codex-thread"
+elif command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$AGS_CODEX_THREAD_URL" -o "$INSTALL_DIR/ags-codex-thread" || error "Failed to download ags-codex-thread"
+else
+    wget -q "$AGS_CODEX_THREAD_URL" -O "$INSTALL_DIR/ags-codex-thread" || error "Failed to download ags-codex-thread"
+fi
+chmod +x "$INSTALL_DIR/ags-codex-thread"
+ln -sfn ags-codex-thread "$INSTALL_DIR/cs-codex-thread"
+
+fi
+
+if _install_has_engine claude; then
+# Install ags-statusline (Claude Code status line)
+installed "ags-statusline" "$INSTALL_DIR/ags-statusline"
 
 if [ "$INSTALL_METHOD" = "local" ]; then
-    cp "$SCRIPT_DIR/bin/cs-statusline" "$INSTALL_DIR/cs-statusline"
+    cp "$SCRIPT_DIR/bin/ags-statusline" "$INSTALL_DIR/ags-statusline"
 else
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$CS_STATUSLINE_URL" -o "$INSTALL_DIR/cs-statusline" || error "Failed to download cs-statusline"
+        curl -fsSL "$AGS_STATUSLINE_URL" -o "$INSTALL_DIR/ags-statusline" || error "Failed to download ags-statusline"
     elif command -v wget >/dev/null 2>&1; then
-        wget -q "$CS_STATUSLINE_URL" -O "$INSTALL_DIR/cs-statusline" || error "Failed to download cs-statusline"
+        wget -q "$AGS_STATUSLINE_URL" -O "$INSTALL_DIR/ags-statusline" || error "Failed to download ags-statusline"
     fi
 fi
 
-chmod +x "$INSTALL_DIR/cs-statusline"
+chmod +x "$INSTALL_DIR/ags-statusline"
+ln -sfn ags-statusline "$INSTALL_DIR/cs-statusline"
 
-# Install cs-subagent-statusline (Claude Code agent-panel rows). It sources
-# cs-statusline for the shared palette, so the two must land in the same dir.
-installed "cs-subagent-statusline" "$INSTALL_DIR/cs-subagent-statusline"
+# Install ags-subagent-statusline (Claude Code agent-panel rows). It sources
+# ags-statusline for the shared palette, so the two must land in the same dir.
+installed "ags-subagent-statusline" "$INSTALL_DIR/ags-subagent-statusline"
 
 if [ "$INSTALL_METHOD" = "local" ]; then
-    cp "$SCRIPT_DIR/bin/cs-subagent-statusline" "$INSTALL_DIR/cs-subagent-statusline"
+    cp "$SCRIPT_DIR/bin/ags-subagent-statusline" "$INSTALL_DIR/ags-subagent-statusline"
 else
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$CS_SUBAGENT_STATUSLINE_URL" -o "$INSTALL_DIR/cs-subagent-statusline" || error "Failed to download cs-subagent-statusline"
+        curl -fsSL "$AGS_SUBAGENT_STATUSLINE_URL" -o "$INSTALL_DIR/ags-subagent-statusline" || error "Failed to download ags-subagent-statusline"
     elif command -v wget >/dev/null 2>&1; then
-        wget -q "$CS_SUBAGENT_STATUSLINE_URL" -O "$INSTALL_DIR/cs-subagent-statusline" || error "Failed to download cs-subagent-statusline"
+        wget -q "$AGS_SUBAGENT_STATUSLINE_URL" -O "$INSTALL_DIR/ags-subagent-statusline" || error "Failed to download ags-subagent-statusline"
     fi
 fi
 
-chmod +x "$INSTALL_DIR/cs-subagent-statusline"
+chmod +x "$INSTALL_DIR/ags-subagent-statusline"
+ln -sfn ags-subagent-statusline "$INSTALL_DIR/cs-subagent-statusline"
 
-# Install cs-tui (interactive session manager).
+fi
+
+# Install ags-tui (interactive session manager), with the old cs-tui alias.
 #
 # bin/cs-tui is a gitignored build artifact and nothing regenerates it: build.sh
 # assembles bin/cs from lib/ and has no TUI arm, while `cargo build --release`
@@ -198,26 +241,39 @@ chmod +x "$INSTALL_DIR/cs-subagent-statusline"
 # a picker weeks older than the release being installed. A version check cannot
 # catch it either: the picker carries no version of its own, so `cs -version`
 # reads correct while the picker is stale. Prefer whichever of the two is newer.
-_cs_tui_src="$SCRIPT_DIR/bin/cs-tui"
-_cs_tui_built="$SCRIPT_DIR/tui/target/release/cs-tui"
+_cs_tui_src="$SCRIPT_DIR/bin/ags-tui"
+_cs_tui_built="$SCRIPT_DIR/tui/target/release/ags-tui"
+if [ ! -f "$_cs_tui_src" ] && [ -f "$SCRIPT_DIR/bin/cs-tui" ]; then
+    _cs_tui_src="$SCRIPT_DIR/bin/cs-tui"
+fi
+if [ ! -f "$_cs_tui_built" ] && [ -f "$SCRIPT_DIR/tui/target/release/cs-tui" ]; then
+    _cs_tui_built="$SCRIPT_DIR/tui/target/release/cs-tui"
+fi
 if [ -f "$_cs_tui_built" ] && { [ ! -f "$_cs_tui_src" ] || [ "$_cs_tui_built" -nt "$_cs_tui_src" ]; }; then
     _cs_tui_src="$_cs_tui_built"
 fi
 if [ "$INSTALL_METHOD" = "local" ] && [ -f "$_cs_tui_src" ]; then
-    installed "cs-tui" "$INSTALL_DIR/cs-tui"
-    cp "$_cs_tui_src" "$INSTALL_DIR/cs-tui"
-    chmod +x "$INSTALL_DIR/cs-tui"
+    installed "ags-tui" "$INSTALL_DIR/ags-tui"
+    cp "$_cs_tui_src" "$INSTALL_DIR/ags-tui"
+    chmod +x "$INSTALL_DIR/ags-tui"
 elif [ "$INSTALL_METHOD" = "web" ]; then
-    _cs_version=$(grep -m1 "^VERSION=" "$INSTALL_DIR/cs" 2>/dev/null | cut -d'"' -f2 || echo "")
+    _cs_version=$(grep -m1 "^VERSION=" "$INSTALL_DIR/ags" 2>/dev/null | cut -d'"' -f2 || echo "")
     _os=$(uname -s | tr '[:upper:]' '[:lower:]')
     _arch=$(uname -m)
     [ "$_arch" = "x86_64" ] && _arch="amd64"
-    _tui_base="cs-tui-${_os}-${_arch}"
-    _tui_dst="$INSTALL_DIR/cs-tui"
+    _tui_base="ags-tui-${_os}-${_arch}"
+    _tui_dst="$INSTALL_DIR/ags-tui"
     _tui_url="${RELEASES_URL}/v${_cs_version}/${_tui_base}"
+    # Older pinned releases published only the cs-tui asset. It is still a
+    # usable picker when installed under the canonical name; use the matching
+    # legacy checksum/signature basename below.
+    if [ -n "$_cs_version" ] && ! curl -fsSL --head "$_tui_url" >/dev/null 2>&1; then
+        _tui_base="cs-tui-${_os}-${_arch}"
+        _tui_url="${RELEASES_URL}/v${_cs_version}/${_tui_base}"
+    fi
     if [ -n "$_cs_version" ] && curl -fsSL --head "$_tui_url" >/dev/null 2>&1 \
         && curl -fsSL "$_tui_url" -o "$_tui_dst"; then
-        installed "cs-tui" "$_tui_dst"
+        installed "ags-tui" "$_tui_dst"
         chmod +x "$_tui_dst"
 
         # Verify cs-tui checksum (hard gate). The rule is the one stated in
@@ -251,13 +307,13 @@ elif [ "$INSTALL_METHOD" = "web" ]; then
         if [ "$_verified" != 1 ]; then
             rm -f "$_tui_dst"
             if [ "$_mismatch" = 1 ]; then
-                warn "cs-tui checksum verification failed -- removed"
+                warn "ags-tui checksum verification failed -- removed"
             else
-                warn "cs-tui could not be verified (no checksum or no digest tool) -- removed"
+                warn "ags-tui could not be verified (no checksum or no digest tool) -- removed"
             fi
         fi
 
-        # Verify cs-tui signature (best-effort: minisign may not be installed)
+        # Verify ags-tui signature (best-effort: minisign may not be installed)
         _sig_url="${RELEASES_URL}/v${_cs_version}/${_tui_base}.minisig"
         if curl -fsSL "$_sig_url" -o "$_tui_dst.minisig" 2>/dev/null; then
             _ms_bin=""
@@ -273,22 +329,26 @@ elif [ "$INSTALL_METHOD" = "web" ]; then
             if [ -n "$_ms_bin" ] && [ -f "$_tui_dst" ]; then
                 if ! "$_ms_bin" -Vm "$_tui_dst" -P "$CS_SIGN_PUBKEY" -x "$_tui_dst.minisig" >/dev/null 2>&1; then
                     rm -f "$_tui_dst" "$_tui_dst.minisig"
-                    warn "cs-tui signature verification failed -- removed"
+                    warn "ags-tui signature verification failed -- removed"
                 fi
             fi
             rm -f "$_tui_dst.minisig"
         fi
     else
-        info "cs-tui not available for ${_os}-${_arch} — run 'cs' for help, or build from source: cd tui && cargo build --release"
+        info "ags-tui not available for ${_os}-${_arch} — run 'ags' for help, or build from source: cd tui && cargo build --release"
     fi
+fi
+if [ -x "$INSTALL_DIR/ags-tui" ]; then
+    ln -sfn ags-tui "$INSTALL_DIR/cs-tui"
 fi
 
 # Remove a stale opposite-platform TUI binary so a cross-platform reinstall can
 # never leave cs-tui and cs-tui.exe side by side — which would let PATH lookup
 # or the sibling probe select the wrong one and fail to launch. Keep only the
 # name this platform installs.
-rm -f "$INSTALL_DIR/cs-tui.exe"
+rm -f "$INSTALL_DIR/ags-tui.exe" "$INSTALL_DIR/cs-tui.exe"
 
+if _install_has_engine claude; then
 # Install hooks
 installed "${#CS_HOOKS[@]} hooks" "$HOOKS_DIR/"
 mkdir -p "$HOOKS_DIR"
@@ -435,6 +495,8 @@ else
     fi
 fi
 
+fi
+
 # Install shell completions
 COMPLETIONS_SOURCE="$SCRIPT_DIR/completions"
 COMPLETION_SETUP_NEEDED=""
@@ -444,28 +506,35 @@ installed "completions" "bash, zsh"
 mkdir -p "$BASH_COMPLETION_DIR"
 
 if [ "$INSTALL_METHOD" = "local" ]; then
-    cp "$COMPLETIONS_SOURCE/cs.bash" "$BASH_COMPLETION_DIR/"
+    cp "$COMPLETIONS_SOURCE/ags.bash" "$BASH_COMPLETION_DIR/"
 else
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$COMPLETION_BASH_URL" -o "$BASH_COMPLETION_DIR/cs.bash" || warn "Failed to download bash completion"
+        curl -fsSL "$COMPLETION_BASH_URL" -o "$BASH_COMPLETION_DIR/ags.bash" || warn "Failed to download bash completion"
     elif command -v wget >/dev/null 2>&1; then
-        wget -q "$COMPLETION_BASH_URL" -O "$BASH_COMPLETION_DIR/cs.bash" || warn "Failed to download bash completion"
+        wget -q "$COMPLETION_BASH_URL" -O "$BASH_COMPLETION_DIR/ags.bash" || warn "Failed to download bash completion"
     fi
+fi
+if [ -f "$BASH_COMPLETION_DIR/ags.bash" ]; then
+    cp "$BASH_COMPLETION_DIR/ags.bash" "$BASH_COMPLETION_DIR/cs.bash"
 fi
 
 # Zsh completion
 mkdir -p "$ZSH_COMPLETION_DIR"
 
 if [ "$INSTALL_METHOD" = "local" ]; then
-    cp "$COMPLETIONS_SOURCE/_cs" "$ZSH_COMPLETION_DIR/"
+    cp "$COMPLETIONS_SOURCE/_ags" "$ZSH_COMPLETION_DIR/"
 else
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$COMPLETION_ZSH_URL" -o "$ZSH_COMPLETION_DIR/_cs" || warn "Failed to download zsh completion"
+        curl -fsSL "$COMPLETION_ZSH_URL" -o "$ZSH_COMPLETION_DIR/_ags" || warn "Failed to download zsh completion"
     elif command -v wget >/dev/null 2>&1; then
-        wget -q "$COMPLETION_ZSH_URL" -O "$ZSH_COMPLETION_DIR/_cs" || warn "Failed to download zsh completion"
+        wget -q "$COMPLETION_ZSH_URL" -O "$ZSH_COMPLETION_DIR/_ags" || warn "Failed to download zsh completion"
     fi
 fi
+if [ -f "$ZSH_COMPLETION_DIR/_ags" ]; then
+    cp "$ZSH_COMPLETION_DIR/_ags" "$ZSH_COMPLETION_DIR/_cs"
+fi
 
+if _install_has_engine claude; then
 # Configure Claude Code settings
 installed "hook config" "~/.claude/settings.json"
 
@@ -492,6 +561,15 @@ else
 
     # Tilde spelling of HOOKS_DIR (settings.json entries use ~ instead of $HOME)
     HOOKS_TILDE_DIR="~/.claude/hooks/cs"
+    # Hook commands are registered with the tilde spelling so a settings.json
+    # carried between machines keeps working. The profile launcher leaves HOME
+    # as the user's own, so a tilde there would run the stable install's hooks
+    # instead of the profile's; setup.sh asks for the absolute spelling.
+    case "${CS_HOOK_PATHS:-tilde}" in
+        tilde) HOOK_COMMAND_DIR="$HOOKS_TILDE_DIR" ;;
+        absolute) HOOK_COMMAND_DIR="$HOOKS_DIR" ;;
+        *) error "CS_HOOK_PATHS must be tilde or absolute" ;;
+    esac
 
     # Strip retired hooks from any event in settings.json (event-agnostic since
     # we don't know which event the old version registered them under). Covers
@@ -528,7 +606,7 @@ else
     # filter shape via _install_merge_filter — keep them aligned.
     _merge_cs_hook() {
         local event="$1" file="$2" timeout="$3" matcher="${4:-}" async="${5:-}" rewake="${6:-}"
-        local path="$HOOKS_DIR/$file" tilde="$HOOKS_TILDE_DIR/$file"
+        local path="$HOOKS_DIR/$file" tilde="$HOOKS_TILDE_DIR/$file" registered="$HOOK_COMMAND_DIR/$file"
         local append
         # asyncRewake makes a hook's exit 2 wake the model with its stderr,
         # wrapped in a system-reminder under the rewakeMessage prefix. It
@@ -542,7 +620,7 @@ else
         # is; a label claiming "mail" would tell the user the wrong story about
         # what started the turn, and was doing exactly that until it was caught
         # in a live rotation.
-        append=$(jq -n --arg cmd "$tilde" --argjson timeout "$timeout" \
+        append=$(jq -n --arg cmd "$registered" --argjson timeout "$timeout" \
             --arg matcher "$matcher" --arg async "$async" --arg rewake "$rewake" '
             (if $matcher != "" then {matcher: $matcher} else {} end)
             + {hooks: [
@@ -597,15 +675,15 @@ else
     _merge_cs_hook FileChanged        narrative-reminder.sh  10 "" "" true
     _merge_cs_hook CwdChanged         narrative-reminder.sh   5
 
-    # Register cs-statusline as the Claude Code status line. A status line the
+    # Register ags-statusline as the Claude Code status line. A status line the
     # user already configured is never replaced silently: prompt when a
     # terminal is attached, otherwise keep it and print how to switch.
-    _statusline_cmd="$INSTALL_DIR/cs-statusline"
+    _statusline_cmd="$INSTALL_DIR/ags-statusline"
     _current_statusline=$(echo "$SETTINGS" | jq -r '.statusLine.command // ""')
-    # A "no" is remembered here so `cs -update` (which re-runs this installer)
-    # stops asking on every release. `cs -statusline enable` clears it,
-    # `cs -statusline disable` sets it (KEEP IN SYNC with lib/70-statusline.sh).
-    _statusline_declined="${XDG_CONFIG_HOME:-$HOME/.config}/cs/statusline-declined"
+    # A "no" is remembered here so `ags -update` (which re-runs this installer)
+    # stops asking on every release. `ags -statusline enable` clears it,
+    # `ags -statusline disable` sets it (KEEP IN SYNC with lib/70-statusline.sh).
+    _statusline_declined="${CS_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/cs}/statusline-declined"
     # A preference memo must never take the install down with it. Both writes
     # below run under errexit and `touch` ends the && list, so a failure — an
     # unwritable ~/.config/cs, which an earlier root-run install leaves behind —
@@ -624,7 +702,7 @@ else
             info "You won't be asked again. $2"
         else
             warn "$1"
-            warn "  (could not record the choice in $_statusline_declined, so cs -update will ask again)"
+            warn "  (could not record the choice in $_statusline_declined, so ags -update will ask again)"
         fi
     }
 
@@ -636,7 +714,7 @@ else
     # path here falls through to the question on its own.
     _preview_statusline() {
         command -v jq >/dev/null 2>&1 || return 0
-        [ -x "$INSTALL_DIR/cs-statusline" ] || return 0
+        [ -x "$INSTALL_DIR/ags-statusline" ] || return 0
         local sample
         sample=$(jq -nc '{
             session_name: "my-session",
@@ -653,7 +731,7 @@ else
         # wrong. install.sh still owns the tty and has just installed the binary
         # that can answer, so it asks; an unknown answer is left unset and the
         # statusline keeps its own fallback.
-        # Only signals already in the environment. `cs -detect-theme` would be
+        # Only signals already in the environment. `ags -detect-theme` would be
         # the accurate answer, but it asks the terminal over OSC 11 and writes
         # that probe straight to /dev/tty — which no capture can intercept, so
         # the escape and its reply paint themselves across the installer's
@@ -675,7 +753,7 @@ else
         rendered=$(
             export CS_STATUSLINE_SEGMENTS=logo,session,model,ctx,limits
             [ -z "$_theme" ] || export CS_TERM_THEME="$_theme"
-            printf '%s' "$sample" | "$INSTALL_DIR/cs-statusline" 2>/dev/null
+            printf '%s' "$sample" | "$INSTALL_DIR/ags-statusline" 2>/dev/null
         ) || return 0
         [ -n "$rendered" ] || return 0
         # No indent: the statusline opens with a reset that eats leading spaces,
@@ -688,16 +766,16 @@ else
     }
 
     # Each branch only decides consent; the registration itself happens once
-    # below. "quiet" re-registers an existing cs-statusline entry (refreshing
+    # below. "quiet" re-registers an existing ags-statusline or cs-statusline entry (refreshing
     # the path) without announcing it.
     _register_statusline=""
     case "$_current_statusline" in
-        */cs-statusline)
+        */ags-statusline|*/cs-statusline)
             _register_statusline=quiet
             ;;
         *)
             if [ -f "$_statusline_declined" ]; then
-                info "Status line not registered (declined earlier). Enable any time with: cs -statusline enable"
+                info "Status line not registered (declined earlier). Enable any time with: ags -statusline enable"
             elif [ -z "$_current_statusline" ]; then
                 # The status bar is user-visible UI: claim it only with consent.
                 # Interactive installs ask (default yes); non-interactive installs
@@ -707,39 +785,39 @@ else
                     # read -p prints its argument verbatim, so an escape in it
                     # would show as literal characters. Emit the styled prompt
                     # with echo -e and read with no prompt of its own.
-                    echo -en "Register ${BOLD}cs-statusline${NC} as the Claude Code status line? [Y/n] "
+                    echo -en "Register ${BOLD}ags-statusline${NC} as the Claude Code status line? [Y/n] "
                     read -n 1 -r
                     echo ""
                     if [[ $REPLY =~ ^[Nn]$ ]]; then
                         _remember_statusline_decline \
                             "Status line not registered." \
-                            "Turn it on any time with: cs -statusline enable"
+                            "Turn it on any time with: ags -statusline enable"
                     else
                         _register_statusline=1
                     fi
                 else
-                    info "Status line not registered. Enable any time with: cs -statusline enable"
+                    info "Status line not registered. Enable any time with: ags -statusline enable"
                 fi
             else
                 if [ -t 0 ]; then
                     _preview_statusline
-                    echo -en "Replace current status line ($_current_statusline) with ${BOLD}cs-statusline${NC}? [y/N] "
+                    echo -en "Replace current status line ($_current_statusline) with ${BOLD}ags-statusline${NC}? [y/N] "
                     read -n 1 -r
                     echo ""
                     # Anything but y declines, enter included: the point of the
-                    # change is that cs -update stops asking, and a default that
+                    # change is that ags -update stops asking, and a default that
                     # left the question open would re-prompt the people it was
                     # written for. The decline says plainly that it is
-                    # remembered, and cs -statusline enable reverses it.
+                    # remembered, and ags -statusline enable reverses it.
                     if [[ $REPLY =~ ^[Yy]$ ]]; then
                         _register_statusline=1
                     else
                         _remember_statusline_decline \
                             "Keeping current status line." \
-                            "To switch to cs-statusline: cs -statusline enable"
+                            "To switch to ags-statusline: ags -statusline enable"
                     fi
                 else
-                    warn "Keeping current status line. To switch to cs-statusline:"
+                    warn "Keeping current status line. To switch to ags-statusline:"
                     warn "  set statusLine.command to $_statusline_cmd in ~/.claude/settings.json"
                 fi
             fi
@@ -748,13 +826,13 @@ else
     # The rounded capsule caps are the bar's one private-use glyph, so the
     # renderer draws square ends until this machine has said its font has
     # them. Ask once, here, while the sample is still on screen; the answer
-    # is per machine and `cs -statusline caps on|off|ask` rewrites it (KEEP
-    # THE PATH IN SYNC with lib/70-statusline.sh and bin/cs-statusline).
+    # is per machine and `ags -statusline caps on|off|ask` rewrites it (KEEP
+    # THE PATH IN SYNC with lib/70-statusline.sh and bin/ags-statusline).
     # Non-interactive installs write nothing and say how to answer later.
     _statusline_caps="${XDG_CONFIG_HOME:-$HOME/.config}/cs/statusline-caps"
     if [ -n "$_register_statusline" ] && [ ! -f "$_statusline_caps" ]; then
         if [ -t 0 ]; then
-            printf '\n  %s\n' "$(printf '\xee\x82\xb6')cs-statusline$(printf '\xee\x82\xb4')"
+            printf '\n  %s\n' "$(printf '\xee\x82\xb6')ags-statusline$(printf '\xee\x82\xb4')"
             # An explicit y or n only: the registration question just above
             # reads one key, so an Enter typed after it is still queued and
             # would answer this one. EOF (Ctrl-D) leaves the question
@@ -771,33 +849,35 @@ else
                 esac
             done
             if [ -z "$_caps_answer" ]; then
-                info "Capsule caps: left unanswered (square ends). Answer later with: cs -statusline caps ask"
+                info "Capsule caps: left unanswered (square ends). Answer later with: ags -statusline caps ask"
             elif mkdir -p "$(dirname "$_statusline_caps")" 2>/dev/null \
                 && printf '%s\n' "$_caps_answer" > "$_statusline_caps" 2>/dev/null; then
-                info "Capsule caps: $_caps_answer. Change later with: cs -statusline caps on|off|ask"
+                info "Capsule caps: $_caps_answer. Change later with: ags -statusline caps on|off|ask"
             else
                 warn "Capsule caps: $_caps_answer, but the answer could not be recorded in $_statusline_caps"
-                warn "  The bar shows square ends until: cs -statusline caps $_caps_answer"
+                warn "  The bar shows square ends until: ags -statusline caps $_caps_answer"
             fi
         else
-            info "Capsule caps: square ends until you answer once with: cs -statusline caps ask"
+            info "Capsule caps: square ends until you answer once with: ags -statusline caps ask"
         fi
     fi
     if [ -n "$_register_statusline" ]; then
         # refreshInterval keeps the bar repainting once a second while idle;
         # the logo's attention pulse animates on that timer. Registers BOTH
-        # settings keys, same as `cs -statusline enable` — the two recipes
+        # settings keys, same as `ags -statusline enable` — the two recipes
         # must stay equivalent (KEEP IN SYNC with lib/70-statusline.sh).
         SETTINGS=$(echo "$SETTINGS" | jq --arg cmd "$_statusline_cmd" \
-            --arg subcmd "$INSTALL_DIR/cs-subagent-statusline" \
+            --arg subcmd "$INSTALL_DIR/ags-subagent-statusline" \
             '.statusLine = {type: "command", command: $cmd, refreshInterval: 1}
              | .subagentStatusLine = {type: "command", command: $subcmd}')
         if [ "$_register_statusline" = "1" ]; then
-            installed "status line" "cs-statusline + cs-subagent-statusline"
+            installed "status line" "ags-statusline + ags-subagent-statusline"
         fi
     fi
 
     echo "$SETTINGS" > "$CLAUDE_SETTINGS"
+fi
+
 fi
 
 # Check if ~/.local/bin is in PATH
@@ -811,13 +891,25 @@ if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
 fi
 
 # Get version for completion message
-CS_VERSION=$(grep -m1 "^VERSION=" "$INSTALL_DIR/cs" 2>/dev/null | cut -d'"' -f2 || echo "unknown")
+CS_VERSION=$(grep -m1 "^VERSION=" "$INSTALL_DIR/ags" 2>/dev/null | cut -d'"' -f2 || echo "unknown")
 
-# Stamp the deployed-hooks version so cs -doctor can flag installs whose
-# deployed artifacts lag behind the running cs binary.
-if [ "$CS_VERSION" != "unknown" ]; then
+# Stamp the deployed-hooks version so ags -doctor can flag installs whose
+# deployed artifacts lag behind the running ags binary.
+if _install_has_engine claude && [ "$CS_VERSION" != "unknown" ]; then
     echo "$CS_VERSION" > "$HOOKS_DIR/.version"
 fi
+
+# Union with prior installed adapters: deselection does not uninstall them.
+# Updates must keep maintaining an adapter that remains deployed on disk.
+_previous_engines=$(cat "$INSTALL_CONFIG" 2>/dev/null) || _previous_engines=""
+case "$_previous_engines" in
+    claude|codex|claude,codex|codex,claude)
+        if [ "$_previous_engines" != "$INSTALL_ENGINES" ]; then
+            INSTALL_ENGINES=claude,codex
+        fi ;;
+esac
+mkdir -p "$(dirname "$INSTALL_CONFIG")"
+printf '%s\n' "$INSTALL_ENGINES" > "$INSTALL_CONFIG"
 
 echo ""
 echo -e "   ${GREEN}✓${NC} ${ORANGE}Installation complete${NC} ${COMMENT}(${CS_VERSION})${NC}"
@@ -827,9 +919,9 @@ echo ""
 SHELL_NAME=$(basename "$SHELL")
 case "$SHELL_NAME" in
     bash)
-        if ! grep -q 'bash_completion.d/cs.bash' "$HOME/.bashrc" 2>/dev/null; then
+        if ! grep -q 'bash_completion.d/ags.bash' "$HOME/.bashrc" 2>/dev/null; then
             warn "   To enable tab completion, add to ~/.bashrc:"
-            warn "     [[ -f ~/.bash_completion.d/cs.bash ]] && source ~/.bash_completion.d/cs.bash"
+            warn "     [[ -f ~/.bash_completion.d/ags.bash ]] && source ~/.bash_completion.d/ags.bash"
             echo ""
         fi
         ;;
@@ -843,15 +935,16 @@ case "$SHELL_NAME" in
         ;;
 esac
 
-echo -e "   ${RUST}Usage:${NC} cs ${GOLD}<session-name>${NC}"
+echo -e "   ${RUST}Usage:${NC} ags ${GOLD}<session-name>${NC}"
 echo ""
 echo -e "   ${COMMENT}Examples:${NC}"
-echo -e "     ${COMMENT}cs${NC} ${GOLD}debug-api${NC}    ${COMMENT}# Create or resume session${NC}"
-echo -e "     ${COMMENT}cs${NC} ${GOLD}server-fix${NC}   ${COMMENT}# Work on server issues${NC}"
+echo -e "     ${COMMENT}ags${NC} ${GOLD}debug-api${NC}    ${COMMENT}# Create or resume session${NC}"
+echo -e "     ${COMMENT}ags${NC} ${GOLD}server-fix${NC}   ${COMMENT}# Work on server issues${NC}"
 echo ""
 
 echo ""
 echo "Getting started:"
-echo "  cs my-first-session    # Create your first session"
-echo "  cs -help               # See all commands"
-echo "  cs -version            # Verify installation"
+echo "  ags my-first-session --engine ${INSTALL_ENGINES%%,*}    # Create your first session"
+echo "  ags -help               # See all commands"
+echo "  ags -version            # Verify installation"
+echo "  cs remains available as a compatibility alias"

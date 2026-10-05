@@ -1,5 +1,5 @@
 # ABOUTME: Cross-session search, the session listing table, and session removal.
-# ABOUTME: Backs 'cs -search', 'cs -list', and 'cs -rm'.
+# ABOUTME: Backs 'ags -search', 'ags -list', and 'ags -rm'.
 
 search_sessions() {
     local query="" include_archived="" arg
@@ -11,7 +11,7 @@ search_sessions() {
     done
 
     if [ -z "$query" ]; then
-        error "Usage: cs -search <query> [--include-archived]"
+        error "Usage: ags -search <query> [--include-archived]"
     fi
 
     # grep exits 2 when the pattern will not compile and 1 on a clean no-match.
@@ -138,7 +138,7 @@ _session_name_for_dir() {  # dir
 }
 
 # Print every session name, one per line, as completion candidates. Symlinks
-# count: `cs -adopt` links repos that live elsewhere on disk into SESSIONS_ROOT,
+# count: `ags -adopt` links repos that live elsewhere on disk into SESSIONS_ROOT,
 # and the marker tests resolve through the link. Kept free of git and keychain
 # lookups so a TAB press stays fast.
 complete_sessions() {
@@ -165,14 +165,18 @@ cmd_complete() {
 # the menu can never name a picker that run_tui would then fail to find.
 _tui_bin() {
     local bin
-    bin="$(command -v cs-tui 2>/dev/null || true)"
+    bin="$(command -v ags-tui 2>/dev/null || command -v cs-tui 2>/dev/null || true)"
     if [ -z "$bin" ]; then
         # Not on PATH (cs may be run by explicit path with its own dir off
         # PATH, which the installer permits): probe the sibling next to this
         # script.
         local _self_dir
         _self_dir="$(dirname "$0")"
-        if [ -x "$_self_dir/cs-tui" ]; then bin="$_self_dir/cs-tui"; fi
+        if [ -x "$_self_dir/ags-tui" ]; then
+            bin="$_self_dir/ags-tui"
+        elif [ -x "$_self_dir/cs-tui" ]; then
+            bin="$_self_dir/cs-tui"
+        fi
     fi
     [ -n "$bin" ] && [ -x "$bin" ] || return 1
     printf '%s\n' "$bin"
@@ -180,7 +184,7 @@ _tui_bin() {
 
 # The interactive session manager. The picker prints its choice on stdout — the
 # session name, optionally followed by flags — and cs re-enters itself with it,
-# so every launch takes the same path an explicit `cs <name>` does. Returns
+# so every launch takes the same path an explicit `ags <name>` does. Returns
 # non-zero when no picker binary is installed, leaving the caller to say so.
 run_tui() {
     local tui_bin
@@ -190,7 +194,7 @@ run_tui() {
     # a light/dark palette; reused by the session we launch next.
     _export_term_theme
     local tui_output
-    tui_output=$(CS_VERSION="$VERSION" CS_BIN="$0" "$tui_bin") || exit $?
+    tui_output=$(CS_VERSION="$VERSION" AGS_BIN="$0" CS_BIN="$0" "$tui_bin") || exit $?
     if [ -n "$tui_output" ]; then
         local selected="${tui_output%%$'\n'*}"
         if [ "$tui_output" != "$selected" ]; then
@@ -210,8 +214,8 @@ list_sessions() {
         case "$1" in
             --tag)
                 shift
-                [ -n "${1:-}" ] || error "Usage: cs -list [--archived] [--tag <tag>]"
-                # Stored tags are always lowercase (cs -tag add lowercases on
+                [ -n "${1:-}" ] || error "Usage: ags -list [--archived] [--tag <tag>]"
+                # Stored tags are always lowercase (ags -tag add lowercases on
                 # write); lowercase the filter too so it matches regardless
                 # of case, mirroring the TUI's parse_tag_query.
                 tag_filter=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
@@ -221,7 +225,7 @@ list_sessions() {
                 archived_only="true"
                 shift
                 ;;
-            *) error "Unknown list option: $1. Usage: cs -list [--archived] [--tag <tag>]" ;;
+            *) error "Unknown list option: $1. Usage: ags -list [--archived] [--tag <tag>]" ;;
         esac
     done
 
@@ -255,7 +259,7 @@ list_sessions() {
     # Dump the keychain once; per-session counts are computed inline in the
     # display loop. No associative array — bash 3.2 lacks `local -A`.
     local keychain_dump=""
-    if command -v cs-secrets >/dev/null 2>&1; then
+    if find_secrets_script >/dev/null 2>&1; then
         keychain_dump=$(security dump-keychain 2>/dev/null | grep -o '"svce"<blob>="cs:[^"]*"' || true)
     fi
 
@@ -349,13 +353,13 @@ remove_session() {
     for arg in "$@"; do
         case "$arg" in
             --force|-f) force="true" ;;
-            -*) error "Unknown remove option: $arg. Usage: cs -remove <session-name>... [--force]" ;;
+            -*) error "Unknown remove option: $arg. Usage: ags -remove <session-name>... [--force]" ;;
             *)
-                [ -n "$arg" ] || error "Usage: cs -remove <session-name>... [--force] (empty session name)"
+                [ -n "$arg" ] || error "Usage: ags -remove <session-name>... [--force] (empty session name)"
                 names+=("$arg") ;;
         esac
     done
-    [ "${#names[@]}" -ge 1 ] || error "Usage: cs -remove <session-name>... [--force]"
+    [ "${#names[@]}" -ge 1 ] || error "Usage: ags -remove <session-name>... [--force]"
     for _name in "${names[@]}"; do
         _remove_one_session "$_name" "$force"
     done
@@ -388,7 +392,7 @@ _remove_one_session() {
     # exited 1 with no explanation. Refuse loudly, before any mutation, unless
     # --force stands in for the confirmation or a human is actually there to answer.
     if [ -z "$force" ] && ! cs_interactive; then
-        error "cs -rm needs a terminal to confirm removing '$session_name'; use --force to skip confirmation"
+        error "ags -rm needs a terminal to confirm removing '$session_name'; use --force to skip confirmation"
     fi
 
     # Worktree sessions: unregister from git, not just delete the directory.
@@ -477,12 +481,12 @@ _humanize_secs() {  # secs
 # List cs sessions whose process is currently alive on THIS machine.
 cmd_live() {
     if [ ! -d "$SESSIONS_ROOT" ]; then
-        echo "No other live cs sessions."
+        echo "No other live agent-sessions sessions."
         return 0
     fi
     local now current others=0
     now="$(date +%s)"
-    current="${CLAUDE_SESSION_NAME:-}"
+    current="${CS_SESSION_NAME:-${CLAUDE_SESSION_NAME:-}}"
 
     local dir name meta actor up agent status states
     states="$(agent_states)"
@@ -507,6 +511,6 @@ cmd_live() {
     done < <(find "$SESSIONS_ROOT" -mindepth 1 -maxdepth 1 \( -type d -o -type l \) -print0 | sort -z)
 
     if [ "$others" -eq 0 ]; then
-        echo "No other live cs sessions."
+        echo "No other live agent-sessions sessions."
     fi
 }

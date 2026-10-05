@@ -11,7 +11,7 @@ You are working in a cs session. Your task is to review the conversation in your
 Two write surfaces, deliberately DIFFERENT bars:
 
 - **The strict buckets (`.cs/memory/{user,feedback,project,reference}_*.md`) are forever** — they sit in Claude's persistent memory and inform every future session. **Bar: very strict. Default: write nothing.**
-- **`.cs/memory/narrative.<actor>.md` is your session-local lab notebook** (per-actor — run `cs -whoami` for your actor) — a native memory topic file, looser bar. Substantive observations welcome. Default: write if the session surfaced a non-obvious finding worth keeping.
+- **`.cs/memory/narrative.<actor>.md` is your session-local lab notebook** (per-actor — run `ags -whoami` for your actor) — a native memory topic file, looser bar. Substantive observations welcome. Default: write if the session surfaced a non-obvious finding worth keeping.
 
 Both are written in parallel from the conversation — narrative is not the upstream of the strict buckets.
 
@@ -53,7 +53,7 @@ bash ~/.claude/hooks/cs/memory-index-guard.sh snapshot
    - After writing an entry, add a one-line pointer for it to `.cs/memory/MEMORY.md`, matching the existing `- [title](file.md): one-line summary` lines and appending to the list. The index is what future sessions load; an unindexed entry is never read again.
    - **Facts about a person MUST be keyed to that person, never asserted about whoever is present.** The durable buckets are shared by every actor on this session while only narratives are per-actor, so "the user is Dana, not Kim" is false on every other machine the moment it is written, and it reads as settled fact to the actor who loads it next. Write `actor <slug> is Dana Marsh, machine /Users/dmarsh` instead: keyed facts stay true everywhere and cannot be misapplied, because they do not claim anyone is present. This governs the `MEMORY.md` pointer line as much as the entry body — pointers load at startup while the entries they name are read lazily, so a pointer saying "session user is Dana" reaches context even when nothing opens the file. Never write an unconditional present-tense identity or presence claim in either place.
 
-4. **Narrative sweep — looser bar.** Resolve `<actor>` with `cs -whoami` first, then append only to your own narrative file. If a substantive finding from this session is not yet in your narrative (`.cs/memory/narrative.<actor>.md`), append it as a dated section. Substantive = something a future session resuming this work would want to know.
+4. **Narrative sweep — looser bar.** Resolve `<actor>` with `ags -whoami` first, then append only to your own narrative file. If a substantive finding from this session is not yet in your narrative (`.cs/memory/narrative.<actor>.md`), append it as a dated section. Substantive = something a future session resuming this work would want to know.
 
 5. **Keep the index under budget.** `MEMORY.md` loads in full at every session start against a hard
    size limit; past it Claude Code loads only part of the file and the entries beyond the cut are never

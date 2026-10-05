@@ -22,6 +22,7 @@ openspec/
 # Rust build artifacts
 tui/target/
 bin/cs-tui
+bin/ags-tui
 .cs/local/
 .cs/archives/
 .cs/.narrative-reminder-cooldown
@@ -30,3 +31,4 @@ bin/cs-tui
 CLAUDE.local.md
 tests/.run_all.lock/
 .skillopt-sleep/
+.cs/vault-mnt/

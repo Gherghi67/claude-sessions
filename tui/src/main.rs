@@ -28,16 +28,11 @@ fn main() {
     }
 
     if !io::stderr().is_terminal() {
-        eprintln!("cs-tui requires an interactive terminal");
+        eprintln!("ags-tui requires an interactive terminal");
         std::process::exit(1);
     }
 
     let sessions = session::scan_sessions();
-    if sessions.is_empty() {
-        eprintln!("No sessions found. Create one with: cs <name>");
-        return;
-    }
-
     let mut app = app::App::new(sessions);
     app.theme = theme::Palette::for_theme(theme::detect_theme());
     app.update_notice = session::update_notice();

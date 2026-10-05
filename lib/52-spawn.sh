@@ -1,4 +1,4 @@
-# ABOUTME: Backs 'cs -spawn': open a session in the cs-owned tmux session,
+# ABOUTME: Backs 'ags -spawn': open a session in the cs-owned tmux session,
 # ABOUTME: optionally staging tasks the launch path arms on open.
 
 # Every tmux call goes through this wrapper; tests point CS_TMUX_BIN at a fake.
@@ -41,7 +41,7 @@ _cs_tmux_managed() {
 # spawn never leaves a pending seed behind.
 _spawn_precheck() {  # name
     local name="$1"
-    command -v "${CS_TMUX_BIN:-tmux}" >/dev/null 2>&1 || error "cs -spawn needs tmux"
+    command -v "${CS_TMUX_BIN:-tmux}" >/dev/null 2>&1 || error "ags -spawn needs tmux"
     if session_is_live "$SESSIONS_ROOT/$name/.cs"; then
         error "Session $name is already live"
     fi
@@ -88,7 +88,7 @@ _spawn_window() {  # name
 
 run_spawn() {
     local name="" brief=""
-    local usage='Usage: cs -spawn <name> [--brief <file>] [--task "..."] ...'
+    local usage='Usage: ags -spawn <name> [--brief <file>] [--task "..."] ...'
     local tasks
     tasks=()
     while [ $# -gt 0 ]; do
@@ -98,19 +98,19 @@ run_spawn() {
                 shift
                 local t
                 t="$(_trim "$1")"
-                [ -n "$t" ] || error "cs -spawn --task needs a non-empty task"
+                [ -n "$t" ] || error "ags -spawn --task needs a non-empty task"
                 _queue_require_single_line "$t"
                 tasks+=("$t");;
             --brief)
                 [ $# -ge 2 ] || error "--brief needs a file"
                 shift
-                [ -z "$brief" ] || error "cs -spawn takes one --brief"
-                [ -f "$1" ] && [ -r "$1" ] || error "cs -spawn --brief: cannot read $1"
-                [ -s "$1" ] || error "cs -spawn --brief: $1 is empty"
+                [ -z "$brief" ] || error "ags -spawn takes one --brief"
+                [ -f "$1" ] && [ -r "$1" ] || error "ags -spawn --brief: cannot read $1"
+                [ -s "$1" ] || error "ags -spawn --brief: $1 is empty"
                 brief="$1";;
             -*) error "Unknown option: $1. $usage";;
             *)
-                [ -z "$name" ] || error "cs -spawn takes exactly one session name"
+                [ -z "$name" ] || error "ags -spawn takes exactly one session name"
                 name="$1";;
         esac
         shift
@@ -143,24 +143,24 @@ run_spawn() {
         # reports only its LAST command, and a failed first write with a
         # succeeding task line published a seed whose spawner line was missing.
         local _payload _t
-        _payload="${CLAUDE_SESSION_NAME:-}
+        _payload="${CS_SESSION_NAME:-${CLAUDE_SESSION_NAME:-}}
 "
         # An empty array is unbound under bash 3.2's set -u, and a brief alone
         # leaves it empty; the guard expands to nothing in that case.
         for _t in ${tasks[@]+"${tasks[@]}"}; do _payload="$_payload$_t
 "; done
         printf '%s' "$_payload" > "$seed.tmp" \
-            || { rm -f "$seed.tmp" 2>/dev/null || :; error "cs -spawn: cannot stage the seed in $sdir"; }
+            || { rm -f "$seed.tmp" 2>/dev/null || :; error "ags -spawn: cannot stage the seed in $sdir"; }
         if [ -n "$brief" ]; then
             cp "$brief" "$sdir/$name.brief.md.tmp" \
                 && mv "$sdir/$name.brief.md.tmp" "$sdir/$name.brief.md" \
                 || { rm -f "$sdir/$name.brief.md.tmp" "$seed.tmp" 2>/dev/null || :
-                     error "cs -spawn --brief: cannot stage $brief in $sdir"; }
+                     error "ags -spawn --brief: cannot stage $brief in $sdir"; }
         fi
         # A failed rename means another spawn of this name consumed the temp
         # path and published its own pair; its brief is not this run's to remove.
         mv "$seed.tmp" "$seed" \
-            || { rm -f "$seed.tmp" 2>/dev/null || :; error "cs -spawn: cannot publish the seed in $sdir"; }
+            || { rm -f "$seed.tmp" 2>/dev/null || :; error "ags -spawn: cannot publish the seed in $sdir"; }
     fi
     _spawn_window "$name"
 }

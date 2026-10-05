@@ -140,10 +140,15 @@ EOF
     real_path="$(cd "$session_dir" && pwd -P)"
     local encoded_path
     encoded_path=$(echo "$real_path" | sed 's|/|-|g; s|\.|-|g')
-    local old_memory_dir="$HOME/.claude/projects/${encoded_path}/memory"
-    mkdir -p "$old_memory_dir"
+    # Claude's projects directory as the launch sees it (CS_TRANSCRIPTS_DIR); the
+    # user's stable one, a decoy here, must be left alone, since the migration
+    # deletes its source once copied.
+    local old_memory_dir="$CS_TRANSCRIPTS_DIR/${encoded_path}/memory"
+    local decoy_dir="$HOME/.claude/projects/${encoded_path}/memory"
+    mkdir -p "$old_memory_dir" "$decoy_dir"
     echo "build command: cargo test" > "$old_memory_dir/MEMORY.md"
     echo "debug notes here" > "$old_memory_dir/debugging.md"
+    echo "stable install memory" > "$decoy_dir/MEMORY.md"
 
     "$CS_BIN" mem-session <<< "" 2>&1 || true
 
@@ -158,8 +163,10 @@ EOF
         echo "  FAIL: old memory dir should be empty after migration"
         return 1
     fi
+    assert_eq "stable install memory" "$(cat "$decoy_dir/MEMORY.md")" \
+        "the stable install's memory must be neither migrated nor deleted" || return 1
 
-    rm -rf "$HOME/.claude/projects/${encoded_path}" 2>/dev/null || true
+    rm -rf "$CS_TRANSCRIPTS_DIR/${encoded_path}" "$HOME/.claude/projects/${encoded_path}" 2>/dev/null || true
 }
 
 # ============================================================================

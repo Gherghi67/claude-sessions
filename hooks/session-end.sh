@@ -93,8 +93,10 @@ _cs_terminate_jsonl "$TIMELINE_FILE" 2>/dev/null || true
        --arg event "ended" \
        --arg source "$END_REASON" \
        --arg session_id "$SESSION_ID" \
+       --arg run_id "${CS_RUN_ID:-}" \
        --arg branch "$TIMELINE_BRANCH" \
-       '{ts: $ts, event: $event, source: $source, session_id: $session_id, branch: $branch}' \
+       '{ts: $ts, event: $event, source: $source, session_id: $session_id,
+         engine: "claude", run_id: $run_id, branch: $branch}' \
     >> "$TIMELINE_FILE"; } 2>/dev/null || true
 
 # Delete only the ending conversation's own autosave ref (no longer needed
@@ -106,21 +108,21 @@ if git -C "$SESSION_DIR" rev-parse --git-dir >/dev/null 2>&1; then
     fi
 fi
 
-# Clean up the lock, but only one this launch owns. Only `cs` writes a lock, so
-# a hook that resolved by walking a directory belongs to another front end and
-# is not the owner: closing a desktop conversation on a directory a CLI session
-# is live in would otherwise strip that session's lock, letting `cs <name>` open
-# a duplicate with no collision menu. A stale lock is still cleared either way, so a
-# crashed session does not stay locked out. Ownership cannot be the $$ test
-# lib/15-lock.sh uses — a hook is a different process.
-if [ "${CS_RESOLVED_FROM:-env}" = "env" ]; then
-    rm -f "$META_DIR/session.lock" 2>/dev/null || true
-else
-    _cs_lock_pid=$(cat "$META_DIR/session.lock" 2>/dev/null | tr -d '[:space:]') || true
-    case "${_cs_lock_pid:-}" in
+# A modern run's launcher owns cleanup. SessionEnd can mean /clear or /resume
+# while that process remains alive, and a delayed hook can outlive a forced
+# successor. It must never release a token-qualified lease. Preserve legacy
+# stale-PID cleanup only under the same guard used by modern acquisition.
+_cs_end_legacy_lock_cleanup() {
+    [ ! -f "$META_DIR/local/run-lease.json" ] && [ -z "${CS_RUN_ID:-}" ] || return 0
+    local lock_pid=""
+    { IFS= read -r lock_pid < "$META_DIR/session.lock"; } 2>/dev/null || return 0
+    case "$lock_pid" in
         ''|*[!0-9]*) rm -f "$META_DIR/session.lock" 2>/dev/null || true ;;
-        *) kill -0 "$_cs_lock_pid" 2>/dev/null || rm -f "$META_DIR/session.lock" 2>/dev/null || true ;;
+        *) kill -0 "$lock_pid" 2>/dev/null || rm -f "$META_DIR/session.lock" 2>/dev/null || true ;;
     esac
+}
+if command -v cs_run_guarded >/dev/null 2>&1; then
+    cs_run_guarded "$META_DIR" _cs_end_legacy_lock_cleanup || true
 fi
 
 # Regenerate sessions index.md at the sessions root

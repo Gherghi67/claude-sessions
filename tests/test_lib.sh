@@ -18,6 +18,10 @@ set -euo pipefail
 # it inherits, so a suite run inside a live conversation would check that
 # conversation's ref instead of the state the test set up.
 unset CLAUDE_PROJECT_DIR CS_ACTOR CLAUDE_CODE_SESSION_ID CS_CLAUDE_SESSION_ID 2>/dev/null || true
+# A developer's preferred runtime must not turn a legacy Claude fixture into
+# a real Codex launch. Runtime suites set their own isolated overrides.
+unset CS_DEFAULT_ENGINE CODEX_BIN CS_CODEX_THREAD_BIN 2>/dev/null || true
+unset CS_SESSION_NAME CS_SESSION_DIR CS_SESSION_META_DIR 2>/dev/null || true
 
 # --- State ---
 TESTS_RUN=0
@@ -30,7 +34,8 @@ SKIPS=()
 # --- Paths ---
 # SCRIPT_DIR must be set by the sourcing test file before calling any helpers
 # CS_BIN is derived from SCRIPT_DIR
-CS_BIN="${SCRIPT_DIR:?SCRIPT_DIR must be set before sourcing test_lib.sh}/../bin/cs"
+unset AGS_BIN CS_BIN
+CS_BIN="${SCRIPT_DIR:?SCRIPT_DIR must be set before sourcing test_lib.sh}/../bin/ags"
 TEST_TMPDIR=""
 
 # Portable octal file-mode reader. BSD (macOS) uses `stat -f "%Lp"`; GNU (Linux)
@@ -199,6 +204,10 @@ mkdir -p "$HOME"
 # and uninstall tests at the real data directory, whatever HOME says. Scoped
 # here, at source time, as HOME is.
 unset XDG_DATA_HOME
+# The same goes for the config and cache roots and for the directory overrides
+# the profile launcher exports: tests assert the default placement under their
+# private HOME, so none of these may leak in from the shell that started the run.
+unset XDG_CONFIG_HOME XDG_CACHE_HOME CS_INSTALL_DIR CS_CONFIG_DIR CS_CACHE_DIR CS_SECRETS_DIR CS_HOOK_PATHS
 # The scope-prompt hook's own deadline (CS_SCOPE_BUDGET_MS) is off the table
 # for every suite that drives the hook: tests time nothing, and a loaded
 # runner must not turn a scan assertion into a skip. The deadline tests in

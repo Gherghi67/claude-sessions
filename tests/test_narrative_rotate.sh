@@ -64,7 +64,7 @@ test_rotate_is_a_recognised_subcommand() {
     _make_narrative "$LIVE" 2 100
     local output
     output=$("$CS_BIN" -narrative rotate 2>&1) || true
-    assert_output_not_contains "$output" "Unknown command" "cs -narrative must dispatch" || return 1
+    assert_output_not_contains "$output" "Unknown command" "ags -narrative must dispatch" || return 1
 }
 
 test_rotate_under_budget_is_a_noop() {
@@ -791,7 +791,7 @@ test_named_rotate_rejects_an_unknown_subcommand() {
     output=$("$CS_BIN" test-session -narrative frobnicate 2>&1) && { echo "  FAIL: unknown subcommand must fail"; return 1; }
     # The dispatcher's own refusal, not just a nonzero exit: deleting the whole
     # -narrative arm also exits nonzero, with "Unknown session command".
-    assert_output_contains "$output" "Usage: cs -narrative rotate" "the narrative dispatcher must be the one refusing" || return 1
+    assert_output_contains "$output" "Usage: ags -narrative rotate" "the narrative dispatcher must be the one refusing" || return 1
 }
 
 test_unknown_session_command_error_lists_narrative() {
@@ -808,7 +808,7 @@ test_help_shows_the_named_narrative_form() {
     # show_verb_help derives from show_help, so the verb's own help answers for
     # both forms in one edit.
     output=$("$CS_BIN" -narrative --help 2>&1)
-    assert_output_contains "$output" "<name> -narrative rotate" "cs -narrative --help must show the named form" || return 1
+    assert_output_contains "$output" "<name> -narrative rotate" "ags -narrative --help must show the named form" || return 1
 }
 
 echo ""

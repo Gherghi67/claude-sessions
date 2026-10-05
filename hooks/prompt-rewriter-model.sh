@@ -24,7 +24,7 @@ command -v claude >/dev/null 2>&1 || exit 1
 # so setting CLAUDE_CONFIG_DIR alone points the lookup at an item that was
 # never created, and the call reports "Not logged in". See the auth block
 # below for how the login is restored.
-cfg="${XDG_CACHE_HOME:-$HOME/.cache}/cs/rewrite-config"
+cfg="${CS_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/cs}/rewrite-config"
 
 # Claude Code collects CLAUDE.md as PROJECT memory by walking up from the
 # working directory, and it labels what it finds as instructions that OVERRIDE

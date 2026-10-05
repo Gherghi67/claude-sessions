@@ -1123,7 +1123,7 @@ test('the pane counts down on a twenty-block bar in the ramp\'s colour, beside t
   expect(JSON.stringify(await pane())).toContain('press 1 to clear now, or send a prompt to stay')
 })
 
-// /queue hands the task to `cs -queue add` by the path the launch exported,
+// /queue hands the task to `ags -queue add` by the path the launch exported,
 // which resolves this session's queue from the environment claude inherited.
 const startSession = () => hooks['session.start']($, { cwd: '/work', surface: 'terminal', isInteractive: true }, async (e) => ({ cwd: e.cwd }))
 const queue = (args: string) => hooks['command.run:queue']($, { command: 'queue', args }, async () => ({ text: 'unhandled' }))
@@ -1132,9 +1132,18 @@ test('the mod registers /queue at load, to run at once even mid-turn', async () 
   await startSession()
   expect(commands).toHaveLength(1)
   expect(commands[0]).toMatchObject({ name: 'queue', immediate: true, argumentHint: '[task]' })
+  expect(commands[0].description).toBe("Add a task to this agent-sessions workspace's walk-away queue, or list it.")
 })
 
-test('/queue with a task runs cs -queue add with the task as one argument and says it is queued', async () => {
+test('/queue prefers AGS_BIN when both canonical and legacy executable paths are present', async () => {
+  envVars.AGS_BIN = '/opt/agent-sessions/bin/ags'
+  envVars.CS_BIN = '/opt/cs/bin/cs'
+  const r = await queue('do the next task')
+  expect(runs[0].argv).toEqual(['/opt/agent-sessions/bin/ags', '-queue', 'add', 'do the next task'])
+  expect(r).toEqual({ text: 'Queued: do the next task' })
+})
+
+test('/queue with a task runs ags -queue add with the task as one argument and says it is queued', async () => {
   envVars.CS_BIN = '/opt/cs/bin/cs'
   const r = await queue('fix the flaky "rotate" test; then rerun it')
   expect(runs.map(x => x.argv)).toEqual([['/opt/cs/bin/cs', '-queue', 'add', 'fix the flaky "rotate" test; then rerun it']])
@@ -1143,7 +1152,7 @@ test('/queue with a task runs cs -queue add with the task as one argument and sa
   expect(asks).toEqual([])
 })
 
-test('/queue with no task, or only spaces, prints cs -queue list', async () => {
+test('/queue with no task, or only spaces, prints ags -queue list', async () => {
   envVars.CS_BIN = '/opt/cs/bin/cs'
   runResult = { exitCode: 0, stdout: 'Pending:\n  1. first\n  2. second\n', stderr: '' }
   expect(await queue('')).toEqual({ text: 'Pending:\n  1. first\n  2. second' })
@@ -1220,7 +1229,7 @@ test('a start cs refuses, or one that cannot run, says so and sends no prompt', 
   await settle()
   await queue('')
   await settle()
-  expect(toasts).toEqual(['cs: cs -queue start exited 1: Error: the queue is locked', 'cs: cs -queue start did not run: spawn ENOENT'])
+  expect(toasts).toEqual(['ags -queue start exited 1: Error: the queue is locked', 'ags -queue start did not run: spawn ENOENT'])
   expect(submitted).toEqual([])
 })
 
@@ -1235,7 +1244,7 @@ test('a prompt the engine refuses is shown, not dropped', async () => {
   } finally {
     $.prompt.submit = async (args: any) => { submitted.push(args); return {} }
   }
-  expect(toasts).toEqual(['cs: the queue is armed, but its first turn did not start: session closed'])
+  expect(toasts).toEqual(['ags: the queue is armed, but its first turn did not start: session closed'])
 })
 
 // Compact frees the context the drain will need first: the conversation is
@@ -1262,7 +1271,7 @@ test('a compaction a hook vetoes leaves the queue unarmed and says why', async (
   await settle()
   expect(runs.map(x => x.argv[2])).toEqual(['list'])
   expect(submitted).toEqual([])
-  expect(toasts).toEqual(['cs: the conversation was not compacted (a PreCompact hook blocked it); the queue is not started'])
+  expect(toasts).toEqual(['ags: the conversation was not compacted (a PreCompact hook blocked it); the queue is not started'])
 })
 
 // The engine refuses a compaction while a turn runs.
@@ -1275,7 +1284,7 @@ test('a compaction the engine refuses leaves the queue unarmed and says so', asy
   await settle()
   expect(runs.map(x => x.argv[2])).toEqual(['list'])
   expect(submitted).toEqual([])
-  expect(toasts).toEqual(['cs: the conversation was not compacted (a turn is running); the queue is not started'])
+  expect(toasts).toEqual(['ags: the conversation was not compacted (a turn is running); the queue is not started'])
 })
 
 test('a dismissed offer runs nothing more', async () => {
@@ -1294,17 +1303,17 @@ test('a refused add prints the exit code and cs\'s own stderr, verbatim', async 
   runResult = { exitCode: 1, stdout: '', stderr: "warning: an earlier line\n\nError: task bodies must be a single line (the queue's done log and listing are line-oriented)\n" }
   const r = await queue('one\ntwo')
   expect(runs[0].argv).toEqual(['/opt/cs/bin/cs', '-queue', 'add', 'one\ntwo'])
-  expect(r).toEqual({ text: "cs -queue add exited 1.\nwarning: an earlier line\nError: task bodies must be a single line (the queue's done log and listing are line-oriented)" })
+  expect(r).toEqual({ text: "ags -queue add exited 1.\nwarning: an earlier line\nError: task bodies must be a single line (the queue's done log and listing are line-oriented)" })
 })
 
 test('a run that cannot start says why', async () => {
   envVars.CS_BIN = '/opt/cs/bin/cs'
   runResult = new Error('spawn ENOENT')
-  expect(await queue('')).toEqual({ text: 'cs -queue list did not run: spawn ENOENT' })
+  expect(await queue('')).toEqual({ text: 'ags -queue list did not run: spawn ENOENT' })
 })
 
-test('without CS_BIN /queue says the launch did not say where cs is, and runs nothing', async () => {
+test('without executable paths /queue says the launch did not say where ags is, and runs nothing', async () => {
   const r = await queue('something')
   expect(runs).toHaveLength(0)
-  expect(r).toEqual({ text: 'The launch did not say where cs is (CS_BIN); run `cs -queue add "<task>"` from a shell in this session.' })
+  expect(r).toEqual({ text: 'The launch did not say where ags is (AGS_BIN); run `ags -queue add "<task>"` from a shell in this session.' })
 })

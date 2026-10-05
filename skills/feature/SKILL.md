@@ -50,7 +50,7 @@ One paragraph: what to build and why.
 
 ## Report back
 When done, send a one-line result to the session that spawned you:
-cs -msg <spawner> -k result "<what landed, what is left>"
+ags -msg <spawner> -k result "<what landed, what is left>"
 The base session <base> then lands the work with /finish <feature>.
 ```
 
@@ -72,16 +72,16 @@ into place, so nothing of yours stays in the session tree.
 ## Spawn
 
 ```
-cs -spawn <base>@<feature> --brief "$brief"
+ags -spawn <base>@<feature> --brief "$brief"
 rm -f "$brief"
 ```
 
 Add `--task "..."` lines only for work that is a checklist item on its own;
 the brief already carries the feature. Let the permission prompt on
-`cs -spawn` stand: that prompt is the user's confirmation that a worktree, a
+`ags -spawn` stand: that prompt is the user's confirmation that a worktree, a
 branch and a window are about to exist. Never work around it.
 
-cs refuses when the name is invalid, tmux is missing, the session is already
+ags refuses when the name is invalid, tmux is missing, the session is already
 open, or a pending spawn for the name exists (cs keeps the earlier brief and
 refuses the new one). Print the refusal verbatim and stop; do not retry with
 a different name on your own.
@@ -92,5 +92,5 @@ Print the spawner's output: the tmux window and the attach hint (`tmux
 attach -t cs`, or `tmux switch-client -t cs` from inside tmux). Then tell the
 user, in one or two lines, that the feature session reads its brief at
 `.cs/brief.md` and begins, that its result arrives here as mail from
-`cs -msg`, and that `/finish <feature>` lands it. This session continues with
+`ags -msg`, and that `/finish <feature>` lands it. This session continues with
 its own work.

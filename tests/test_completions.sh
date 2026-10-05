@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-# ABOUTME: Guards against drift between bin/cs's command dispatch and the shell completions
-# ABOUTME: Every top-level -command in bin/cs must appear in completions/_cs and completions/cs.bash
+# ABOUTME: Guards against drift between bin/ags's command dispatch and shell completions
+# ABOUTME: Canonical ags completions and cs aliases cover the same command surface
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/test_lib.sh"
 
-CS_FILE="$SCRIPT_DIR/../bin/cs"
-SECRETS_FILE="$SCRIPT_DIR/../bin/cs-secrets"
-ZSH_COMP="$SCRIPT_DIR/../completions/_cs"
-BASH_COMP="$SCRIPT_DIR/../completions/cs.bash"
+CS_FILE="$SCRIPT_DIR/../bin/ags"
+SECRETS_FILE="$SCRIPT_DIR/../bin/ags-secrets"
+ZSH_COMP="$SCRIPT_DIR/../completions/_ags"
+BASH_COMP="$SCRIPT_DIR/../completions/ags.bash"
+LEGACY_ZSH_COMP="$SCRIPT_DIR/../completions/_cs"
+LEGACY_BASH_COMP="$SCRIPT_DIR/../completions/cs.bash"
 # The session dispatch is read from its lib fragment, not the built bin/cs: the
 # build concatenates every fragment, so -msg/-queue/-tag's own argument parsers
 # contribute their flags to any `while [ $# -gt 0 ]` range taken over bin/cs.
@@ -49,23 +51,28 @@ secrets_subcommands() {
     } | grep -E '^[a-z]' | sort -u
 }
 
-# Both completion scripts shell out to `cs`, so a functional test has to shadow
-# the installed cs with the one just built from lib/.
+# Both completion scripts call the command being completed, so shadow both
+# executable names with the newly built entrypoint.
 put_built_cs_on_path() {
     mkdir -p "$TEST_TMPDIR/bin"
-    ln -sf "$(cd "$(dirname "$CS_BIN")" && pwd)/$(basename "$CS_BIN")" "$TEST_TMPDIR/bin/cs"
+    ln -sf "$(cd "$(dirname "$CS_FILE")" && pwd)/$(basename "$CS_FILE")" "$TEST_TMPDIR/bin/ags"
+    ln -sf ags "$TEST_TMPDIR/bin/cs"
     PATH="$TEST_TMPDIR/bin:$PATH"
 }
 
-# First-argument completion: `cs <word>`. Thin wrapper over the general
+# First-argument completion: `ags <word>`. Thin wrapper over the general
 # word-list driver below (COMP_WORDS=(cs "$word"), COMP_CWORD=1). The script
 # under test is passed in so a pre-fix copy can be checked against the same
 # assertions.
 bash_candidates_for() {  # script, word
+    bash_candidates_words "$1" ags "$2"
+}
+
+bash_candidates_for_legacy_cs() {  # script, word
     bash_candidates_words "$1" cs "$2"
 }
 
-# Drive bash completion with an explicit word list (cs first; the final element
+# Drive bash completion with an explicit word list (command first; final element
 # is the word being completed). COMP_CWORD points at that final element.
 bash_candidates_words() {  # script word...
     local script="$1"; shift
@@ -82,14 +89,19 @@ bash_candidates_words() {  # script word...
 
 # Drive zsh completion with an explicit word list (cs first; the final element
 # is the word being completed). CURRENT points at that final element.
-zsh_candidates_words() {  # word...
+zsh_candidates_with_script() {  # script word...
+    local script="$1"; shift
     zsh -f -c '
         PATH="$1:$PATH"; comp="$2"; shift 2
         _describe() { local arr=${@[-1]}; print -rl -- ${(P)arr} }
         words=("$@")
         CURRENT=$#
         source "$comp"
-    ' _ "$TEST_TMPDIR/bin" "$ZSH_COMP" "$@" 2>/dev/null | sed 's/:.*//'
+    ' _ "$TEST_TMPDIR/bin" "$script" "$@" 2>/dev/null | sed 's/:.*//'
+}
+
+zsh_candidates_words() {  # word...
+    zsh_candidates_with_script "$ZSH_COMP" "$@"
 }
 
 test_bash_completion_offers_a_symlinked_session() {
@@ -125,7 +137,11 @@ PREFIX
 # First-argument completion: `cs <word>`. Thin wrapper over the general
 # word-list driver above (words=(cs "$word"), CURRENT=2).
 zsh_candidates_for_first_word() {  # word
-    zsh_candidates_words cs "$1"
+    zsh_candidates_words ags "$1"
+}
+
+zsh_candidates_for_legacy_cs() {  # word
+    zsh_candidates_with_script "$LEGACY_ZSH_COMP" cs "$1"
 }
 
 test_zsh_completion_offers_a_symlinked_session() {
@@ -228,10 +244,30 @@ test_zsh_completion_offers_sessions_and_flags_on_an_empty_word() {
 # The symlink bug existed because each completion script enumerated sessions in
 # its own dialect. Neither should know where sessions live or what marks one.
 test_completions_delegate_session_enumeration_to_cs() {
-    assert_file_contains "$ZSH_COMP" 'cs -complete sessions' "_cs must ask cs for session names" || return 1
-    assert_file_contains "$BASH_COMP" 'cs -complete sessions' "cs.bash must ask cs for session names" || return 1
+    assert_file_contains "$ZSH_COMP" 'complete sessions' "_ags must ask ags for session names" || return 1
+    assert_file_contains "$BASH_COMP" 'complete sessions' "ags.bash must ask ags for session names" || return 1
     assert_file_not_contains "$ZSH_COMP" 'sessions_root' "_cs must not locate the sessions root itself" || return 1
     assert_file_not_contains "$BASH_COMP" 'sessions_root' "cs.bash must not locate the sessions root itself" || return 1
+    assert_file_exists "$LEGACY_ZSH_COMP" "legacy _cs completion remains available" || return 1
+    assert_file_exists "$LEGACY_BASH_COMP" "legacy cs.bash completion remains available" || return 1
+}
+
+test_legacy_cs_completion_aliases_offer_sessions() {
+    if command -v zsh >/dev/null 2>&1; then
+        create_test_session "compat-session" >/dev/null
+        put_built_cs_on_path
+        local zsh_out bash_out
+        bash_out=$(bash_candidates_for_legacy_cs "$LEGACY_BASH_COMP" "compat")
+        assert_candidate "$bash_out" "compat-session" "cs.bash must complete through the compatibility command" || return 1
+        zsh_out=$(zsh_candidates_for_legacy_cs "compat")
+        assert_candidate "$zsh_out" "compat-session" "_cs must complete through the compatibility command" || return 1
+    else
+        create_test_session "compat-session" >/dev/null
+        put_built_cs_on_path
+        local bash_out
+        bash_out=$(bash_candidates_for_legacy_cs "$LEGACY_BASH_COMP" "compat")
+        assert_candidate "$bash_out" "compat-session" "cs.bash must complete through the compatibility command" || return 1
+    fi
 }
 
 test_hidden_commands_are_exempt_from_completion_coverage() {
@@ -444,6 +480,7 @@ run_test test_bash_completion_does_not_glob_a_session_name_with_a_star
 run_test test_bash_completion_does_not_enumerate_when_completing_a_flag
 run_test test_zsh_completion_does_not_enumerate_when_completing_a_flag
 run_test test_completions_delegate_session_enumeration_to_cs
+run_test test_legacy_cs_completion_aliases_offer_sessions
 run_test test_dispatch_extraction_is_sane
 run_test test_hidden_commands_are_exempt_from_completion_coverage
 run_test test_zsh_completion_covers_all_commands

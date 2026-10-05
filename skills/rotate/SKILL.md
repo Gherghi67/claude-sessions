@@ -17,7 +17,7 @@ empty, tell the user rotation needs a cs session and stop.
 
 A rotation needs a purpose — one line describing what the next conversation
 should do. If the user did not give one, take it from the conversation: the
-work in flight and its next step. Do not stop to ask; the `cs` mod's
+work in flight and its next step. Do not stop to ask; the `ags` mod's
 button runs `/rotate` with no argument, and a question there would defeat the
 one-key rotation it exists for.
 
@@ -157,8 +157,8 @@ one-key rotation it exists for.
      path first, and if the file is absent on this machine, to ask the user
      before proceeding as if there were no constraint.
      `.cs/handoffs/` is tracked, so writing one here publishes it;
-     credentials live in `cs -secrets`. Name the secret's purpose instead:
-     "the deploy token, in `cs -secrets get DEPLOY_TOKEN`".
+     credentials live in `ags -secrets`. Name the secret's purpose instead:
+     "the deploy token, in `ags -secrets get DEPLOY_TOKEN`".
      Re-read the finished body before step 4 commits it, for secrets and
      for the detail this rule names: an exact reading is where a secret
      hides, and a verbatim quote is where personal detail does.
@@ -256,7 +256,7 @@ one-key rotation it exists for.
 
    Arming is the final step because an armed marker is fragile in a way a
    committed file is not. If Claude Code exits before the ritual finishes and
-   the user relaunches, `cs <name>`'s prompt disarms the marker on `Y`, `n`
+   the user relaunches, `ags <name>`'s prompt disarms the marker on `Y`, `n`
    or Enter (lib/75-launch.sh), and nothing re-arms it; a later `/clear`
    then opens a bare conversation with this handoff left `unconsumed`. The
    launch prompt recovers either state — it scans the store and offers an
@@ -270,7 +270,7 @@ one-key rotation it exists for.
    to start it, and a message they do send takes precedence over the handoff.
 
    If they would rather stop for the day, exiting and answering `r` at the
-   next `cs <session-name>` launch does the same thing. Answering `Y` or `n`
+   next `ags <session-name>` launch does the same thing. Answering `Y` or `n`
    there disarms the marker (the handoff itself stays pending, so a later
    rotate can re-arm it), and `d` discards the handoff outright.
 
@@ -281,7 +281,7 @@ one-key rotation it exists for.
 
    This is the one step you cannot take for the user. A hook cannot submit
    to Claude Code's command queue (it accepts the TUI's own input only); the
-   `cs` mod's button can, and once the marker is armed it reads
+   `ags` mod's button can, and once the marker is armed it reads
    `1: /clear and continue from the handoff`. The keystroke is theirs unless
    they launched with `CS_ROTATE_FORCE_CTX`, when the mod counts twenty
    seconds down and runs the `/clear` itself — which is why the line must not

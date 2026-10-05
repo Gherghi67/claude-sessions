@@ -240,7 +240,7 @@ test_checkpoint_quotes_label_and_stops_on_failure() {
     assert_file_contains "$COMMANDS_DIR/checkpoint.md" "single-quoting the label" \
         "checkpoint.md must single-quote the label, not double-quote it" || return 1
     assert_file_contains "$COMMANDS_DIR/checkpoint.md" "do not retry" \
-        "checkpoint.md must stop (not retry) when cs -checkpoint fails" || return 1
+        "checkpoint.md must stop (not retry) when ags -checkpoint fails" || return 1
 }
 
 test_sweep_supersedes_stale_entries() {
@@ -272,12 +272,12 @@ test_sweep_states_memory_pointer_format() {
 }
 
 test_sweep_resolves_actor_before_narrative_append() {
-    # cs -whoami resolution must be repeated at the narrative step, not left only in the
+    # ags -whoami resolution must be repeated at the narrative step, not left only in the
     # framing parenthetical, so a multi-actor session appends to the right file.
     local count
-    count=$(grep -c "cs -whoami" "$COMMANDS_DIR/sweep.md" || true)
+    count=$(grep -c "ags -whoami" "$COMMANDS_DIR/sweep.md" || true)
     if [ "$count" -lt 2 ]; then
-        echo "  FAIL: sweep.md must repeat 'cs -whoami' in the narrative step (found $count)"
+        echo "  FAIL: sweep.md must repeat 'ags -whoami' in the narrative step (found $count)"
         return 1
     fi
 }
@@ -510,8 +510,8 @@ run_test test_release_gate_mandates_an_empirical_pass
 test_wrap_rotates_the_narrative_after_the_summary() {
     assert_file_contains "$COMMANDS_DIR/wrap.md" "## Pass 3 — Narrative rotation" \
         "wrap has a third pass" || return 1
-    assert_file_contains "$COMMANDS_DIR/wrap.md" 'cs -narrative rotate' \
-        "the pass runs the cs helper rather than describing file surgery" || return 1
+    assert_file_contains "$COMMANDS_DIR/wrap.md" 'ags -narrative rotate' \
+        "the pass runs the ags helper rather than describing file surgery" || return 1
     assert_file_contains "$COMMANDS_DIR/wrap.md" '3\. \*\*Narrative:\*\*' \
         "the report gains a third item" || return 1
 }

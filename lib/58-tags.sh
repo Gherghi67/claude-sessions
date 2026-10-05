@@ -1,4 +1,4 @@
-# ABOUTME: cs -tag: read, write, and validate session tags stored as the
+# ABOUTME: ags -tag: read, write, and validate session tags stored as the
 # ABOUTME: inline-array tags line in .cs/README.md YAML frontmatter.
 
 # Print one tag per line from the README's frontmatter tags line. Tolerates
@@ -134,16 +134,16 @@ _tag_validate() {
 
 # Resolve the README path for the ambient session, erroring outside one.
 _tag_target_readme() {
-    if [ -z "${CLAUDE_SESSION_META_DIR:-}" ]; then
-        error "In-session only; use 'cs <name> -tag ...' from outside a session"
+    if [ -z "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ]; then
+        error "In-session only; use 'ags <name> -tag ...' from outside a session"
     fi
-    printf '%s/README.md' "$CLAUDE_SESSION_META_DIR"
+    printf '%s/README.md' "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}"
 }
 
 _tag_mutate() {
     local op="$1"
     shift
-    [ $# -gt 0 ] || error "Usage: cs -tag $op <tag>..."
+    [ $# -gt 0 ] || error "Usage: ags -tag $op <tag>..."
     local readme
     readme=$(_tag_target_readme)
     [ -f "$readme" ] || error "No README frontmatter for this session: $readme"
@@ -199,7 +199,7 @@ run_tag() {
                 _tag_list_all
             fi
             ;;
-        *) error "Usage: cs -tag <add|rm|list> [args]. Run 'cs -help' for details." ;;
+        *) error "Usage: ags -tag <add|rm|list> [args]. Run 'ags -help' for details." ;;
     esac
 }
 

@@ -33,7 +33,7 @@ _in_session() {  # name — export ambient env for the in-session verb form
 test_tag_subcommand_exists() {
     local output
     output=$("$CS_BIN" -tag 2>&1) || true
-    assert_output_not_contains "$output" "Unknown command" "cs -tag should be a recognized verb" || return 1
+    assert_output_not_contains "$output" "Unknown command" "ags -tag should be a recognized verb" || return 1
 }
 
 test_tag_add_and_list_roundtrip() {

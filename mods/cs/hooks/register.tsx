@@ -1,15 +1,15 @@
 /* @jsxRuntime classic */
 /* @jsx h */
 /* @jsxFrag Fragment */
-// ABOUTME: cs mod: keys above the prompt: rotate past the threshold, wrap up, or /clear once a handoff is armed.
+// ABOUTME: agent-sessions mod: keys above the prompt: rotate past the threshold, wrap up, or /clear once a handoff is armed.
 // ABOUTME: A turn ending past CS_ROTATE_FORCE_CTX (default 80, off disables) runs /rotate itself, then counts down to the /clear (session colour, amber, crit); session.start writes a heartbeat for doctor.
-// ABOUTME: /queue adds a task to the session's walk-away queue through `cs -queue add`, at once even mid-turn; bare, it prints `cs -queue list`.
+// ABOUTME: /queue adds a task to the session's walk-away queue through `ags -queue add`, at once even mid-turn; bare, it prints `ags -queue list`.
 import type { On, EngineInterface } from 'claude-code'
 
 declare const h: any
 declare const Fragment: any
 
-// KEEP IN SYNC with the ctx warn and crit defaults in bin/cs-statusline
+// KEEP IN SYNC with the ctx warn and crit defaults in bin/ags-statusline
 // (_seg_ctx): by default the band appears where the status bar turns amber and
 // the Stop hook gives its headroom notice. CS_STATUSLINE_CTX_WARN in the
 // process environment moves it, as it moves the bar; CS_ROTATE_BUTTON_CTX moves
@@ -17,10 +17,10 @@ declare const Fragment: any
 export const DEFAULT_PERCENT = 40
 
 // KEEP IN SYNC with _bg_shade and the `surface` arm of _sgr in
-// bin/cs-statusline: the band paints the bar's own capsule fill, a shade of the
+// bin/ags-statusline: the band paints the bar's own capsule fill, a shade of the
 // terminal background nudged a tenth away from itself (darker on a light
 // terminal, lighter on a dark one), so the keys read as one more capsule of the
-// bar rather than as a row of the transcript. cs measures the background at
+// bar rather than as a row of the transcript. ags measures the background at
 // launch and exports it; without that measurement the band paints no fill, so a
 // guess can never leave the engine's own text on a surface it cannot read
 // against.
@@ -39,8 +39,8 @@ export function surfaceColor(bg: string | undefined): string | undefined {
 }
 
 // The count's colour ramp, in the status bar's inks. KEEP IN SYNC with _sgr in
-// bin/cs-statusline (tests/test_mod_rotate.sh pins every value here against
-// it): the session palette is Claude Code's /color, the tab colour cs sets;
+// bin/ags-statusline (tests/test_mod_rotate.sh pins every value here against
+// it): the session palette is Claude Code's /color, the tab colour ags sets;
 // amber and crit are the bar's warning and critical inks. Amber pivots on the
 // measured background's luminance (the ink pivot, not the surface one) and
 // falls back to the theme; crit follows the theme.
@@ -90,13 +90,13 @@ export function countdownBar(left: number): string {
 // Doctor observes the mod RUNNING, not merely installed: under a managed
 // machine's policy a mod can load and never run. Written when the plugin loads
 // (process start or reload; session.start does not fire on /clear). Path is
-// relative to the session's cwd, which under cs is the session directory (or
+// relative to the session's cwd, which under ags is the session directory (or
 // its worktree).
 export const HEARTBEAT = '.cs/local/cs.heartbeat'
 // Written by /wrap's last pass: the conversation it wrapped.
 export const WRAPPED = '.cs/local/wrapped'
 
-// The rotate skill's last step writes the handoff's basename here; cs's
+// The rotate skill's last step writes the handoff's basename here; ags's
 // SessionStart hook reads it on the next conversation and starts the handoff's
 // next step. While it names a handoff the conversation has nothing left to do
 // but /clear, whatever the context reads.
@@ -140,11 +140,11 @@ export const WRAP_QUESTION = 'Run /wrap for this session?'
 export const WRAP_YES = 'Yes, wrap up'
 
 // Bare /queue's offer, and the prompt a Start sends when no turn is running.
-// `cs -queue start` only arms the queue: the Stop hook hands over each task as
+// `ags -queue start` only arms the queue: the Stop hook hands over each task as
 // a turn ends, so an idle session needs one turn to reach that first stop.
 export const QUEUE_START = 'Start'
 export const QUEUE_COMPACT = 'Compact'
-export const QUEUE_KICK = 'The cs walk-away queue is started. Reply with one short line saying so, then stop: the cs Stop hook hands you each queued task in turn.'
+export const QUEUE_KICK = 'The agent-sessions walk-away queue is started. Reply with one short line saying so, then stop: the Stop hook hands you each queued task in turn.'
 
 // The countdown: seconds left, its ticker, and what the band last saw. Module
 // state survives a /clear (measured), so every path that ends the countdown
@@ -182,9 +182,9 @@ export function register(on: On) {
   on('session.start', async ($, e, next) => {
     if (!registered) {
       registered = true
-      await $.command.register({ name: 'queue', description: "Add a task to this cs session's walk-away queue, or list it.", argumentHint: '[task]', immediate: true })
+      await $.command.register({ name: 'queue', description: "Add a task to this agent-sessions workspace's walk-away queue, or list it.", argumentHint: '[task]', immediate: true })
     }
-    // Only a cs session has .cs/local; anywhere else the mod stays silent.
+    // Only a registered session has .cs/local; anywhere else the mod stays silent.
     const local = `${e.cwd}/.cs/local`
     if (await $.fs.exists(local)) {
       await $.fs.write(`${e.cwd}/${HEARTBEAT}`, `${new Date().toISOString()}\n`)
@@ -192,18 +192,18 @@ export function register(on: On) {
     return next(e)
   })
 
-  // `/queue <task>` runs `cs -queue add` by the path the launch exported;
-  // `/queue` alone runs `cs -queue list`. The child inherits the claude
+  // `/queue <task>` runs `ags -queue add` by the path the launch exported;
+  // `/queue` alone runs `ags -queue list`. The child inherits the claude
   // process's environment, and CLAUDE_SESSION_META_DIR there picks the queue.
   // Registered immediate, so the hook may run while a turn streams: it reads
-  // nothing of the turn. cs is the judge of the task: whatever it refuses
+  // nothing of the turn. ags validates the task: whatever it refuses
   // (an empty or multi-line body) comes back as its own stderr.
   on('command.run', { command: 'queue' }, async ($, e) => {
     const task = e.args.trim()
     const argv = task === '' ? ['-queue', 'list'] : ['-queue', 'add', e.args]
-    const bin = await $.env.get("CS_BIN")
-    if (!bin) return { text: 'The launch did not say where cs is (CS_BIN); run `cs -queue add "<task>"` from a shell in this session.' }
-    const what = `cs ${argv.slice(0, 2).join(' ')}`
+    const bin = (await $.env.get("AGS_BIN")) || (await $.env.get("CS_BIN"))
+    if (!bin) return { text: 'The launch did not say where ags is (AGS_BIN); run `ags -queue add "<task>"` from a shell in this session.' }
+    const what = `ags ${argv.slice(0, 2).join(' ')}`
     let result: { exitCode: number; stdout: string; stderr: string }
     try {
       result = await $.process.run([bin, ...argv])
@@ -383,7 +383,7 @@ async function forceRotation($: EngineInterface) {
     birth = undefined
     startPercent = context.percent
     if (startPercent !== undefined && startPercent >= force) {
-      $.ui.toast(`cs: CS_ROTATE_FORCE_CTX=${force} is below this conversation's starting context (${startPercent}%); not forcing a rotation`)
+      $.ui.toast(`ags: CS_ROTATE_FORCE_CTX=${force} is below this conversation's starting context (${startPercent}%); not forcing a rotation`)
     }
   }
   if (await handoffArmed($)) {
@@ -396,7 +396,7 @@ async function forceRotation($: EngineInterface) {
   if ((await $.fs.exists(forced)) && (await $.fs.read(forced)).trim() === id) return
   await $.fs.write(forced, `${id}\n`)
   $.clock.after(0, () => {
-    rotate($).catch(err => $.ui.toast(`cs: /rotate did not run: ${String(err)}`))
+    rotate($).catch(err => $.ui.toast(`ags: /rotate did not run: ${String(err)}`))
   })
 }
 
@@ -426,7 +426,7 @@ function startCountdown($: EngineInterface) {
     const idle = bandIdle && (await handoffArmed($)) && (await ownsRotation($))
     if (left !== 0) return
     stopCountdown($)
-    if (idle) await clearAndContinue($).catch(err => $.ui.toast(`cs: /clear did not run: ${String(err)}`))
+    if (idle) await clearAndContinue($).catch(err => $.ui.toast(`ags: /clear did not run: ${String(err)}`))
   })
 }
 
@@ -436,7 +436,7 @@ function stopCountdown($: EngineInterface) {
   left = undefined
   if (preview !== undefined) {
     preview = undefined
-    $.ui.close({ id: PREVIEW_PANE }).catch(err => $.ui.toast(`cs: the handoff pane did not close: ${String(err)}`))
+    $.ui.close({ id: PREVIEW_PANE }).catch(err => $.ui.toast(`ags: the handoff pane did not close: ${String(err)}`))
   }
   $.ui.invalidate('ui.render')
 }
@@ -452,7 +452,7 @@ async function openPreview($: EngineInterface) {
   // engine first: a pane that lands after its count is closed here, since
   // nothing else will close it.
   if (preview === undefined) {
-    await $.ui.close({ id: PREVIEW_PANE }).catch(err => $.ui.toast(`cs: the handoff pane did not close: ${String(err)}`))
+    await $.ui.close({ id: PREVIEW_PANE }).catch(err => $.ui.toast(`ags: the handoff pane did not close: ${String(err)}`))
   }
 }
 
@@ -540,7 +540,7 @@ async function rampColor($: EngineInterface, secs: number): Promise<string | und
   return countdownColor(secs, await sessionColor($), await $.env.get("CS_TERM_BG_RGB"), await $.env.get("CS_TERM_THEME"))
 }
 
-// The session's colour name as cs recorded it in state, or undefined.
+// The session's colour name as ags recorded it in state, or undefined.
 async function sessionColor($: EngineInterface): Promise<string | undefined> {
   const state = await readState($)
   return state?.match(/^claude_session_color: *"?([^"\s]+)"?[ \t]*$/m)?.[1]
@@ -550,17 +550,17 @@ async function readState($: EngineInterface): Promise<string | undefined> {
   try {
     return await $.fs.read(`${await $.session.cwd()}/.cs/local/state`)
   } catch {
-    return undefined // no state: not a session cs launched
+    return undefined // no state: not a session ags launched
   }
 }
 
-// Only the lead conversation of a cs session may be offered a rotation. The
-// rotate skill refuses outside a cs session, .cs/local/disabled opts a
-// directory out of cs entirely, and the handoff it writes carries the UUID in
-// .cs/local/state, which belongs to the one conversation cs launched: a
+// Only the lead conversation of a registered session may be offered a rotation. The
+// rotate skill refuses outside a session, .cs/local/disabled opts a
+// directory out entirely, and the handoff it writes carries the UUID in
+// .cs/local/state, which belongs to the one conversation ags launched: a
 // teammate claude in the same directory would arm the lead's marker under the
 // lead's identity. The checks run only once the band has a button to draw.
-// The value may be quoted and may carry trailing spaces, as cs's own state
+// The value may be quoted and may carry trailing spaces, as ags's own state
 // readers allow.
 async function ownsRotation($: EngineInterface): Promise<boolean> {
   const local = `${await $.session.cwd()}/.cs/local`
@@ -615,11 +615,11 @@ async function askToWrap($: EngineInterface) {
   try {
     await $.command.run({ command: 'wrap', args: '' })
   } catch (err) {
-    $.ui.toast(`cs: /wrap did not run: ${String(err)}`)
+    $.ui.toast(`ags: /wrap did not run: ${String(err)}`)
   }
 }
 
-// An armed or draining queue is already on its way; only bin/cs and the Stop
+// An armed or draining queue is already on its way; only bin/ags and the Stop
 // hook write the file, and no file is an idle queue.
 async function queueRunning($: EngineInterface): Promise<boolean> {
   const path = `${await $.session.cwd()}/.cs/local/queue.state`
@@ -649,7 +649,7 @@ async function offerToStart($: EngineInterface, bin: string, count: number) {
       reason = String(err instanceof Error ? err.message : err)
     }
     if (reason !== undefined) {
-      $.ui.toast(`cs: the conversation was not compacted (${reason}); the queue is not started`)
+      $.ui.toast(`ags: the conversation was not compacted (${reason}); the queue is not started`)
       return
     }
   }
@@ -658,23 +658,23 @@ async function offerToStart($: EngineInterface, bin: string, count: number) {
   try {
     result = await $.process.run([bin, '-queue', verb])
   } catch (err) {
-    $.ui.toast(`cs: cs -queue ${verb} did not run: ${String(err instanceof Error ? err.message : err)}`)
+    $.ui.toast(`ags -queue ${verb} did not run: ${String(err instanceof Error ? err.message : err)}`)
     return
   }
   if (result.exitCode !== 0) {
     const tail = result.stderr.split('\n').filter(l => l.trim() !== '').slice(-1)[0] ?? ''
-    $.ui.toast(`cs: cs -queue ${verb} exited ${result.exitCode}${tail === '' ? '' : `: ${tail}`}`)
+    $.ui.toast(`ags -queue ${verb} exited ${result.exitCode}${tail === '' ? '' : `: ${tail}`}`)
     return
   }
   if (verb !== 'start' || turnRunning) return
   try {
     await $.prompt.submit({ text: QUEUE_KICK })
   } catch (err) {
-    $.ui.toast(`cs: the queue is armed, but its first turn did not start: ${String(err instanceof Error ? err.message : err)}`)
+    $.ui.toast(`ags: the queue is armed, but its first turn did not start: ${String(err instanceof Error ? err.message : err)}`)
   }
 }
 
-// /clear ends this conversation, and cs's SessionStart hook then starts the
+// /clear ends this conversation, and the session-start hook then starts the
 // armed handoff's next step in the new one.
 // Measured: the run resolves once the screen has cleared and a new transcript
 // is open; the marker is the hook's to consume.

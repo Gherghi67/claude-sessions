@@ -884,7 +884,7 @@ test_integrate_requires_a_gate_command() {
     sha=$(integrate_fixture myproj fix-auth)
     output=$("$CS_BIN" myproj -integrate-feature fix-auth "$sha" 2>&1) || status=$?
     assert_eq "1" "$status" "missing gate argv refuses" || return 1
-    assert_output_contains "$output" "Usage: cs <base> -integrate-feature" "prints usage" || return 1
+    assert_output_contains "$output" "Usage: ags <base> -integrate-feature" "prints usage" || return 1
 }
 
 test_integrate_requires_a_sha() {
@@ -894,7 +894,7 @@ test_integrate_requires_a_sha() {
     local output status=0
     output=$("$CS_BIN" myproj -integrate-feature fix-auth 2>&1) || status=$?
     assert_eq "1" "$status" "missing sha refuses" || return 1
-    assert_output_contains "$output" "Usage: cs <base> -integrate-feature" "prints usage, not a shell error" || return 1
+    assert_output_contains "$output" "Usage: ags <base> -integrate-feature" "prints usage, not a shell error" || return 1
     assert_output_not_contains "$output" "unbound variable" "no set -u crash" || return 1
 }
 
@@ -1867,6 +1867,12 @@ test_finish_yields_to_an_explicit_rotation_choice() {
     local base_dir
     base_dir=$(create_test_session_with_git "myproj")
     cs_launch "myproj@fix-auth"
+    # The prompt belongs to a session with a conversation to resume; an engine
+    # with no recorded conversation stages a fresh identity without asking.
+    # The stub never acknowledges a binding, so record one the way the
+    # handoff's parent names it.
+    mkdir -p "$base_dir/.cs/local"
+    printf 'claude_session_id: 00000000-0000-4000-8000-000000000000\n' >> "$base_dir/.cs/local/state"
     mkdir -p "$base_dir/.cs/handoffs"
     cat > "$base_dir/.cs/handoffs/2026-07-16-test.md" << 'EOF'
 ---
@@ -1879,9 +1885,11 @@ status: unconsumed
 ## 7. Next Step
 Continue the test.
 EOF
+    # The answer rides a pipe; an unattended launch takes the default without
+    # asking, so declare the terminal the way the suite's other prompts do.
     local output
-    output=$("$CS_BIN" "myproj" -finish "fix-auth" <<< "r" 2>&1 || true)
-    assert_output_contains "$output" "Rotation handoff takes this launch; re-run: cs myproj -finish fix-auth" \
+    output=$(CS_ASSUME_TTY=1 "$CS_BIN" "myproj" -finish "fix-auth" <<< "r" 2>&1 || true)
+    assert_output_contains "$output" "Rotation handoff takes this launch; re-run: ags myproj -finish fix-auth" \
         "the displaced merge must be announced" || return 1
     assert_output_not_contains "$output" "/finish fix-auth" "the explicit r choice must not be overridden" || return 1
     assert_output_contains "$output" ".cs/handoffs/2026-07-16-test.md" "the handoff prompt must run instead" || return 1

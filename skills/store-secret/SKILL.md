@@ -7,7 +7,7 @@ The user's message may contain sensitive credentials. Your task is to store any 
 
 ## Prerequisites
 
-This skill only works in a `cs` session. Check if `$CLAUDE_SESSION_NAME` environment variable exists:
+This skill only works in a `ags` session. Check if `$CLAUDE_SESSION_NAME` environment variable exists:
 
 ```bash
 echo $CLAUDE_SESSION_NAME
@@ -39,7 +39,7 @@ If empty, inform the user that secrets storage requires a cs session and skip st
    line. A value passed as an argument is visible via `ps` and is captured
    verbatim by the bash-logger hook into `.cs/local/session.log`.
    The Bash command itself must not contain the secret:
-   - Run `cs -secrets list` first. `set` replaces an existing value silently
+   - Run `ags -secrets list` first. `set` replaces an existing value silently
      (no diff, no prompt), so if the name you chose already exists, pick a more
      specific name or confirm with the user before overwriting.
    - Write the raw value to a scratch file with the **Write** tool (Write is not
@@ -50,7 +50,7 @@ If empty, inform the user that secrets storage requires a cs session and skip st
      ref by the autosave-commits hook, and that snapshot survives the later `rm`
    - Store it by redirecting that file into stdin:
      ```bash
-     cs -secrets set KEY_NAME < <scratchdir>/.secret
+     ags -secrets set KEY_NAME < <scratchdir>/.secret
      ```
    - Delete the scratch file: `rm -f <scratchdir>/.secret`
 
@@ -60,9 +60,9 @@ If empty, inform the user that secrets storage requires a cs session and skip st
    file is still deleted per step 4, but do not tell the user a secret was saved.
    On success, tell the user:
    - Which secrets were stored and under what names
-   - How to retrieve: `cs -secrets get KEY_NAME`
-   - How to list all: `cs -secrets list`
-   - How to delete if unwanted: `cs -secrets delete KEY_NAME`
+   - How to retrieve: `ags -secrets get KEY_NAME`
+   - How to list all: `ags -secrets list`
+   - How to delete if unwanted: `ags -secrets delete KEY_NAME`
 
 ## Important
 

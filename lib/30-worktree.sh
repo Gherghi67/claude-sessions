@@ -1,5 +1,5 @@
 # ABOUTME: Parallel feature worktrees: name parsing, bootstrap, create, merge, and record fusion.
-# ABOUTME: Backs 'cs <base>@<feature>' and the finish skill's integrate and retire entries.
+# ABOUTME: Backs 'ags <base>@<feature>' and the finish skill's integrate and retire entries.
 
 cs_split_worktree_name() {
     local name="$1"
@@ -287,7 +287,7 @@ confirm_clean_worktree_base() {
 # The caller gates dirty base state via confirm_clean_worktree_base. Prints
 # the new worktree path.
 create_worktree_session() {
-    local base_dir="$1" base_name="$2" task="$3"
+    local base_dir="$1" base_name="$2" task="$3" engine="${4:-claude}"
     local wt_dir="$SESSIONS_ROOT/$base_name@$task"
     local branch="cs/$task"
 
@@ -318,17 +318,6 @@ create_worktree_session() {
     if [ -z "$(git -C "$base_dir" ls-files -- .cs 2>/dev/null)" ]; then
         mode="ignored"
         bootstrap_worktree_meta "$wt_dir" "$base_name" "$task"
-    fi
-
-    # The protocol file is normally gitignored, so no worktree inherits it
-    # through git in either mode; write this worktree's own copy. The FILE
-    # only — never touch a .gitignore here (ignored-mode worktrees check out
-    # project repos whose .gitignore is theirs). Guarded: a repo that
-    # (against CC convention) TRACKS CLAUDE.local.md checks its own copy
-    # into the worktree; only overwrite when absent or already cs's own.
-    if [ ! -f "$wt_dir/CLAUDE.local.md" ] \
-        || grep -q 'cs:session-protocol' "$wt_dir/CLAUDE.local.md"; then
-        write_session_claude_md "$wt_dir"
     fi
 
     # Cover the protocol file via the clone-local info/exclude in BOTH
@@ -371,13 +360,12 @@ create_worktree_session() {
     fi
 
     local state="$wt_dir/.cs/local/state"
-    _set_local_state "$state" claude_session_id "$(_alloc_uuid)"
-    _set_local_state "$state" claude_session_color "$(_alloc_random_color)"
     _set_local_state "$state" task_branch "$branch"
     _set_local_state "$state" cs_mode "$mode"
     _set_local_state "$state" cs_base "$base_name"
 
-    setup_auto_memory "$wt_dir"
+    mkdir -p "$wt_dir/.cs"/{memory,plans}
+    cs_engine_call "$engine" prepare_workspace "$wt_dir" worktree || return $?
 
     # A feature worktree is a full cs session holding the same narrative, plans
     # and machine-local state as its base, so it gets the same privacy. cs
@@ -392,7 +380,7 @@ create_worktree_session() {
 
 # Retire an integrated feature worktree: fuse its session records into the
 # base (ignored mode), remove the worktree and delete its branch. Backs the
-# unadvertised `cs <base> -retire-feature <task> <sha> [--force]` that
+# unadvertised `ags <base> -retire-feature <task> <sha> [--force]` that
 # skills/finish/scripts/finish.sh drives after an integrate. It never merges:
 # <sha> is the commit /finish landed and must already be reachable from the
 # base, and the branch tip must be too, so nothing the base lacks is ever
@@ -401,7 +389,7 @@ create_worktree_session() {
 # ancestor — and every other refusal still applies. Every refusal names what
 # the user has to do next, in their own words; the skill prints them verbatim.
 retire_feature_worktree() {  # base_name task sha [--force]
-    local usage="Usage: cs <base> -retire-feature <task> <sha> [--force]"
+    local usage="Usage: ags <base> -retire-feature <task> <sha> [--force]"
     [ $# -ge 3 ] || error "$usage"
     local base_name="$1" task="$2" sha="$3" force=""
     shift 3
@@ -420,7 +408,7 @@ retire_feature_worktree() {  # base_name task sha [--force]
     [ -d "$wt_dir" ] || error "No worktree for feature '$task' (expected $wt_dir)"
 
     local wt_name="$base_name@$task"
-    if [ "${CLAUDE_SESSION_NAME:-}" = "$wt_name" ]; then
+    if [ "${CS_SESSION_NAME:-${CLAUDE_SESSION_NAME:-}}" = "$wt_name" ]; then
         error "This is the '$wt_name' conversation itself, and a worktree can't remove the directory it is running in. Close this session, then run /finish $task in '$base_name'."
     fi
 
@@ -548,11 +536,11 @@ _integrate_cleanup() {
 # worktree, run the gates there, fast-forward the base onto the result. Removes
 # nothing — the worktree, the branch and the feature session all remain until
 # retire_feature_worktree, the same skill's closing step. Backs the unadvertised
-# `cs <base> -integrate-feature <task> <sha> [--from-remote] -- <gate...>`
+# `ags <base> -integrate-feature <task> <sha> [--from-remote] -- <gate...>`
 # that skills/finish/scripts/finish.sh drives. Every refusal is an error that
 # names the next command.
 integrate_feature_worktree() {  # base_name task sha [--from-remote [--ci-green]] -- gate...
-    local usage="Usage: cs <base> -integrate-feature <task> <sha> [--from-remote [--ci-green]] -- <gate command...>"
+    local usage="Usage: ags <base> -integrate-feature <task> <sha> [--from-remote [--ci-green]] -- <gate command...>"
     [ $# -ge 3 ] || error "$usage"
     local base_name="$1" task="$2" sha="$3"
     shift 3
@@ -627,7 +615,7 @@ integrate_feature_worktree() {  # base_name task sha [--from-remote [--ci-green]
     # contends with this integrate — the feature conversation stays open and
     # keeps snapshotting throughout a gate run. An existing directory is a
     # refusal, never stolen: a stale one is the user's to inspect and remove
-    # (cs -doctor names it).
+    # (ags -doctor names it).
     local lock="$git_dir/cs/integrate.lock"
     mkdir -p "$git_dir/cs"
     # The base's own autosave takes this same lock for the length of one tree
@@ -651,7 +639,7 @@ integrate_feature_worktree() {  # base_name task sha [--from-remote [--ci-green]
     # write that fails under set -e must still release the directory.
     trap '_integrate_cleanup' EXIT
     trap '_integrate_cleanup; exit 130' INT TERM
-    # The holder's pid, for cs -doctor's liveness check. Inside the lock, so
+    # The holder's pid, for ags -doctor's liveness check. Inside the lock, so
     # the directory and its evidence are created and removed together; the
     # autosave hook's own brief hold records nothing and releases with rmdir.
     echo "$$" > "$lock/pid"
@@ -942,7 +930,7 @@ run_features() {  # base_name [--porcelain]
     while [ $# -gt 0 ]; do
         case "$1" in
             --porcelain) porcelain=1; shift ;;
-            *) error "Usage: cs $base_name -features [--porcelain]" ;;
+            *) error "Usage: ags $base_name -features [--porcelain]" ;;
         esac
     done
 

@@ -297,13 +297,13 @@ test_human_prompt_sources_kept() {
 
 # cs launches claude with a kick as its positional prompt, and Claude Code
 # stamps that record promptSource "typed". The fixtures copy the kick texts
-# built in lib/40-state.sh (rotation handoff) and lib/75-launch.sh (spawn);
+# built in lib/42-claude-state.sh (rotation handoff) and lib/75-launch.sh (spawn);
 # the pins below fail when either wording moves without the filter.
 test_cs_launch_kicks_dropped() {
     local f; f="$(proj_file projA)"
     add_msg "$f" "Continue from the pending rotation handoff: read .cs/handoffs/2026-09-28-x.md first." \
         "2026-07-01T10:00:00Z" '{"promptSource": "typed"}'
-    add_msg "$f" "Spawned by lead-session. Your walk-away queue is armed with 2 task(s); begin. Send results with: cs -msg lead-session -k result \"...\"" \
+    add_msg "$f" "Spawned by lead-session. Your walk-away queue is armed with 2 task(s); begin. Send results with: ags -msg lead-session -k result \"...\"" \
         "2026-07-01T10:00:01Z" '{"promptSource": "typed"}'
     add_msg "$f" "Your brief is .cs/brief.md: read it first. Then begin." \
         "2026-07-01T10:00:02Z" '{"promptSource": "typed"}'
@@ -317,11 +317,11 @@ test_cs_launch_kicks_dropped() {
         "stats should count the launch kicks as machine-authored" || return 1
     assert_file_contains "$(corpus_path)" "Continue from where we stopped" \
         "a typed message sharing the opening words must be kept" || return 1
-    assert_file_contains "$SCRIPT_DIR/../lib/40-state.sh" \
+    assert_file_contains "$SCRIPT_DIR/../lib/42-claude-state.sh" \
         'handoff_arg="Continue from the pending rotation handoff: read .cs/handoffs/' \
         "rotation kick wording moved; update the corpus filter" || return 1
     assert_file_contains "$SCRIPT_DIR/../lib/75-launch.sh" \
-        'spawn_kick="Spawned by $_spawner. $_work Send results with: cs -msg ' \
+        'spawn_kick="Spawned by $_spawner. $_work Send results with: ags -msg ' \
         "spawn kick wording moved; update the corpus filter" || return 1
     assert_file_contains "$SCRIPT_DIR/../lib/75-launch.sh" \
         '_work="Your brief is .cs/brief.md: read it first."' \

@@ -91,7 +91,7 @@ EXPECT
             echo "  FAIL: permanence must not ride on the same line as the outcome"; return 1 ;;
     esac
     # And the way back stays with it.
-    grep -q "cs -statusline enable" "$out" \
+    grep -q "ags -statusline enable" "$out" \
         || { echo "  FAIL: the decline must name the command that undoes it"; return 1; }
 }
 
@@ -354,21 +354,22 @@ test_local_install_prefers_a_freshly_built_picker() {
         [ -e "$real/$e" ] && ln -s "$(cd "$real" && pwd)/$e" "$repo/$e"
     done
     cp "$real/install.sh" "$repo/install.sh"
-    cp "$real/bin/cs" "$real/bin/cs-secrets" "$real/bin/cs-statusline" \
-       "$real/bin/cs-subagent-statusline" "$repo/bin/" 2>/dev/null || true
-    printf 'STALE PICKER' > "$repo/bin/cs-tui"
-    chmod +x "$repo/bin/cs-tui"
+    cp "$real/bin/ags" "$real/bin/ags-secrets" "$real/bin/ags-statusline" \
+       "$real/bin/ags-subagent-statusline" "$real/bin/ags-codex-thread" "$repo/bin/"
+    printf 'STALE PICKER' > "$repo/bin/ags-tui"
+    chmod +x "$repo/bin/ags-tui"
     # Distinct mtimes, oldest first: -nt is the whole decision.
-    printf 'FRESH PICKER' > "$repo/tui/target/release/cs-tui"
-    chmod +x "$repo/tui/target/release/cs-tui"
-    touch -t 202001010000 "$repo/bin/cs-tui"
+    printf 'FRESH PICKER' > "$repo/tui/target/release/ags-tui"
+    chmod +x "$repo/tui/target/release/ags-tui"
+    touch -t 202001010000 "$repo/bin/ags-tui"
 
     HOME="$fake_home" bash "$repo/install.sh" > /dev/null 2>&1 || true
 
-    local installed="$fake_home/.local/bin/cs-tui"
+    local installed="$fake_home/.local/bin/ags-tui"
     assert_file_exists "$installed" "a picker should have been installed" || return 1
     assert_eq "FRESH PICKER" "$(cat "$installed")" \
-        "the newer cargo build must win over a stale bin/cs-tui" || return 1
+        "the newer cargo build must win over a stale bin/ags-tui" || return 1
+    assert_symlink "$fake_home/.local/bin/cs-tui" "legacy picker name must point to canonical ags-tui" || return 1
 }
 
 # The reverse: nothing built, so bin/cs-tui is all there is. A release tarball
@@ -382,15 +383,16 @@ test_local_install_uses_bin_picker_when_nothing_was_built() {
         [ -e "$real/$e" ] && ln -s "$(cd "$real" && pwd)/$e" "$repo/$e"
     done
     cp "$real/install.sh" "$repo/install.sh"
-    cp "$real/bin/cs" "$real/bin/cs-secrets" "$real/bin/cs-statusline" \
-       "$real/bin/cs-subagent-statusline" "$repo/bin/" 2>/dev/null || true
-    printf 'ONLY PICKER' > "$repo/bin/cs-tui"
-    chmod +x "$repo/bin/cs-tui"
+    cp "$real/bin/ags" "$real/bin/ags-secrets" "$real/bin/ags-statusline" \
+       "$real/bin/ags-subagent-statusline" "$real/bin/ags-codex-thread" "$repo/bin/"
+    printf 'ONLY PICKER' > "$repo/bin/ags-tui"
+    chmod +x "$repo/bin/ags-tui"
 
     HOME="$fake_home" bash "$repo/install.sh" > /dev/null 2>&1 || true
 
-    assert_eq "ONLY PICKER" "$(cat "$fake_home/.local/bin/cs-tui" 2>/dev/null)" \
+    assert_eq "ONLY PICKER" "$(cat "$fake_home/.local/bin/ags-tui" 2>/dev/null)" \
         "with no build present the shipped picker must still install" || return 1
+    assert_symlink "$fake_home/.local/bin/cs-tui" "legacy picker name must point to canonical ags-tui" || return 1
 }
 
 # hooks/cs-shared.sh is a build artifact: build.sh writes it from lib/02-shared.sh
@@ -400,6 +402,7 @@ test_local_install_uses_bin_picker_when_nothing_was_built() {
 test_build_generates_the_shared_hook_fragment() {
     local repo="$TEST_TMPDIR/build-repo" real="$SCRIPT_DIR/.."
     mkdir -p "$repo/bin" "$repo/hooks"
+    cp "$real"/bin/ags-{secrets,codex-thread,statusline,subagent-statusline} "$repo/bin/"
     cp -R "$real/lib" "$repo/lib"
     cp "$real/build.sh" "$real/install.sh.in" "$repo/"
     (cd "$repo" && bash build.sh > /dev/null) || { echo "  FAIL: build.sh failed"; return 1; }
@@ -419,6 +422,7 @@ test_build_generates_the_shared_hook_fragment() {
 test_build_generates_install_sh_from_its_template() {
     local repo="$TEST_TMPDIR/build-repo2" real="$SCRIPT_DIR/.."
     mkdir -p "$repo/bin" "$repo/hooks"
+    cp "$real"/bin/ags-{secrets,codex-thread,statusline,subagent-statusline} "$repo/bin/"
     cp -R "$real/lib" "$repo/lib"
     cp "$real/build.sh" "$real/install.sh.in" "$repo/"
     (cd "$repo" && bash build.sh > /dev/null) || { echo "  FAIL: build.sh failed"; return 1; }
@@ -437,6 +441,7 @@ test_build_generates_install_sh_from_its_template() {
 test_build_refuses_a_template_without_the_marker() {
     local repo="$TEST_TMPDIR/build-repo3" real="$SCRIPT_DIR/.."
     mkdir -p "$repo/bin" "$repo/hooks"
+    cp "$real"/bin/ags-{secrets,codex-thread,statusline,subagent-statusline} "$repo/bin/"
     cp -R "$real/lib" "$repo/lib"
     cp "$real/build.sh" "$repo/"
     grep -v '^# @@CS_MANIFESTS@@$' "$real/install.sh.in" > "$repo/install.sh.in"
@@ -454,6 +459,7 @@ test_build_refuses_a_template_without_the_marker() {
 test_build_refuses_a_missing_manifests_source() {
     local repo="$TEST_TMPDIR/build-repo4" real="$SCRIPT_DIR/.."
     mkdir -p "$repo/bin" "$repo/hooks"
+    cp "$real"/bin/ags-{secrets,codex-thread,statusline,subagent-statusline} "$repo/bin/"
     cp -R "$real/lib" "$repo/lib"
     cp "$real/build.sh" "$real/install.sh.in" "$repo/"
     rm "$repo/lib/01-manifests.sh"
@@ -471,11 +477,12 @@ test_build_refuses_a_missing_manifests_source() {
 test_build_outputs_are_world_readable() {
     local repo="$TEST_TMPDIR/build-repo5" real="$SCRIPT_DIR/.."
     mkdir -p "$repo/bin" "$repo/hooks"
+    cp "$real"/bin/ags-{secrets,codex-thread,statusline,subagent-statusline} "$repo/bin/"
     cp -R "$real/lib" "$repo/lib"
     cp "$real/build.sh" "$real/install.sh.in" "$repo/"
     (cd "$repo" && bash build.sh > /dev/null) || { echo "  FAIL: build.sh failed"; return 1; }
     local f mode
-    for f in bin/cs hooks/cs-shared.sh install.sh; do
+    for f in bin/ags bin/cs hooks/cs-shared.sh install.sh; do
         # GNU stat first: its -c is invalid on BSD stat (no output, exit 1), while
         # BSD's -f means "filesystem" to GNU stat and prints a block before failing.
         mode=$(stat -c '%a' "$repo/$f" 2>/dev/null || stat -f '%Lp' "$repo/$f")
@@ -708,6 +715,28 @@ test_install_deploys_hooks_to_cs_subdir() {
     fi
 }
 
+test_install_registers_absolute_hook_paths_on_request() {
+    local fake_home="$TEST_TMPDIR/home"
+    mkdir -p "$fake_home"
+    HOME="$fake_home" CS_HOOK_PATHS=absolute bash "$INSTALL_SH" > /dev/null 2>&1 < /dev/null || {
+        echo "  FAIL: install.sh exited non-zero"; return 1; }
+    local absolute tilde
+    absolute=$(jq --arg p "$fake_home/.claude/hooks/cs/session-start.sh" \
+        '[.hooks[][] | .hooks[]?.command | select(. == $p)] | length' "$fake_home/.claude/settings.json")
+    tilde=$(jq '[.hooks[][] | .hooks[]?.command | select(startswith("~/"))] | length' "$fake_home/.claude/settings.json")
+    if [ "$absolute" != 1 ] || [ "$tilde" != 0 ]; then
+        echo "  FAIL: expected absolute registrations only, got absolute=$absolute tilde=$tilde"; return 1
+    fi
+    # A later default install replaces the absolute spelling instead of adding a second entry.
+    HOME="$fake_home" bash "$INSTALL_SH" > /dev/null 2>&1 < /dev/null || { echo "  FAIL: reinstall exited non-zero"; return 1; }
+    absolute=$(jq --arg p "$fake_home/.claude/hooks/cs/session-start.sh" \
+        '[.hooks[][] | .hooks[]?.command | select(. == $p)] | length' "$fake_home/.claude/settings.json")
+    tilde=$(jq '[.hooks[][] | .hooks[]?.command | select(. == "~/.claude/hooks/cs/session-start.sh")] | length' "$fake_home/.claude/settings.json")
+    if [ "$absolute" != 0 ] || [ "$tilde" != 1 ]; then
+        echo "  FAIL: expected the tilde spelling to replace the absolute one, got absolute=$absolute tilde=$tilde"; return 1
+    fi
+}
+
 test_install_migrates_flat_hook_layout() {
     local fake_home="$TEST_TMPDIR/home"
     mkdir -p "$fake_home/.claude/hooks"
@@ -866,10 +895,11 @@ test_install_deploys_statusline_binary() {
         echo "  FAIL: install.sh exited non-zero"
         return 1
     }
-    if [ ! -x "$fake_home/.local/bin/cs-statusline" ]; then
-        echo "  FAIL: cs-statusline not deployed executable to ~/.local/bin"
+    if [ ! -x "$fake_home/.local/bin/ags-statusline" ]; then
+        echo "  FAIL: ags-statusline not deployed executable to ~/.local/bin"
         return 1
     fi
+    assert_symlink "$fake_home/.local/bin/cs-statusline" "legacy cs-statusline must point to the canonical helper" || return 1
 }
 
 test_install_deploys_subagent_statusline_binary() {
@@ -879,10 +909,32 @@ test_install_deploys_subagent_statusline_binary() {
         echo "  FAIL: install.sh exited non-zero"
         return 1
     }
-    if [ ! -x "$fake_home/.local/bin/cs-subagent-statusline" ]; then
-        echo "  FAIL: cs-subagent-statusline not deployed executable to ~/.local/bin"
+    if [ ! -x "$fake_home/.local/bin/ags-subagent-statusline" ]; then
+        echo "  FAIL: ags-subagent-statusline not deployed executable to ~/.local/bin"
         return 1
     fi
+    assert_symlink "$fake_home/.local/bin/cs-subagent-statusline" "legacy cs-subagent-statusline must point to the canonical helper" || return 1
+}
+
+test_install_and_uninstall_codex_thread_helper() {
+    local fake_home="$TEST_TMPDIR/home-codex"
+    mkdir -p "$fake_home"
+    HOME="$fake_home" bash "$INSTALL_SH" > /dev/null 2>&1 < /dev/null || {
+        echo "  FAIL: install.sh exited non-zero"
+        return 1
+    }
+    local helper="$fake_home/.local/bin/ags-codex-thread"
+    [ -x "$helper" ] || { echo "  FAIL: Codex thread helper is not executable"; return 1; }
+    cmp -s "$SCRIPT_DIR/../bin/ags-codex-thread" "$helper" || {
+        echo "  FAIL: installed Codex helper differs from the source"
+        return 1
+    }
+    assert_symlink "$fake_home/.local/bin/cs-codex-thread" "legacy Codex helper alias must be installed" || return 1
+    printf 'y\n' | HOME="$fake_home" "$CS_BIN" -uninstall > /dev/null 2>&1 || {
+        echo "  FAIL: uninstall failed"
+        return 1
+    }
+    [ ! -e "$helper" ] || { echo "  FAIL: Codex helper survived uninstall"; return 1; }
 }
 
 test_install_skips_statusline_noninteractive() {
@@ -899,7 +951,7 @@ test_install_skips_statusline_noninteractive() {
         echo "  FAIL: statusLine was registered without consent (got '$cmd')"
         return 1
     fi
-    assert_output_contains "$out" "cs -statusline enable" \
+    assert_output_contains "$out" "ags -statusline enable" \
         "non-interactive install should say how to enable the status line" || return 1
 }
 
@@ -916,7 +968,7 @@ test_statusline_enable_registers() {
     local cmd
     cmd=$(jq -r '.statusLine.command // ""' "$fake_home/.claude/settings.json")
     case "$cmd" in
-        */cs-statusline) ;;
+        */ags-statusline) ;;
         *)
             echo "  FAIL: enable did not register cs-statusline (got '$cmd')"
             return 1
@@ -972,7 +1024,7 @@ EOF
         echo "  FAIL: foreign statusLine was replaced non-interactively (now '$cmd')"
         return 1
     fi
-    assert_output_contains "$out" "cs-statusline" "install should mention how to enable cs-statusline" || return 1
+    assert_output_contains "$out" "ags-statusline" "install should mention how to enable ags-statusline" || return 1
 }
 
 # A declined status-line prompt is remembered, so `cs -update` (which re-runs
@@ -994,7 +1046,7 @@ test_install_honors_declined_statusline_marker() {
         return 1
     fi
     assert_output_contains "$out" "declined earlier"         "install should say the status line was declined earlier" || return 1
-    assert_output_contains "$out" "cs -statusline enable"         "install should still say how to enable" || return 1
+    assert_output_contains "$out" "ags -statusline enable"         "install should still say how to enable" || return 1
 }
 
 # The marker honors XDG_CONFIG_HOME, and it wins over a foreign status line's
@@ -1033,7 +1085,7 @@ test_install_refreshes_registered_statusline_despite_marker() {
     }
     local cmd
     cmd=$(jq -r '.statusLine.command // ""' "$fake_home/.claude/settings.json")
-    if [ "$cmd" != "$fake_home/.local/bin/cs-statusline" ]; then
+    if [ "$cmd" != "$fake_home/.local/bin/ags-statusline" ]; then
         echo "  FAIL: registered cs-statusline was not refreshed (got '$cmd')"
         return 1
     fi
@@ -1147,7 +1199,7 @@ case "\$url" in
 esac
 if [ -n "\$out" ]; then
     case "\$out" in
-        */cs) printf 'VERSION="9999.9.9"\n' > "\$out" ;;
+        */ags) printf 'VERSION="9999.9.9"\n' > "\$out" ;;
         *.sha256) printf 'deadbeef  x\n' > "\$out" ;;
         *)    printf 'stub-binary\n' > "\$out" ;;
     esac
@@ -1194,7 +1246,7 @@ test_tui_removed_when_checksum_cannot_be_fetched() {
     local bin
     bin=$(CS_TEST_SHA_FETCH=fail _install_tui_with_broken_verification fetch)
     local f
-    for f in "$bin"/cs-tui "$bin"/cs-tui.exe; do
+    for f in "$bin"/ags-tui "$bin"/ags-tui.exe; do
         if [ -f "$f" ]; then
             echo "  FAIL: kept an unverified $f when the checksum could not be fetched"
             return 1
@@ -1208,7 +1260,7 @@ test_tui_removed_when_digest_cannot_be_computed() {
     local bin
     bin=$(CS_TEST_SHA_TOOL=fail _install_tui_with_broken_verification tool)
     local f
-    for f in "$bin"/cs-tui "$bin"/cs-tui.exe; do
+    for f in "$bin"/ags-tui "$bin"/ags-tui.exe; do
         if [ -f "$f" ]; then
             echo "  FAIL: kept an unverified $f when no digest could be computed"
             return 1
@@ -1355,6 +1407,85 @@ test_uninstall_removes_update_cache() {
 }
 
 
+test_codex_only_install_and_reinstall_leave_claude_absent() {
+    local fake_home="$TEST_TMPDIR/codex-home" output
+    mkdir -p "$fake_home"
+    output=$(HOME="$fake_home" XDG_CONFIG_HOME="$fake_home/.config" CS_INSTALL_ENGINES=codex bash "$INSTALL_SH" 2>&1) || { echo "$output"; return 1; }
+    assert_file_exists "$fake_home/.local/bin/ags" || return 1
+    assert_symlink "$fake_home/.local/bin/cs" "cs remains an executable alias" || return 1
+    assert_file_exists "$fake_home/.local/bin/ags-secrets" || return 1
+    assert_file_exists "$fake_home/.local/bin/ags-codex-thread" || return 1
+    assert_symlink "$fake_home/.local/bin/cs-codex-thread" || return 1
+    assert_not_exists "$fake_home/.claude" || return 1
+    assert_not_exists "$fake_home/.local/bin/ags-statusline" || return 1
+    assert_not_exists "$fake_home/.local/bin/cs-statusline" || return 1
+    assert_eq codex "$(cat "$fake_home/.local/bin/.cs-install-engines")" || return 1
+    output=$(env -u CS_INSTALL_ENGINES HOME="$fake_home" XDG_CONFIG_HOME="$fake_home/.config" bash "$INSTALL_SH" 2>&1) || { echo "$output"; return 1; }
+    assert_not_exists "$fake_home/.claude" "reinstall must remember the selected adapter"
+}
+
+test_install_refuses_to_replace_legacy_cs_commands() {
+    local fake_home="$TEST_TMPDIR/reinstall-legacy"
+    mkdir -p "$fake_home/.local/bin"
+    local name
+    for name in cs cs-secrets cs-codex-thread; do
+        printf '#!/bin/sh\nexit 0\n' > "$fake_home/.local/bin/$name"
+        chmod +x "$fake_home/.local/bin/$name"
+    done
+    printf 'codex\n' > "$fake_home/.local/bin/.cs-install-engines"
+
+    local status=0 output
+    output=$(HOME="$fake_home" XDG_CONFIG_HOME="$fake_home/.config" bash "$INSTALL_SH" 2>&1) || status=$?
+    assert_eq 1 "$status" "direct installation must protect the original cs" || return 1
+    assert_output_contains "$output" 'Run sh setup.sh' || return 1
+    for name in cs cs-secrets cs-codex-thread; do
+        assert_eq $'#!/bin/sh\nexit 0' "$(cat "$fake_home/.local/bin/$name")" || return 1
+        [ ! -L "$fake_home/.local/bin/$name" ] || return 1
+    done
+    assert_not_exists "$fake_home/.local/bin/ags" || return 1
+    assert_eq codex "$(cat "$fake_home/.local/bin/.cs-install-engines")" \
+        "engine preference storage remains compatible" || return 1
+}
+
+test_uninstall_removes_canonical_commands_and_legacy_aliases() {
+    local fake_home="$TEST_TMPDIR/uninstall-ags" name
+    mkdir -p "$fake_home"
+    HOME="$fake_home" CS_INSTALL_ENGINES=codex bash "$INSTALL_SH" >/dev/null 2>&1 \
+        || { echo "  FAIL: install failed"; return 1; }
+    printf 'y\n' | HOME="$fake_home" "$fake_home/.local/bin/ags" -uninstall >/dev/null 2>&1 \
+        || { echo "  FAIL: ags -uninstall failed"; return 1; }
+    for name in ags cs ags-secrets cs-secrets ags-codex-thread cs-codex-thread; do
+        assert_not_exists "$fake_home/.local/bin/$name" "uninstall must remove $name" || return 1
+    done
+}
+
+test_codex_only_install_preserves_existing_claude_settings() {
+    local fake_home="$TEST_TMPDIR/codex-existing" output
+    mkdir -p "$fake_home/.claude/hooks/cs"
+    printf 'user settings, even malformed\n' > "$fake_home/.claude/settings.json"
+    printf 'user hook\n' > "$fake_home/.claude/hooks/cs/session-start.sh"
+    output=$(HOME="$fake_home" XDG_CONFIG_HOME="$fake_home/.config" CS_INSTALL_ENGINES=codex bash "$INSTALL_SH" 2>&1) || { echo "$output"; return 1; }
+    assert_eq 'user settings, even malformed' "$(cat "$fake_home/.claude/settings.json")" || return 1
+    assert_eq 'user hook' "$(cat "$fake_home/.claude/hooks/cs/session-start.sh")" || return 1
+    assert_not_exists "$fake_home/.claude/commands" || return 1
+    assert_not_exists "$fake_home/.claude/skills" || return 1
+    output=$(printf 'y\nn\nn\n' | HOME="$fake_home" XDG_CONFIG_HOME="$fake_home/.config" "$fake_home/.local/bin/cs" -uninstall 2>&1) || { echo "$output"; return 1; }
+    assert_not_exists "$fake_home/.local/bin/cs" || return 1
+    assert_not_exists "$fake_home/.local/bin/.cs-install-engines" || return 1
+    assert_eq 'user settings, even malformed' "$(cat "$fake_home/.claude/settings.json")" || return 1
+    assert_eq 'user hook' "$(cat "$fake_home/.claude/hooks/cs/session-start.sh")"
+}
+
+test_invalid_install_adapter_selection_fails_before_writes() {
+    local fake_home="$TEST_TMPDIR/invalid-home" output status=0
+    mkdir -p "$fake_home"
+    output=$(HOME="$fake_home" XDG_CONFIG_HOME="$fake_home/.config" CS_INSTALL_ENGINES='codex,unknown' bash "$INSTALL_SH" 2>&1) || status=$?
+    [ "$status" -ne 0 ] || { echo '  FAIL: invalid selection accepted'; return 1; }
+    assert_output_contains "$output" 'CS_INSTALL_ENGINES must be' || return 1
+    assert_not_exists "$fake_home/.local" || return 1
+    assert_not_exists "$fake_home/.claude"
+}
+
 run_test test_install_completes_when_zshrc_has_no_fpath
 run_test test_install_respects_custom_fpath_dir
 run_test test_manifest_arrays_in_sync
@@ -1365,11 +1496,13 @@ run_test test_install_deploys_the_rotate_mod_and_uninstall_removes_it
 run_test test_install_replaces_a_symlinked_mod_directory
 run_test test_strip_filters_in_sync
 run_test test_install_deploys_hooks_to_cs_subdir
+run_test test_install_registers_absolute_hook_paths_on_request
 run_test test_install_migrates_flat_hook_layout
 run_test test_install_writes_version_stamp
 run_test test_uninstall_strips_hook_registrations
 run_test test_install_deploys_statusline_binary
 run_test test_install_deploys_subagent_statusline_binary
+run_test test_install_and_uninstall_codex_thread_helper
 run_test test_install_skips_statusline_noninteractive
 run_test test_statusline_enable_registers
 run_test test_statusline_disable_strips_only_ours
@@ -1475,4 +1608,9 @@ run_test test_statusline_disable_sets_and_enable_clears_declined_marker
 run_test test_uninstall_removes_declined_marker
 run_test test_install_removes_the_retired_hint_mod
 run_test test_install_removes_the_mod_under_its_old_name
+run_test test_codex_only_install_and_reinstall_leave_claude_absent
+run_test test_install_refuses_to_replace_legacy_cs_commands
+run_test test_uninstall_removes_canonical_commands_and_legacy_aliases
+run_test test_codex_only_install_preserves_existing_claude_settings
+run_test test_invalid_install_adapter_selection_fails_before_writes
 report_results

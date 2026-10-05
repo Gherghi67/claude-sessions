@@ -1,5 +1,5 @@
 # ABOUTME: Session .gitignore setup, adopting an existing project, and full uninstall.
-# ABOUTME: Backs 'cs -adopt' and 'cs -uninstall'.
+# ABOUTME: Backs 'ags -adopt' and 'ags -uninstall'.
 
 create_session_gitignore() {
     local session_dir="$1"
@@ -69,13 +69,25 @@ ENTRIES
     done <<< "$entries"
 }
 
-# Adopt an existing project directory as a cs session
+# Adopt an existing project directory as an agent-sessions workspace
 adopt_session() {
-    local session_name="$1"
+    local session_name="${1:-}" explicit_engine="" engine
+    [ "$#" -eq 0 ] || shift
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --engine)
+                [ -n "${2:-}" ] || error "--engine needs claude or codex"
+                explicit_engine="$2"; shift 2 ;;
+            --engine=*) explicit_engine="${1#*=}"; shift ;;
+            *) error "Usage: ags -adopt <name> [--engine claude|codex]" ;;
+        esac
+        cs_engine_known "$explicit_engine" || error "--engine needs claude or codex"
+    done
     local target_dir
     target_dir="$(pwd -P)"
 
     validate_session_name "$session_name"
+    engine=$(_session_engine "$target_dir" "$explicit_engine")
 
     # A .cs/ directory with no session link is orphaned: `cs -rm`/the TUI's `d`
     # only ever remove the symlink, by design, so records survive a removal —
@@ -94,7 +106,7 @@ adopt_session() {
         done
 
         if [ -n "$existing_name" ]; then
-            error "Directory is already adopted as session '$existing_name' (open it with: cs $existing_name)"
+            error "Directory is already adopted as session '$existing_name' (open it with: ags $existing_name)"
         fi
 
         if cs_interactive; then
@@ -115,9 +127,17 @@ adopt_session() {
         error "Session '$session_name' already exists"
     fi
 
-    # create_session_structure writes CLAUDE.local.md, never CLAUDE.md — a
-    # project's own CLAUDE.md is left untouched.
-    create_session_structure "$target_dir"
+    # create_session_structure stages a Claude id for a brand-new session's
+    # first launch. An adopted directory already exists, so its first open is
+    # treated as a reopen, and the staged id made it ask to continue a
+    # conversation that never existed (the default answer then failed). Drop
+    # the id on a first adoption so the first open starts fresh; re-adopted
+    # records keep the conversation they name.
+    local prior_binding
+    prior_binding=$(_read_local_state "$target_dir/.cs/local/state" claude_session_id)
+    create_session_structure "$target_dir" "$engine"
+    [ -n "$prior_binding" ] || _unset_local_state "$target_dir/.cs/local/state" claude_session_id
+    _set_local_state "$target_dir/.cs/local/state" engine "$engine"
 
     # An adopted session's name is the link's, not the directory's, and the link
     # is the only place it lives — so a hook that resolves this project by
@@ -129,8 +149,10 @@ adopt_session() {
     mkdir -p "$SESSIONS_ROOT"
     ln -s "$target_dir" "$session_link"
 
-    # Initialize git if not already a repo
-    if [ ! -d "$target_dir/.git" ]; then
+    # Initialize git if not already a repo. A linked worktree or submodule has
+    # a .git file, not a directory; reading that as "no repo" ran the fresh-repo
+    # path in the user's checkout (template .gitignore, branch renamed to main).
+    if [ ! -e "$target_dir/.git" ]; then
         (
             cd "$target_dir" || exit 0
             create_session_gitignore "$target_dir"
@@ -167,12 +189,14 @@ adopt_session() {
 
     info "Adopted $(basename "$target_dir") as session '$session_name'"
     echo -e "${DIM}Symlink: $session_link -> $target_dir${NC}"
-    echo -e "${DIM}Resume with: cs $session_name${NC}"
+    echo -e "${DIM}Resume with: ags $session_name${NC}"
 }
 
-# Uninstall cs and all components
+# Uninstall agent-sessions and all components
 run_uninstall() {
-    local install_dir="$HOME/.local/bin"
+    local install_dir="${CS_INSTALL_DIR:-$HOME/.local/bin}"
+    local install_engines install_config="${CS_INSTALL_DIR:-$HOME/.local/bin}/.cs-install-engines"
+    install_engines=$(cat "$install_config" 2>/dev/null) || install_engines=claude,codex
     local hooks_parent_dir="$HOME/.claude/hooks"
     local hooks_dir="$hooks_parent_dir/cs"
     local commands_dir="$HOME/.claude/commands"
@@ -191,10 +215,10 @@ run_uninstall() {
     local zsh_completion_dirs=("$HOME/.zsh/completions" "$HOME/.zsh/completion")
     # check_update_notify stamps update-check and update-notes-* here; they
     # outlived a full uninstall and made the next install look up to date.
-    local update_cache_dir="$HOME/.cache/cs"
+    local update_cache_dir="${CS_CACHE_DIR:-$HOME/.cache/cs}"
 
-    warn "This will uninstall cs and all its components:"
-    echo "  - $install_dir/cs, $install_dir/cs-secrets, $install_dir/cs-statusline, $install_dir/cs-subagent-statusline, $install_dir/cs-tui(.exe)"
+    warn "This will uninstall agent-sessions (ags) and its cs compatibility aliases:"
+    echo "  - $install_dir/ags and $install_dir/cs, plus ags/cs companion commands"
     echo "  - Hooks in $hooks_dir/"
     echo "  - Commands in $commands_dir/"
     echo "  - Skills in $skills_dir/"
@@ -210,53 +234,54 @@ run_uninstall() {
     fi
 
     echo ""
-    info "Uninstalling cs..."
+    info "Uninstalling agent-sessions..."
     echo ""
 
-    # Remove binaries
-    if [ -f "$install_dir/cs" ]; then
-        rm "$install_dir/cs"
-        info "Removed $install_dir/cs"
-    fi
+    # Remove canonical commands and legacy command aliases. `-L` includes a
+    # dangling symlink left by an interrupted install or manual binary removal.
+    local command_name
+    for command_name in ags cs ags-secrets cs-secrets ags-codex-thread cs-codex-thread; do
+        if [ -e "$install_dir/$command_name" ] || [ -L "$install_dir/$command_name" ]; then
+            rm -f "$install_dir/$command_name"
+            info "Removed $install_dir/$command_name"
+        fi
+    done
 
-    if [ -f "$install_dir/cs-secrets" ]; then
-        rm "$install_dir/cs-secrets"
-        info "Removed $install_dir/cs-secrets"
-    fi
+    if [[ ",$install_engines," == *,claude,* ]]; then
+    for command_name in ags-statusline cs-statusline ags-subagent-statusline cs-subagent-statusline; do
+        if [ -e "$install_dir/$command_name" ] || [ -L "$install_dir/$command_name" ]; then
+            rm -f "$install_dir/$command_name"
+            info "Removed $install_dir/$command_name"
+        fi
+    done
 
-    if [ -f "$install_dir/cs-statusline" ]; then
-        rm "$install_dir/cs-statusline"
-        info "Removed $install_dir/cs-statusline"
-    fi
-
-    if [ -f "$install_dir/cs-subagent-statusline" ]; then
-        rm "$install_dir/cs-subagent-statusline"
-        info "Removed $install_dir/cs-subagent-statusline"
-    fi
-
-    # Remove the statusLine registration only when it points at cs-statusline;
+    # Remove status-line registrations only when they point at either the
+    # canonical ags helpers or their legacy cs aliases;
     # a status line the user configured themselves is left untouched.
     if command -v jq >/dev/null 2>&1 && _strip_statusline_registration "$settings_file"; then
-        info "Removed cs-statusline registration from settings.json"
+        info "Removed agent-sessions statusLine registration from settings.json"
     fi
 
-    # Remove the subagentStatusLine registration only when it points at
-    # cs-subagent-statusline; a row renderer the user configured is left alone.
+    # Remove the subagentStatusLine registration only when it points at one of
+    # our helper names; a row renderer the user configured is left alone.
     if command -v jq >/dev/null 2>&1 && _strip_subagent_statusline_registration "$settings_file"; then
-        info "Removed cs-subagent-statusline registration from settings.json"
+        info "Removed agent-sessions subagentStatusLine registration from settings.json"
     fi
 
     rm -f "$(_statusline_declined_marker)"
 
+    fi
+
     # The .exe name is only ever a leftover from an install that predates
     # dropping Windows; remove it too so an upgrade leaves nothing behind.
-    for _tui in cs-tui cs-tui.exe; do
+    for _tui in ags-tui cs-tui ags-tui.exe cs-tui.exe; do
         if [ -f "$install_dir/$_tui" ]; then
             rm "$install_dir/$_tui"
             info "Removed $install_dir/$_tui"
         fi
     done
 
+    if [[ ",$install_engines," == *,claude,* ]]; then
     # Remove hooks from both deployment layouts (subdirectory and flat)
     local hook dir
     for hook in "${CS_HOOKS[@]}" "${CS_HOOK_LIBS[@]}"; do
@@ -312,18 +337,24 @@ run_uninstall() {
         fi
     done
 
-    # Remove shell completions
-    if [ -f "$bash_completion_dir/cs.bash" ]; then
-        rm "$bash_completion_dir/cs.bash"
-        info "Removed $bash_completion_dir/cs.bash"
     fi
+
+    # Remove shell completions
+    for _completion in ags.bash cs.bash; do
+        if [ -f "$bash_completion_dir/$_completion" ] || [ -L "$bash_completion_dir/$_completion" ]; then
+            rm -f "$bash_completion_dir/$_completion"
+            info "Removed $bash_completion_dir/$_completion"
+        fi
+    done
 
     local zsh_dir
     for zsh_dir in "${zsh_completion_dirs[@]}"; do
-        if [ -f "$zsh_dir/_cs" ]; then
-            rm "$zsh_dir/_cs"
-            info "Removed $zsh_dir/_cs"
-        fi
+        for _completion in _ags _cs; do
+            if [ -f "$zsh_dir/$_completion" ] || [ -L "$zsh_dir/$_completion" ]; then
+                rm -f "$zsh_dir/$_completion"
+                info "Removed $zsh_dir/$_completion"
+            fi
+        done
     done
 
     if [ -d "$update_cache_dir" ]; then
@@ -331,6 +362,7 @@ run_uninstall() {
         info "Removed $update_cache_dir"
     fi
 
+    if [[ ",$install_engines," == *,claude,* ]]; then
     # Clean up settings.json (remove cs hooks, preserve others)
     if [ -f "$settings_file" ] && command -v jq >/dev/null 2>&1; then
         local settings
@@ -361,6 +393,9 @@ run_uninstall() {
         warn "Manually remove cs hook entries from $settings_file"
     fi
 
+    fi
+    rm -f "$install_config"
+
     # Ask about secrets in keychain
     if [ -d "$SESSIONS_ROOT" ]; then
         local sessions
@@ -378,7 +413,7 @@ run_uninstall() {
             if [[ $REPLY =~ ^[Yy]$ ]]; then
                 # Find cs-secrets script
                 local secrets_script=""
-                for loc in "$install_dir/cs-secrets" "/usr/local/bin/cs-secrets"; do
+                for loc in "$install_dir/ags-secrets" "$install_dir/cs-secrets" "/usr/local/bin/ags-secrets" "/usr/local/bin/cs-secrets"; do
                     if [ -x "$loc" ]; then
                         secrets_script="$loc"
                         break

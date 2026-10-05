@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# ABOUTME: Assembles bin/cs from its lib/*.sh fragments; edit lib/, never bin/cs.
+# ABOUTME: Assembles bin/ags from its lib/*.sh fragments; edit lib/, never bin/ags.
 # ABOUTME: Concatenates the numbered fragments in order, dropping each fragment's
-# ABOUTME: own ABOUTME header so the built bin/cs keeps only lib/00-header.sh's.
+# ABOUTME: own ABOUTME header so the built bin/ags keeps only lib/00-header.sh's.
 # ABOUTME: Also writes hooks/cs-shared.sh from lib/02-shared.sh, the code hooks share with cs,
 # ABOUTME: and install.sh from install.sh.in with lib/01-manifests.sh spliced in at its marker.
 set -euo pipefail
 cd "$(dirname "$0")"
 
 LIB_DIR="lib"
-OUT="bin/cs"
+OUT="bin/ags"
 SHARED_SRC="$LIB_DIR/02-shared.sh"
 SHARED_OUT="hooks/cs-shared.sh"
 MANIFESTS_SRC="$LIB_DIR/01-manifests.sh"
@@ -31,7 +31,7 @@ trap 'rm -f "$tmp"' EXIT
 first=1
 for f in "$@"; do
     if [ "$first" = 1 ]; then
-        # 00-header carries bin/cs's shebang and its single ABOUTME header.
+        # 00-header carries bin/ags's shebang and its single ABOUTME header.
         cat "$f" >> "$tmp"
         first=0
     else
@@ -50,6 +50,27 @@ chmod 755 "$tmp"
 mv "$tmp" "$OUT"
 trap - EXIT
 echo "Built $OUT from $# lib fragments ($(wc -l < "$OUT") lines)"
+
+# Keep the historical command as a symlink to the one canonical implementation.
+# `cs` is intentionally source/eval-compatible: reading the alias follows the
+# symlink and returns exactly the generated `ags` program.
+ln -sf ags bin/cs
+
+# Canonical helper names own the implementations; old names stay usable by
+# existing settings and source-based callers through symlinks.
+for pair in \
+    "cs-secrets:ags-secrets" \
+    "cs-codex-thread:ags-codex-thread" \
+    "cs-statusline:ags-statusline" \
+    "cs-subagent-statusline:ags-subagent-statusline"; do
+    alias_name=${pair%%:*}
+    canonical_name=${pair#*:}
+    [ -f "bin/$canonical_name" ] || {
+        echo "error: missing canonical command bin/$canonical_name" >&2
+        exit 1
+    }
+    ln -sf "$canonical_name" "bin/$alias_name"
+done
 
 # The hooks cannot source lib/ (they run from ~/.claude/hooks/cs/, where only
 # the hooks and their libraries are deployed), so the fragment they share with

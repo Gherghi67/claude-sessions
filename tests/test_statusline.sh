@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=tests/test_lib.sh
 source "$SCRIPT_DIR/test_lib.sh"
 
-SL="$SCRIPT_DIR/../bin/cs-statusline"
+SL="$SCRIPT_DIR/../bin/ags-statusline"
 # Every cs launch exports CS_BIN (the installed cs), so a run from inside a cs
 # session inherits one: this suite tests the checkout's cs, and setup() unsets
 # every exported CS_* variable, which would leave CS_BIN unbound. Drop the
@@ -1863,8 +1863,8 @@ test_enable_registers_both_status_lines() {
     local sl ssl
     sl=$(jq -r '.statusLine.command' "$CS_CLAUDE_DIR/settings.json")
     ssl=$(jq -r '.subagentStatusLine.command' "$CS_CLAUDE_DIR/settings.json")
-    assert_output_contains "$sl" "/cs-statusline" "statusLine registered" || return 1
-    assert_output_contains "$ssl" "/cs-subagent-statusline" "subagentStatusLine registered" || return 1
+    assert_output_contains "$sl" "/ags-statusline" "statusLine registered" || return 1
+    assert_output_contains "$ssl" "/ags-subagent-statusline" "subagentStatusLine registered" || return 1
 }
 
 test_disable_leaves_a_foreign_subagent_statusline_alone() {

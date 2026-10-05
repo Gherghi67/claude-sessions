@@ -1,44 +1,57 @@
-# ABOUTME: cs -conversations: the session's conversation chain from timeline.jsonl.
+# ABOUTME: ags -conversations: the session's conversation chain from timeline.jsonl.
 # ABOUTME: Renders started/rotated events with lineage arrows in local time.
 
 run_conversations() {
-    [ $# -eq 0 ] || error "Usage: cs -conversations"
-    if [ -z "${CLAUDE_SESSION_META_DIR:-}" ]; then
-        error "cs -conversations must be run inside a cs session, or as: cs <session> -conversations"
+    [ $# -eq 0 ] || error "Usage: ags -conversations"
+    if [ -z "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ]; then
+        error "ags -conversations must be run inside a cs session, or as: ags <session> -conversations"
     fi
-    local timeline="$CLAUDE_SESSION_META_DIR/timeline.jsonl"
+    local timeline="${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/timeline.jsonl"
     if [ ! -s "$timeline" ]; then
         echo "No conversation history recorded."
         return 0
     fi
-    local current
-    current=$(_read_local_state "$CLAUDE_SESSION_META_DIR/local/state" claude_session_id)
-    # One line per conversation's first started event (later starteds fold
-    # into a resumed-count suffix); one line per rotated event. Torn or
-    # foreign lines are skipped by the tolerant per-line parse.
-    jq -rRs --arg current "$current" '
+    local current_claude current_codex session_dir
+    session_dir="${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/.."
+    current_claude=$(cs_binding_read "$session_dir" claude) || current_claude=""
+    current_codex=$(cs_binding_read "$session_dir" codex) || current_codex=""
+    # Old records have no engine and belong to Claude. Key by engine AND ID:
+    # equal opaque native IDs from different engines are separate conversations.
+    jq -rRs --arg claude "$current_claude" --arg codex "$current_codex" '
+        def key: [.engine, .session_id] | tojson;
+        def conversation_label($engine; $id): $engine + ":" + $id[0:8];
         [split("\n")[] | select(length > 0) | (fromjson? // empty)
-         | select(.event == "started" or .event == "rotated")] as $ev |
+         | select(type == "object")
+         | .engine = (.engine // "claude")
+         | select((.engine | type) == "string" and (.ts | type) == "string")
+         | select(((.source // "") | type) == "string" and
+                  ((.reason // "") | type) == "string" and
+                  ((.handoff // "") | type) == "string" and
+                  ((.from // "") | type) == "string")
+         | select((.event == "started" and (.session_id | type) == "string")
+               or (.event == "rotated" and (.to | type) == "string"))] as $ev |
         (reduce $ev[] as $e ({};
             if $e.event == "started"
-            then .[$e.session_id] = (.[$e.session_id] // 0) + 1
+            then .[$e | key] = (.[$e | key] // 0) + 1
             else . end)) as $n |
         (reduce $ev[] as $e ({seen: {}, out: []};
             if $e.event == "started" then
-                if .seen[$e.session_id] then . else
-                    .seen[$e.session_id] = true |
+                ($e | key) as $k |
+                if .seen[$k] then . else
+                    .seen[$k] = true |
                     .out += [{ts: $e.ts,
-                        txt: ($e.session_id[0:8] + "  started (" + ($e.source // "?")
-                            + (if ($n[$e.session_id] // 1) > 1
-                               then ", resumed " + (($n[$e.session_id] - 1) | tostring) + "x"
+                        txt: (conversation_label($e.engine; $e.session_id) + "  started (" + ($e.source // "?")
+                            + (if ($n[$k] // 1) > 1
+                               then ", resumed " + (($n[$k] - 1) | tostring) + "x"
                                else "" end)
                             + ")"
-                            + (if $current != "" and $e.session_id == $current
+                            + (if ($e.engine == "claude" and $claude != "" and $e.session_id == $claude)
+                                   or ($e.engine == "codex" and $codex != "" and $e.session_id == $codex)
                                then "  [current]" else "" end))}]
                 end
             else
                 .out += [{ts: $e.ts,
-                    txt: ((if ($e.from // "") == "" then "?" else $e.from[0:8] end)
+                    txt: ($e.engine + ":" + (if ($e.from // "") == "" then "?" else $e.from[0:8] end)
                         + " > " + ($e.to[0:8]) + "  rotated (" + ($e.reason // "?")
                         + (if ($e.handoff // "") != "" then ": " + $e.handoff else "" end)
                         + ")")}]

@@ -1,6 +1,24 @@
 # ABOUTME: Actor identity, narrative-budget and tmux window-title code that cs AND its hooks run. build.sh
 # ABOUTME: folds this into bin/cs and writes it verbatim to hooks/cs-shared.sh for sourcing.
 
+# The core session identity is independent of the selected runtime. Keep the
+# aliases while shipped hooks and shared commands still read the older names.
+# Always replace all six values together: a nested launch may inherit a parent.
+cs_export_session_context() {  # session_name, session_dir
+    export CS_SESSION_NAME="$1" CS_SESSION_DIR="$2" CS_SESSION_META_DIR="$2/.cs"
+    export CLAUDE_SESSION_NAME="$CS_SESSION_NAME" CLAUDE_SESSION_DIR="$CS_SESSION_DIR"
+    export CLAUDE_SESSION_META_DIR="$CS_SESSION_META_DIR"
+    # Feature sessions share their base's secrets, regardless of runtime.
+    export CS_SECRETS_SESSION="${1%@*}"
+}
+
+# Read legacy callers while preferring the canonical neutral interface.
+cs_import_session_context() {
+    export CS_SESSION_NAME="${CS_SESSION_NAME:-${CLAUDE_SESSION_NAME:-}}"
+    export CS_SESSION_DIR="${CS_SESSION_DIR:-${CLAUDE_SESSION_DIR:-}}"
+    export CS_SESSION_META_DIR="${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}"
+}
+
 # Normalize an arbitrary identity string to a filesystem-safe slug.
 _slugify() {
     printf '%s' "$1" \
@@ -31,13 +49,13 @@ cs_actor_raw() {  # session_dir, meta_dir
 
 # Resolve the current actor as a slug. With a session_dir arg, resolve the
 # pinned identity and git config from that dir (callers may run before
-# CLAUDE_SESSION_META_DIR is exported). Without, use env + cwd.
+# CS_SESSION_META_DIR (or its legacy alias) is exported). Without, use env + cwd.
 cs_actor_slug() {
     local sdir="${1:-}" meta=""
     if [ -n "$sdir" ]; then
         meta="$sdir/.cs"
     else
-        meta="${CLAUDE_SESSION_META_DIR:-}"
+        meta="${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}"
     fi
     _slugify "$(cs_actor_raw "$sdir" "$meta")"
 }
@@ -90,7 +108,7 @@ cs_tmux_title_window() {  # pane, session name ("" releases the pane)
     names=$(tmux list-panes -t "$pane" -F '#{@cs_session}' 2>/dev/null \
         | awk 'NF && !seen[$0]++ { out = out (out == "" ? "" : " | ") $0 } END { print out }') || names=""
     if [ -n "$names" ]; then
-        tmux rename-window -t "$pane" "cs: $names" 2>/dev/null || true
+        tmux rename-window -t "$pane" "ags: $names" 2>/dev/null || true
         tmux set-window-option -t "$pane" allow-rename off 2>/dev/null || true
         tmux set-window-option -t "$pane" allow-set-title off 2>/dev/null || true
     else
@@ -138,4 +156,54 @@ _cs_tmux_title_lock() {  # pane
     done
     echo "$$" > "$lock/pid" 2>/dev/null || true
     printf '%s\n' "$lock"
+}
+
+# Serialize ownership changes on a persistent inode. The descriptor belongs to
+# this subshell, so the kernel releases it even after a signal or SIGKILL.
+# Never unlink the guard: waiters must all lock the same inode. BSD lockf and
+# Linux flock both lock the inherited open file description, not just their
+# short-lived utility process. Callback variable assignments stay in this
+# subshell; callers communicate through files and the callback's exit status.
+cs_run_guarded() (  # meta_dir, callback, arguments...
+    local meta="$1"
+    shift
+    mkdir -p "$meta/local" || return 1
+    umask 077
+    exec 9> "$meta/local/run-lease.guard" || return 1
+    if command -v flock >/dev/null 2>&1; then
+        flock -w 5 9 || { printf 'Error: Could not acquire run ownership guard: %s\n' "$meta" >&2; return 1; }
+    elif command -v lockf >/dev/null 2>&1; then
+        lockf -s -t 5 9 || { printf 'Error: Could not acquire run ownership guard: %s\n' "$meta" >&2; return 1; }
+    else
+        printf 'Error: Run ownership requires flock (Linux) or lockf (macOS).\n' >&2
+        return 1
+    fi
+    "$@"
+)
+
+# A read predicate for hooks. Mutations must use cs_run_with_lease so a forced
+# successor cannot replace ownership between this check and a binding write.
+cs_run_lease_owned() {  # meta_dir
+    local meta="$1" owner="${CS_RUN_OWNER_PID:-}" lock_pid=""
+    [ -n "${CS_RUN_ID:-}" ] && [ -n "${CS_RUN_ENGINE:-}" ] || return 1
+    case "$owner" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$owner" -gt 1 ] && kill -0 "$owner" 2>/dev/null || return 1
+    { IFS= read -r lock_pid < "$meta/session.lock"; } 2>/dev/null || return 1
+    [ "$lock_pid" = "$owner" ] || return 1
+    jq -e --arg id "$CS_RUN_ID" --arg engine "$CS_RUN_ENGINE" --arg owner "$owner" \
+        '.run_id == $id and .engine == $engine and (.owner_pid | tostring) == $owner' \
+        "$meta/local/run-lease.json" >/dev/null 2>&1
+}
+
+_cs_run_owned_callback() {  # meta_dir, callback, arguments...
+    local meta="$1"
+    shift
+    cs_run_lease_owned "$meta" || return 1
+    "$@"
+}
+
+cs_run_with_lease() {  # meta_dir, callback, arguments...
+    local meta="$1"
+    shift
+    cs_run_guarded "$meta" _cs_run_owned_callback "$meta" "$@"
 }

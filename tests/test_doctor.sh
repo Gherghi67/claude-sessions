@@ -70,7 +70,7 @@ test_doctor_warns_on_a_narrative_over_budget() {
     # Colour escapes may sit between the [WARN] tag and the message, so the two
     # are pinned separately.
     assert_output_contains "$output" "Narrative: narrative.alice.md is 2 KB (budget 2 KB)" "warns with file and budget" || return 1
-    assert_output_contains "$output" "run cs -narrative rotate" "points at the rotation" || return 1
+    assert_output_contains "$output" "run ags -narrative rotate" "points at the rotation" || return 1
     # This fixture never trips a FAIL check, so the summary takes the WARN
     # branch ("Complete with N warning(s).") rather than the FAIL branch's
     # "Warnings: N" — assert against the branch this scenario actually hits.
@@ -102,8 +102,8 @@ test_doctor_reports_ok_when_narratives_fit() {
     budget_kb=$(( $(grep -o 'CS_NARRATIVE_MAX_DEFAULT=[0-9]*' "$SCRIPT_DIR/../lib/02-shared.sh" \
         | head -1 | cut -d= -f2) / 1024 ))
     assert_output_contains "$output" "Narrative: all within the $budget_kb KB budget" \
-        "ok line names the budget cs -narrative rotate would use" || return 1
-    assert_output_not_contains "$output" "run cs -narrative rotate" "no warning" || return 1
+        "ok line names the budget ags -narrative rotate would use" || return 1
+    assert_output_not_contains "$output" "run ags -narrative rotate" "no warning" || return 1
 }
 
 test_doctor_survives_an_unreadable_narrative() {
@@ -147,7 +147,7 @@ make_fake_checkout() {  # dir, [deploy_dir], [version]
     local dir="$1" deployed="${2:-}" version="${3:-9999.9.9}"
     mkdir -p "$dir/hooks" "$dir/bin"
     : > "$dir/install.sh"
-    printf 'VERSION="%s"\n' "$version" > "$dir/bin/cs"
+    printf 'VERSION="%s"\n' "$version" > "$dir/bin/ags"
     # The drift scan compares only against the checkout that produced the
     # install, which it recognises by the stamp install.sh writes into the
     # deploy directory. Without a matching stamp it declines to compare.
@@ -614,9 +614,9 @@ test_doctor_statusline_ok_when_registered_and_executable() {
     local fake_claude="$TEST_TMPDIR/sl-claude"
     local fake_bin="$TEST_TMPDIR/sl-bin"
     mkdir -p "$fake_claude" "$fake_bin"
-    printf '#!/bin/sh\n' > "$fake_bin/cs-statusline"
-    chmod +x "$fake_bin/cs-statusline"
-    printf '{"statusLine":{"type":"command","command":"%s"}}\n' "$fake_bin/cs-statusline" > "$fake_claude/settings.json"
+    printf '#!/bin/sh\n' > "$fake_bin/ags-statusline"
+    chmod +x "$fake_bin/ags-statusline"
+    printf '{"statusLine":{"type":"command","command":"%s"}}\n' "$fake_bin/ags-statusline" > "$fake_claude/settings.json"
     local output
     output=$(CS_CLAUDE_DIR="$fake_claude" "$CS_BIN" -doctor 2>&1) || true
     assert_output_contains "$output" "Statusline" "doctor should run a Statusline check" || return 1
@@ -629,7 +629,7 @@ test_doctor_statusline_ok_when_registered_and_executable() {
 test_doctor_statusline_fails_when_binary_missing() {
     local fake_claude="$TEST_TMPDIR/sl-claude-missing"
     mkdir -p "$fake_claude"
-    printf '{"statusLine":{"type":"command","command":"%s"}}\n' "$TEST_TMPDIR/absent/cs-statusline" > "$fake_claude/settings.json"
+    printf '{"statusLine":{"type":"command","command":"%s"}}\n' "$TEST_TMPDIR/absent/ags-statusline" > "$fake_claude/settings.json"
     local output
     output=$(CS_CLAUDE_DIR="$fake_claude" "$CS_BIN" -doctor 2>&1) || true
     if ! echo "$output" | grep "Statusline" | grep -q "FAIL"; then
@@ -646,12 +646,12 @@ test_doctor_statusline_caps_row_names_the_answer_or_the_ask() {
     local fake_bin="$TEST_TMPDIR/sl-bin-caps"
     local xdg="$TEST_TMPDIR/xdg-caps"
     mkdir -p "$fake_claude" "$fake_bin" "$xdg/cs"
-    printf '#!/bin/sh\n' > "$fake_bin/cs-statusline"
-    chmod +x "$fake_bin/cs-statusline"
-    printf '{"statusLine":{"type":"command","command":"%s"}}\n' "$fake_bin/cs-statusline" > "$fake_claude/settings.json"
+    printf '#!/bin/sh\n' > "$fake_bin/ags-statusline"
+    chmod +x "$fake_bin/ags-statusline"
+    printf '{"statusLine":{"type":"command","command":"%s"}}\n' "$fake_bin/ags-statusline" > "$fake_claude/settings.json"
     local output
     output=$(XDG_CONFIG_HOME="$xdg" CS_CLAUDE_DIR="$fake_claude" "$CS_BIN" -doctor 2>&1) || true
-    assert_output_contains "$output" "cs -statusline caps ask" "unanswered: doctor names the ask" || return 1
+    assert_output_contains "$output" "ags -statusline caps ask" "unanswered: doctor names the ask" || return 1
     printf 'on\n' > "$xdg/cs/statusline-caps"
     output=$(XDG_CONFIG_HOME="$xdg" CS_CLAUDE_DIR="$fake_claude" "$CS_BIN" -doctor 2>&1) || true
     assert_output_contains "$output" "caps: rounded" "answered on: doctor says rounded" || return 1
@@ -732,9 +732,9 @@ test_doctor_subagent_statusline_ok_when_registered_and_executable() {
     local fake_claude="$TEST_TMPDIR/ssl-claude"
     local fake_bin="$TEST_TMPDIR/ssl-bin"
     mkdir -p "$fake_claude" "$fake_bin"
-    printf '#!/bin/sh\n' > "$fake_bin/cs-subagent-statusline"
-    chmod +x "$fake_bin/cs-subagent-statusline"
-    printf '{"subagentStatusLine":{"type":"command","command":"%s"}}\n' "$fake_bin/cs-subagent-statusline" > "$fake_claude/settings.json"
+    printf '#!/bin/sh\n' > "$fake_bin/ags-subagent-statusline"
+    chmod +x "$fake_bin/ags-subagent-statusline"
+    printf '{"subagentStatusLine":{"type":"command","command":"%s"}}\n' "$fake_bin/ags-subagent-statusline" > "$fake_claude/settings.json"
     local output
     output=$(CS_CLAUDE_DIR="$fake_claude" "$CS_BIN" -doctor 2>&1) || true
     assert_output_contains "$output" "Subagent statusline" "doctor should run a Subagent statusline check" || return 1
@@ -747,7 +747,7 @@ test_doctor_subagent_statusline_ok_when_registered_and_executable() {
 test_doctor_subagent_statusline_fails_when_binary_missing() {
     local fake_claude="$TEST_TMPDIR/ssl-claude-missing"
     mkdir -p "$fake_claude"
-    printf '{"subagentStatusLine":{"type":"command","command":"%s"}}\n' "$TEST_TMPDIR/absent/cs-subagent-statusline" > "$fake_claude/settings.json"
+    printf '{"subagentStatusLine":{"type":"command","command":"%s"}}\n' "$TEST_TMPDIR/absent/ags-subagent-statusline" > "$fake_claude/settings.json"
     local output
     output=$(CS_CLAUDE_DIR="$fake_claude" "$CS_BIN" -doctor 2>&1) || true
     if ! echo "$output" | grep "Subagent statusline" | grep -q "FAIL"; then
@@ -872,7 +872,7 @@ test_doctor_spawned_by_ok_when_spawner_exists() {
 test_doctor_warns_on_unmarked_cs_tmux_session() {
     local output
     output=$(CS_TMUX_BIN="$(_doctor_tmux_fake cs '')" "$CS_BIN" -doctor 2>&1) || true
-    assert_output_contains "$output" "not cs-managed\|@cs_managed\|cs -spawn will refuse" \
+    assert_output_contains "$output" "not cs-managed\|@cs_managed\|ags -spawn will refuse" \
         "doctor should warn about a foreign tmux session named cs" || return 1
 }
 

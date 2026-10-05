@@ -1,17 +1,30 @@
-# ABOUTME: Dependency checks (claude binary) and session-name validation.
+# ABOUTME: Runtime dependency checks and session-name validation.
 # ABOUTME: Rejects unsafe names before any filesystem work.
 
 check_dependencies() {
-    local missing=()
-
-    # Extract just the binary name (first word) for the check
-    local claude_bin
-    claude_bin="${CLAUDE_CODE_BIN%% *}"
-    command -v "$claude_bin" >/dev/null 2>&1 || missing+=("claude-code")
-
-    if [ ${#missing[@]} -gt 0 ]; then
-        error "Missing required dependencies: ${missing[*]}"
+    local engine="${1:-claude}"
+    local missing
+    missing=$(cs_engine_call "$engine" dependencies) || return $?
+    if [ -n "$missing" ]; then
+        error "Missing required dependencies: ${missing//$'\n'/ }"
     fi
+}
+
+# Resolve engine selection before creating or migrating a session. Older
+# sessions have no preference and retain Claude unless a default is configured.
+_session_engine() {  # session_dir explicit_engine
+    local engine="${2:-}"
+    if [ -z "$engine" ]; then
+        engine=$(_read_local_state "$1/.cs/local/state" engine)
+    fi
+    if [ -z "$engine" ] && [ -z "${CS_DEFAULT_ENGINE:-}" ]; then
+        local installed_engines
+        installed_engines=$(cat "${CS_INSTALL_DIR:-$HOME/.local/bin}/.cs-install-engines" 2>/dev/null) || installed_engines=""
+        [ "$installed_engines" != codex ] || engine=codex
+    fi
+    engine="${engine:-${CS_DEFAULT_ENGINE:-claude}}"
+    cs_engine_known "$engine" || error "Unknown engine: $engine. Choose claude or codex with --engine."
+    printf '%s\n' "$engine"
 }
 
 # Validate session name
@@ -24,7 +37,7 @@ validate_session_name() {
 
     case "$name" in
         .|..) error "Session name cannot be '.' or '..'" ;;
-        # `cs <name>` reads a leading hyphen as a verb: a session named
+        # `ags <name>` reads a leading hyphen as a verb: a session named
         # -uninstall would run that verb rather than open, and -rm would reach
         # remove_session.
         -*) error "Session name cannot start with a hyphen" ;;

@@ -1,12 +1,12 @@
 # Configuration
 
-cs reads its configuration from environment variables. None are required — cs
+agent-sessions (`ags`) reads its configuration from environment variables. None are required — it
 runs with sensible defaults out of the box — but you can set any of these in
 `~/.bashrc` or `~/.zshrc` to override behavior.
 
-This lists every variable a user would set, plus the ones cs exports for hooks
+This lists every variable a user would set, plus the ones ags exports for hooks
 and helper binaries. It deliberately excludes test seams and internal state —
-values cs computes and passes to itself, which change without notice and are
+values ags computes and passes to its own helpers, which change without notice and are
 documented in the code that reads them.
 
 ## Environment variables you set
@@ -15,13 +15,26 @@ documented in the code that reads them.
 # Sessions directory (default: ~/.claude-sessions)
 export CS_SESSIONS_ROOT="/path/to/sessions"
 
+# Where cs's own configuration and caches live (defaults: $XDG_CONFIG_HOME/cs or
+# ~/.config/cs, and $XDG_CACHE_HOME/cs or ~/.cache/cs). The ags profile launcher
+# sets both so a session never touches the stable install's files.
+export CS_CONFIG_DIR="$HOME/.config/cs"
+export CS_CACHE_DIR="$HOME/.cache/cs"
+
+# Where the deployed ags executables and the installer's adapter record live
+# (default: ~/.local/bin). The profile launcher sets it to the profile's own.
+export CS_INSTALL_DIR="$HOME/.local/bin"
+
+# Where the encrypted-file secrets backend keeps its store (default: ~/.cs-secrets).
+export CS_SECRETS_DIR="$HOME/.cs-secrets"
+
 # The actor name that shared memory and narratives are attributed to. Highest
 # precedence in the chain $CS_ACTOR > .cs/local/identity > git user.email >
 # git user.name, so it is how you override attribution on a machine whose git
 # identity is not the one you want recorded.
 export CS_ACTOR="alice"
 
-# Skip the update check entirely. cs otherwise asks GitHub for the latest
+# Skip the update check entirely. ags otherwise asks GitHub for the latest
 # release at most hourly and caches the answer under ~/.cache/cs; this stops
 # both the request and the write, for an air-gapped machine or simply to keep
 # cs off the network.
@@ -36,14 +49,24 @@ export CS_SECRETS_BACKEND="keychain"
 # Override Claude Code binary (default: claude)
 export CLAUDE_CODE_BIN="claude"
 
-# Nerd Font icons in cs banners and session listings (lock, host);
+# Default runtime for sessions without a saved engine preference.
+# Legacy/dual installs default to Claude; a sole Codex install defaults to Codex.
+# A session's saved engine choice takes precedence; `--engine` on the `ags` command
+# takes precedence over both. Codex launches require CODEX_BIN and Python 3.
+export CS_DEFAULT_ENGINE="codex"   # claude | codex
+
+# Override the Codex CLI executable used by `ags <name> --engine codex`
+# (default: codex). This is one executable path, without extra arguments.
+export CODEX_BIN="/path/to/codex"
+
+# Nerd Font icons in ags banners and session listings (lock, host);
 # the status line uses standard Unicode and is unaffected by this
 export CS_NERD_FONTS="1"
 
 # Force the light/dark theme (session-picker TUI palette, statusline, hooks).
-# Unset (default), cs auto-detects the terminal background before launch; the
+# Unset (default), ags auto-detects the terminal background before launch; the
 # exact detection cascade lives in docs/statusline.md ("Terminal theme").
-# Set this to override; `cs -detect-theme` prints what detection yields.
+# Set this to override; `ags -detect-theme` prints what detection yields.
 export CS_TERM_THEME="light"   # or "dark"
 
 # Override the terminal's real background color (default: auto-detected via
@@ -73,7 +96,7 @@ export CS_USAGE_DIR="$HOME/.claude-sessions/.usage"
 export CS_USAGE_NO_REFRESH="1"
 
 # Every switch below that silences something the model would otherwise see is
-# listed by `cs -doctor` under "Authority", with its live on/off state.
+# listed by `ags -doctor` under "Authority", with its live on/off state.
 
 # Opt a session out of the scope-prompt auto-grounding hook
 export CS_SCOPE_DISABLE="1"
@@ -105,7 +128,7 @@ export CS_CLARIFY_DISABLE="1"
 
 # Opt a session out of prompt rewriting (ctrl+g in the composer; see hooks.md).
 # Separate from CS_CLARIFY_DISABLE: the questions and the rewriter are
-# independent. When set, cs leaves your $EDITOR alone entirely.
+# independent. When set, ags leaves your $EDITOR alone entirely.
 export CS_REWRITE_DISABLE="1"
 
 # Who rewrites prompts. The default is Claude, through the `claude` CLI and your
@@ -166,7 +189,7 @@ export CS_REWRITE_CMD="/path/to/my-rewriter"
 # Statusline context gauge escalation thresholds (see statusline.md). Each takes
 # a plain integer of at most three digits; anything else falls back to the
 # default shown. A value above 100 is out of the gauge's reach and so switches
-# that band off, the same idiom cs -doctor uses on the Stop hook's tiers below.
+# that band off, the same idiom ags -doctor uses on the Stop hook's tiers below.
 export CS_STATUSLINE_CTX_WARN="40"
 export CS_STATUSLINE_CTX_CRIT="65"
 
@@ -222,7 +245,7 @@ export CS_NO_ROTATION_WAKE="1"
 # the colour resets when the session exits.
 export CS_NO_ITERM2="1"
 
-# Leave the Task tools to Claude Code's model default. A cs launch exports
+# Leave the Task tools to Claude Code's model default. An ags launch exports
 # CLAUDE_CODE_ENABLE_TODO_TOOLS=1 because Claude Code 2.1.233+ withholds
 # TaskCreate/TaskList/TaskUpdate/TaskGet on Opus 4.8, Sonnet 5 and Fable 5,
 # and the rotation wake, the walk-away drain and the rotate skill all address
@@ -231,17 +254,17 @@ export CS_NO_ITERM2="1"
 export CS_NO_TASK_TOOLS="1"
 
 # Launch without CLAUDE_CODE_ENABLE_FUNCTION_HOOKS, even when the shell
-# carries it. A cs launch exports it so the rotate mod the installer deployed
+# carries it. An ags launch exports it so the rotate mod the installer deployed
 # (the "1: rotate this conversation" button past 65% context) loads; the flag
 # also loads any other function-hooks plugin on the machine. Without this knob
-# cs keeps a value already in the shell (0 keeps function hooks off).
+# ags keeps a value already in the shell (0 keeps function hooks off).
 export CS_NO_FUNCTION_HOOKS="1"
 
-# Override the tmux binary cs -spawn uses (default: tmux on PATH)
+# Override the tmux binary ags -spawn uses (default: tmux on PATH)
 export CS_TMUX_BIN="/opt/homebrew/bin/tmux"
 
 # Force the detected platform instead of probing for it; any other
-# value is rejected. Read by cs -secrets only, to choose between the
+# value is rejected. Read by ags -secrets only, to choose between the
 # macOS keychain and the encrypted file
 export CS_PLATFORM_OVERRIDE="linux"   # macos, wsl, or linux
 ```
@@ -254,18 +277,33 @@ The launch banner's compact notes card draws only when `CS_NO_FUNCTION_HOOKS=1`
 or `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=0` withholds the mod, since otherwise
 the mod shows the full notes in the session.
 
-## Environment variables cs sets for you
+## Environment variables ags sets for you
 
 These are exported automatically when you start a session, so the Claude Code
 process and its hooks can find the session:
 
-- `CLAUDE_SESSION_NAME` - The session name (e.g., `myproject`)
-- `CS_CLAUDE_SESSION_ID` - The conversation UUID cs launched or resumed, exported so hooks can tell the launched conversation from any other claude that resolves the same session
-- `CS_REAL_EDITOR` - Your own `$EDITOR`, captured before cs repoints `EDITOR`/`VISUAL` at the prompt-rewriter shim. The shim hands every file that is not a composer buffer back to it, so `/memory` and commit messages still open your editor. Set it yourself to pin which editor that is
+- `CS_SESSION_NAME` - The session name (e.g., `myproject`); legacy `CLAUDE_SESSION_NAME` is accepted
+- `CS_CLAUDE_SESSION_ID` - The conversation UUID ags launched or resumed, exported so hooks can tell the launched conversation from any other claude that resolves the same session
+- `CS_REAL_EDITOR` - Your own `$EDITOR`, captured before ags repoints `EDITOR`/`VISUAL` at the prompt-rewriter shim. The shim hands every file that is not a composer buffer back to it, so `/memory` and commit messages still open your editor. Set it yourself to pin which editor that is
 - `CS_SECRETS_SESSION` - For a worktree session, the base session its secrets key to, so a feature worktree reads the same store as its parent (see [secrets.md](secrets.md))
-- `CLAUDE_SESSION_DIR` - Full path to the session directory (workspace root)
-- `CLAUDE_SESSION_META_DIR` - Path to the `.cs/` metadata directory
+- `CS_SESSION_DIR` - Full path to the session directory (workspace root)
+- `CS_SESSION_META_DIR` - Path to the `.cs/` metadata directory
 - `CLAUDE_CODE_TASK_LIST_ID` - Set to the session name for task list persistence; a feature worktree gets its own list under its `base@task` name, not the base's
 - `CLAUDE_CODE_AUTO_MEMORY_PATH` / `CLAUDE_COWORK_MEMORY_PATH_OVERRIDE` - Redirect Claude Code's auto-memory writer into `<session>/.cs/memory/`
-- `CS_BIN` - Exported by every cs launch, never set by hand: the absolute path of the running cs, replacing any value inherited from a parent launch. The mods run cs through it (`cs -update`, `/queue`), since the claude process's `PATH` is not the launching shell's
-- `CS_UPDATE_AVAILABLE` - Exported by a cs launch, never set by hand: the version a newer cs was found at. The cs-update mod reads it to draw the release-notes pane. Absent when nothing is pending
+- `AGS_BIN` - Exported by every ags launch, never set by hand: the absolute path of the running ags executable, replacing any value inherited from a parent launch. The TUI and Claude Code mods prefer this pointer when calling ags because Claude Code's `PATH` may differ from the launching shell's
+- `CS_BIN` - Exported alongside `AGS_BIN` as a compatibility pointer to that same executable path. Existing integrations can keep reading it; new integrations should use `AGS_BIN`
+- `CS_UPDATE_AVAILABLE` - Exported by an ags launch, never set by hand: the version a newer cs was found at. The cs-update mod reads it to draw the release-notes pane. Absent when nothing is pending
+
+## Adapter installation
+
+`CS_INSTALL_ENGINES=claude|codex|claude,codex` selects installer payloads. With
+no explicit selection, install.sh reads `$HOME/.local/bin/.cs-install-engines`
+or defaults to both adapters for legacy compatibility. The file contains plain
+engine identifiers; it is never executed as shell code. Previously installed
+adapters remain recorded so future updates maintain their deployed integrations.
+See [Migration](migration.md) for the compatibility policy.
+
+`CS_HOOK_PATHS=absolute` makes install.sh register its hook commands in
+`settings.json` by absolute path instead of `~/.claude/hooks/cs/...`. setup.sh
+sets it for the profile, whose launcher keeps the user's HOME: a tilde there
+would run the stable install's hooks.

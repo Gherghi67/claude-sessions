@@ -315,7 +315,7 @@ test_launch_consumes_seed_queues_arms_and_kicks() {
     [ ! -f "$CS_SESSIONS_ROOT/.spawn/worker.seed" ] || { echo "  seed not deleted"; return 1; }
     assert_output_contains "$out" "Spawned by boss" "kick prompt in claude argv" || return 1
     assert_output_contains "$out" "2 task(s)" "kick counts tasks" || return 1
-    assert_output_contains "$out" "cs -msg boss -k result" "reply instructions present" || return 1
+    assert_output_contains "$out" "ags -msg boss -k result" "reply instructions present" || return 1
 }
 
 # A pane claude splits off for an agent-team teammate is started by the tmux
@@ -382,7 +382,7 @@ test_launch_moves_brief_into_the_session_and_kicks_to_it() {
     assert_output_contains "$out" "Spawned by boss" "spawner named" || return 1
     assert_output_contains "$out" "Your brief is .cs/brief.md" "kick names the brief" || return 1
     assert_output_not_contains "$out" "armed with" "no queue promised without tasks" || return 1
-    assert_output_contains "$out" "cs -msg boss -k result" "reply instructions present" || return 1
+    assert_output_contains "$out" "ags -msg boss -k result" "reply instructions present" || return 1
     assert_file_contains "$(WQ)/spawned-by" "boss" "spawned-by recorded for a brief-only spawn" || return 1
     [ ! -f "$(WQ)/queue.state" ] || { echo "  queue armed with no tasks"; return 1; }
 }
