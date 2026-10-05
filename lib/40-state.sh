@@ -261,7 +261,7 @@ _transcript_first_prompt() {  # transcript_file
 # objective has no placeholder and is never touched. The README is replaced
 # whole and keeps its mode; ENVIRON sidesteps awk -v escape processing of
 # arbitrary prompt text. A README that cannot be rewritten keeps its
-# placeholder, and the first prompt of the session fills it.
+# placeholder.
 _seed_readme_objective() {  # readme, text
     local readme="$1" text="$2"
     [ -f "$readme" ] && [ -n "$text" ] || return 0

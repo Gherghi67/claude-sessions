@@ -740,7 +740,7 @@ migrate_session() {
         ' "$readme"; then
             warn "Moved machine-local fields from .cs/README.md to .cs/local/state"
         else
-            warn "could not rewrite $readme; its machine-local fields stay beside the copy in .cs/local/state"
+            warn "could not rewrite $readme; its machine-local fields stay in it"
         fi
     fi
 

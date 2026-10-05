@@ -127,10 +127,10 @@ run_spawn() {
         seed="$sdir/$name.seed"
         # The check-then-write below is deliberately unlocked, and both temp
         # names are fixed. Two spawns of one name started in the same instant
-        # can therefore both pass the check and publish, the later rename
-        # winning, and a seed can end up beside the other run's brief. One
-        # user spawning one name twice at once is the only way in, so it is
-        # left as it is.
+        # can therefore interleave on them: one run fails at its publishing
+        # rename, or a seed is torn, or it is published beside the other
+        # run's brief. One user spawning one name twice at once is the only
+        # way in, so it is left as it is.
         [ ! -f "$seed" ] || error "A pending spawn for $name exists: $seed"
         mkdir -p "$sdir"
         # Order: seed content first (to a temp file), brief second, seed

@@ -79,7 +79,8 @@ if ! command -v cs_private_dir >/dev/null 2>&1; then
     cs_private_dir() { return 1; }
 fi
 # Nor can the queue state be replaced whole without the library's writer; the
-# drain then reports the state it could not write and hands out nothing.
+# drain then tells the user which state it could not write and hands out
+# nothing.
 if ! command -v cs_write_atomic >/dev/null 2>&1; then
     cs_write_atomic() { return 1; }
 fi
@@ -461,13 +462,18 @@ LOCAL="$META_DIR/local"
 QUEUE="$QDIR/queue"
 QSTATE_FILE="$QDIR/queue.state"
 
-# Record the queue state. A state that cannot be written ends this Stop with
-# the reason on stderr and nothing handed out: carrying on would inject a task
-# against a state the next Stop reads differently.
+# Record the queue state. An absent state file reads as idle, so when idle
+# cannot be written the file is removed instead: "draining" left behind would
+# have the next Stop mark a task done that was never handed out. Any other
+# state that cannot be recorded ends this Stop with nothing handed out and a
+# message Claude Code shows the user.
 _qstate_write() {  # state word
     cs_write_atomic "$QSTATE_FILE" printf '%s\n' "$1" && return 0
-    echo "cs task queue: could not write $QSTATE_FILE" >&2
-    echo '{"decision": "approve"}'
+    if [ "$1" = idle ] && rm -f "$QSTATE_FILE" 2>/dev/null \
+        && [ ! -e "$QSTATE_FILE" ] && [ ! -L "$QSTATE_FILE" ]; then
+        return 0
+    fi
+    jq -nc --arg m "cs task queue: could not write $QSTATE_FILE" '{decision:"approve", systemMessage:$m}'
     exit 0
 }
 

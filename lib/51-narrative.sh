@@ -26,8 +26,6 @@ EOF
     printf '%s\n' "$headings" | tail -1 | cut -d' ' -f1
 }
 
-# Archive the oldest sections of this actor's narrative when the file is over
-# CS_NARRATIVE_MAX_BYTES, leaving a tail of about CS_NARRATIVE_KEEP_BYTES.
 # What the live narrative holds after a rotation: its header block from the
 # snapshot, then everything in the live file past the cut.
 _narrative_kept_text() {  # snap, live, head_end, cut
@@ -37,6 +35,8 @@ _narrative_kept_text() {  # snap, live, head_end, cut
     tail -c +$(($4 + 1)) "$2"
 }
 
+# Archive the oldest sections of this actor's narrative when the file is over
+# CS_NARRATIVE_MAX_BYTES, leaving a tail of about CS_NARRATIVE_KEEP_BYTES.
 rotate_narrative() {
     if [ -z "${CLAUDE_SESSION_META_DIR:-}" ] || [ ! -d "${CLAUDE_SESSION_META_DIR}" ]; then
         error "cs -narrative rotate must be run from inside a cs session"

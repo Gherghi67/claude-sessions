@@ -70,7 +70,6 @@ _tags_write() {
     # byte-identically, and the caller reported success having written nothing.
     # Verifying the write landed is the whole point — a status quo the tool
     # cannot distinguish from a successful edit is not a successful edit.
-    local status=0
     if _tags_read_line_exists "$readme"; then
         cs_write_atomic "$readme" awk -v repl="$newline" '
             NR == 1 && $0 == "---" { fm = 1; print; next }
@@ -78,7 +77,7 @@ _tags_write() {
             fm == 1 && /^tags:[[:space:]]*\[/ && !done { print repl; done = 1; next }
             { print }
             END { exit done ? 0 : 1 }
-        ' "$readme" || status=$?
+        ' "$readme"
     else
         # The `eat` run below consumes tags lines sitting immediately after
         # status:. cs always inserts there, so those are its own from earlier
@@ -96,9 +95,8 @@ _tags_write() {
             fm == 1 && $0 == "---" { fm = 2; print; next }
             { print }
             END { exit done ? 0 : 1 }
-        ' "$readme" || status=$?
+        ' "$readme"
     fi
-    [ "$status" -eq 0 ]
 }
 
 # True when an inline tags line exists in the frontmatter. The "found" branch

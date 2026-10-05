@@ -3252,7 +3252,7 @@ _transcript_first_prompt() {  # transcript_file
 # objective has no placeholder and is never touched. The README is replaced
 # whole and keeps its mode; ENVIRON sidesteps awk -v escape processing of
 # arbitrary prompt text. A README that cannot be rewritten keeps its
-# placeholder, and the first prompt of the session fills it.
+# placeholder.
 _seed_readme_objective() {  # readme, text
     local readme="$1" text="$2"
     [ -f "$readme" ] && [ -n "$text" ] || return 0
@@ -4145,7 +4145,7 @@ migrate_session() {
         ' "$readme"; then
             warn "Moved machine-local fields from .cs/README.md to .cs/local/state"
         else
-            warn "could not rewrite $readme; its machine-local fields stay beside the copy in .cs/local/state"
+            warn "could not rewrite $readme; its machine-local fields stay in it"
         fi
     fi
 
@@ -4512,8 +4512,6 @@ EOF
     printf '%s\n' "$headings" | tail -1 | cut -d' ' -f1
 }
 
-# Archive the oldest sections of this actor's narrative when the file is over
-# CS_NARRATIVE_MAX_BYTES, leaving a tail of about CS_NARRATIVE_KEEP_BYTES.
 # What the live narrative holds after a rotation: its header block from the
 # snapshot, then everything in the live file past the cut.
 _narrative_kept_text() {  # snap, live, head_end, cut
@@ -4523,6 +4521,8 @@ _narrative_kept_text() {  # snap, live, head_end, cut
     tail -c +$(($4 + 1)) "$2"
 }
 
+# Archive the oldest sections of this actor's narrative when the file is over
+# CS_NARRATIVE_MAX_BYTES, leaving a tail of about CS_NARRATIVE_KEEP_BYTES.
 rotate_narrative() {
     if [ -z "${CLAUDE_SESSION_META_DIR:-}" ] || [ ! -d "${CLAUDE_SESSION_META_DIR}" ]; then
         error "cs -narrative rotate must be run from inside a cs session"
@@ -4836,10 +4836,10 @@ run_spawn() {
         seed="$sdir/$name.seed"
         # The check-then-write below is deliberately unlocked, and both temp
         # names are fixed. Two spawns of one name started in the same instant
-        # can therefore both pass the check and publish, the later rename
-        # winning, and a seed can end up beside the other run's brief. One
-        # user spawning one name twice at once is the only way in, so it is
-        # left as it is.
+        # can therefore interleave on them: one run fails at its publishing
+        # rename, or a seed is torn, or it is published beside the other
+        # run's brief. One user spawning one name twice at once is the only
+        # way in, so it is left as it is.
         [ ! -f "$seed" ] || error "A pending spawn for $name exists: $seed"
         mkdir -p "$sdir"
         # Order: seed content first (to a temp file), brief second, seed
@@ -6190,7 +6190,6 @@ _tags_write() {
     # byte-identically, and the caller reported success having written nothing.
     # Verifying the write landed is the whole point — a status quo the tool
     # cannot distinguish from a successful edit is not a successful edit.
-    local status=0
     if _tags_read_line_exists "$readme"; then
         cs_write_atomic "$readme" awk -v repl="$newline" '
             NR == 1 && $0 == "---" { fm = 1; print; next }
@@ -6198,7 +6197,7 @@ _tags_write() {
             fm == 1 && /^tags:[[:space:]]*\[/ && !done { print repl; done = 1; next }
             { print }
             END { exit done ? 0 : 1 }
-        ' "$readme" || status=$?
+        ' "$readme"
     else
         # The `eat` run below consumes tags lines sitting immediately after
         # status:. cs always inserts there, so those are its own from earlier
@@ -6216,9 +6215,8 @@ _tags_write() {
             fm == 1 && $0 == "---" { fm = 2; print; next }
             { print }
             END { exit done ? 0 : 1 }
-        ' "$readme" || status=$?
+        ' "$readme"
     fi
-    [ "$status" -eq 0 ]
 }
 
 # True when an inline tags line exists in the frontmatter. The "found" branch
