@@ -34,7 +34,7 @@ import sys
 
 REMOTE = "origin"
 # Written by build.sh. Never merged: rebuilt once the sources are merged.
-GENERATED = {"bin/ags", "bin/cs", "hooks/cs-shared.sh", "install.sh"}
+GENERATED = {"bin/ags", "bin/cs", "hooks/cs-shared.sh", "skills/sweep/scripts/cs-shared.sh", "install.sh"}
 # Where the fork's renames apply. Prose (README, docs, CHANGELOG) was
 # rewritten by hand, so it merges plainly.
 RENAME_DIRS = ("lib/", "hooks/", "skills/", "commands/", "mods/", "completions/",
@@ -82,13 +82,26 @@ def rename(text):
     text = re.sub(r"/cs\.bash\b", "/ags.bash", text)
     text = re.sub(r"/_cs(?![\w-])", "/_ags", text)
     text = re.sub(r"\$CS_((?:SECRETS_|STATUSLINE_|SUBAGENT_STATUSLINE_)?URL)\b", r"$AGS_\1", text)
-    # The command itself: `cs -list`, "cs:", (cs), ${COMMENT}cs${NC}. Not .cs/,
-    # hooks/cs, cs-shared.sh, cs_helper, CS_KEY or docs.
-    return re.sub(r"(?<![\w./$-])cs(?=$|[\s\"'`):.,;]|\$\{)", "ags", text, flags=re.M)
+    # The command itself: `cs -list`, "cs: name", (cs), ${COMMENT}cs${NC}. Not
+    # .cs/, hooks/cs, cs-shared.sh, cs_helper, CS_KEY or docs, and not a cs:word
+    # identifier: <!-- cs:wrap-cues --> and the other sentinels keep their names.
+    text = re.sub(r"(?<![\w./$-])cs(?=$|[\s\"'`).,;]|:(?=\s|$)|\$\{)", "ags", text, flags=re.M)
+    return re.sub(r"\b([Aa]) ags\b", r"\1n ags", text)  # "a cs session" reads "an ags session"
 
 
 def renames_apply(path):
     return path in RENAME_FILES or path.startswith(RENAME_DIRS)
+
+
+def rename_changed_lines(base, upstream):
+    """Upstream text with the renames applied to the lines it changed or added."""
+    base_lines, upstream_lines = base.split("\n"), upstream.split("\n")
+    out = []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(
+            None, base_lines, upstream_lines, autojunk=False).get_opcodes():
+        lines = upstream_lines[j1:j2]
+        out += lines if tag == "equal" else [rename(line) for line in lines]
+    return "\n".join(out)
 
 
 def renamed_like_the_fork(base, ours, upstream):
@@ -318,9 +331,14 @@ def merge_one(path, o, b, u, scratch):
     where result is str/bytes/("link", target) to write, or None to delete."""
     texts = all(isinstance(x, str) or x is None for x in (o, b, u))
     renamed = renames_apply(path) and texts
-    # Only upstream changed it. A file the fork never touched follows upstream
-    # as it is; one the fork changed by the renames alone gets them again.
+    # Only upstream changed it. In a file the fork never touched the fork made
+    # no choices, so every line upstream changes or adds gets the renames (a
+    # test there asserts the messages the fork renamed in lib/); one the fork
+    # changed by the renames alone gets them again.
     if o == b and o is not None:
+        if renamed and u is not None:
+            result = rename_changed_lines(b, u)
+            return result, 0, 0, (["renames"] if result != u else [])
         return u, 0, 0, []
     if renamed and b is not None and o == rename(b):
         return (None if u is None else rename(u)), 0, 0, ["renames"]

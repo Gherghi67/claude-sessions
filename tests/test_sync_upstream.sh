@@ -41,6 +41,8 @@ EOF
     printf '#!/usr/bin/env bash\necho "cs-statusline v1"\n' > "$UP/bin/cs-statusline"
     printf '#!/usr/bin/env bash\ncd "$(dirname "$0")"\ncat lib/*.sh > bin/cs\n' > "$UP/build.sh"
     printf 'cs is a session manager.\n' > "$UP/README.md"
+    mkdir -p "$UP/tests"
+    printf '# A test the fork never touches.\nrun_mail_tests\n' > "$UP/tests/test_mail.sh"
     chmod +x "$UP/bin/cs-statusline" "$UP/build.sh"
     (cd "$UP" && bash build.sh && git add -A && git commit -q -m v1 && git tag v1)
 }
@@ -99,11 +101,13 @@ EOF
 release_upstream() {
     sed -i.bak 's/echo red/echo blue/' "$UP/lib/40-state.sh"
     printf '\n_is_uuid() {\n    [ -n "$1" ]\n}\n' >> "$UP/lib/40-state.sh"
+    printf '\n# <!-- cs:wrap-cues --> stays a sentinel; "cs: %%s" is the command.\n' >> "$UP/lib/53-mail.sh"
     sed -i.bak -e 's/cs -msg needs a body/cs -msg needs a non-empty body/' \
         -e 's/echo "\$1" >> /printf "%s\\n" "$1" >> /' \
         -e 's/# cs never reads mail twice\./# cs never reads mail twice, nor drops it./' "$UP/lib/53-mail.sh"
     sed -i.bak 's/v1/v2/' "$UP/bin/cs-statusline"
     printf 'cs is a session manager for Claude Code.\n' > "$UP/README.md"
+    printf 'assert_output_contains "$out" "cs -msg needs a non-empty body"\n' >> "$UP/tests/test_mail.sh"
     rm -f "$UP"/lib/*.bak "$UP"/bin/*.bak
     (cd "$UP" && bash build.sh && git add -A && git commit -q -m v2 && git tag v2)
 }
@@ -146,6 +150,12 @@ test_start_translates_upstream_into_the_forks_dialect() {
         || { cat "$WT/lib/53-mail.sh"; echo "  FAIL: variable not renamed"; return 1; }
     grep -Fqx '# cs never reads mail twice, nor drops it.' "$WT/lib/53-mail.sh" \
         || { cat "$WT/lib/53-mail.sh"; echo "  FAIL: kept comment renamed"; return 1; }
+    grep -Fqx '# <!-- cs:wrap-cues --> stays a sentinel; "ags: %s" is the command.' "$WT/lib/53-mail.sh" \
+        || { cat "$WT/lib/53-mail.sh"; echo "  FAIL: sentinel renamed or command not"; return 1; }
+    # In a file the fork never touched, upstream's new lines take the renames.
+    assert_eq '# A test the fork never touches.
+run_mail_tests
+assert_output_contains "$out" "ags -msg needs a non-empty body"' "$(cat "$WT/tests/test_mail.sh")" || return 1
     # The companion's change lands in the fork's file; the symlink stays.
     assert_eq 'echo "ags-statusline v2"' "$(tail -1 "$WT/bin/ags-statusline")" || return 1
     assert_eq ags-statusline "$(readlink "$WT/bin/cs-statusline")" || return 1
