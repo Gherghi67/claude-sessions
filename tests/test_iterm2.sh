@@ -219,7 +219,12 @@ test_each_version_has_its_own_link() {
     [ "$old" != "$new" ] || { echo "  FAIL: both versions ran from one path: $old"; return 1; }
     [ "$old" -ef "$inst/versions/9.9.9" ] || {
         echo "  FAIL: linking 10.0.0 changed what $old runs"; return 1; }
+    # A launch may still be waiting to exec a link it picked moments ago, so a
+    # link whose version is gone stays until nothing has picked it for a day.
     rm "$inst/versions/9.9.9"
+    "$CS_BIN" v-recent <<< "" > /dev/null 2>&1 || true
+    [ -e "$old" ] || { echo "  FAIL: $old went while a launch may still need it"; return 1; }
+    touch -t 202001010000 "$(dirname "$old")"
     "$CS_BIN" v-pruned <<< "" > /dev/null 2>&1 || true
     [ ! -e "$old" ] || { echo "  FAIL: $old kept a removed version alive"; return 1; }
 }

@@ -9354,13 +9354,18 @@ _iterm_tab_through_tmux() {
         ln -f "$real" "$link.$$" 2>/dev/null || return 0
         mv -f "$link.$$" "$link" 2>/dev/null || { rm -f "$link.$$"; return 0; }
     fi
+    # A launch marks the directory it picked; another launch may still be
+    # waiting to exec that link, at the resume prompt for one.
+    touch "$(dirname "$link")" 2>/dev/null || true
     # A link keeps its file's data alive after the installer removes the
-    # version; drop those. A claude still running from one keeps its copy.
+    # version; drop those nobody has picked for a day. A claude still running
+    # from one keeps its copy. Two launches can prune the same directory, so
+    # a removal that finds it gone is not an error.
     local old
-    for old in "$links"/*/claude; do
-        [ -e "$(dirname "$real")/$(basename "$(dirname "$old")")" ] && continue
-        rm -f "$old" 2>/dev/null && rmdir "$(dirname "$old")" 2>/dev/null
-    done
+    while IFS= read -r old; do
+        [ -e "$(dirname "$real")/$(basename "$old")" ] && continue
+        { rm -f "$old/claude"; rmdir "$old"; } 2>/dev/null || true
+    done < <(find "$links" -mindepth 1 -maxdepth 1 -type d -mtime +1 2>/dev/null)
     CLAUDE_CODE_BIN="$link"
 }
 
