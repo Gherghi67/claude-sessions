@@ -154,7 +154,83 @@ test_launch_under_iterm_cc_shows_loader_and_icon() {
     [ ! -L "$argv0" ] || { echo "  FAIL: $argv0 is a symlink, its process name stays the version"; return 1; }
 }
 
+# Claude Code reads iTerm.app plus a TERM outside screen*/tmux* as tmux -CC.
+# In plain tmux with such a TERM that would be false, so claude keeps tmux's
+# name there; with a tmux TERM the reading cannot misfire and the loader works.
+test_plain_tmux_keeps_tmux_name_unless_term_is_tmux() {
+    _tab_launch_env 0
+    local out
+    out=$("$CS_BIN" plaintmux <<< "" 2>&1) || true
+    assert_eq "tmux" "$(_launched "$out" TERM_PROGRAM)" \
+        "plain tmux with an xterm TERM must not look like tmux -CC to claude" || return 1
+    export TERM=tmux-256color
+    out=$("$CS_BIN" plaintmux <<< "" 2>&1) || true
+    assert_eq "iTerm.app" "$(_launched "$out" TERM_PROGRAM)" \
+        "plain tmux with a tmux TERM gets the loader" || return 1
+}
+
+test_outside_iterm_launch_is_untouched() {
+    _tab_launch_env 1
+    unset LC_TERMINAL
+    local out
+    out=$("$CS_BIN" notiterm <<< "" 2>&1) || true
+    assert_eq "tmux" "$(_launched "$out" TERM_PROGRAM)" "no iTerm2, no rename" || return 1
+    assert_eq "$TEST_TMPDIR/inst/bin/claude" "$(_launched "$out" argv0)" \
+        "no iTerm2, claude runs as found on PATH" || return 1
+}
+
+test_iterm_integrations_off_leaves_launch_untouched() {
+    _tab_launch_env 1
+    export CS_NO_ITERM2=1
+    local out
+    out=$("$CS_BIN" itermoff <<< "" 2>&1) || true
+    assert_eq "tmux" "$(_launched "$out" TERM_PROGRAM)" "CS_NO_ITERM2 keeps tmux's name" || return 1
+    assert_eq "$TEST_TMPDIR/inst/bin/claude" "$(_launched "$out" argv0)" \
+        "CS_NO_ITERM2 runs claude as found on PATH" || return 1
+}
+
+# After a claude update the link still names the old version's file; the next
+# launch must run the version bin/claude now points at.
+test_link_follows_a_claude_update() {
+    _tab_launch_env 1
+    "$CS_BIN" before-update <<< "" > /dev/null 2>&1 || true
+    printf '#!/usr/bin/env bash\necho "argv0=$0"\necho "version=10.0.0"\n' > "$TEST_TMPDIR/inst/versions/10.0.0"
+    chmod +x "$TEST_TMPDIR/inst/versions/10.0.0"
+    ln -sf ../versions/10.0.0 "$TEST_TMPDIR/inst/bin/claude"
+    local out
+    out=$("$CS_BIN" after-update <<< "" 2>&1) || true
+    assert_eq "10.0.0" "$(_launched "$out" version)" "the updated claude must run" || return 1
+    assert_eq "claude" "$(basename "$(_launched "$out" argv0)")" "still under the name claude" || return 1
+}
+
+# The icon is cosmetic: a launch that cannot make the link runs claude anyway.
+test_unlinkable_claude_still_launches() {
+    _tab_launch_env 1
+    mkdir -p "$HOME/.local/share"
+    : > "$HOME/.local/share/cs"
+    local out
+    out=$("$CS_BIN" nolink <<< "" 2>&1) || true
+    assert_eq "$TEST_TMPDIR/inst/bin/claude" "$(_launched "$out" argv0)" \
+        "with no place for the link, claude runs as found on PATH" || return 1
+    assert_eq "iTerm.app" "$(_launched "$out" TERM_PROGRAM)" "the loader does not need the link" || return 1
+}
+
+test_user_chosen_claude_binary_is_run_as_given() {
+    _tab_launch_env 1
+    export CLAUDE_CODE_BIN="$TEST_TMPDIR/inst/versions/9.9.9"
+    local out
+    out=$("$CS_BIN" ownbin <<< "" 2>&1) || true
+    assert_eq "$TEST_TMPDIR/inst/versions/9.9.9" "$(_launched "$out" argv0)" \
+        "a CLAUDE_CODE_BIN the user set is never swapped for the link" || return 1
+}
+
 run_test test_launch_under_iterm_cc_shows_loader_and_icon
+run_test test_plain_tmux_keeps_tmux_name_unless_term_is_tmux
+run_test test_outside_iterm_launch_is_untouched
+run_test test_iterm_integrations_off_leaves_launch_untouched
+run_test test_link_follows_a_claude_update
+run_test test_unlinkable_claude_still_launches
+run_test test_user_chosen_claude_binary_is_run_as_given
 run_test test_stop_hook_bounces_dock_in_iterm
 run_test test_no_bounce_outside_iterm
 run_test test_no_bounce_when_disabled
