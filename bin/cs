@@ -9361,6 +9361,11 @@ _iterm_tab_through_tmux() {
     # version; drop those nobody has picked for a day. A claude still running
     # from one keeps its copy. Two launches can prune the same directory, so
     # a removal that finds it gone is not an error.
+    # Do not re-fix: a prune can still race a launch that picks the same
+    # directory between find and rm, but only if the installer removes that
+    # version's file in the same moment. It removes only versions that are
+    # no longer current, and a launch only picks the current one (Codex
+    # review round 3, accepted 2026-10-05).
     local old
     while IFS= read -r old; do
         [ -e "$(dirname "$real")/$(basename "$old")" ] && continue
