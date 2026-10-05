@@ -78,6 +78,11 @@ fi
 if ! command -v cs_private_dir >/dev/null 2>&1; then
     cs_private_dir() { return 1; }
 fi
+# Nor can the queue state be replaced whole without the library's writer, so a
+# state change fails instead of being written some lesser way.
+if ! command -v cs_write_atomic >/dev/null 2>&1; then
+    cs_write_atomic() { return 1; }
+fi
 if ! command -v _cs_terminate_jsonl >/dev/null 2>&1; then
     _cs_terminate_jsonl() {
         [ -s "$1" ] || return 0
@@ -558,7 +563,7 @@ if [ "$QLEN" -gt 0 ] && _mail_is_lead; then
         TASK=""
         _first=$(_qfirst "$QUEUE") || _first=""
         [ -n "$_first" ] && TASK=$(cat "$_first" 2>/dev/null || true)
-        printf 'draining\n' > "$QSTATE_FILE.tmp" && mv "$QSTATE_FILE.tmp" "$QSTATE_FILE"
+        cs_write_atomic "$QSTATE_FILE" printf 'draining\n'
         rm -f "$QDIR/failures"
         _inbox_append --arg ts "$(date +%s)" --arg q "$QLEN" \
             '{ts: ($ts|tonumber), event: "drain_started", queued: ($q|tonumber)}'
@@ -585,7 +590,7 @@ $SCOPE"
                 '{ts: ($ts|tonumber), event: "task_done", task: $task}'
             NEWLEN=$(_qlen "$QUEUE")
             if [ "$NEWLEN" -le 0 ]; then
-                printf 'idle\n' > "$QSTATE_FILE.tmp" && mv "$QSTATE_FILE.tmp" "$QSTATE_FILE"
+                cs_write_atomic "$QSTATE_FILE" printf 'idle\n'
                 DONE_COUNT=$(_qdone_len "$QDIR/queue.done")
                 _inbox_append --arg ts "$(date +%s)" --arg d "$DONE_COUNT" \
                     '{ts: ($ts|tonumber), event: "drain_finished", done: ($d|tonumber)}'
@@ -600,7 +605,7 @@ $SCOPE"
             if TRIP=$(_breaker_check); then
                 set -- $TRIP
                 REASON_KIND="$1"; READING="$2"; LIMIT="$3"
-                printf 'idle\n' > "$QSTATE_FILE.tmp" && mv "$QSTATE_FILE.tmp" "$QSTATE_FILE"
+                cs_write_atomic "$QSTATE_FILE" printf 'idle\n'
                 _inbox_append --arg ts "$(date +%s)" --arg r "$REASON_KIND" \
                     --arg v "$READING" --arg l "$LIMIT" --arg n "$NEWLEN" \
                     '{ts: ($ts|tonumber), event: "breaker_tripped", reason: $r, reading: ($v|tonumber), limit: ($l|tonumber), remaining: ($n|tonumber)}'
@@ -625,7 +630,7 @@ $SCOPE"
             exit 0
         else
             # pop failed: disarm rather than re-inject the same task (fail-safe)
-            printf 'idle\n' > "$QSTATE_FILE.tmp" && mv "$QSTATE_FILE.tmp" "$QSTATE_FILE"
+            cs_write_atomic "$QSTATE_FILE" printf 'idle\n'
         fi
     fi
 

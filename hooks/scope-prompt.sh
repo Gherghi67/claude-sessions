@@ -84,6 +84,11 @@ if ! command -v cs_resolve_session >/dev/null 2>&1; then
         [ -n "${CLAUDE_SESSION_NAME:-}" ] && [ -n "${CLAUDE_SESSION_DIR:-}" ]
     }
 fi
+# Nor is the digest cursor advanced without the library's writer: a digest
+# then repeats, which is the harmless direction.
+if ! command -v cs_write_atomic >/dev/null 2>&1; then
+    cs_write_atomic() { return 1; }
+fi
 # Only run inside a cs session. No input yet at this point (it is read further
 # down), so resolution relies on the env or CLAUDE_PROJECT_DIR.
 cs_resolve_session "" || exit 0
@@ -312,8 +317,7 @@ _build_digest() {  # meta_local_dir
 # can at worst repeat a digest, which is the harmless direction to fail in.
 _commit_digest() {  # meta_local_dir
     [ -n "${DIGEST_PENDING:-}" ] || return 0
-    { printf '%s\n' "$DIGEST_PENDING" > "$1/notifications.seen.tmp"; } 2>/dev/null \
-        && mv "$1/notifications.seen.tmp" "$1/notifications.seen" 2>/dev/null || true
+    cs_write_atomic "$1/notifications.seen" printf '%s\n' "$DIGEST_PENDING" 2>/dev/null || true
     DIGEST_PENDING=""
 }
 

@@ -62,6 +62,12 @@ if ! command -v cs_local_state_set >/dev/null 2>&1; then
         return 1
     }
 fi
+# Nor is a file replaced whole without the library's writer: the digest cursor
+# stays where it was and the digest repeats, and a consumed handoff keeps its
+# unconsumed status line.
+if ! command -v cs_write_atomic >/dev/null 2>&1; then
+    cs_write_atomic() { return 1; }
+fi
 if ! command -v cs_resolve_session >/dev/null 2>&1; then
     cs_resolve_session() {
         [ -n "${CLAUDE_SESSION_NAME:-}" ] && [ -n "${CLAUDE_SESSION_DIR:-}" ]
@@ -117,8 +123,7 @@ _build_digest() {  # meta_local_dir
 # can at worst repeat a digest, which is the harmless direction to fail in.
 _commit_digest() {  # meta_local_dir
     [ -n "${DIGEST_PENDING:-}" ] || return 0
-    { printf '%s\n' "$DIGEST_PENDING" > "$1/notifications.seen.tmp"; } 2>/dev/null \
-        && mv "$1/notifications.seen.tmp" "$1/notifications.seen" 2>/dev/null || true
+    cs_write_atomic "$1/notifications.seen" printf '%s\n' "$DIGEST_PENDING" 2>/dev/null || true
     DIGEST_PENDING=""
 }
 
