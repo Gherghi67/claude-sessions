@@ -485,6 +485,22 @@ test_drain_disarms_after_a_failed_pop_past_a_stale_state_tmp() {
     assert_eq "idle" "$(cat "$(QDIR)/queue.state" | tr -d '[:space:]')" "failed pop disarms the drain" || return 1
 }
 
+# A state write that fails ends the Stop hook cleanly and says why: no task is
+# handed out against a state that was never recorded, and the hook does not
+# die with a bare shell status.
+test_drain_reports_a_state_it_cannot_write() {
+    qseed "task one"
+    printf 'armed\n' > "$(QDIR)/queue.state"
+    _deny_writes "$(QDIR)" || return 77
+    local out rc=0 err="$TEST_TMPDIR/drain.err"
+    out=$(echo '{}' | CS_LEAD_PID=$$ CLAUDE_PID=$$ bash "$HOOKS_DIR/narrative-reminder.sh" 2>"$err") || rc=$?
+    _allow_writes "$(QDIR)"
+    assert_eq "0" "$rc" "the hook exits cleanly" || return 1
+    assert_file_contains "$err" "could not write .*queue\.state" "the failure names the file" || return 1
+    assert_output_not_contains "$out" "task one" "no task is handed out" || return 1
+    assert_eq "armed" "$(cat "$(QDIR)/queue.state" | tr -d '[:space:]')" "the state is as it was" || return 1
+}
+
 test_drain_empties_and_returns_idle() {
     qseed "last task"
     printf 'draining\n' > "$(QDIR)/queue.state"
@@ -588,6 +604,7 @@ run_test test_drain_ignores_a_teammate_stop
 run_test test_drain_gate_ignores_a_teammate_stop
 run_test test_drain_disarms_when_the_pop_fails
 run_test test_drain_empties_and_returns_idle
+run_test test_drain_reports_a_state_it_cannot_write
 run_test test_drain_advances_past_a_stale_state_tmp
 run_test test_drain_disarms_after_a_failed_pop_past_a_stale_state_tmp
 run_test test_drain_declined_within_cooldown_falls_through

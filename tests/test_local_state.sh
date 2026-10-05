@@ -181,6 +181,7 @@ test_migration_readme_survives_a_failed_frontmatter_write() {
         echo "  FAIL: rewrote the README in place despite the write failing"
         return 1
     fi
+    [ -L "$readme" ] || { echo "  FAIL: the README link was replaced by a file"; return 1; }
 }
 
 # Both README rewrites of the migration go through a uniquely named temp file:
@@ -531,6 +532,15 @@ test_two_state_writers_lose_no_update() {
 
 # Homebrew's gnubin puts GNU stat first on a Mac's PATH; the mode read must
 # work with either stat, so the dispatch is by behaviour, not by OSTYPE.
+# A destination that is a directory is refused: nothing is written into it.
+test_atomic_write_refuses_a_directory_destination() {
+    local d="$TEST_TMPDIR/a-directory" rc=0
+    mkdir -p "$d"
+    bash -c 'source "$1"; cs_write_atomic "$2" printf "new\n"' _ "$SCRIPT_DIR/../hooks/cs-shared.sh" "$d" 2>/dev/null || rc=$?
+    [ "$rc" -ne 0 ] || { echo "  FAIL: writing onto a directory must fail"; return 1; }
+    assert_eq "" "$(ls -A "$d")" "nothing is left inside the directory" || return 1
+}
+
 test_atomic_write_keeps_the_mode_with_gnu_stat_on_a_mac() {
     command -v gstat >/dev/null 2>&1 || { echo "  SKIP: no gstat on this machine"; return 77; }
     local shim="$TEST_TMPDIR/gnubin"
@@ -811,4 +821,5 @@ run_test test_state_write_takes_over_a_dead_holders_lock
 run_test test_state_write_fails_loudly_when_the_old_state_cannot_be_read
 run_test test_two_state_writers_lose_no_update
 run_test test_atomic_write_keeps_the_mode_with_gnu_stat_on_a_mac
+run_test test_atomic_write_refuses_a_directory_destination
 report_results
