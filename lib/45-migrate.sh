@@ -26,6 +26,25 @@ cs_assert_local_untracked() {
     fi
 }
 
+# For a checkout ags hides itself in through info/exclude (git_bookkeeping:
+# exclude): the first path ags would rewrite at open that the branch tracks, or
+# "<path> is a symlink" when one of them points elsewhere (a write through it
+# lands on the target, which may be tracked). Empty when the open is safe. An
+# exclude hides only untracked files, so a tracked one here would be dirtied
+# on every open; checked at adoption to skip, and at every open to refuse,
+# since the branch moves on.
+_exclude_session_tracked_conflict() {  # dir
+    local dir="$1" p
+    for p in .claude .claude/settings.local.json CLAUDE.local.md .cs; do
+        if [ -L "$dir/$p" ]; then
+            printf '%s is a symlink' "$p"
+            return 0
+        fi
+    done
+    # The .tmp names are the fixed temp files ags writes through before its mv.
+    git -C "$dir" ls-files -- .cs .claude/settings.local.json .claude/settings.local.json.tmp CLAUDE.local.md CLAUDE.local.md.tmp 2>/dev/null | head -1
+}
+
 # True when cs created this session directory, and so owns its mode. Two ways to
 # fail: the directory sits outside the sessions root, or a symlink IN the root
 # resolves to it — an adopted session, whose target is the user's own project
@@ -79,23 +98,91 @@ _run_pre_open() {  # session_name, session_dir
     [ -x "$hook" ] || error "$1: .cs/local/pre-open is not executable; chmod +x it, or remove it."
     (cd "$2" && "$hook") || rc=$?
     [ "$rc" -eq 0 ] || error "$1: .cs/local/pre-open exited $rc; not opening the session."
+    _arm_vault_detach "$2"
 }
 
-# A session can keep .cs/memory and .cs/plans on an encrypted volume by making
-# them symlinks into its mountpoint. Unmounted, the links dangle: `test -d` is
-# false through them, so migrate would mkdir through them and abort on a raw
-# mkdir error. Refuse by name instead, before anything writes there.
+# A session can keep .cs/memory, .cs/plans, .cs/claude-config (Claude Code's
+# own config dir) and .cs/private (cs's own content files) on an encrypted
+# volume by making them symlinks into its mountpoint. Unmounted, the links
+# dangle: `test -d` is false through them, so migrate would mkdir through them
+# and abort on a raw mkdir error. Refuse by name instead, before anything
+# writes there.
 _refuse_unmounted_meta() {  # session_name, session_dir
     local sub link target
-    for sub in memory plans; do
+    for sub in $CS_VAULT_LINKS; do
         link="$2/.cs/$sub"
+        if [ -e "$link" ] && [ ! -d "$link" ]; then
+            error "$1: .cs/$sub is a file, not a directory or a link into encrypted storage. Remove it, or link it into the vault, then reopen."
+        fi
         [ -L "$link" ] && [ ! -e "$link" ] || continue
         target=$(readlink "$link")
         error "$1: .cs/$sub points at $target, which is missing (encrypted storage not mounted?). Mount it, then reopen."
     done
+    _refuse_plaintext_beside_private "$1" "$2"
+}
+
+# Feature worktrees of an encrypted session are not designed yet. ags -encrypt
+# links the four names relative to .cs/, so a checkout of them resolves inside
+# the worktree, where nothing is mounted; and a base whose .cs/ is ignored
+# gives the worktree plaintext files of its own. Refused by name until then.
+_refuse_worktree_of_encrypted_base() {  # base_name, base_dir
+    local sub
+    for sub in $CS_VAULT_LINKS; do
+        [ -L "$2/.cs/$sub" ] || continue
+        error "$1: .cs/$sub links into encrypted storage, and feature worktrees of an encrypted session are not supported yet."
+    done
+}
+
+# The ags content files a plain session keeps in .cs/local and an encrypted one
+# keeps behind .cs/private. The open refuses a plaintext copy of any of them,
+# and ags -encrypt moves each into the vault.
+CS_PRIVATE_LOCAL_FILES="session.log scope-prompt.trace memory-index.snapshot mail
+    queue queue.tmp queue.state queue.done queue.declined queue.migrating
+    notifications.jsonl notifications.seen failures rewrite.trace pending-handoff"
+
+# Once .cs/private holds a session's ags content files, a copy still in
+# .cs/local is plaintext the vault was meant to hold: an unmigrated log, or one
+# written by an older ags. Named rather than moved, since a move cannot remove
+# the copies backups and snapshots already hold.
+_refuse_plaintext_beside_private() {  # session_name, session_dir
+    local meta="$2/.cs" name
+    [ -e "$meta/private" ] || return 0
+    for name in $CS_PRIVATE_LOCAL_FILES; do
+        [ -e "$meta/local/$name" ] || continue
+        error "$1: .cs/private keeps this session's ags files in its vault, but .cs/local still holds $name in plaintext. Move it into .cs/private or delete it, then reopen."
+    done
+    if [ -e "$meta/handoffs" ]; then
+        error "$1: .cs/private keeps this session's rotation handoffs in its vault, but .cs/handoffs still holds them in plaintext. Move it to .cs/private/handoffs or delete it, then reopen."
+    fi
+    if [ -e "$meta/checkpoints" ]; then
+        error "$1: .cs/private keeps this session's checkpoints in its vault, but .cs/checkpoints is still plaintext. Move it to .cs/private/checkpoints or delete it, then reopen."
+    fi
+    # A narrative in the vault rotates into it; a .cs/narrative-archive link
+    # into the vault is where rotation writes, not a leftover.
+    if [ -L "$meta/memory" ] && [ -e "$meta/narrative-archive" ] && [ ! -L "$meta/narrative-archive" ]; then
+        error "$1: this session's narrative lives in its vault, but .cs/narrative-archive is still plaintext. Move it to .cs/private/narrative-archive or delete it, then reopen."
+    fi
 }
 
 # Create session directory structure
+# The part of a session README every reader parses: the YAML frontmatter
+# (status, created, tags, aliases) and the `# Session: <name>` title, followed
+# by one blank line. Callers append their own body. The TUI, the hooks and
+# `ags -list` read these fields, so every session kind writes them here.
+_write_session_readme_head() {  # readme, name, tags_yaml, aliases_yaml
+    local readme="$1" name="$2" tags="$3" aliases="$4"
+    cat > "$readme" << EOF
+---
+status: active
+created: $(date '+%Y-%m-%d')
+tags: $tags
+aliases: $aliases
+---
+# Session: $name
+
+EOF
+}
+
 create_session_structure() {
     local session_dir="$1" engine="${2:-claude}"
 
@@ -107,15 +194,8 @@ create_session_structure() {
     # one caller that runs this against a directory that already carries one,
     # and its records must survive untouched.
     if [ ! -f "$session_dir/.cs/README.md" ]; then
-        cat > "$session_dir/.cs/README.md" << EOF
----
-status: active
-created: $(date '+%Y-%m-%d')
-tags: []
-aliases: ["$(basename "$session_dir")"]
----
-# Session: $(basename "$session_dir")
-
+        _write_session_readme_head "$session_dir/.cs/README.md" "$(basename "$session_dir")" "[]" "[\"$(basename "$session_dir")\"]"
+        cat >> "$session_dir/.cs/README.md" << EOF
 **Started:** $(date '+%Y-%m-%d %H:%M:%S')
 **Location:** $(hostname):$(pwd)
 
@@ -315,14 +395,35 @@ migrate_session() {
 
     # Per-actor local state must never be committed; refuse if it has been.
     cs_assert_local_untracked "$session_dir"
+    if [ "$(_read_local_state "$session_dir/.cs/local/state" git_bookkeeping)" = "exclude" ]; then
+        local conflict
+        conflict=$(_exclude_session_tracked_conflict "$session_dir")
+        if [ -n "$conflict" ]; then
+            case "$conflict" in
+                *symlink) error "$conflict in $session_dir, and ags writes through it at every open. Replace it with a real file or directory, or ags -rm the session." ;;
+                *) error "$conflict is tracked on the branch in $session_dir, and ags would rewrite it at every open. Stop tracking it, or ags -rm the session." ;;
+            esac
+        fi
+    fi
 
-    # Backfill the merge attributes on existing sessions.
-    setup_merge_attributes "$session_dir"
-
-    # Backfill the .cs/local/ ignore rule on older sessions whose .gitignore
-    # predates it, so per-actor local state never gets committed (which would
-    # otherwise trip cs_assert_local_untracked and block the next resume).
-    ensure_cs_gitignore_entries "$session_dir"
+    # Backfill the merge attributes on existing sessions, and the .cs/local/
+    # ignore rule on older sessions whose .gitignore predates it, so per-actor
+    # local state never gets committed (which would otherwise trip
+    # cs_assert_local_untracked and block the next resume). An adopted Claude
+    # Code worktree keeps cs's files out of git through the repo's common
+    # exclude instead (git_bookkeeping: exclude): nothing of cs's is committed
+    # there for attributes to govern, and an in-tree .gitignore or
+    # .gitattributes would be the one thing dirtying its PR branch.
+    # The same sessions keep their tracked CLAUDE.md as the branch has it: the
+    # two CLAUDE.md migrations further down are skipped for them too.
+    local tracked_tree_is_ours=1
+    if [ "$(_read_local_state "$session_dir/.cs/local/state" git_bookkeeping)" = "exclude" ]; then
+        tracked_tree_is_ours=0
+    fi
+    if [ "$tracked_tree_is_ours" = 1 ]; then
+        setup_merge_attributes "$session_dir"
+        ensure_cs_gitignore_entries "$session_dir"
+    fi
 
     # Phase 1: Structural migration (flat layout -> .cs/ directory)
     if needs_cs_migration "$session_dir"; then
@@ -379,19 +480,24 @@ migrate_session() {
     # peer still on the old cs may keep appending to the tracked log, so a
     # one-time modify/delete conflict on this low-stakes file is possible — take
     # either side.
+    # An encrypted session's log belongs behind .cs/private; open has already
+    # refused a locked vault, so cs_private_dir resolves here.
     if [ -f "$session_dir/.cs/logs/session.log" ]; then
-        cat "$session_dir/.cs/logs/session.log" >> "$session_dir/.cs/local/session.log"
+        local log_dir
+        log_dir=$(cs_private_dir "$session_dir/.cs") \
+            || error "Cannot move .cs/logs/session.log: .cs/private $(cs_private_state "$session_dir/.cs"), and cs cannot write there."
+        cat "$session_dir/.cs/logs/session.log" >> "$log_dir/session.log"
         rm -f "$session_dir/.cs/logs/session.log"
         rmdir "$session_dir/.cs/logs" 2>/dev/null || true
         # Drop the obsolete union rule for the relocated log. grep -v exits 1 when
         # that was the only line, so guard on presence and tolerate the exit code
         # rather than leaving the rule (and a stray .tmp) behind.
         local ga="$session_dir/.gitattributes"
-        if [ -f "$ga" ] && grep -q 'logs/session\.log merge=union' "$ga"; then
+        if [ "$tracked_tree_is_ours" = 1 ] && [ -f "$ga" ] && grep -q 'logs/session\.log merge=union' "$ga"; then
             { grep -v 'logs/session\.log merge=union' "$ga" > "$ga.tmp"; } 2>/dev/null || true
             mv "$ga.tmp" "$ga" 2>/dev/null || rm -f "$ga.tmp"
         fi
-        warn "Moved .cs/logs/session.log to machine-local .cs/local/session.log"
+        warn "Moved .cs/logs/session.log to ${log_dir#"$session_dir"/}/session.log"
     fi
 
     # Remove inert sync/remote metadata left by older versions (the sync
@@ -490,11 +596,24 @@ migrate_session() {
         local _legacy_uuid _legacy_color
         _legacy_uuid=$(awk '/^claude_session_id:/ { sub(/^claude_session_id:[[:space:]]*/, ""); gsub(/["\r]/, ""); print; exit }' "$readme")
         _legacy_color=$(awk '/^claude_session_color:/ { sub(/^claude_session_color:[[:space:]]*/, ""); gsub(/["\r]/, ""); print; exit }' "$readme")
+        # The README is whatever the clone or the adopted project committed, so
+        # only a UUID is taken as a conversation id.
         if [ -n "$_legacy_uuid" ] && [ -z "$(_read_local_state "$_state" claude_session_id)" ]; then
-            _set_local_state_if_absent "$_state" claude_session_id "$_legacy_uuid"
+            if _is_uuid "$_legacy_uuid"; then
+                _set_local_state_if_absent "$_state" claude_session_id "$_legacy_uuid"
+            else
+                warn "ignoring claude_session_id in .cs/README.md: not a UUID, so it names no conversation"
+            fi
         fi
+        # The colour is claude's first prompt, so the same rule: only one of
+        # claude's own colours is taken; anything else leaves the slot empty for
+        # the backfill below.
         if [ -n "$_legacy_color" ] && [ -z "$(_read_local_state "$_state" claude_session_color)" ]; then
-            _set_local_state_if_absent "$_state" claude_session_color "$_legacy_color"
+            if _is_session_color "$_legacy_color"; then
+                _set_local_state_if_absent "$_state" claude_session_color "$_legacy_color"
+            else
+                warn "ignoring claude_session_color in .cs/README.md: not one of claude's colours"
+            fi
         fi
         local _tmp="$readme.tmp"
         awk -v re="$_fm_field_re" '

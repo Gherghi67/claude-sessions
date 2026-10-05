@@ -45,6 +45,7 @@ Commands:
   -tui                Open the interactive session manager (bare 'ags' does too)
   -list, -ls          List sessions (--tag <tag> filters; --archived shows only archived)
   -adopt <name> [--engine claude|codex]  Adopt current directory as a session
+  -adopt --worktrees  Register Claude Code's .claude/worktrees/* here as <repo>.<worktree> sessions (--dry-run previews)
   -whoami             Show the current actor (for shared, multi-person sessions)
   -who                Show who contributed to shared memory/narrative (git history)
   -engine [supports <capability>]  Show this session's engine, conversation and capabilities
@@ -53,8 +54,9 @@ Commands:
   -tag add|rm <tag>   Tag the current session (frontmatter); -tag list [<name>] to view
   -archive <name>... [--force]  Archive sessions (hidden until reopened; --force if live)
   -unarchive <name>...  Restore archived sessions to the listings
+  -encrypt <name>     Move a closed session's private files into an encrypted vault (macOS; asks for a password at every open)
   -status "<text>"    Set this session's advertised status (also: -status, -status --clear/-c)
-  -remove, -rm <name>... [--force]  Remove sessions (each asks its own confirm; --force if live)
+  -remove, -rm <name>... [--force [--delete-files]]  Remove sessions (each asks its own confirm and names files ags did not create; --force if live; --delete-files lets --force remove those files)
   -secrets <cmd>      Manage current session secrets (requires CS_SESSION_NAME)
   -update             Update ags to latest version
     --check, -c       Check for updates without installing

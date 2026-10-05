@@ -11,7 +11,7 @@ _cs_completions() {
     }
 
     # Global flags
-    local global_flags="-tui -list -ls -adopt -remove -rm -whoami -who -engine -secrets -checkpoint -narrative -queue -msg -spawn -conversations -search -statusline -detect-theme -doctor -diag -update -uninstall -help -h -version -v -live -usage -status -tag -archive -unarchive"
+    local global_flags="-tui -list -ls -adopt -remove -rm -whoami -who -engine -secrets -checkpoint -narrative -queue -msg -spawn -conversations -search -statusline -detect-theme -doctor -diag -update -uninstall -help -h -version -v -live -usage -status -tag -archive -unarchive -encrypt"
 
     # Secrets subcommands
     local secrets_cmds="set store get list ls delete rm purge export export-file import-file migrate migrate-backend backend age"
@@ -63,6 +63,7 @@ _cs_completions() {
     local has_session=false
     local expect_engine=false
     local after_remove=false
+    local after_adopt=false
     local after_archive=false
 
     for ((i=1; i < cword; i++)); do
@@ -140,7 +141,10 @@ _cs_completions() {
             -remove|-rm)
                 after_remove=true
                 ;;
-            -archive|-unarchive)
+            -adopt)
+                after_adopt=true
+                ;;
+            -archive|-unarchive|-encrypt)
                 after_archive=true
                 ;;
             -*)
@@ -148,7 +152,7 @@ _cs_completions() {
                 ;;
             *)
                 # A non-flag word that's not a subcommand is likely a session name
-                if ! $in_secrets && ! $after_remove && ! $in_update && ! $in_checkpoint && ! $in_queue && ! $in_narrative && ! $in_tag && ! $in_list && ! $after_archive; then
+                if ! $in_secrets && ! $after_remove && ! $after_adopt && ! $in_update && ! $in_checkpoint && ! $in_queue && ! $in_narrative && ! $in_tag && ! $in_list && ! $after_archive; then
                     has_session=true
                 fi
                 ;;
@@ -175,12 +179,31 @@ _cs_completions() {
         return
     fi
 
+    # Context: after -adopt. A new session name completes nothing; the options
+    # choose the engine, or register Claude Code's worktrees instead.
+    if $after_adopt; then
+        COMPREPLY=()
+        case "$cur" in
+            -*)
+                if [[ "${words[cword-1]}" == "--worktrees" ]]; then
+                    COMPREPLY=($(compgen -W "--dry-run" -- "$cur"))
+                else
+                    COMPREPLY=($(compgen -W "--worktrees --engine" -- "$cur"))
+                fi
+                ;;
+        esac
+        return
+    fi
+
     # Context: after -remove/-rm, complete with session names. These verbs take
     # several names, so every positional past the flag completes, not just the
     # first.
     if $after_remove; then
         COMPREPLY=()
-        _cs_add_session_matches "$cur"
+        case "$cur" in
+            -*) COMPREPLY=($(compgen -W "--force -f --delete-files" -- "$cur")) ;;
+            *) _cs_add_session_matches "$cur" ;;
+        esac
         return
     fi
 

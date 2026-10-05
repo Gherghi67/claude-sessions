@@ -175,6 +175,23 @@ test_session_end_preserves_a_live_lock_from_env_only() {
         "the live launcher's PID must remain unchanged" || return 1
 }
 
+# /clear and /resume end a conversation but not the claude that holds the
+# lock: it keeps running, so the next `ags <name>` must still meet the
+# collision check.
+test_session_end_keeps_the_lock_for_clear_and_resume() {
+    create_lock_test_session "test-session"
+    local meta_dir="$CS_SESSIONS_ROOT/test-session/.cs" reason
+    export CLAUDE_SESSION_NAME="test-session"
+    export CLAUDE_SESSION_DIR="$CS_SESSIONS_ROOT/test-session"
+    export CLAUDE_SESSION_META_DIR="$meta_dir"
+    for reason in clear resume; do
+        echo "$$" > "$meta_dir/session.lock"
+        printf '{"session_id": "test-123", "reason": "%s"}' "$reason" \
+            | CS_RESOLVED_FROM="env" "$SCRIPT_DIR/../hooks/session-end.sh"
+        assert_eq "$$" "$(cat "$meta_dir/session.lock" 2>/dev/null)" "lock kept after reason $reason" || return 1
+    done
+}
+
 # The other half of that branch, which nothing covered — which is why the
 # inherited value could flip the test above and read as a flake. A teammate
 # resolved by walking into the directory does not own the lock: stripping it
@@ -556,6 +573,7 @@ run_test test_lock_prevents_duplicate_session
 run_test test_stale_lock_is_reclaimed
 run_test test_force_overrides_live_lock
 run_test test_session_end_preserves_a_live_lock_from_env_only
+run_test test_session_end_keeps_the_lock_for_clear_and_resume
 run_test test_session_end_leaves_a_live_lock_it_does_not_own
 run_test test_session_end_clears_a_stale_lock_even_when_walked_in
 run_test test_lock_contains_valid_pid

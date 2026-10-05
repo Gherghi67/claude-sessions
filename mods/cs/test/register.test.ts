@@ -336,6 +336,22 @@ test('a marker naming a handoff that is gone, consumed, or outside the store doe
   expect(findButton(await band()).props.label).toBe('rotate this conversation')
 })
 
+// An encrypted session keeps the marker and its handoffs behind .cs/private.
+const PRIVATE_MARKER = '/work/.cs/private/pending-handoff'
+const PRIVATE_HANDOFF = '/work/.cs/private/handoffs/2026-09-15-next-step.md'
+
+test('an encrypted session arms from the marker and handoff behind .cs/private', async () => {
+  files[PRIVATE_HANDOFF] = UNCONSUMED; files[PRIVATE_MARKER] = '2026-09-15-next-step.md\n'
+  percent = 3
+  expect(findButton(await band()).props.label).toBe('/clear and continue from the handoff')
+})
+
+test('a private marker never arms from the plaintext handoff store', async () => {
+  files[HANDOFF] = UNCONSUMED; files[PRIVATE_MARKER] = '2026-09-15-next-step.md\n'
+  percent = 39
+  expect(await band()).toBe(DRAWN)
+})
+
 test('an empty marker names no handoff, so the band behaves as unarmed', async () => {
   files[MARKER] = '\n'
   percent = 39
@@ -1211,6 +1227,16 @@ test('a queue already armed or draining is listed without an offer', async () =>
   }
   expect(asks).toEqual([])
   expect(runs.map(x => x.argv[2])).toEqual(['list', 'list'])
+})
+
+test('an encrypted session\'s queue state is read behind .cs/private', async () => {
+  envVars.CS_BIN = '/opt/cs/bin/ags'
+  runResult = LISTED
+  files['/work/.cs/private/queue.state'] = 'draining\n'
+  await queue('')
+  await settle()
+  expect(asks).toEqual([])
+  expect(runs.map(x => x.argv[2])).toEqual(['list'])
 })
 
 test('an empty queue is listed without an offer', async () => {

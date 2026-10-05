@@ -13,6 +13,25 @@ _alloc_uuid() {
     fi
 }
 
+# A conversation id goes onto claude's command line, and the README a clone or an
+# adopted project brings can say anything, so only a UUID counts as one. Same
+# pattern as hooks/session-start.sh's UUID_RE.
+_is_uuid() {
+    [[ "$1" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]
+}
+
+# True when $1 is one of CS_VALID_COLORS. The recorded colour becomes claude's
+# first prompt (`/color <value>`), so every reader checks it here before building
+# that prompt: a README frontmatter travels with a clone or an adopted project,
+# and a hand-edited state file can hold anything.
+_is_session_color() {
+    local c
+    for c in "${CS_VALID_COLORS[@]}"; do
+        [ "$1" = "$c" ] && return 0
+    done
+    return 1
+}
+
 # Machine-local session state lives in .cs/local/state as 'key: value' lines
 # (claude_session_id, claude_session_color, last_resumed, and session_name for
 # adopted sessions, whose name lives in a symlink no hook can see). It is gitignored
@@ -39,17 +58,28 @@ _read_local_state() {
 
 # Write 'key: value' into a machine-local state file, replacing any existing
 # line for that key. Creates .cs/local/ and the file on first write. Atomic
-# (tmp+mv), idempotent.
+# (tmp+mv), idempotent. A write that fails (permissions, a full disk) names the
+# file and returns non-zero; the locking wrappers below then end ags: the launch
+# has already told the user what it was about to start, and a silent miss
+# leaves the next open resuming nothing.
 _cs_set_local_state_unlocked() {
     local state="$1" key="$2" value="$3" tmp
-    mkdir -p "$(dirname "$state")" || return 1
-    tmp=$(mktemp "$state.XXXXXX") || return 1
+    mkdir -p "$(dirname "$state")" 2>/dev/null || { _cs_state_write_failed "$(dirname "$state")" create; return 1; }
+    tmp=$(mktemp "$state.XXXXXX" 2>/dev/null) || { _cs_state_write_failed "$state"; return 1; }
     {
-        if [ -f "$state" ]; then
-            awk -v key="$key" 'index($0, key ":") != 1' "$state" || { rm -f "$tmp"; return 1; }
-        fi
-        printf '%s: %s\n' "$key" "$value"
-    } > "$tmp" && mv "$tmp" "$state" || { rm -f "$tmp"; return 1; }
+        {
+            if [ -f "$state" ]; then
+                awk -v key="$key" 'index($0, key ":") != 1' "$state"
+            fi && printf '%s: %s\n' "$key" "$value"
+        } > "$tmp" && mv "$tmp" "$state"
+    } 2>/dev/null || { rm -f "$tmp" 2>/dev/null; _cs_state_write_failed "$state"; return 1; }
+}
+
+# Name the file a machine-local state write could not create or replace, as
+# error() would, but without exiting: a lease callback returns and its caller
+# decides; the wrappers below end ags.
+_cs_state_write_failed() {  # path [verb]
+    printf "${RED}Error: could not %s %s${NC}\n" "${2:-write}" "$1" >&2
 }
 
 _set_local_state() {
@@ -61,7 +91,7 @@ _set_local_state() {
             cs_run_guarded "${1%/local/state}" _cs_set_local_state_unlocked "$@"
             ;;
         *) _cs_set_local_state_unlocked "$@" ;;
-    esac
+    esac || exit 1
 }
 
 _cs_set_local_state_if_absent_unlocked() {
@@ -75,17 +105,18 @@ _set_local_state_if_absent() {
             cs_run_guarded "${1%/local/state}" _cs_set_local_state_if_absent_unlocked "$@"
             ;;
         *) _cs_set_local_state_if_absent_unlocked "$@" ;;
-    esac
+    esac || exit 1
 }
 
-# Remove a key's line from a machine-local state file. Absent file or key is a
-# no-op. Atomic (tmp+mv) and serialized like _set_local_state.
+# Remove a key's line from a machine-local state file. A missing file or key is
+# a no-op. Atomic (tmp+mv), serialized like _set_local_state, and loud on the
+# same failures.
 _cs_unset_local_state_unlocked() {
     local state="$1" key="$2" tmp
     [ -f "$state" ] || return 0
-    tmp=$(mktemp "$state.XXXXXX") || return 1
-    awk -v key="$key" 'index($0, key ":") != 1' "$state" > "$tmp" \
-        && mv "$tmp" "$state" || { rm -f "$tmp"; return 1; }
+    tmp=$(mktemp "$state.XXXXXX" 2>/dev/null) || { _cs_state_write_failed "$state"; return 1; }
+    { awk -v key="$key" 'index($0, key ":") != 1' "$state" > "$tmp" && mv "$tmp" "$state"; } 2>/dev/null \
+        || { rm -f "$tmp" 2>/dev/null; _cs_state_write_failed "$state"; return 1; }
 }
 
 _unset_local_state() {
@@ -94,7 +125,60 @@ _unset_local_state() {
             cs_run_guarded "${1%/local/state}" _cs_unset_local_state_unlocked "$@"
             ;;
         *) _cs_unset_local_state_unlocked "$@" ;;
-    esac
+    esac || exit 1
+}
+
+# The first prompt somebody typed into a conversation, as an Objective line:
+# whitespace collapsed, clipped to 100 characters with an ellipsis. Prints
+# nothing when the transcript holds no such prompt, or without jq. User records
+# also carry tool results, injected meta text and slash commands, which Claude
+# Code records as a <command-name> block indented across lines, so a record
+# counts only when its text, once collapsed, starts with none of `/`, `!` or
+# `<` and runs to 8 characters or more.
+# KEEP IN SYNC with the objective capture in hooks/scope-prompt.sh: the hook
+# applies the same rules to the prompt it is handed live.
+_transcript_first_prompt() {  # transcript_file
+    local file="$1"
+    [ -f "$file" ] || return 0
+    command -v jq >/dev/null 2>&1 || return 0
+    local candidates
+    candidates=$(jq -r -R '
+        fromjson? | select(.type == "user" and ((.isMeta // false) | not))
+        | .message.content
+        | if type == "string" then .
+          elif type == "array" then ([.[] | select(.type == "text") | .text] | join(" "))
+          else empty end
+        | gsub("[\\n\\r\\t]+"; " ") | gsub(" +"; " ")
+        | select(length > 0)' "$file" 2>/dev/null) || return 0
+    local line
+    while IFS= read -r line; do
+        line="${line# }"; line="${line% }"
+        case "$line" in /*|!*|'<'*) continue ;; esac
+        [ "${#line}" -ge 8 ] || continue
+        [ "${#line}" -gt 100 ] && line="${line:0:100}…"
+        printf '%s\n' "$line"
+        return 0
+    done <<< "$candidates"
+    return 0
+}
+
+# Replace the Objective placeholder (a whole line wrapped in [...] under
+# `## Objective`) with text, leaving every other line alone. A hand-written
+# objective has no placeholder and is never touched. tmp+mv keeps the write
+# atomic; ENVIRON sidesteps awk -v escape processing of arbitrary prompt text.
+_seed_readme_objective() {  # readme, text
+    local readme="$1" text="$2" tmp
+    [ -f "$readme" ] && [ -n "$text" ] || return 0
+    tmp=$(mktemp "${TMPDIR:-/tmp}/cs-objective.XXXXXX") || return 0
+    if OBJ="$text" awk '
+            /^## / { in_obj = ($0 ~ /^## Objective/) }
+            in_obj && /^\[.*\]$/ { print ENVIRON["OBJ"]; next }
+            { print }
+        ' "$readme" > "$tmp"; then
+        mv "$tmp" "$readme" || rm -f "$tmp"
+    else
+        rm -f "$tmp"
+    fi
 }
 
 # Terminate a JSONL file whose last line lost its newline to an interrupted

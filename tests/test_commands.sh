@@ -371,6 +371,16 @@ test_sweep_resolves_actor_before_narrative_append() {
     fi
 }
 
+test_sweep_adds_check_tasks_and_keeps_the_entry() {
+    # A rule-shaped entry usually carries the incident or measurement behind the rule,
+    # which a check's failure message would lose, so a check that can carry the rule
+    # becomes a task beside the entry, never a replacement for it.
+    assert_file_contains "$SKILLS_DIR/sweep/SKILL.md" "Could a check carry it instead" \
+        "the sweep skill must ask whether a mechanical check could carry a rule" || return 1
+    assert_file_contains "$SKILLS_DIR/sweep/SKILL.md" "add a task to build it and keep the memory entry as written" \
+        "the sweep skill must add a task for the check and keep the memory entry, never replace it" || return 1
+}
+
 # ============================================================================
 # lane 1b: store-secret guardrails, prose-hygiene scoring contract, release runbook
 # ============================================================================
@@ -548,6 +558,7 @@ run_test test_sweep_states_filename_convention
 run_test test_sweep_scopes_when_not_to_write
 run_test test_sweep_states_memory_pointer_format
 run_test test_sweep_resolves_actor_before_narrative_append
+run_test test_sweep_adds_check_tasks_and_keeps_the_entry
 run_test test_store_secret_opener_softened_and_stops_on_nothing
 run_test test_store_secret_guards_silent_overwrite
 run_test test_store_secret_non_session_warns_and_forbids_file

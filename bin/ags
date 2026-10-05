@@ -5,7 +5,7 @@
 set -euo pipefail
 
 # Configuration
-VERSION="2026.9.23"
+VERSION="2026.10.3"
 SESSIONS_ROOT="${CS_SESSIONS_ROOT:-$HOME/.claude-sessions}"
 CLAUDE_CODE_BIN="${CLAUDE_CODE_BIN:-claude}"
 CODEX_BIN="${CODEX_BIN:-codex}"
@@ -69,6 +69,7 @@ CS_HOOKS=(
 CS_HOOK_LIBS=(
     cs-resolve.sh
     cs-shared.sh
+    cs-iterm-tab.py
     prompt-rewriter.sh
     prompt-rewriter-model.sh
     prompt-rewriter-vendor.sh
@@ -132,6 +133,7 @@ CS_SKILL_FILES=(
     finish/scripts/finish.sh
     finish/agents/openai.yaml   # Codex ignores disable-model-invocation; this is its switch
     sweep/scripts/memory-index-guard.sh
+    sweep/scripts/cs-shared.sh  # build.sh's copy of hooks/cs-shared.sh, which the guard sources
 )
 
 # Mods cs ships: Claude Code function-hooks plugins, deployed file by file as
@@ -368,6 +370,47 @@ _narrative_budget() {  # value, default
     if [ "$n" -gt 0 ]; then echo "$n"; else echo "$2"; fi
 }
 
+# The four names under .cs/ that an encrypted session links into its vault;
+# see docs/session-layout.md "Encrypted sessions".
+# shellcheck disable=SC2034  # read by ags and by the hooks that source this file
+CS_VAULT_LINKS="memory plans claude-config private"
+
+# The directory holding a session's ags content files (command log, mail,
+# traces). An encrypted session links .cs/private into its vault; any other
+# keeps them in .cs/local. Fails, printing nothing, when .cs/private is a link
+# whose vault is locked: a writer drops its line rather than write it anywhere
+# else in plaintext.
+cs_private_dir() {  # meta_dir
+    if [ -L "$1/private" ] || [ -e "$1/private" ]; then
+        [ -d "$1/private" ] || return 1
+        printf '%s\n' "$1/private"
+    else
+        printf '%s\n' "$1/local"
+    fi
+}
+
+# Says what an unusable .cs/private is, for an error message: the vault it
+# points at, or that it is not a directory at all.
+cs_private_state() {  # meta_dir
+    if [ -L "$1/private" ]; then
+        printf 'points at %s\n' "$(readlink "$1/private")"
+    else
+        printf 'is not a directory\n'
+    fi
+}
+
+# The rotation handoff store: .cs/private/handoffs in an encrypted session,
+# .cs/handoffs in every other. Fails, like cs_private_dir, while .cs/private
+# dangles: a locked vault has no handoffs to offer or consume.
+cs_handoff_dir() {  # meta_dir
+    if [ -L "$1/private" ] || [ -e "$1/private" ]; then
+        [ -d "$1/private" ] || return 1
+        printf '%s\n' "$1/private/handoffs"
+    else
+        printf '%s\n' "$1/handoffs"
+    fi
+}
+
 # Names a tmux window after every cs session running in its panes: "cs: a | b",
 # in pane order, each name once. Under iTerm's tmux integration the window name
 # is the tab's title, and one window holds every pane of a tab, so a single
@@ -401,6 +444,23 @@ cs_tmux_title_window() {  # pane, session name ("" releases the pane)
         tmux set-window-option -t "$pane" allow-set-title on 2>/dev/null || true
     fi
     [ -z "$lock" ] || { rm -f "$lock/pid"; rmdir "$lock" 2>/dev/null; } || true
+    _cs_iterm_tab_title "$pane"
+}
+
+# Under iTerm's tmux integration the tab shows a title iTerm keeps for itself:
+# tmux window renames never reach it, and only iTerm's Python API sets it.
+# Hands the window to cs-iterm-tab.py in the background, after the lock is
+# released, since the helper takes about a second and reads the claims itself
+# when it runs. Its output is discarded and nothing waits on it, so a machine
+# without iTerm's API or the iterm2 python module goes without the tab title
+# and nothing else.
+_cs_iterm_tab_title() {  # pane
+    local helper window
+    [ "${LC_TERMINAL:-}" = iTerm2 ] && [ -z "${CS_NO_ITERM2:-}" ] || return 0
+    helper="${CS_HOOKS_DIR:-$HOME/.claude/hooks/cs}/cs-iterm-tab.py"
+    [ -f "$helper" ] && command -v python3 >/dev/null 2>&1 || return 0
+    window=$(tmux display-message -p -t "$1" '#{window_id}' 2>/dev/null) || return 0
+    ( python3 "$helper" "$window" </dev/null >/dev/null 2>&1 & )
 }
 
 # Takes the lock on a pane's window and prints its directory: a directory per
@@ -453,7 +513,8 @@ cs_run_guarded() (  # meta_dir, callback, arguments...
     shift
     mkdir -p "$meta/local" || return 1
     umask 077
-    exec 9> "$meta/local/run-lease.guard" || return 1
+    { exec 9> "$meta/local/run-lease.guard"; } 2>/dev/null \
+        || { printf 'Error: could not write %s\n' "$meta/local/run-lease.guard" >&2; return 1; }
     if command -v flock >/dev/null 2>&1; then
         flock -w 5 9 || { printf 'Error: Could not acquire run ownership guard: %s\n' "$meta" >&2; return 1; }
     elif command -v lockf >/dev/null 2>&1; then
@@ -819,6 +880,7 @@ Commands:
   -tui                Open the interactive session manager (bare 'ags' does too)
   -list, -ls          List sessions (--tag <tag> filters; --archived shows only archived)
   -adopt <name> [--engine claude|codex]  Adopt current directory as a session
+  -adopt --worktrees  Register Claude Code's .claude/worktrees/* here as <repo>.<worktree> sessions (--dry-run previews)
   -whoami             Show the current actor (for shared, multi-person sessions)
   -who                Show who contributed to shared memory/narrative (git history)
   -engine [supports <capability>]  Show this session's engine, conversation and capabilities
@@ -827,8 +889,9 @@ Commands:
   -tag add|rm <tag>   Tag the current session (frontmatter); -tag list [<name>] to view
   -archive <name>... [--force]  Archive sessions (hidden until reopened; --force if live)
   -unarchive <name>...  Restore archived sessions to the listings
+  -encrypt <name>     Move a closed session's private files into an encrypted vault (macOS; asks for a password at every open)
   -status "<text>"    Set this session's advertised status (also: -status, -status --clear/-c)
-  -remove, -rm <name>... [--force]  Remove sessions (each asks its own confirm; --force if live)
+  -remove, -rm <name>... [--force [--delete-files]]  Remove sessions (each asks its own confirm and names files ags did not create; --force if live; --delete-files lets --force remove those files)
   -secrets <cmd>      Manage current session secrets (requires CS_SESSION_NAME)
   -update             Update ags to latest version
     --check, -c       Check for updates without installing
@@ -1006,7 +1069,7 @@ _lock_collision_menu() {
     case "$action" in
         force) return 0 ;;                              # force a second launch here
         open:*) exec "$0" "${action#open:}" ;;          # resume an existing feature
-        tui) exec "$0" -tui ;;                          # pick a different session
+        tui) _vault_leave; exec "$0" -tui ;;            # pick a different session
         new)
             printf '    %bFeature name%b  %b›%b ' "$WHITE" "$NC" "$GOLD" "$NC"
             read -r feature || feature=""
@@ -1167,7 +1230,7 @@ _epoch_mtime() {  # path
 # How long after the last statusline write a lockless conversation still counts
 # as live, matching the TUI's HEARTBEAT_WINDOW_SECS. A conversation opened
 # outside cs writes no lock, but its statusline touches .cs/local/context-pct
-# every few seconds while active.
+# every minute or two while it is open: an idle bar repaints once a minute.
 HEARTBEAT_WINDOW_SECS=900
 
 # True when the statusline heartbeat is fresh: context-pct was written within
@@ -1217,6 +1280,10 @@ _cs_run_cleanup() {
     fi
     [ -z "${_cs_run_gate:-}" ] || rm -f "$_cs_run_gate" 2>/dev/null || true
     release_session_lock "$_cs_run_meta" || true
+    # An encrypted session's vault, mounted by this open's pre-open hook, is
+    # detached when the last process holding it ends: here too, so a signal
+    # or an error mid-launch does not leave it mounted.
+    if declare -F _detach_opened_vault >/dev/null; then _detach_opened_vault || true; fi
     if declare -F reset_tab_title >/dev/null; then reset_tab_title || true; fi
     _cs_run_active=0
 }
@@ -1933,15 +2000,8 @@ cs_split_worktree_name() {
 bootstrap_worktree_meta() {
     local wt_dir="$1" base_name="$2" task="$3"
     mkdir -p "$wt_dir/.cs"/{local,memory}
-    cat > "$wt_dir/.cs/README.md" << EOF
----
-status: active
-created: $(date '+%Y-%m-%d')
-tags: [worktree]
-aliases: ["$base_name@$task"]
----
-# Session: $base_name@$task
-
+    _write_session_readme_head "$wt_dir/.cs/README.md" "$base_name@$task" "[worktree]" "[\"$base_name@$task\"]"
+    cat >> "$wt_dir/.cs/README.md" << EOF
 Feature worktree of session '$base_name' on branch cs/$task.
 
 ## Objective
@@ -2349,6 +2409,14 @@ retire_feature_worktree() {  # base_name task sha [--force]
     if [ -n "$pid" ]; then
         error "Base session '$base_name' is open elsewhere (PID $pid); run /finish $task from that conversation"
     fi
+
+    # git worktree remove --force recurses into a mount, so a volume mounted
+    # inside the worktree would lose what it holds.
+    local mounted
+    mounted=$(_volume_mounted_under "$wt_dir") \
+        || error "ags could not read the mount table, so it cannot tell whether a volume is mounted inside $wt_dir; refusing to remove the worktree."
+    [ -z "$mounted" ] \
+        || error "The feature is landed, but its worktree has a volume mounted inside it at $mounted, and removing the worktree would delete what the volume holds. Unmount it, then run /finish $task here again."
 
     if _tree_is_dirty "$wt_dir"; then
         error "Worktree has uncommitted changes; commit them in $wt_dir first (cs never commits for you)"
@@ -2785,11 +2853,15 @@ fuse_session_records() {
     # Worktrees never run migrate_session, so a task branch created before the
     # log moved to .cs/local/ still keeps its audit trail at .cs/logs/; fuse
     # whichever the worktree has into the base's machine-local log.
-    local srclog
+    # An encrypted base keeps its log behind .cs/private; a locked one cannot
+    # take the log, and .cs/local must not take it in plaintext instead.
+    local srclog dstlog
     for srclog in "$src/local/session.log" "$src/logs/session.log"; do
         if [ -f "$srclog" ]; then
-            mkdir -p "$dst/local"
-            { echo ""; cat "$srclog"; } >> "$dst/local/session.log"
+            dstlog=$(cs_private_dir "$dst") \
+                || error "cannot fuse the worktree's log: $dst/private is locked. Mount it, then retry."
+            mkdir -p "$dstlog"
+            { echo ""; cat "$srclog"; } >> "$dstlog/session.log"
             break
         fi
     done
@@ -3025,6 +3097,25 @@ Claude's built-in memory writes durable facts to `.cs/memory/` (ags redirects vi
 EOF
 }
 
+# The protocol for an encrypted session: migrate_session appends it once
+# .cs/private exists. It overrides the README instructions of the base
+# protocol, which every session gets from _emit_session_claude_md.
+_emit_encrypted_protocol_block() {
+    cat << 'EOF'
+<!-- cs:encrypted-protocol -->
+## Encrypted session
+
+This session keeps its private files in an encrypted vault: `.cs/memory`, `.cs/plans` and `.cs/private` link into it. Every other path in the session directory is plaintext on disk and in backups. These rules override the Session Files and Documentation Discipline sections above:
+
+- Keep the objective, environment and outcome at the top of your narrative (`.cs/memory/narrative.<actor>.md`), and read them from there on resume. `.cs/README.md` stays frontmatter only; ags does not copy your first prompt into it.
+- The bash-logger records every Bash command in `.cs/private/session.log`, inside the vault. The secrets rule above still applies.
+- Rotation handoffs live in `.cs/private/handoffs/` and are never committed; the `rotate` skill says how.
+- `ags -narrative rotate` archives your narrative's older sections into `.cs/private/narrative-archive/<actor>/` (or through a `.cs/narrative-archive` link into the vault); grep there on demand.
+- `/checkpoint` saves under `.cs/private/checkpoints/`, and the timeline records no label.
+- Keep session notes (research, scratch, drafts) under `.cs/memory`, `.cs/plans` or `.cs/private`.
+EOF
+}
+
 # Emit the session CLAUDE.md template to stdout. The leading sentinel lets both
 # the create path (overwrite) and the migrate path (guarded append) detect
 # whether the protocol is already present.
@@ -3257,6 +3348,25 @@ _alloc_uuid() {
     fi
 }
 
+# A conversation id goes onto claude's command line, and the README a clone or an
+# adopted project brings can say anything, so only a UUID counts as one. Same
+# pattern as hooks/session-start.sh's UUID_RE.
+_is_uuid() {
+    [[ "$1" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]
+}
+
+# True when $1 is one of CS_VALID_COLORS. The recorded colour becomes claude's
+# first prompt (`/color <value>`), so every reader checks it here before building
+# that prompt: a README frontmatter travels with a clone or an adopted project,
+# and a hand-edited state file can hold anything.
+_is_session_color() {
+    local c
+    for c in "${CS_VALID_COLORS[@]}"; do
+        [ "$1" = "$c" ] && return 0
+    done
+    return 1
+}
+
 # Machine-local session state lives in .cs/local/state as 'key: value' lines
 # (claude_session_id, claude_session_color, last_resumed, and session_name for
 # adopted sessions, whose name lives in a symlink no hook can see). It is gitignored
@@ -3283,17 +3393,28 @@ _read_local_state() {
 
 # Write 'key: value' into a machine-local state file, replacing any existing
 # line for that key. Creates .cs/local/ and the file on first write. Atomic
-# (tmp+mv), idempotent.
+# (tmp+mv), idempotent. A write that fails (permissions, a full disk) names the
+# file and returns non-zero; the locking wrappers below then end ags: the launch
+# has already told the user what it was about to start, and a silent miss
+# leaves the next open resuming nothing.
 _cs_set_local_state_unlocked() {
     local state="$1" key="$2" value="$3" tmp
-    mkdir -p "$(dirname "$state")" || return 1
-    tmp=$(mktemp "$state.XXXXXX") || return 1
+    mkdir -p "$(dirname "$state")" 2>/dev/null || { _cs_state_write_failed "$(dirname "$state")" create; return 1; }
+    tmp=$(mktemp "$state.XXXXXX" 2>/dev/null) || { _cs_state_write_failed "$state"; return 1; }
     {
-        if [ -f "$state" ]; then
-            awk -v key="$key" 'index($0, key ":") != 1' "$state" || { rm -f "$tmp"; return 1; }
-        fi
-        printf '%s: %s\n' "$key" "$value"
-    } > "$tmp" && mv "$tmp" "$state" || { rm -f "$tmp"; return 1; }
+        {
+            if [ -f "$state" ]; then
+                awk -v key="$key" 'index($0, key ":") != 1' "$state"
+            fi && printf '%s: %s\n' "$key" "$value"
+        } > "$tmp" && mv "$tmp" "$state"
+    } 2>/dev/null || { rm -f "$tmp" 2>/dev/null; _cs_state_write_failed "$state"; return 1; }
+}
+
+# Name the file a machine-local state write could not create or replace, as
+# error() would, but without exiting: a lease callback returns and its caller
+# decides; the wrappers below end ags.
+_cs_state_write_failed() {  # path [verb]
+    printf "${RED}Error: could not %s %s${NC}\n" "${2:-write}" "$1" >&2
 }
 
 _set_local_state() {
@@ -3305,7 +3426,7 @@ _set_local_state() {
             cs_run_guarded "${1%/local/state}" _cs_set_local_state_unlocked "$@"
             ;;
         *) _cs_set_local_state_unlocked "$@" ;;
-    esac
+    esac || exit 1
 }
 
 _cs_set_local_state_if_absent_unlocked() {
@@ -3319,17 +3440,18 @@ _set_local_state_if_absent() {
             cs_run_guarded "${1%/local/state}" _cs_set_local_state_if_absent_unlocked "$@"
             ;;
         *) _cs_set_local_state_if_absent_unlocked "$@" ;;
-    esac
+    esac || exit 1
 }
 
-# Remove a key's line from a machine-local state file. Absent file or key is a
-# no-op. Atomic (tmp+mv) and serialized like _set_local_state.
+# Remove a key's line from a machine-local state file. A missing file or key is
+# a no-op. Atomic (tmp+mv), serialized like _set_local_state, and loud on the
+# same failures.
 _cs_unset_local_state_unlocked() {
     local state="$1" key="$2" tmp
     [ -f "$state" ] || return 0
-    tmp=$(mktemp "$state.XXXXXX") || return 1
-    awk -v key="$key" 'index($0, key ":") != 1' "$state" > "$tmp" \
-        && mv "$tmp" "$state" || { rm -f "$tmp"; return 1; }
+    tmp=$(mktemp "$state.XXXXXX" 2>/dev/null) || { _cs_state_write_failed "$state"; return 1; }
+    { awk -v key="$key" 'index($0, key ":") != 1' "$state" > "$tmp" && mv "$tmp" "$state"; } 2>/dev/null \
+        || { rm -f "$tmp" 2>/dev/null; _cs_state_write_failed "$state"; return 1; }
 }
 
 _unset_local_state() {
@@ -3338,7 +3460,60 @@ _unset_local_state() {
             cs_run_guarded "${1%/local/state}" _cs_unset_local_state_unlocked "$@"
             ;;
         *) _cs_unset_local_state_unlocked "$@" ;;
-    esac
+    esac || exit 1
+}
+
+# The first prompt somebody typed into a conversation, as an Objective line:
+# whitespace collapsed, clipped to 100 characters with an ellipsis. Prints
+# nothing when the transcript holds no such prompt, or without jq. User records
+# also carry tool results, injected meta text and slash commands, which Claude
+# Code records as a <command-name> block indented across lines, so a record
+# counts only when its text, once collapsed, starts with none of `/`, `!` or
+# `<` and runs to 8 characters or more.
+# KEEP IN SYNC with the objective capture in hooks/scope-prompt.sh: the hook
+# applies the same rules to the prompt it is handed live.
+_transcript_first_prompt() {  # transcript_file
+    local file="$1"
+    [ -f "$file" ] || return 0
+    command -v jq >/dev/null 2>&1 || return 0
+    local candidates
+    candidates=$(jq -r -R '
+        fromjson? | select(.type == "user" and ((.isMeta // false) | not))
+        | .message.content
+        | if type == "string" then .
+          elif type == "array" then ([.[] | select(.type == "text") | .text] | join(" "))
+          else empty end
+        | gsub("[\\n\\r\\t]+"; " ") | gsub(" +"; " ")
+        | select(length > 0)' "$file" 2>/dev/null) || return 0
+    local line
+    while IFS= read -r line; do
+        line="${line# }"; line="${line% }"
+        case "$line" in /*|!*|'<'*) continue ;; esac
+        [ "${#line}" -ge 8 ] || continue
+        [ "${#line}" -gt 100 ] && line="${line:0:100}…"
+        printf '%s\n' "$line"
+        return 0
+    done <<< "$candidates"
+    return 0
+}
+
+# Replace the Objective placeholder (a whole line wrapped in [...] under
+# `## Objective`) with text, leaving every other line alone. A hand-written
+# objective has no placeholder and is never touched. tmp+mv keeps the write
+# atomic; ENVIRON sidesteps awk -v escape processing of arbitrary prompt text.
+_seed_readme_objective() {  # readme, text
+    local readme="$1" text="$2" tmp
+    [ -f "$readme" ] && [ -n "$text" ] || return 0
+    tmp=$(mktemp "${TMPDIR:-/tmp}/cs-objective.XXXXXX") || return 0
+    if OBJ="$text" awk '
+            /^## / { in_obj = ($0 ~ /^## Objective/) }
+            in_obj && /^\[.*\]$/ { print ENVIRON["OBJ"]; next }
+            { print }
+        ' "$readme" > "$tmp"; then
+        mv "$tmp" "$readme" || rm -f "$tmp"
+    else
+        rm -f "$tmp"
+    fi
 }
 
 # Terminate a JSONL file whose last line lost its newline to an interrupted
@@ -3538,8 +3713,7 @@ cs_binding_stage() {  # session_dir, engine, previous, candidate, reason, [hando
 }
 _claude_encode_path() {
     local p="$1"
-    p="${p//\//-}"
-    p="${p//./-}"
+    p="${p//[^A-Za-z0-9]/-}"
     printf '%s' "$p"
 }
 
@@ -3561,12 +3735,17 @@ _alloc_random_color() {
 # macOS mktemp returns /var/folders/... which is a symlink to
 # /private/var/folders/... and claude realpaths cwd before encoding.
 # CS_TRANSCRIPTS_DIR overrides the base for tests (also used by doctor).
+# A session with .cs/claude-config runs Claude Code on that config dir, so its
+# transcripts live in the dir's projects/. A dangling link (vault locked) still
+# names that base: the shared one never holds the session's conversations.
 _claude_project_dir() {
     local cwd="$1"
-    local resolved
+    local resolved base="${CS_TRANSCRIPTS_DIR:-$HOME/.claude/projects}"
     resolved=$( (cd "$cwd" 2>/dev/null && pwd -P) || printf '%s' "$cwd" )
-    printf '%s/%s\n' "${CS_TRANSCRIPTS_DIR:-$HOME/.claude/projects}" \
-        "$(_claude_encode_path "$resolved")"
+    if [ -e "$cwd/.cs/claude-config" ] || [ -L "$cwd/.cs/claude-config" ]; then
+        base="$cwd/.cs/claude-config/projects"
+    fi
+    printf '%s/%s\n' "$base" "$(_claude_encode_path "$resolved")"
 }
 
 # Discover claude's most-recently-modified transcript UUID under a project
@@ -3654,6 +3833,9 @@ _discover_session_uuid_in() {
 # Stage a replacement UUID and launch it under the core controller.
 # SessionStart promotes the candidate only after verifying this run and lead.
 # Failure preserves the prior binding and the pending transition for inspection.
+# With no recorded conversation to leave (the first open after ags -adopt, a
+# clone without its machine-local state) this is the session's first
+# conversation, not a rotation: no CS_FRESH_REBIND.
 _exec_fresh_rebind() {
     local session_dir="$1"
     local reason="${2:-declined-resume}"
@@ -3664,18 +3846,32 @@ _exec_fresh_rebind() {
     # adopted session lives at the project's own path, so its basename is the
     # project directory and `--name` would open (and create) a different
     # session. cs_launch_session exported the resolved name before handing
-    # the launch to the engine; the basename is only the fallback for a
-    # session that lives under the sessions root, where the two agree.
-    local session_name="${CS_SESSION_NAME:-$(basename "$session_dir")}"
+    # the launch to the engine, and the open records it in local state; the
+    # basename is only the fallback for a session that lives under the
+    # sessions root, where the two agree.
+    local session_name="${CS_SESSION_NAME:-}"
+    [ -n "$session_name" ] || session_name=$(_read_local_state "$session_dir/.cs/local/state" session_name)
+    [ -n "$session_name" ] || session_name=$(basename "$session_dir")
+    # Only a UUID names a conversation to leave; the launch ignores anything
+    # else in the slot, and so does the rotation record.
     local old_uuid
     old_uuid=$(cs_binding_read "$session_dir" claude) || return 1
+    _is_uuid "$old_uuid" || old_uuid=""
     local new_uuid
     new_uuid=$(_alloc_uuid)
-    cs_binding_stage "$session_dir" claude "$old_uuid" "$new_uuid" "$reason" "$handoff" || return 1
+    # An encrypted session's handoff name is its topic, so it stays out of the
+    # plaintext pending record and timeline, and out of claude's argv (visible
+    # to ps and in a terminal title); the SessionStart hook names the file from
+    # the vault.
+    local public_handoff="$handoff"
+    if [ -L "$session_dir/.cs/private" ] || [ -e "$session_dir/.cs/private" ]; then
+        public_handoff=""
+    fi
+    cs_binding_stage "$session_dir" claude "$old_uuid" "$new_uuid" "$reason" "$public_handoff" || return 1
     local session_color
     session_color=$(_read_local_state "$session_dir/.cs/local/state" claude_session_color)
     local color_arg=""
-    [ -n "$session_color" ] && color_arg="/color $session_color"
+    _is_session_color "$session_color" && color_arg="/color $session_color"
     # A handoff kick makes the fresh conversation act on its first turn instead of
     # waiting for the user. It stays a bare trigger on purpose: the SessionStart
     # hook (which the same r answer arms via the pending-handoff marker) is the
@@ -3685,10 +3881,14 @@ _exec_fresh_rebind() {
     # color re-apply; all four ride claude's single prompt slot, so a displaced
     # color returns on the next open.
     local handoff_arg=""
-    [ -n "$handoff" ] && handoff_arg="Continue from the pending rotation handoff: read .cs/handoffs/$handoff first."
+    if [ -n "$public_handoff" ]; then
+        handoff_arg="Continue from the pending rotation handoff: read .cs/handoffs/$handoff first."
+    elif [ -n "$handoff" ]; then
+        handoff_arg="Continue from the pending rotation handoff."
+    fi
     local launch_prompt="${merge_kick:-${spawn_kick:-${handoff_arg:-$color_arg}}}"
     export CS_CLAUDE_SESSION_ID="$new_uuid"
-    export CS_FRESH_REBIND=1
+    [ -z "$old_uuid" ] || export CS_FRESH_REBIND=1
     # shellcheck disable=SC2086
     cs_run_child $CLAUDE_CODE_BIN --name "$session_name" --session-id "$new_uuid" ${launch_prompt:+"$launch_prompt"}
 }
@@ -3716,6 +3916,25 @@ cs_assert_local_untracked() {
     if [ -n "$(git -C "$dir" ls-files -- .cs/local 2>/dev/null)" ]; then
         error ".cs/local/ is tracked in git (per-actor state must stay local). Fix with: git -C \"$dir\" rm -r --cached .cs/local && git commit -m 'stop tracking .cs/local'"
     fi
+}
+
+# For a checkout ags hides itself in through info/exclude (git_bookkeeping:
+# exclude): the first path ags would rewrite at open that the branch tracks, or
+# "<path> is a symlink" when one of them points elsewhere (a write through it
+# lands on the target, which may be tracked). Empty when the open is safe. An
+# exclude hides only untracked files, so a tracked one here would be dirtied
+# on every open; checked at adoption to skip, and at every open to refuse,
+# since the branch moves on.
+_exclude_session_tracked_conflict() {  # dir
+    local dir="$1" p
+    for p in .claude .claude/settings.local.json CLAUDE.local.md .cs; do
+        if [ -L "$dir/$p" ]; then
+            printf '%s is a symlink' "$p"
+            return 0
+        fi
+    done
+    # The .tmp names are the fixed temp files ags writes through before its mv.
+    git -C "$dir" ls-files -- .cs .claude/settings.local.json .claude/settings.local.json.tmp CLAUDE.local.md CLAUDE.local.md.tmp 2>/dev/null | head -1
 }
 
 # True when cs created this session directory, and so owns its mode. Two ways to
@@ -3771,23 +3990,91 @@ _run_pre_open() {  # session_name, session_dir
     [ -x "$hook" ] || error "$1: .cs/local/pre-open is not executable; chmod +x it, or remove it."
     (cd "$2" && "$hook") || rc=$?
     [ "$rc" -eq 0 ] || error "$1: .cs/local/pre-open exited $rc; not opening the session."
+    _arm_vault_detach "$2"
 }
 
-# A session can keep .cs/memory and .cs/plans on an encrypted volume by making
-# them symlinks into its mountpoint. Unmounted, the links dangle: `test -d` is
-# false through them, so migrate would mkdir through them and abort on a raw
-# mkdir error. Refuse by name instead, before anything writes there.
+# A session can keep .cs/memory, .cs/plans, .cs/claude-config (Claude Code's
+# own config dir) and .cs/private (cs's own content files) on an encrypted
+# volume by making them symlinks into its mountpoint. Unmounted, the links
+# dangle: `test -d` is false through them, so migrate would mkdir through them
+# and abort on a raw mkdir error. Refuse by name instead, before anything
+# writes there.
 _refuse_unmounted_meta() {  # session_name, session_dir
     local sub link target
-    for sub in memory plans; do
+    for sub in $CS_VAULT_LINKS; do
         link="$2/.cs/$sub"
+        if [ -e "$link" ] && [ ! -d "$link" ]; then
+            error "$1: .cs/$sub is a file, not a directory or a link into encrypted storage. Remove it, or link it into the vault, then reopen."
+        fi
         [ -L "$link" ] && [ ! -e "$link" ] || continue
         target=$(readlink "$link")
         error "$1: .cs/$sub points at $target, which is missing (encrypted storage not mounted?). Mount it, then reopen."
     done
+    _refuse_plaintext_beside_private "$1" "$2"
+}
+
+# Feature worktrees of an encrypted session are not designed yet. ags -encrypt
+# links the four names relative to .cs/, so a checkout of them resolves inside
+# the worktree, where nothing is mounted; and a base whose .cs/ is ignored
+# gives the worktree plaintext files of its own. Refused by name until then.
+_refuse_worktree_of_encrypted_base() {  # base_name, base_dir
+    local sub
+    for sub in $CS_VAULT_LINKS; do
+        [ -L "$2/.cs/$sub" ] || continue
+        error "$1: .cs/$sub links into encrypted storage, and feature worktrees of an encrypted session are not supported yet."
+    done
+}
+
+# The ags content files a plain session keeps in .cs/local and an encrypted one
+# keeps behind .cs/private. The open refuses a plaintext copy of any of them,
+# and ags -encrypt moves each into the vault.
+CS_PRIVATE_LOCAL_FILES="session.log scope-prompt.trace memory-index.snapshot mail
+    queue queue.tmp queue.state queue.done queue.declined queue.migrating
+    notifications.jsonl notifications.seen failures rewrite.trace pending-handoff"
+
+# Once .cs/private holds a session's ags content files, a copy still in
+# .cs/local is plaintext the vault was meant to hold: an unmigrated log, or one
+# written by an older ags. Named rather than moved, since a move cannot remove
+# the copies backups and snapshots already hold.
+_refuse_plaintext_beside_private() {  # session_name, session_dir
+    local meta="$2/.cs" name
+    [ -e "$meta/private" ] || return 0
+    for name in $CS_PRIVATE_LOCAL_FILES; do
+        [ -e "$meta/local/$name" ] || continue
+        error "$1: .cs/private keeps this session's ags files in its vault, but .cs/local still holds $name in plaintext. Move it into .cs/private or delete it, then reopen."
+    done
+    if [ -e "$meta/handoffs" ]; then
+        error "$1: .cs/private keeps this session's rotation handoffs in its vault, but .cs/handoffs still holds them in plaintext. Move it to .cs/private/handoffs or delete it, then reopen."
+    fi
+    if [ -e "$meta/checkpoints" ]; then
+        error "$1: .cs/private keeps this session's checkpoints in its vault, but .cs/checkpoints is still plaintext. Move it to .cs/private/checkpoints or delete it, then reopen."
+    fi
+    # A narrative in the vault rotates into it; a .cs/narrative-archive link
+    # into the vault is where rotation writes, not a leftover.
+    if [ -L "$meta/memory" ] && [ -e "$meta/narrative-archive" ] && [ ! -L "$meta/narrative-archive" ]; then
+        error "$1: this session's narrative lives in its vault, but .cs/narrative-archive is still plaintext. Move it to .cs/private/narrative-archive or delete it, then reopen."
+    fi
 }
 
 # Create session directory structure
+# The part of a session README every reader parses: the YAML frontmatter
+# (status, created, tags, aliases) and the `# Session: <name>` title, followed
+# by one blank line. Callers append their own body. The TUI, the hooks and
+# `ags -list` read these fields, so every session kind writes them here.
+_write_session_readme_head() {  # readme, name, tags_yaml, aliases_yaml
+    local readme="$1" name="$2" tags="$3" aliases="$4"
+    cat > "$readme" << EOF
+---
+status: active
+created: $(date '+%Y-%m-%d')
+tags: $tags
+aliases: $aliases
+---
+# Session: $name
+
+EOF
+}
+
 create_session_structure() {
     local session_dir="$1" engine="${2:-claude}"
 
@@ -3799,15 +4086,8 @@ create_session_structure() {
     # one caller that runs this against a directory that already carries one,
     # and its records must survive untouched.
     if [ ! -f "$session_dir/.cs/README.md" ]; then
-        cat > "$session_dir/.cs/README.md" << EOF
----
-status: active
-created: $(date '+%Y-%m-%d')
-tags: []
-aliases: ["$(basename "$session_dir")"]
----
-# Session: $(basename "$session_dir")
-
+        _write_session_readme_head "$session_dir/.cs/README.md" "$(basename "$session_dir")" "[]" "[\"$(basename "$session_dir")\"]"
+        cat >> "$session_dir/.cs/README.md" << EOF
 **Started:** $(date '+%Y-%m-%d %H:%M:%S')
 **Location:** $(hostname):$(pwd)
 
@@ -4007,14 +4287,35 @@ migrate_session() {
 
     # Per-actor local state must never be committed; refuse if it has been.
     cs_assert_local_untracked "$session_dir"
+    if [ "$(_read_local_state "$session_dir/.cs/local/state" git_bookkeeping)" = "exclude" ]; then
+        local conflict
+        conflict=$(_exclude_session_tracked_conflict "$session_dir")
+        if [ -n "$conflict" ]; then
+            case "$conflict" in
+                *symlink) error "$conflict in $session_dir, and ags writes through it at every open. Replace it with a real file or directory, or ags -rm the session." ;;
+                *) error "$conflict is tracked on the branch in $session_dir, and ags would rewrite it at every open. Stop tracking it, or ags -rm the session." ;;
+            esac
+        fi
+    fi
 
-    # Backfill the merge attributes on existing sessions.
-    setup_merge_attributes "$session_dir"
-
-    # Backfill the .cs/local/ ignore rule on older sessions whose .gitignore
-    # predates it, so per-actor local state never gets committed (which would
-    # otherwise trip cs_assert_local_untracked and block the next resume).
-    ensure_cs_gitignore_entries "$session_dir"
+    # Backfill the merge attributes on existing sessions, and the .cs/local/
+    # ignore rule on older sessions whose .gitignore predates it, so per-actor
+    # local state never gets committed (which would otherwise trip
+    # cs_assert_local_untracked and block the next resume). An adopted Claude
+    # Code worktree keeps cs's files out of git through the repo's common
+    # exclude instead (git_bookkeeping: exclude): nothing of cs's is committed
+    # there for attributes to govern, and an in-tree .gitignore or
+    # .gitattributes would be the one thing dirtying its PR branch.
+    # The same sessions keep their tracked CLAUDE.md as the branch has it: the
+    # two CLAUDE.md migrations further down are skipped for them too.
+    local tracked_tree_is_ours=1
+    if [ "$(_read_local_state "$session_dir/.cs/local/state" git_bookkeeping)" = "exclude" ]; then
+        tracked_tree_is_ours=0
+    fi
+    if [ "$tracked_tree_is_ours" = 1 ]; then
+        setup_merge_attributes "$session_dir"
+        ensure_cs_gitignore_entries "$session_dir"
+    fi
 
     # Phase 1: Structural migration (flat layout -> .cs/ directory)
     if needs_cs_migration "$session_dir"; then
@@ -4071,19 +4372,24 @@ migrate_session() {
     # peer still on the old cs may keep appending to the tracked log, so a
     # one-time modify/delete conflict on this low-stakes file is possible — take
     # either side.
+    # An encrypted session's log belongs behind .cs/private; open has already
+    # refused a locked vault, so cs_private_dir resolves here.
     if [ -f "$session_dir/.cs/logs/session.log" ]; then
-        cat "$session_dir/.cs/logs/session.log" >> "$session_dir/.cs/local/session.log"
+        local log_dir
+        log_dir=$(cs_private_dir "$session_dir/.cs") \
+            || error "Cannot move .cs/logs/session.log: .cs/private $(cs_private_state "$session_dir/.cs"), and cs cannot write there."
+        cat "$session_dir/.cs/logs/session.log" >> "$log_dir/session.log"
         rm -f "$session_dir/.cs/logs/session.log"
         rmdir "$session_dir/.cs/logs" 2>/dev/null || true
         # Drop the obsolete union rule for the relocated log. grep -v exits 1 when
         # that was the only line, so guard on presence and tolerate the exit code
         # rather than leaving the rule (and a stray .tmp) behind.
         local ga="$session_dir/.gitattributes"
-        if [ -f "$ga" ] && grep -q 'logs/session\.log merge=union' "$ga"; then
+        if [ "$tracked_tree_is_ours" = 1 ] && [ -f "$ga" ] && grep -q 'logs/session\.log merge=union' "$ga"; then
             { grep -v 'logs/session\.log merge=union' "$ga" > "$ga.tmp"; } 2>/dev/null || true
             mv "$ga.tmp" "$ga" 2>/dev/null || rm -f "$ga.tmp"
         fi
-        warn "Moved .cs/logs/session.log to machine-local .cs/local/session.log"
+        warn "Moved .cs/logs/session.log to ${log_dir#"$session_dir"/}/session.log"
     fi
 
     # Remove inert sync/remote metadata left by older versions (the sync
@@ -4182,11 +4488,24 @@ migrate_session() {
         local _legacy_uuid _legacy_color
         _legacy_uuid=$(awk '/^claude_session_id:/ { sub(/^claude_session_id:[[:space:]]*/, ""); gsub(/["\r]/, ""); print; exit }' "$readme")
         _legacy_color=$(awk '/^claude_session_color:/ { sub(/^claude_session_color:[[:space:]]*/, ""); gsub(/["\r]/, ""); print; exit }' "$readme")
+        # The README is whatever the clone or the adopted project committed, so
+        # only a UUID is taken as a conversation id.
         if [ -n "$_legacy_uuid" ] && [ -z "$(_read_local_state "$_state" claude_session_id)" ]; then
-            _set_local_state_if_absent "$_state" claude_session_id "$_legacy_uuid"
+            if _is_uuid "$_legacy_uuid"; then
+                _set_local_state_if_absent "$_state" claude_session_id "$_legacy_uuid"
+            else
+                warn "ignoring claude_session_id in .cs/README.md: not a UUID, so it names no conversation"
+            fi
         fi
+        # The colour is claude's first prompt, so the same rule: only one of
+        # claude's own colours is taken; anything else leaves the slot empty for
+        # the backfill below.
         if [ -n "$_legacy_color" ] && [ -z "$(_read_local_state "$_state" claude_session_color)" ]; then
-            _set_local_state_if_absent "$_state" claude_session_color "$_legacy_color"
+            if _is_session_color "$_legacy_color"; then
+                _set_local_state_if_absent "$_state" claude_session_color "$_legacy_color"
+            else
+                warn "ignoring claude_session_color in .cs/README.md: not one of claude's colours"
+            fi
         fi
         local _tmp="$readme.tmp"
         awk -v re="$_fm_field_re" '
@@ -4338,8 +4657,12 @@ _claude_migrate_workspace() {
 
     _claude_ensure_workspace_protocol "$session_dir"
 
-    # Phase 7: prune retired command-tracker artifacts.
-    prune_commands_artifacts "$session_dir"
+    # Phase 7: prune retired command-tracker artifacts. Not in an adopted
+    # Claude Code worktree, whose tracked tree is the branch's (see
+    # _claude_tracked_tree_is_ours).
+    if _claude_tracked_tree_is_ours "$session_dir"; then
+        prune_commands_artifacts "$session_dir"
+    fi
 
     # Phase 8: Backfill only an absent binding. A missing native transcript
     # does not authorize replacing an existing conversation with a discovered one.
@@ -4447,6 +4770,15 @@ EOF
         warn "Appended session wrap-up cues to CLAUDE.local.md"
     fi
 
+    # Phase 14: an encrypted session (.cs/private present; a locked one was
+    # refused before migrate) gains the encrypted protocol. The sentinel is a
+    # tombstone like cs:wrap-cues: present means managed, never re-added.
+    if [ -f "$claude_md_p9" ] && [ -d "$session_dir/.cs/private" ] \
+        && ! grep -q 'cs:encrypted-protocol' "$claude_md_p9"; then
+        { echo; _emit_encrypted_protocol_block; } >> "$claude_md_p9"
+        warn "Added the encrypted-session protocol to CLAUDE.local.md"
+    fi
+
     # Phase 11: Backfill claude_session_color in local state when absent.
     # Picks one of the 8 colors claude's /color command accepts. Idempotent —
     # runs only when the field is missing. Legacy sessions (pre-v2026.5.7)
@@ -4457,6 +4789,14 @@ EOF
         _set_local_state_if_absent "$_state" claude_session_color "$_new_color"
         warn "Backfilled claude_session_color in .cs/local/state ($_new_color)"
     fi
+}
+
+# An adopted Claude Code worktree (git_bookkeeping: exclude) keeps its tracked
+# CLAUDE.md and files as the branch has them: nothing moves out of CLAUDE.md
+# and nothing tracked is pruned. migrate_session skips its own tracked-tree
+# work for the same sessions.
+_claude_tracked_tree_is_ours() {  # session_dir
+    [ "$(_read_local_state "$1/.cs/local/state" git_bookkeeping)" != "exclude" ]
 }
 
 _claude_ensure_workspace_protocol() {
@@ -4472,7 +4812,9 @@ _claude_ensure_workspace_protocol() {
     # present" in CLAUDE.local.md is any cs sentinel at all, not just the
     # leading one — otherwise this fallback would re-append a duplicate
     # fresh template on top of it.
-    migrate_claude_md_to_local "$session_dir"
+    if _claude_tracked_tree_is_ours "$session_dir"; then
+        migrate_claude_md_to_local "$session_dir"
+    fi
     local claude_md="$session_dir/CLAUDE.md"
     local claude_local="$session_dir/CLAUDE.local.md"
     if ! { [ -f "$claude_local" ] && grep -q '<!-- cs:' "$claude_local"; } \
@@ -4501,6 +4843,31 @@ _slugify_label() {
     echo "$1" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g; s/--*/-/g; s/^-//; s/-$//' | cut -c1-40
 }
 
+# Where checkpoints live: .cs/private/checkpoints in an encrypted session,
+# .cs/checkpoints in every other. A checkpoint copies the narrative, so a
+# narrative behind a .cs/memory link with no .cs/private beside it has no
+# private place to go (rc 2); a dangling .cs/private is a locked vault (rc 1).
+_checkpoints_dir() {  # meta_dir
+    if [ -L "$1/private" ] || [ -e "$1/private" ]; then
+        [ -d "$1/private" ] || return 1
+        printf '%s\n' "$1/private/checkpoints"
+    elif [ -L "$1/memory" ]; then
+        return 2
+    else
+        printf '%s\n' "$1/checkpoints"
+    fi
+}
+
+# Names why _checkpoints_dir failed; returns when it did not.
+_refuse_checkpoints_dir() {  # rc, meta_dir
+    case "$1" in
+        0) ;;
+        1) error "this session keeps its checkpoints in encrypted storage that is not mounted (.cs/private $(cs_private_state "$2")). Mount it, then retry." ;;
+        2) error "this session's narrative lives on encrypted storage (.cs/memory is a link), and .cs/private is not there to hold the checkpoint. Link .cs/private into the vault, then retry." ;;
+        *) error "_checkpoints_dir returned $1 for $2" ;;
+    esac
+}
+
 # Save a labelled checkpoint of the current session state
 save_checkpoint() {
     local label="$*"
@@ -4514,7 +4881,9 @@ save_checkpoint() {
     fi
 
     local meta_dir="${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}"
-    local checkpoints_dir="$meta_dir/checkpoints"
+    local checkpoints_dir rc=0
+    checkpoints_dir=$(_checkpoints_dir "$meta_dir") || rc=$?
+    _refuse_checkpoints_dir "$rc" "$meta_dir"
     mkdir -p "$checkpoints_dir"
 
     local stamp slug filename checkpoint_path
@@ -4559,13 +4928,20 @@ save_checkpoint() {
     local timeline_file="$meta_dir/timeline.jsonl"
     local timeline_branch
     timeline_branch=$(git -C "$session_dir" branch --show-current 2>/dev/null || echo "")
+    # The label and the file name derived from it are topic text; an
+    # encrypted session's plaintext timeline records only that a checkpoint
+    # was taken.
+    local sealed=false
+    [ "$checkpoints_dir" = "$meta_dir/private/checkpoints" ] && sealed=true
     _terminate_jsonl "$timeline_file"
     { jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
            --arg event "checkpoint" \
            --arg label "$label" \
            --arg file "$filename" \
            --arg branch "$timeline_branch" \
-           '{ts: $ts, event: $event, label: $label, file: $file, branch: $branch}' \
+           --argjson sealed "$sealed" \
+           'if $sealed then {ts: $ts, event: $event, branch: $branch}
+            else {ts: $ts, event: $event, label: $label, file: $file, branch: $branch} end' \
         >> "$timeline_file"; } 2>/dev/null || true
 
     info "Checkpoint saved: $filename"
@@ -4578,7 +4954,9 @@ list_checkpoints() {
     if [ -z "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ]; then
         error "ags -checkpoint list must be run from inside a cs session"
     fi
-    local checkpoints_dir="${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/checkpoints"
+    local checkpoints_dir rc=0
+    checkpoints_dir=$(_checkpoints_dir "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}") || rc=$?
+    _refuse_checkpoints_dir "$rc" "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}"
     if [ ! -d "$checkpoints_dir" ] || [ -z "$(ls -A "$checkpoints_dir" 2>/dev/null)" ]; then
         info "No checkpoints yet. Save one with: ags -checkpoint \"<label>\""
         return 0
@@ -4603,7 +4981,9 @@ show_checkpoint() {
     if [ -z "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ]; then
         error "ags -checkpoint show must be run from inside a cs session"
     fi
-    local checkpoints_dir="${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/checkpoints"
+    local checkpoints_dir rc=0
+    checkpoints_dir=$(_checkpoints_dir "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}") || rc=$?
+    _refuse_checkpoints_dir "$rc" "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}"
     local path="$checkpoints_dir/${name}.md"
     if [ ! -f "$path" ]; then
         error "Checkpoint not found: $name"
@@ -4633,7 +5013,8 @@ run_checkpoint() {
 
 # --- Task queue (ags -queue) ---------------------------------------------------
 # Machine-local queue of prompts drained by the Stop hook. Files live in
-# <session>/.cs/local/: queue/ (one file per task, staged via queue.tmp/),
+# <session>/.cs/local/ (.cs/private/ in an encrypted session): queue/ (one
+# file per task, staged via queue.tmp/),
 # queue.done, queue.state (idle|armed|draining), queue.declined (epoch).
 # Plain files so the standalone Stop hook can read them without bin/cs's
 # helpers.
@@ -4715,7 +5096,19 @@ rotate_narrative() {
         | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | tail -1 || true)
     [ -n "$through" ] || through="undated"
 
-    local arch_dir="$meta_dir/narrative-archive/$actor"
+    # An encrypted session's narrative sits in the vault behind the .cs/memory
+    # link, so its archive must too. A .cs/narrative-archive link is used as
+    # it is; otherwise .cs/private holds the archive. With neither, the only
+    # place left is plaintext, so the rotation refuses.
+    local arch_root="$meta_dir/narrative-archive"
+    if [ -L "$meta_dir/memory" ] && [ ! -L "$arch_root" ]; then
+        if [ ! -d "$meta_dir/private" ]; then
+            rm -f "$snap"
+            error "narrative.$actor.md lives on encrypted storage (.cs/memory is a link), and neither .cs/private nor .cs/narrative-archive is there to hold its archive. Link one of them into the vault, then run cs -narrative rotate again."
+        fi
+        arch_root="$meta_dir/private/narrative-archive"
+    fi
+    local arch_dir="$arch_root/$actor"
     mkdir -p "$arch_dir"
     [ -w "$arch_dir" ] || { rm -f "$snap"; error "Cannot write to $arch_dir"; }
     local body="$arch_dir/.body.$$"
@@ -4768,7 +5161,7 @@ rotate_narrative() {
     mv "$live_tmp" "$live"
     rm -f "$snap"
 
-    local chunk_rel=".cs/narrative-archive/$actor/$(basename "$chunk")"
+    local chunk_rel=".cs/${arch_root#"$meta_dir"/}/$actor/$(basename "$chunk")"
     if git -C "$session_dir" rev-parse --git-dir >/dev/null 2>&1 \
         && git -C "$session_dir" ls-files --error-unmatch -- "$live" >/dev/null 2>&1 \
         && { git -C "$session_dir" check-ignore -q --no-index -- "$live" \
@@ -4819,7 +5212,7 @@ rotate_narrative() {
     local archived_kb now_kb
     archived_kb=$(( (cut - head_end) / 1024 ))
     now_kb=$(( $(wc -c < "$live" | tr -d ' ') / 1024 ))
-    echo "rotated $sections sections (${archived_kb} KB) -> .cs/narrative-archive/$actor/$(basename "$chunk"); live file now ${now_kb} KB"
+    echo "rotated $sections sections (${archived_kb} KB) -> $chunk_rel; live file now ${now_kb} KB"
 }
 
 # Dispatcher for ags -narrative
@@ -5014,6 +5407,23 @@ _mail_ensure_maildir() {  # maildir
     mkdir -p "$1/tmp" "$1/new" "$1/cur" "$1/out"
 }
 
+# A session's mailbox sits with its other ags files: in its vault when
+# .cs/private links there, else in .cs/local. rc 1, printing nothing, when the
+# link dangles (the vault is locked): mail is never written beside it in
+# plaintext.
+_mail_dir() {  # meta_dir
+    local base
+    base=$(cs_private_dir "$1") || return 1
+    printf '%s/mail' "$base"
+}
+
+# The current session's own mailbox, or the error that its vault is locked.
+# Callers capture it, so error only ends their subshell: each one exits after.
+_mail_own_dir() {
+    _mail_dir "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" \
+        || error "this session keeps its mail in encrypted storage that is not mounted (.cs/private $(cs_private_state "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}")). Mount it, then retry."
+}
+
 # Thread ids are 6 hex digits because an agent has to retype them. RANDOM is 15
 # bits, so two draws cover the 24. Collisions matter — a repeat would merge two
 # unrelated transcripts and misroute replies — so generation avoids the roots
@@ -5039,7 +5449,8 @@ _mail_new_thread() {  # maildir
 # failure to file the copy must never report the send as failed.
 _mail_keep_sent() {  # line, fname
     [ -n "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ] || return 0
-    local mine="${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/mail"
+    local mine
+    mine=$(_mail_dir "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}") || return 0
     _mail_ensure_maildir "$mine" 2>/dev/null || return 0
     if ! { { printf '%s\n' "$1" > "$mine/tmp/$2"; } 2>/dev/null \
             && mv "$mine/tmp/$2" "$mine/out/$2" 2>/dev/null; }; then
@@ -5099,8 +5510,9 @@ _mail_send() {  # target, [--kind|-k KIND] [--reply THREAD] body
     if [ -n "$reply_thread" ]; then
         [ -n "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ] \
             || error "ags -msg --reply resolves the thread from a session's mailbox; run it inside a session"
-        local pair derived rc=0
-        pair=$(_mail_reply_peer "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/mail" "$reply_thread") || rc=$?
+        local pair derived rc=0 mine
+        mine=$(_mail_own_dir) || exit 1
+        pair=$(_mail_reply_peer "$mine" "$reply_thread") || rc=$?
         case "$rc" in
             0) : ;;
             2) error "thread $reply_thread names more than one correspondent; it is not a single conversation" ;;
@@ -5136,6 +5548,11 @@ _mail_send() {  # target, [--kind|-k KIND] [--reply THREAD] body
         body="$(_trim "$body")"
     fi
     [ -n "$body" ] || error "ags -msg needs a non-empty body"
+    # Resolved before anything is written: a locked recipient gets nothing at
+    # all, neither its queue task nor a plaintext mailbox beside the vault.
+    local target_files
+    target_files=$(cs_private_dir "$target_dir/.cs") \
+        || error "$target keeps its mail in encrypted storage that is not mounted (.cs/private $(cs_private_state "$target_dir/.cs")). Nothing was sent."
     local bytes
     bytes=$(LC_ALL=C printf '%s' "$body" | wc -c | tr -d '[:space:]')
     if [ "$bytes" -gt "$MAIL_BODY_MAX" ]; then
@@ -5145,13 +5562,13 @@ _mail_send() {  # target, [--kind|-k KIND] [--reply THREAD] body
         # Queue first, attribution second: if the queue write fails (a
         # multi-line body among the ways it refuses) nothing is sent; if the
         # mail write fails the work is still delivered.
-        _queue_add "$target_dir/.cs/local" "$body"
+        _queue_add "$target_files" "$body"
     fi
     # Deliver into the RECIPIENT's tmp/, then rename into its new/: both live
     # in one tree, so the rename is atomic even for adopted (symlinked)
     # sessions, where a sender-side tmp/ could sit on another volume and
     # degrade the mv to copy-then-unlink.
-    local maildir="$target_dir/.cs/local/mail"
+    local maildir="$target_files/mail"
     # Everything after _queue_add must fail gracefully for a task-kind send:
     # the work is already queued, so aborting here makes the sender believe the
     # send failed, and a retry queues the task a second time. The maildir
@@ -5174,7 +5591,11 @@ _mail_send() {  # target, [--kind|-k KIND] [--reply THREAD] body
     if [ -n "$reply_thread" ]; then
         thread="$reply_thread"
     else
-        thread="$(_mail_new_thread "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-$target_dir/.cs}}/local/mail")"
+        local roots="$maildir"
+        if [ -n "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ]; then
+            roots=$(_mail_dir "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}") || roots="$maildir"
+        fi
+        thread="$(_mail_new_thread "$roots")"
     fi
     # The body rides on stdin, never as an --arg: `ags -msg <target> -` exists
     # precisely so a multi-KB handoff need not go through argv, and putting it
@@ -5230,7 +5651,8 @@ _mail_print_files() {  # file...
 }
 
 _mail_read() {
-    local maildir="${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/mail"
+    local maildir
+    maildir=$(_mail_own_dir) || exit 1
     local f files=()
     for f in "$maildir"/new/*.json; do
         [ -f "$f" ] || continue
@@ -5249,7 +5671,8 @@ _mail_read() {
 }
 
 _mail_log() {
-    local maildir="${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/mail"
+    local maildir
+    maildir=$(_mail_own_dir) || exit 1
     local f files=()
     # Sent copies belong in the history too: without out/, a session cannot see
     # what it said, and cannot find the thread id of any conversation it started.
@@ -5323,7 +5746,8 @@ _mail_emit_subtree() {  # index
 _mail_thread() {  # thread id
     local id="${1:-}"
     [ -n "$id" ] || error "ags -msg thread needs a thread id (ags -msg log lists them)"
-    local maildir="${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/mail"
+    local maildir
+    maildir=$(_mail_own_dir) || exit 1
     local files=() f
     # Already in filename order, so siblings answering one parent stay in it.
     while IFS= read -r f; do
@@ -5643,7 +6067,12 @@ run_queue() {
     if [ -z "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ]; then
         error "ags -queue must be run inside a cs session, or as: ags <session> -queue ..."
     fi
-    local qdir="${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local"
+    # The queue sits with the session's other ags files: behind .cs/private in
+    # an encrypted session, where a locked vault refuses rather than queue a
+    # task beside it in plaintext.
+    local qdir
+    qdir=$(cs_private_dir "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}") \
+        || error "this session keeps its queue in encrypted storage that is not mounted (.cs/private $(cs_private_state "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}")). Mount it, then retry."
     _queue_convert_legacy "$qdir"
     local sub="${1:-list}"
     case "$sub" in
@@ -7235,7 +7664,7 @@ _doctor_check_session_id_match() {
     local recorded
     recorded=$(_read_local_state "$state" claude_session_id)
     if [ -z "$recorded" ]; then
-        _doctor_warn "Session UUID: not recorded in .cs/local/state — next cs launch will backfill"
+        _doctor_warn "Session UUID: not recorded in .cs/local/state — the next cs launch binds the folder's newest conversation, or starts one and records it"
         return
     fi
     local current="${CLAUDE_CODE_SESSION_ID:-}"
@@ -7360,6 +7789,236 @@ run_doctor() {
 }
 
 # Search across all sessions' metadata
+# Where the container lives: outside every session directory, so neither
+# ags -rm nor the autosave snapshot ever reaches it.
+_encrypt_container_path() {  # session_name
+    printf '%s/.local/share/cs/vaults/%s.sparsebundle' "$HOME" "$1"
+}
+
+# Every precondition, checked before anything is written.
+_encrypt_refuse() {  # session_name
+    local name="$1" dir meta sub container
+    [ "$(uname -s)" = "Darwin" ] || error "ags -encrypt needs macOS (hdiutil); Linux is not supported yet."
+    case "$name" in
+        *@*) error "$name: encrypt the base session, not a feature worktree." ;;
+    esac
+    validate_session_name "$name"
+    dir="$SESSIONS_ROOT/$name"
+    [ -e "$dir" ] || [ -L "$dir" ] || error "No such session: $name"
+    [ -L "$dir" ] && error "$name: an adopted session cannot be encrypted; its .cs/ lives in the project checkout."
+    cs_interactive || error "ags -encrypt asks for the vault password; run it from a terminal."
+    meta="$dir/.cs"
+    session_is_live "$meta" && error "$name: the session is running; close it, then encrypt."
+    for sub in $CS_VAULT_LINKS; do
+        [ -L "$meta/$sub" ] && error "$name: .cs/$sub is already a link; the session is encrypted, or half set up by hand."
+    done
+    # memory and plans move into the vault; these two are only linked, so a
+    # real one would take the link inside it and keep its files in plaintext.
+    for sub in claude-config private; do
+        [ -e "$meta/$sub" ] && error "$name: .cs/$sub already exists and is not a link; ags -encrypt links it into the vault. Move it aside first."
+    done
+    [ -e "$meta/local/pre-open" ] && error "$name: .cs/local/pre-open already exists; ags -encrypt writes its own. Move yours aside first."
+    container=$(_encrypt_container_path "$name")
+    [ -e "$container" ] && error "$name: $container already exists; ags -encrypt will not reuse or overwrite it."
+    if ! _tags_has_frontmatter "$meta/README.md" || _tags_has_block_style "$meta/README.md"; then
+        error "$name: .cs/README.md has no YAML frontmatter to carry the encrypted tag."
+    fi
+    return 0
+}
+
+# Each "source destination" pair to move, source relative to .cs/, destination
+# relative to the mount. Only sources that exist are listed.
+_encrypt_moves() {  # meta_dir
+    local meta="$1" f
+    [ -e "$meta/memory" ] && echo "memory memory"
+    [ -e "$meta/plans" ] && echo "plans plans"
+    for f in $CS_PRIVATE_LOCAL_FILES; do
+        [ -e "$meta/local/$f" ] && echo "local/$f private/$f"
+    done
+    for f in handoffs checkpoints narrative-archive; do
+        [ -e "$meta/$f" ] && echo "$f private/$f"
+    done
+    return 0
+}
+
+# Moves one name at a time. A failure stops and names what moved and what did
+# not: a rollback would be more moves that can fail the same way.
+_encrypt_move_content() {  # session_name, meta_dir
+    local name="$1" meta="$2" mnt="$2/vault-mnt" moves src dst moved="" rest
+    moves=$(_encrypt_moves "$meta")
+    mkdir -p "$mnt/private" "$mnt/claude-config"
+    while read -r src dst; do
+        [ -n "$src" ] || continue
+        if ! mv "$meta/$src" "$mnt/$dst" 2>/dev/null; then
+            rest=$(printf '%s\n' "$moves" | awk -v s="$src" 'found || $1 == s { found = 1; printf " .cs/%s", $1 }')
+            error "$name: could not move .cs/$src into the vault. Already moved:${moved:- nothing}. Not moved:$rest. The vault is still mounted at .cs/vault-mnt; finish by hand or move those back, then detach it."
+        fi
+        moved="$moved .cs/$src"
+    done <<< "$moves"
+    mkdir -p "$mnt/memory" "$mnt/plans"
+}
+
+# The hook ags runs before every open: attaches the vault, asking for its
+# password each time. A mount whose session is not running is a leftover (a
+# crash, or a detach that failed), so it is detached and asked for again.
+_encrypt_write_pre_open() {  # meta_dir, container
+    local hook="$1/local/pre-open"
+    {
+        echo '#!/bin/bash'
+        echo '# Written by ags -encrypt: mounts this session vault, asking for its password at every open.'
+        echo 'set -euo pipefail'
+        printf 'container=%q\n' "$2"
+        cat <<'EOF'
+mkdir -p .cs/vault-mnt
+mnt=$(cd .cs/vault-mnt && pwd -P)
+mounted() { mount | grep -F " on $mnt (" >/dev/null; }
+alive() { case "$1" in ''|*[!0-9]*) return 1 ;; esac; kill -0 "$1" 2>/dev/null; }
+lock_alive() { alive "$(tr -d '[:space:]' < .cs/session.lock 2>/dev/null || true)"; }
+holder_alive() {
+    local pid
+    [ -f .cs/local/vault-holders ] || return 1
+    while read -r pid; do
+        alive "$pid" && return 0
+    done < .cs/local/vault-holders
+    return 1
+}
+if mounted; then
+    { lock_alive || holder_alive; } && exit 0
+    # A leftover from a conversation that ended. Stop its waiter, and the
+    # detach the waiter may have started, before touching the volume.
+    for f in vault-waiter.pid vault-detach.pid; do
+        pid=$(cat ".cs/local/$f" 2>/dev/null || true)
+        alive "$pid" || continue
+        kill "$pid" 2>/dev/null || true
+        i=0
+        while alive "$pid" && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+    done
+    rm -f .cs/local/vault-waiter.pid .cs/local/vault-detach.pid .cs/local/vault-holders
+    if mounted && ! hdiutil detach "$mnt"; then
+        echo "ags: the vault is still mounted from a conversation that ended, and it would not detach. Close whatever holds it, run: hdiutil detach $mnt" >&2
+        exit 1
+    fi
+fi
+if ! { [ -t 0 ] || [ "${CS_ASSUME_TTY:-}" = "1" ]; }; then
+    echo "ags: this session is encrypted and needs a terminal to ask for the vault password." >&2
+    exit 1
+fi
+hdiutil attach -nobrowse -mountpoint "$mnt" "$container"
+EOF
+    } > "$hook"
+    chmod +x "$hook"
+}
+
+# .cs/local/vault-holders lists the pids whose life keeps the vault mounted:
+# every ags run whose pre-open attached or joined it. exec keeps the pid, so a
+# claude that replaced its ags stays a holder; an ags that ends without exec
+# (a refusal, a cancelled prompt, or claude run as its child) leaves, and
+# detaches the vault if it was the last live holder.
+CS_OPENED_VAULT_META=""
+
+_vault_live_holder_besides() {  # meta_dir, pid -> true if another listed holder is alive
+    local pid
+    [ -f "$1/local/vault-holders" ] || return 1
+    while read -r pid; do
+        [ "$pid" = "$2" ] && continue
+        case "$pid" in ''|*[!0-9]*) continue ;; esac
+        kill -0 "$pid" 2>/dev/null && return 0
+    done < "$1/local/vault-holders"
+    return 1
+}
+
+_vault_mountpoint_if_mounted() {  # meta_dir -> prints the mountpoint, or fails
+    local mnt
+    mnt=$(cd "$1/vault-mnt" 2>/dev/null && pwd -P) || return 1
+    mount | grep -F " on $mnt (" >/dev/null || return 1
+    printf '%s\n' "$mnt"
+}
+
+_arm_vault_detach() {  # session_dir
+    local meta="$1/.cs"
+    [ -f "$meta/local/vault" ] || return 0
+    _vault_mountpoint_if_mounted "$meta" >/dev/null || return 0
+    echo "$$" >> "$meta/local/vault-holders"
+    CS_OPENED_VAULT_META="$meta"
+    trap _detach_opened_vault EXIT
+}
+
+# An ags that execs something other than claude stops holding the vault: its
+# pid lives on in a process that never opens it. Other lines stay as they are.
+_vault_leave() {
+    local meta="$CS_OPENED_VAULT_META" tmp
+    [ -n "$meta" ] || return 0
+    CS_OPENED_VAULT_META=""
+    [ -f "$meta/local/vault-holders" ] || return 0
+    tmp="$meta/local/vault-holders.$$"
+    grep -vx "$$" "$meta/local/vault-holders" > "$tmp" || true
+    mv -f "$tmp" "$meta/local/vault-holders"
+}
+
+# The holder list is read, never rewritten, here: dead pids and this one are
+# skipped, so a concurrent open's line is never lost.
+_detach_opened_vault() {
+    local meta="$CS_OPENED_VAULT_META" mnt lock
+    [ -n "$meta" ] || return 0
+    _vault_live_holder_besides "$meta" "$$" && return 0
+    lock=$(read_lock_pid "$meta")
+    [ -n "$lock" ] && [ "$lock" != "$$" ] && kill -0 "$lock" 2>/dev/null && return 0
+    mnt=$(_vault_mountpoint_if_mounted "$meta") || return 0
+    hdiutil detach "$mnt" >/dev/null 2>&1 && return 0
+    _vault_mountpoint_if_mounted "$meta" >/dev/null || return 0
+    warn "The vault is still mounted at $mnt; the next open detaches it, or run: hdiutil detach $mnt"
+}
+
+run_encrypt() {
+    [ $# -eq 1 ] || error "Usage: ags -encrypt <name>"
+    local name="$1" meta container mnt sub
+    _encrypt_refuse "$name"
+    meta="$SESSIONS_ROOT/$name/.cs"
+    # Hold the session lock while the password prompts run, so an open in
+    # another terminal meets the collision check instead of racing the moves.
+    echo "$$" > "$meta/session.lock"
+    # shellcheck disable=SC2064  # the path is fixed now, on purpose
+    trap "release_session_lock $(printf '%q' "$meta")" EXIT
+    # .cs/local is gitignored and born on the first open, so a session cloned
+    # here and never opened has none; the pre-open hook and the vault record
+    # live in it. Made before anything moves, so a failure changes nothing.
+    mkdir -p "$meta/local"
+    mnt="$meta/vault-mnt"
+    container=$(_encrypt_container_path "$name")
+
+    mkdir -p "$(dirname "$container")"
+    info "Creating the encrypted container; hdiutil asks for the new password."
+    hdiutil create -size 50g -type SPARSEBUNDLE -fs APFS -encryption AES-256 \
+        -volname "cs-$name" "$container" \
+        || error "$name: hdiutil create failed; the session is unchanged."
+    mkdir -p "$mnt"
+    info "Mounting it; hdiutil asks for the password again."
+    if ! hdiutil attach -nobrowse -mountpoint "$mnt" "$container"; then
+        rmdir "$mnt" 2>/dev/null || true
+        error "$name: hdiutil could not attach $container; the session is unchanged. Delete the container before retrying."
+    fi
+    # Spotlight indexing holds files open and turns a detach busy.
+    touch "$mnt/.metadata_never_index"
+
+    _encrypt_move_content "$name" "$meta"
+    for sub in $CS_VAULT_LINKS; do
+        ln -s "vault-mnt/$sub" "$meta/$sub"
+    done
+    _encrypt_write_pre_open "$meta" "$container"
+    printf '%s\n' "$container" > "$meta/local/vault"
+    ( CS_SESSION_META_DIR="$meta" CLAUDE_SESSION_META_DIR="$meta" _tag_mutate add encrypted ) \
+        || error "$name: the vault is built but the encrypted tag could not be written; add it with ags $name -tag add encrypted."
+
+    hdiutil detach "$mnt" \
+        || error "$name: encrypted, but the vault would not detach; run hdiutil detach $mnt before opening it."
+    info "$name is encrypted. Every open asks for the vault password; the vault detaches when the last conversation ends."
+    echo "ags could not move copies made before today; remove them by hand if they matter:"
+    echo "  - this session's transcripts in ~/.claude/projects/"
+    echo "  - its lines in ~/.claude/history.jsonl"
+    echo "  - its project entries in ~/.claude.json and that file's backups"
+    echo "  - .cs/summary.md and .cs/brief.md, which stay plaintext"
+    echo "  - git history of anything committed before, and backups or snapshots"
+}
 search_sessions() {
     local query="" include_archived="" arg
     for arg in "$@"; do
@@ -7393,7 +8052,7 @@ search_sessions() {
 
     local found=0
     local search_files=".cs/README.md"
-    local -a search_globs=(".cs/memory/*.md" ".cs/narrative-archive/*/*.md")
+    local -a search_globs=(".cs/memory/*.md" ".cs/narrative-archive/*/*.md" ".cs/private/narrative-archive/*/*.md")
 
     for session_dir in "$SESSIONS_ROOT"/*/; do
         [ -d "$session_dir" ] || continue
@@ -7640,8 +8299,10 @@ list_sessions() {
         local created="-"
         local modified="-"
 
-        local log_file="$session_dir/.cs/local/session.log"
-        # Fall back to older locations for unmigrated sessions
+        local log_file="$session_dir/.cs/private/session.log"
+        # An encrypted session keeps its log behind .cs/private; every other
+        # one in .cs/local. Fall back to older locations for unmigrated sessions
+        [ ! -f "$log_file" ] && log_file="$session_dir/.cs/local/session.log"
         [ ! -f "$log_file" ] && log_file="$session_dir/.cs/logs/session.log"
         [ ! -f "$log_file" ] && log_file="$session_dir/logs/session.log"
         if [ -f "$log_file" ]; then
@@ -7706,13 +8367,14 @@ list_sessions() {
 # All names are validated before anything is deleted: an empty name would
 # resolve to the sessions root itself and rm -rf every session.
 remove_session() {
-    local force="" arg _name
+    local force="" delete_files="" arg _name
     local names
     names=()
     for arg in "$@"; do
         case "$arg" in
             --force|-f) force="true" ;;
-            -*) error "Unknown remove option: $arg. Usage: ags -remove <session-name>... [--force]" ;;
+            --delete-files) delete_files="true" ;;
+            -*) error "Unknown remove option: $arg. Usage: ags -remove <session-name>... [--force [--delete-files]]" ;;
             *)
                 [ -n "$arg" ] || error "Usage: ags -remove <session-name>... [--force] (empty session name)"
                 names+=("$arg") ;;
@@ -7720,13 +8382,97 @@ remove_session() {
     done
     [ "${#names[@]}" -ge 1 ] || error "Usage: ags -remove <session-name>... [--force]"
     for _name in "${names[@]}"; do
-        _remove_one_session "$_name" "$force"
+        _remove_one_session "$_name" "$force" "$delete_files"
     done
+}
+
+# Top-level entries of a session root that ags did not put there, as one
+# comma-separated line (empty when there are none). ags owns .cs/, .claude/,
+# the session git files and the two CLAUDE files; .DS_Store is Finder's.
+_session_foreign_entries() {  # session_dir
+    local dir="$1" entry name out=""
+    for entry in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
+        [ -e "$entry" ] || [ -L "$entry" ] || continue
+        name="${entry##*/}"
+        case "$name" in
+            .cs|.claude|.git|.gitignore|.gitattributes|CLAUDE.md|CLAUDE.local.md|.DS_Store) continue ;;
+        esac
+        out="${out:+$out, }$name"
+    done
+    printf '%s' "$out"
+}
+
+# The first mount point at or under a directory, from the mount table text on
+# stdin (empty when there is none). macOS lists "<dev> on <path> (<opts>)",
+# Linux "<dev> on <path> type <fs> (<opts>)", and neither escapes its fields:
+# a source may hold " on " and a path " on ", " type " or " (". So each line
+# is read the Linux way (cut at its last " type ") and then the macOS way, and
+# in each every absolute path that follows an " on " is a candidate. Each cut
+# keeps the space after "on", so a source ending in " on", whose " on" shares
+# that space with the separator, still leaves the separator to find. Each
+# candidate's ancestors are compared with -ef, which sees through letter case
+# and symlinks where a string prefix would not.
+_mount_under() {  # dir
+    local dir="$1" line body text mnt p
+    while IFS= read -r line; do
+        body="${line% (*}"
+        for text in "${body% type *}" "$body"; do
+            while :; do
+                case "$text" in
+                    *" on "*) text="${text#* on}" ;;
+                    *) break ;;
+                esac
+                case "$text" in " /"*) mnt="${text# }" ;; *) continue ;; esac
+                p="$mnt"
+                while [ -n "$p" ]; do
+                    if [ "$p" -ef "$dir" ]; then
+                        printf '%s' "$mnt"
+                        return 0
+                    fi
+                    p="${p%/*}"
+                done
+            done
+        done
+    done
+    return 0
+}
+
+# The first volume mounted at or under a directory, from the live mount
+# table; empty when there is none. rm -rf and git worktree remove recurse into
+# a mount, so every path that deletes a directory asks this first. Fails when
+# `mount` does, so the caller refuses instead of guessing.
+_volume_mounted_under() {  # dir
+    local table
+    table=$(mount) || return 1
+    _mount_under "$1" <<< "$table"
+}
+
+# Paths in a worktree session that git does not track (untracked or
+# ignored), as one comma-separated line; git worktree remove --force
+# deletes them with no copy on the branch. ags's own .cs/, .claude/ and
+# CLAUDE.local.md, and Finder's .DS_Store, are left out.
+_worktree_untracked_entries() {  # worktree_dir
+    local dir="$1" status line path top paths="" out=""
+    status=$(git -C "$dir" status --porcelain --ignored --untracked-files=normal) \
+        || error "git status failed in $dir; refusing to remove what it cannot list"
+    while IFS= read -r line; do
+        case "$line" in '?? '*|'!! '*) ;; *) continue ;; esac
+        path="${line:3}"
+        top="${path%%/*}"
+        case "$top" in .cs|.claude|CLAUDE.local.md|.DS_Store) continue ;; esac
+        paths="$paths$path"$'\n'
+    done <<< "$status"
+    [ -n "$paths" ] || return 0
+    while IFS= read -r path; do
+        out="${out:+$out, }$path"
+    done <<< "$(printf '%s' "$paths" | LC_ALL=C sort)"
+    printf '%s' "$out"
 }
 
 _remove_one_session() {
     local session_name="$1"
     local force="${2:-}"
+    local delete_files="${3:-}"
     [ -n "$session_name" ] || error "Refusing to remove an empty session name"
 
     # Reject path traversal before any filesystem action: '.'/'..' and any
@@ -7746,6 +8492,32 @@ _remove_one_session() {
         error "Session '$session_name' is live (pid $(read_lock_pid "$session_dir/.cs")); use --force to remove anyway"
     fi
 
+    # An encrypted session mounts its vault inside the session directory by
+    # convention, and rm -rf recurses into a mount: removing the session would
+    # delete what the vault holds. A link that resolves into this directory
+    # means the vault is mounted here, so refuse, --force or not. An adopted
+    # session loses only its link below, so it is exempt.
+    if [ ! -L "$session_dir" ]; then
+        local sub link real_dir real_target
+        real_dir=$(cd "$session_dir" && pwd -P)
+        for sub in $CS_VAULT_LINKS; do
+            link="$session_dir/.cs/$sub"
+            [ -L "$link" ] || continue
+            real_target=$(cd "$link" 2>/dev/null && pwd -P) || continue
+            case "$real_target" in
+                "$real_dir"/*)
+                    error "Session '$session_name' has encrypted storage mounted inside it: .cs/$sub points at $(readlink "$link"). Removing the session would delete what the vault holds; unmount it, then retry." ;;
+            esac
+        done
+        # An ags -encrypt that stopped partway leaves its volume mounted with no
+        # link yet, so the links above cannot see it; the mount table can.
+        local mounted
+        mounted=$(_volume_mounted_under "$session_dir") \
+            || error "ags -rm could not read the mount table, so it cannot tell whether a volume is mounted inside '$session_name'; refusing to remove it."
+        [ -z "$mounted" ] \
+            || error "Session '$session_name' has a volume mounted inside it at $mounted. Removing the session would delete what the volume holds; unmount it, then retry."
+    fi
+
     # Every confirmation below reads from stdin; a script piping input through
     # a non-tty without --force used to hit a `read` that failed silently and
     # exited 1 with no explanation. Refuse loudly, before any mutation, unless
@@ -7763,10 +8535,16 @@ _remove_one_session() {
             if [ -d "$wt_base_dir" ] && [ -f "$session_dir/.git" ]; then
                 local wt_branch
                 wt_branch=$(_read_local_state "$session_dir/.cs/local/state" task_branch)
+                local untracked
+                untracked=$(_worktree_untracked_entries "$session_dir")
+                if [ -n "$untracked" ] && [ -n "$force" ] && [ -z "$delete_files" ]; then
+                    error "Worktree session '$session_name' holds files git does not track: $untracked. Add --delete-files to remove them with --force"
+                fi
                 local confirm
                 if [ -n "$force" ]; then
                     confirm="y"
                 else
+                    [ -z "$untracked" ] || printf '%bAlso deletes files git does not track: %s%b\n' "$RED" "$untracked" "$NC" >&2
                     read -r -p $'\033[0;31mRemove worktree session '"'$session_name'"$'? Uncommitted work in it is discarded. [y/N] \033[0m' confirm
                 fi
                 if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
@@ -7793,6 +8571,17 @@ _remove_one_session() {
             ;;
     esac
 
+    # A cs-created root is also the user's workspace: rm -rf takes whatever
+    # they put beside ags's own files (an encrypted image, a checkout). Name
+    # those in the confirm, and make --force ask for them by name.
+    local foreign=""
+    if [ ! -L "$session_dir" ]; then
+        foreign=$(_session_foreign_entries "$session_dir")
+    fi
+    if [ -n "$foreign" ] && [ -n "$force" ] && [ -z "$delete_files" ]; then
+        error "Session '$session_name' holds files ags did not create: $foreign. Add --delete-files to remove them with --force"
+    fi
+
     # Confirm deletion
     local confirm
     if [ -n "$force" ]; then
@@ -7802,6 +8591,9 @@ _remove_one_session() {
         target="$(_resolve_symlink_dir "$session_dir")"
         read -r -p $'\033[0;31mRemove adopted session '"'$session_name'"$'? (removes symlink only, project at '"$target"$' is preserved) [y/N] \033[0m' confirm
     else
+        # read -p only shows its prompt on a terminal; the list must reach
+        # the user even when the answer is piped in.
+        [ -z "$foreign" ] || printf '%bAlso deletes files ags did not create: %s%b\n' "$RED" "$foreign" "$NC" >&2
         read -r -p $'\033[0;31mRemove session '"'$session_name'"$'? [y/N] \033[0m' confirm
     fi
     if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
@@ -7944,7 +8736,7 @@ _statusline_caps_ask() {
     done
 }
 
-# disable strips only a ags-statusline registration, never a foreign one.
+# disable strips only an ags-statusline registration, never a foreign one.
 run_statusline_cmd() {
     local action="${1:-}"
     local settings="${CS_CLAUDE_DIR:-$HOME/.claude}/settings.json"
@@ -7961,10 +8753,12 @@ run_statusline_cmd() {
             [ -f "$settings" ] || echo '{}' > "$settings"
             local _tmp
             _tmp=$(mktemp)
-            # refreshInterval keeps the bar repainting once a second while
-            # idle; the logo's attention pulse animates on that timer.
+            # refreshInterval 60 repaints an idle bar once a minute, which keeps
+            # the context-pct heartbeat fresh for a conversation with no lock.
+            # Each tick on Claude Code 2.1.286 lists every process with
+            # `ps -A`; at 1 s a dozen sessions together hit the process limit.
             if { jq --arg cmd "$bin" --arg subcmd "$subbin" \
-                '.statusLine = {type: "command", command: $cmd, refreshInterval: 1}
+                '.statusLine = {type: "command", command: $cmd, refreshInterval: 60}
                  | .subagentStatusLine = {type: "command", command: $subcmd}' \
                 "$settings" > "$_tmp"; } 2>/dev/null; then
                 mv "$_tmp" "$settings"
@@ -8250,7 +9044,8 @@ _handoff_is_unconsumed() {  # handoff_file
 # show, not a filter: the pick deliberately still offers a handoff from
 # elsewhere, because continuing one on another machine is a working flow.
 _handoff_is_local() {  # handoff_file, session_dir
-    local log="$2/.cs/local/session.log" parent
+    local log parent
+    log="$(cs_private_dir "$2/.cs")/session.log" || return 1
     [ -f "$log" ] || return 1
     parent=$(awk '
         NR==1 { if ($0 != "---") exit; next }
@@ -8284,16 +9079,19 @@ _handoff_is_local() {  # handoff_file, session_dir
 # a spent or absent file is stale and the scan still answers. The marker names
 # a basename, never a path: a separator would resolve outside the handoff store.
 _pending_handoff_pick() {  # session_dir
-    local session_dir="$1" pending="" hf armed
-    for hf in "$session_dir/.cs/handoffs"/*.md; do
+    local session_dir="$1" pending="" hf armed handoffs
+    # An encrypted session keeps its handoffs in its vault; a locked one
+    # offers nothing (the open has already refused it).
+    handoffs=$(cs_handoff_dir "$session_dir/.cs") || return 0
+    for hf in "$handoffs"/*.md; do
         [ -f "$hf" ] || continue
         _handoff_is_unconsumed "$hf" || continue
         pending="$hf"
     done
     armed=$(_rotation_marker_basename "$session_dir")
-    if [ -n "$armed" ] && [ -f "$session_dir/.cs/handoffs/$armed" ] \
-        && _handoff_is_unconsumed "$session_dir/.cs/handoffs/$armed"; then
-        pending="$session_dir/.cs/handoffs/$armed"
+    if [ -n "$armed" ] && [ -f "$handoffs/$armed" ] \
+        && _handoff_is_unconsumed "$handoffs/$armed"; then
+        pending="$handoffs/$armed"
     fi
     printf '%s' "$pending"
 }
@@ -8301,7 +9099,8 @@ _pending_handoff_pick() {  # session_dir
 # The basename the pending-handoff marker names, or nothing when there is no
 # marker or it names something with a path separator.
 _rotation_marker_basename() {  # session_dir
-    local marker="$1/.cs/local/pending-handoff" armed=""
+    local marker armed=""
+    marker="$(cs_private_dir "$1/.cs")/pending-handoff" || return 0
     [ -f "$marker" ] || return 0
     armed=$(tr -d '[:space:]' < "$marker" 2>/dev/null) || armed=""
     case "$armed" in */*|*\\*) armed="" ;; esac
@@ -8312,14 +9111,16 @@ _rotation_marker_basename() {  # session_dir
 # naming anything else is stale, and is dropped so a later /clear cannot trip
 # over it. hooks/session-start.sh resolves Claude's marker the same way.
 _rotation_armed_handoff() {  # session_dir
-    local armed
+    local armed handoffs private
+    handoffs=$(cs_handoff_dir "$1/.cs") || return 0
+    private=$(cs_private_dir "$1/.cs") || return 0
     armed=$(_rotation_marker_basename "$1")
-    if [ -n "$armed" ] && [ -f "$1/.cs/handoffs/$armed" ] \
-        && _handoff_is_unconsumed "$1/.cs/handoffs/$armed"; then
+    if [ -n "$armed" ] && [ -f "$handoffs/$armed" ] \
+        && _handoff_is_unconsumed "$handoffs/$armed"; then
         printf '%s' "$armed"
         return 0
     fi
-    rm -f "$1/.cs/local/pending-handoff" 2>/dev/null || true
+    rm -f "$private/pending-handoff" 2>/dev/null || true
 }
 
 # Retire a handoff by flipping its frontmatter status. Only the first
@@ -8412,7 +9213,8 @@ _resume_context_pct() {  # session_dir
 # retires the one it had. Offering r in those cases sends the user back for
 # something that no longer exists.
 _disarm_rotation_marker() {  # session_dir [surviving_handoff]
-    local marker="$1/.cs/local/pending-handoff"
+    local marker
+    marker="$(cs_private_dir "$1/.cs")/pending-handoff" || return 0
     [ -f "$marker" ] || return 0
     rm -f "$marker" 2>/dev/null || true
     # An explicit if: `[ ... ] && return 0` as the last command returns 1 when
@@ -8422,6 +9224,63 @@ _disarm_rotation_marker() {  # session_dir [surviving_handoff]
         return 0
     fi
     printf "${DIM}Rotation marker disarmed; the handoff stays pending — answer r, or re-run the rotate skill.${NC}\n"
+}
+
+# A session whose .cs/claude-config exists keeps Claude Code's whole config
+# dir there (transcripts, prompt history, .claude.json and its backups), so an
+# encrypted session's conversation never lands in ~/.claude. The login stays
+# the one the shell would use: CLAUDE_SECURESTORAGE_CONFIG_DIR names the
+# keychain entry independently of the config dir, and empty selects the
+# default entry. A value inherited from a parent launch into such a session is
+# recognisable by its path and dropped, so a session without the link opens
+# on the shell's own config.
+_export_session_claude_config() {  # session_dir
+    local config="$1/.cs/claude-config"
+    case "${CLAUDE_CONFIG_DIR:-}" in
+        */.cs/claude-config)
+            unset CLAUDE_CONFIG_DIR CLAUDE_SECURESTORAGE_CONFIG_DIR
+            ;;
+    esac
+    [ -e "$config" ] || return 0
+    _link_shared_claude_config "$config" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+    # Claude Code keeps .claude.json beside the config dir by default, inside it
+    # when CLAUDE_CONFIG_DIR is set.
+    _seed_session_claude_json "$config" "${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"
+    export CLAUDE_SECURESTORAGE_CONFIG_DIR="${CLAUDE_SECURESTORAGE_CONFIG_DIR-${CLAUDE_CONFIG_DIR-}}"
+    export CLAUDE_CONFIG_DIR="$config"
+}
+
+# The session's config dir shares the shell's settings, instructions and
+# extensions by symlink, so hooks, skills and plugins behave as they do
+# anywhere else. Only these names are shared: everything else Claude Code
+# writes (projects/, history.jsonl, backups/, todos/) is born in the session's
+# config dir and stays behind the vault. An entry already there is the
+# session's own and is left alone.
+_link_shared_claude_config() {  # session_config_dir, shell_config_dir
+    local name
+    for name in settings.json settings.local.json CLAUDE.md AGENTS.md rules skills \
+        commands agents hooks plugins output-styles keybindings.json vale; do
+        [ -e "$2/$name" ] || continue
+        [ -e "$1/$name" ] || [ -L "$1/$name" ] && continue
+        ln -s "$2/$name" "$1/$name" || error "could not link $1/$name to $2/$name."
+    done
+}
+
+# The session's .claude.json starts once as a copy of the shell's, so the
+# login's onboarding and preferences carry over, with every project's record
+# dropped: each keeps that project's last prompt in plaintext. From then on it
+# is the session's own. jq exits 0 on an empty file and prints nothing, so -e
+# is what turns an empty or unreadable source into a refusal.
+_seed_session_claude_json() {  # session_config_dir, shell_claude_json
+    local dest="$1/.claude.json" tmp
+    [ -e "$dest" ] || [ -L "$dest" ] && return 0
+    [ -e "$2" ] || return 0
+    tmp=$(mktemp "$1/.claude.json.XXXXXX") || error "could not create a temporary file in $1."
+    if ! jq -e '.projects = {}' "$2" > "$tmp" 2>/dev/null; then
+        rm -f "$tmp"
+        error "$2 is not a JSON object ags can copy into $1; fix it, then reopen."
+    fi
+    mv "$tmp" "$dest" || { rm -f "$tmp"; error "could not write $dest."; }
 }
 
 # One row of the pending-handoff answers: the key, a padded label, and a dim
@@ -8492,17 +9351,48 @@ _launch_claude_bound() {
     [ "${CS_COLLISION_FORCE:-}" = "1" ] && force="true"
 
     # Read the session's recorded UUID (allocated by create_session_structure
-    # on new sessions or backfilled by migrate_session Phase 8 on legacy ones).
-    # Used for both the CS_CLAUDE_SESSION_ID env export below and for the
-    # spawn args at exec time. Empty only if the state file is somehow
-    # missing — exec paths fall back gracefully.
+    # on new sessions or bound by migrate_session Phase 8 to a transcript on
+    # disk). Used for both the CS_CLAUDE_SESSION_ID env export below and for
+    # the spawn args at exec time. Empty on an existing session that has never
+    # had a conversation, such as the first open after cs -adopt; the launch
+    # below starts one and records it. Both recorded values reach claude's
+    # argv, so each is checked here: a value that is not a UUID names no
+    # conversation and counts as empty, a colour claude would reject passes no
+    # colour. Neither is dropped without a line saying so.
     local claude_session_id claude_session_color
     claude_session_id=$(cs_binding_read "$session_dir" claude) || return 1
     if [ -n "$claude_session_id" ] && ! _claude_native_id_valid "$claude_session_id"; then
-        printf 'Error: Invalid Claude conversation binding in %s/.cs/local/state; repair it before launching.\n' "$session_dir" >&2
-        return 1
+        # An explicit --resume names this binding, and nothing can stand in
+        # for it. Any other open treats it as no conversation.
+        if [ "$intent" = resume ]; then
+            printf 'Error: Invalid Claude conversation binding in %s/.cs/local/state; repair it before launching.\n' "$session_dir" >&2
+            return 1
+        fi
+        warn "ignoring claude_session_id in .cs/local/state: not a UUID, so it names no conversation"
+        # Dropped from state too: SessionStart commits the staged conversation
+        # only over the predecessor it names, and that is none.
+        _unset_local_state "$session_dir/.cs/local/state" claude_session_id
+        claude_session_id=""
+    fi
+    # No recorded conversation does not mean no conversation: a feature
+    # worktree's open runs no migrate_session, so Phase 8 never looked, and a
+    # dropped non-UUID leaves the slot empty with the transcript still on disk.
+    # Look once at the folder's transcripts before calling the session unbound,
+    # so a real conversation is offered rather than abandoned.
+    if [ -z "$claude_session_id" ] && [ "$is_new" = "false" ]; then
+        local _found
+        _found=$(_discover_session_uuid_in "$(_claude_project_dir "$session_dir")")
+        if _is_uuid "$_found"; then
+            _set_local_state "$session_dir/.cs/local/state" claude_session_id "$_found"
+            warn "Bound claude_session_id in .cs/local/state to $_found"
+            claude_session_id="$_found"
+        fi
     fi
     claude_session_color=$(_read_local_state "$session_dir/.cs/local/state" claude_session_color)
+    if [ -n "$claude_session_color" ] && ! _is_session_color "$claude_session_color"; then
+        warn "ignoring claude_session_color in .cs/local/state: not one of claude's colours"
+        claude_session_color=""
+    fi
 
     # Build the trailing positional prompt arg that applies the session's
     # color at launch. Claude has no --color CLI flag (verified through
@@ -8527,8 +9417,9 @@ _launch_claude_bound() {
     #
     # Skip when is_new=true: the UUID was just allocated by
     # create_session_structure milliseconds ago, so no other process can
-    # be holding it. Spares the ps fork on fresh-spawn.
-    if [ -n "$claude_session_id" ] && [ "$force" != "true" ] && [ "$is_new" != "true" ]; then
+    # be holding it. Spares the ps fork on fresh-spawn. An unbound session
+    # has no UUID to match, so only the --name half runs for it.
+    if [ "$force" != "true" ] && [ "$is_new" != "true" ]; then
         local _ps_out
         _ps_out=$("${CS_PS_BIN:-ps}" -Ao args= 2>/dev/null || true)
         # An in-app /clear rebinds the recorded UUID while the live process's
@@ -8545,16 +9436,18 @@ _launch_claude_bound() {
         # or with `=`.
         _ps_out="$_ps_out"$'\n'
         local _flag _hit=""
-        for _flag in "--session-id " "--session-id=" "--resume " "--resume=" " -r " "--parent-session-id " "--parent-session-id="; do
-            if [[ "$_ps_out" == *"$_flag$claude_session_id "* ]] \
-                || [[ "$_ps_out" == *"$_flag$claude_session_id"$'\n'* ]]; then
-                _hit=1; break
-            fi
-        done
+        if [ -n "$claude_session_id" ]; then
+            for _flag in "--session-id " "--session-id=" "--resume " "--resume=" " -r " "--parent-session-id " "--parent-session-id="; do
+                if [[ "$_ps_out" == *"$_flag$claude_session_id "* ]] \
+                    || [[ "$_ps_out" == *"$_flag$claude_session_id"$'\n'* ]]; then
+                    _hit=1; break
+                fi
+            done
+        fi
         if [ -n "$_hit" ] \
             || [[ "$_ps_out" == *"--name $session_name "* ]] \
             || [[ "$_ps_out" == *"--name $session_name"$'\n'* ]]; then
-            error "Session $session_name is already running elsewhere (UUID $claude_session_id). Use --force to override."
+            error "Session $session_name is already running elsewhere${claude_session_id:+ (UUID $claude_session_id)}. Use --force to override."
         fi
     fi
 
@@ -8621,6 +9514,7 @@ _launch_claude_bound() {
     local memory_path="$session_dir/.cs/memory"
     export CLAUDE_CODE_AUTO_MEMORY_PATH="$memory_path"
     export CLAUDE_COWORK_MEMORY_PATH_OVERRIDE="$memory_path"
+    _export_session_claude_config "$session_dir"
     # Expose the recorded session UUID to hooks. Hooks can use this to
     # reverse-look-up which cs session they're firing inside without having
     # to depend on $CLAUDE_CODE_SESSION_ID (set by Claude Code itself, but
@@ -8866,15 +9760,23 @@ EOF
 
     cd "$session_dir" || return 1
 
-    # An engine first opened in an existing workspace has no acknowledged
-    # native conversation. Stage its initial identity without attempting resume.
-    if [ -z "$claude_session_id" ]; then
+    # A new session with no recorded conversation stages its first identity
+    # without asking. An existing one without a conversation is the resume
+    # question's: it offers a pending handoff before starting fresh.
+    if [ -z "$claude_session_id" ] && [ "$is_new" = "true" ]; then
         _exec_fresh_rebind "$session_dir" fresh "" "$spawn_kick" "$merge_kick"
         return $?
     fi
 
-    # For existing sessions, ask if user wants to continue previous conversation
-    local continue_flag=""
+    # For existing sessions, ask if user wants to continue previous conversation.
+    # The answer sets the id to resume; it goes to claude as one quoted argument.
+    # An existing session with no recorded conversation has nothing to resume:
+    # an engine's first open in an existing workspace, the first open after
+    # ags -adopt, or records whose machine-local state did not travel. It takes
+    # the fresh answer without asking, unless a rotation handoff is pending:
+    # that is the user's call, so the offer is made with the rows that apply.
+    # An explicit --fresh asks nothing.
+    local resume_id=""
     if [ "$is_new" = "false" ] && [ "$intent" != fresh ]; then
         # cs records only the conversation it launched, so one started any other
         # way on this folder — a `/desktop` handoff, a claude opened on the
@@ -8905,13 +9807,22 @@ EOF
         fi
 
         # Deliberate rotation: an unconsumed handoff written by the rotate
-        # skill adds a third answer (_pending_handoff_pick says which).
-        local pending_handoff
+        # skill adds a third answer (_pending_handoff_pick says which). An
+        # encrypted session keeps its handoffs and the marker in its vault;
+        # the open has already refused a locked one.
+        local pending_handoff _marker_dir
+        _marker_dir=$(cs_private_dir "$session_dir/.cs") && cs_handoff_dir "$session_dir/.cs" >/dev/null \
+            || error "$session_name: .cs/private dangles after the open checked it (vault unmounted mid-launch?). Mount it, then reopen."
         pending_handoff=$(_pending_handoff_pick "$session_dir")
         # A spawned launch is unattended: take the default (resume) instead
-        # of parking the tmux window on an interactive ask.
+        # of parking the tmux window on an interactive ask. So is an explicit
+        # --resume, and an open with no terminal to ask on. Unbound, the
+        # default is fresh, and a pending handoff waits for an attended open.
         if [ "$intent" = resume ] || [ -n "$spawn_kick" ] || ! cs_interactive; then
             response=""
+            [ -n "$claude_session_id" ] || response="n"
+        elif [ -z "$claude_session_id" ] && [ -z "$pending_handoff" ]; then
+            response="n"
         else
             if [ -n "$pending_handoff" ]; then
                 # Answering blind is the hazard this label exists for: r arms
@@ -8925,10 +9836,16 @@ EOF
                 # One answer per row, key first, laid out like the already-open
                 # menu; the keys stay the letters the one-line ask used.
                 echo
-                _resume_menu_row y "$GREEN" 'resume' 'continue the previous conversation · default'
-                _resume_menu_row r "$GOLD" 'from handoff' 'fresh conversation that picks up the handoff'
-                _resume_menu_row n "$COMMENT" 'fresh' 'fresh conversation; the handoff waits for later'
-                _resume_menu_row d "$ORANGE" 'discard' 'retire the handoff, then resume'
+                if [ -n "$claude_session_id" ]; then
+                    _resume_menu_row y "$GREEN" 'resume' 'continue the previous conversation · default'
+                    _resume_menu_row r "$GOLD" 'from handoff' 'fresh conversation that picks up the handoff'
+                    _resume_menu_row n "$COMMENT" 'fresh' 'fresh conversation; the handoff waits for later'
+                    _resume_menu_row d "$ORANGE" 'discard' 'retire the handoff, then resume'
+                else
+                    _resume_menu_row r "$GOLD" 'from handoff' 'fresh conversation that picks up the handoff'
+                    _resume_menu_row n "$COMMENT" 'fresh' 'fresh conversation; the handoff waits for later · default'
+                    _resume_menu_row d "$ORANGE" 'discard' 'retire the handoff, then start fresh'
+                fi
                 echo
                 printf '    %b›%b ' "$GOLD" "$NC"
             else
@@ -8944,12 +9861,12 @@ EOF
         case "$response" in
             [nN]|[nN][oO])
                 _disarm_rotation_marker "$session_dir" "$pending_handoff"
-                continue_flag=""
+                resume_id=""
                 ;;
             [rR])
                 if [ -n "$pending_handoff" ]; then
-                    mkdir -p "$session_dir/.cs/local"
-                    printf '%s\n' "$(basename "$pending_handoff")" > "$session_dir/.cs/local/pending-handoff"
+                    mkdir -p "$_marker_dir"
+                    printf '%s\n' "$(basename "$pending_handoff")" > "$_marker_dir/pending-handoff"
                     echo ""
                     # r is the user explicitly choosing the rotation handoff
                     # over resuming; a merge armed moments earlier must not
@@ -8963,11 +9880,7 @@ EOF
                 # r without a pending handoff was never offered: treat as the
                 # default resume answer, disarm included.
                 _disarm_rotation_marker "$session_dir"
-                if [ -n "$claude_session_id" ]; then
-                    continue_flag="--resume $claude_session_id"
-                else
-                    continue_flag="--continue"
-                fi
+                resume_id="$claude_session_id"
                 ;;
             [dD])
                 # Nothing survives d: it retires the handoff it was offered, and
@@ -8979,36 +9892,29 @@ EOF
                 fi
                 # d without a pending handoff was never offered: treat as the
                 # default resume answer.
-                if [ -n "$claude_session_id" ]; then
-                    continue_flag="--resume $claude_session_id"
-                else
-                    continue_flag="--continue"
-                fi
+                resume_id="$claude_session_id"
                 ;;
             *)
                 # Also the unattended spawn path, which takes this default
                 # without asking.
                 _disarm_rotation_marker "$session_dir" "$pending_handoff"
-                # Prefer --resume <uuid> when the session has a recorded UUID:
-                # it names the exact conversation, vs --continue which means
-                # "most recent" and may resolve to a sibling Claude session
-                # the user ran in a different terminal between cs launches.
-                if [ -n "$claude_session_id" ]; then
-                    continue_flag="--resume $claude_session_id"
-                else
-                    continue_flag="--continue"
-                fi
+                # --resume <uuid>, never --continue: the uuid names the exact
+                # conversation, while --continue means "most recent" and may
+                # resolve to a sibling Claude session the user ran in a
+                # different terminal between cs launches. Empty on an unbound
+                # session, which the fresh path below starts.
+                resume_id="$claude_session_id"
                 ;;
         esac
         echo ""
     fi
 
-    if [ -n "$continue_flag" ]; then
+    if [ -n "$resume_id" ]; then
         # Resume errors keep the exact binding. Creating a replacement is
         # an explicit --fresh choice, independent of how quickly native exit occurs.
         local rc=0
         # shellcheck disable=SC2086
-        cs_run_child $CLAUDE_CODE_BIN --name "$session_name" $continue_flag ${launch_prompt:+"$launch_prompt"} || rc=$?
+        cs_run_child $CLAUDE_CODE_BIN --name "$session_name" --resume "$resume_id" ${launch_prompt:+"$launch_prompt"} || rc=$?
         if [ "$rc" -ne 0 ]; then
             printf 'Could not resume the recorded Claude conversation; binding preserved. Retry or run: ags %s --engine claude --fresh\n' "$session_name" >&2
         fi
@@ -9017,10 +9923,11 @@ EOF
         # Fresh-spawn path. Three sub-cases:
         #   - is_new=true: pass --session-id <pre-allocated-uuid> so claude
         #     adopts the UUID create_session_structure wrote into README.
-        #   - is_new=false (fresh intent): stage a fresh UUID and pass it to
+        #   - is_new=false (an explicit --fresh, the user said n, or the session
+        #     has no recorded conversation): stage a fresh UUID and pass it to
         #     native startup. SessionStart acknowledges and commits it.
-        #   - is_new=false with no claude_session_id (shouldn't happen
-        #     post-Phase-8 but handled defensively): naked exec.
+        #   - is_new=true with no claude_session_id (create_session_structure
+        #     always writes one; handled defensively): naked exec.
         if [ "$is_new" = "true" ] && [ -n "$claude_session_id" ]; then
             # shellcheck disable=SC2086
             cs_run_child $CLAUDE_CODE_BIN --name "$session_name" --session-id "$claude_session_id" ${launch_prompt:+"$launch_prompt"}
@@ -9029,6 +9936,7 @@ EOF
             # An explicit --fresh never asked anything, so it is not a decline.
             local _rebind_reason=declined-resume
             [ "$intent" = fresh ] && _rebind_reason=fresh
+            [ -n "$claude_session_id" ] || _rebind_reason=fresh
             _exec_fresh_rebind "$session_dir" "$_rebind_reason" "" "$spawn_kick" "$merge_kick"
         else
             # shellcheck disable=SC2086
@@ -9540,6 +10448,9 @@ create_session_gitignore() {
 # Session archives (large binaries; unrelated to the tracked .cs/archived marker)
 .cs/archives/
 
+# An encrypted session's mounted volume (never staged in plaintext)
+.cs/vault-mnt/
+
 # Session cooldown markers
 .cs/.narrative-reminder-cooldown
 
@@ -9578,6 +10489,7 @@ ensure_cs_gitignore_entries() {
     entries=$(cat << 'ENTRIES'
 .cs/local/
 .cs/archives/
+.cs/vault-mnt/
 .cs/.narrative-reminder-cooldown
 .claude/settings.local.json
 CLAUDE.local.md
@@ -9613,6 +10525,13 @@ adopt_session() {
 
     validate_session_name "$session_name"
     engine=$(_session_engine "$target_dir" "$explicit_engine")
+
+    # A linked git worktree keeps a `.git` FILE, so the init path below would
+    # read it as "not a repo", `git init` over it and `git add -A` the user's
+    # PR branch. Claude Code's worktrees have their own verb.
+    if [ -f "$target_dir/.git" ]; then
+        error "$target_dir is a linked git worktree. For Claude Code's worktrees run ags -adopt --worktrees from the repo; plain ags -adopt would commit into this branch."
+    fi
 
     # A .cs/ directory with no session link is orphaned: `cs -rm`/the TUI's `d`
     # only ever remove the symlink, by design, so records survive a removal —
@@ -9652,16 +10571,31 @@ adopt_session() {
         error "Session '$session_name' already exists"
     fi
 
-    # create_session_structure stages a Claude id for a brand-new session's
-    # first launch. An adopted directory already exists, so its first open is
-    # treated as a reopen, and the staged id made it ask to continue a
-    # conversation that never existed (the default answer then failed). Drop
-    # the id on a first adoption so the first open starts fresh; re-adopted
-    # records keep the conversation they name.
-    local prior_binding
+    # create_session_structure writes CLAUDE.local.md, never CLAUDE.md — a
+    # project's own CLAUDE.md is left untouched.
+    #
+    # It also stages a Claude id and a colour for a brand-new session's first
+    # launch. An adopted directory already exists, so its first open is a
+    # reopen: a first adoption keeps no id (the launch records one when it
+    # starts the first conversation), and re-adopted records keep the
+    # conversation and the colour they name. Only a UUID names a conversation
+    # and only one of claude's colours is a colour; anything else is dropped,
+    # and said.
+    local prior_binding prior_color
     prior_binding=$(_read_local_state "$target_dir/.cs/local/state" claude_session_id)
+    prior_color=$(_read_local_state "$target_dir/.cs/local/state" claude_session_color)
     create_session_structure "$target_dir" "$engine"
-    [ -n "$prior_binding" ] || _unset_local_state "$target_dir/.cs/local/state" claude_session_id
+    if _is_uuid "$prior_binding"; then
+        _set_local_state "$target_dir/.cs/local/state" claude_session_id "$prior_binding"
+    else
+        [ -z "$prior_binding" ] || warn "ignoring claude_session_id in .cs/local/state: not a UUID, so it names no conversation"
+        _unset_local_state "$target_dir/.cs/local/state" claude_session_id
+    fi
+    if _is_session_color "$prior_color"; then
+        _set_local_state "$target_dir/.cs/local/state" claude_session_color "$prior_color"
+    elif [ -n "$prior_color" ]; then
+        warn "ignoring claude_session_color in .cs/local/state: not one of claude's colours"
+    fi
     _set_local_state "$target_dir/.cs/local/state" engine "$engine"
 
     # An adopted session's name is the link's, not the directory's, and the link
@@ -9669,6 +10603,19 @@ adopt_session() {
     # walking up from it has nothing to read. Record it where that walk looks
     # (hooks/cs-resolve.sh's _cs_session_name).
     _set_local_state "$target_dir/.cs/local/state" session_name "$session_name"
+
+    # A project Claude Code already ran in has said what it is about: its
+    # newest conversation's first prompt becomes the Objective, the line the
+    # picker previews and searches. The prompt hook does the same for a live
+    # session, so a project with no conversation keeps the placeholder for
+    # the first prompt typed after the open.
+    local adopt_proj adopt_uuid adopt_objective
+    adopt_proj=$(_claude_project_dir "$target_dir")
+    adopt_uuid=$(_discover_session_uuid_in "$adopt_proj")
+    if [ -n "$adopt_uuid" ]; then
+        adopt_objective=$(_transcript_first_prompt "$adopt_proj/$adopt_uuid.jsonl")
+        _seed_readme_objective "$target_dir/.cs/README.md" "$adopt_objective"
+    fi
 
     # Create symlink from sessions root
     mkdir -p "$SESSIONS_ROOT"
@@ -9715,6 +10662,189 @@ adopt_session() {
     info "Adopted $(basename "$target_dir") as session '$session_name'"
     echo -e "${DIM}Symlink: $session_link -> $target_dir${NC}"
     echo -e "${DIM}Resume with: ags $session_name${NC}"
+}
+
+# Append each entry to a git exclude file once. Append only: the file may hold
+# the user's own rules, and a linked worktree reads only the common one.
+_append_exclude_once() {  # exclude_file, entry...
+    local file="$1"; shift
+    mkdir -p "$(dirname "$file")"
+    [ -f "$file" ] || : > "$file"
+    # A last line with no newline would swallow the first entry appended to it.
+    if [ -s "$file" ] && [ -n "$(tail -c 1 "$file")" ]; then
+        printf '\n' >> "$file"
+    fi
+    local entry
+    for entry in "$@"; do
+        grep -qxF -- "$entry" "$file" || printf '%s\n' "$entry" >> "$file"
+    done
+}
+
+# The .cs/ skeleton for a Claude Code worktree adopted as a session. Not
+# create_session_structure: that commits into the checkout, and the checkout
+# is a live PR branch. Not bootstrap_worktree_meta: its README names a base
+# session and a cs/<task> branch, which an adopted worktree has neither of.
+_bootstrap_adopted_worktree_meta() {  # wt_dir, session_name
+    local wt_dir="$1" session_name="$2"
+    mkdir -p "$wt_dir/.cs/memory"
+    _write_session_readme_head "$wt_dir/.cs/README.md" "$session_name" "[]" "[\"$session_name\"]"
+    cat >> "$wt_dir/.cs/README.md" << EOF
+Claude Code worktree \`$(basename "$wt_dir")\`, adopted from $wt_dir.
+
+## Objective
+
+[Describe what you're trying to accomplish in this session]
+
+## Outcome
+
+[To be filled when session is complete - summarize what was accomplished]
+EOF
+    cat > "$wt_dir/.cs/local/session.log" << EOF
+Claude Code Session Log
+Session: $session_name
+Started: $(date '+%Y-%m-%d %H:%M:%S')
+
+================================================================================
+
+EOF
+    ensure_narrative_file "$wt_dir"
+}
+
+# Register every worktree Claude Code created under <repo>/.claude/worktrees/
+# as a session named <repo>.<worktree>, bound to the conversation it already
+# holds. One worktree is one conversation, which is ags's own model, so nothing
+# changes shape: the session link points into the repo, the state binds the
+# UUID, and the Objective is the conversation's first prompt. The checkout is
+# a live PR branch, so ags's files are hidden through the repo's common exclude
+# rather than committed, and the tracked CLAUDE.md is never touched.
+#
+# `.` separates repo and worktree because `@` already means <base>@<task> and
+# would make ags look for a base session. No cs_base is recorded: these are
+# peers, and a base would fuse their task lists and keychain namespaces.
+#
+# A re-run adopts what is new, skips what is already a session, finishes an
+# adoption that stopped before its link was made, and prunes the links it made
+# for worktrees Claude Code has since deleted.
+adopt_worktrees() {  # [--dry-run]
+    local dry_run=0 arg
+    for arg in "$@"; do
+        case "$arg" in
+            --dry-run) dry_run=1 ;;
+            *) error "Unknown option for ags -adopt --worktrees: $arg (only --dry-run)" ;;
+        esac
+    done
+
+    local repo
+    repo=$(git rev-parse --show-toplevel 2>/dev/null) \
+        || error "ags -adopt --worktrees reads <repo>/.claude/worktrees, and $(pwd) is not inside a git repository"
+    repo=$(cd "$repo" && pwd -P)
+    local wt_root="$repo/.claude/worktrees"
+    [ -d "$wt_root" ] || error "No Claude Code worktrees to adopt: $wt_root does not exist"
+    local repo_name common
+    repo_name=$(basename "$repo")
+    common=$(git -C "$repo" rev-parse --git-common-dir)
+    case "$common" in /*) ;; *) common="$repo/$common" ;; esac
+
+    # Prune links this command made for worktrees that no longer exist.
+    local link target
+    for link in "$SESSIONS_ROOT/$repo_name".*; do
+        [ -L "$link" ] || continue
+        target=$(readlink "$link")
+        case "$target" in "$wt_root"/*) ;; *) continue ;; esac
+        [ -d "$target" ] && continue
+        if [ "$dry_run" = 1 ]; then
+            echo "would prune $(basename "$link"): $target is gone"
+        else
+            rm "$link"
+            info "Pruned $(basename "$link"): $target is gone"
+        fi
+    done
+
+    local wt_dir wt_name session_name proj uuid adopted=0 wt_top wt_common state tracked
+    for wt_dir in "$wt_root"/*/; do
+        wt_dir="${wt_dir%/}"
+        [ -d "$wt_dir" ] || continue
+        wt_name=$(basename "$wt_dir")
+        session_name="$repo_name.$wt_name"
+        link="$SESSIONS_ROOT/$session_name"
+        # Everything below writes into this directory, so it has to be a
+        # checkout of this repo: its own worktree root, on this repo's common
+        # git dir. A symlink to another project, or a plain folder, is neither.
+        wt_top=$(git -C "$wt_dir" rev-parse --show-toplevel 2>/dev/null) || wt_top=""
+        wt_common=$(cd "$wt_dir" && cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P) || wt_common=""
+        if [ -L "$wt_dir" ] || [ -z "$wt_top" ] || ! [ "$wt_top" -ef "$wt_dir" ] || ! [ "$wt_common" -ef "$common" ]; then
+            echo -e "${DIM}skip $wt_name: not a worktree of $repo${NC}"
+            continue
+        fi
+        state="$wt_dir/.cs/local/state"
+        if [ -d "$wt_dir/.cs" ]; then
+            # Three kinds of .cs/ can sit here. One this command marked and
+            # linked is a session, or was one until `ags -rm` took the link
+            # and left .cs/ behind as that verb does; neither is re-adopted,
+            # the second is named so the user knows how to get it back. One it
+            # marked and never linked died part-way and is finished below.
+            # Anything else is someone's session.
+            if [ "$(_read_local_state "$state" git_bookkeeping)" != "exclude" ] || [ -e "$link" ] || [ -L "$link" ]; then
+                # A run that died between ln -s and the marker left a linked
+                # session without one; without it a later ags -rm would be undone.
+                if [ "$(_read_local_state "$state" git_bookkeeping)" = "exclude" ] && [ -z "$(_read_local_state "$state" adopted)" ] \
+                    && [ -L "$link" ] && [ "$(readlink "$link")" = "$wt_dir" ] && [ "$dry_run" != 1 ]; then
+                    _set_local_state "$state" adopted "$(date '+%Y-%m-%d')"
+                fi
+                echo -e "${DIM}skip $wt_name: already carries .cs/${NC}"
+                continue
+            fi
+            if [ -n "$(_read_local_state "$state" adopted)" ]; then
+                echo -e "${DIM}skip $wt_name: removed with ags -rm (delete its .cs/ to adopt it again)${NC}"
+                continue
+            fi
+        fi
+        proj=$(_claude_project_dir "$wt_dir")
+        uuid=$(_discover_session_uuid_in "$proj")
+        if [ -z "$uuid" ]; then
+            echo -e "${DIM}skip $wt_name: no conversation under $proj${NC}"
+            continue
+        fi
+        # The open refuses the same conflict; skipping here keeps a worktree
+        # from being registered as a session that can never open.
+        tracked=$(_exclude_session_tracked_conflict "$wt_dir")
+        if [ -n "$tracked" ]; then
+            case "$tracked" in
+                *symlink) echo -e "${DIM}skip $wt_name: $tracked, and ags writes through it at every open${NC}" ;;
+                *) echo -e "${DIM}skip $wt_name: $tracked is tracked on its branch, and ags would rewrite it at every open${NC}" ;;
+            esac
+            continue
+        fi
+        validate_session_name "$session_name"
+        if [ -e "$link" ] || [ -L "$link" ]; then
+            error "Session '$session_name' already exists: the same repo name in two places? ($(readlink "$link" 2>/dev/null || echo "$link"))"
+        fi
+        if [ "$dry_run" = 1 ]; then
+            echo "would adopt $wt_name as '$session_name' (conversation $uuid)"
+            continue
+        fi
+        # Hidden before anything exists to hide, marked before anything else
+        # is written: a run that dies part-way leaves nothing git can see and
+        # a .cs/ the next run knows to finish.
+        _append_exclude_once "$common/info/exclude" ".cs/" ".claude/settings.local.json" "CLAUDE.local.md"
+        mkdir -p "$wt_dir/.cs/local"
+        # The open reads this and keeps its hands off the tracked tree: no
+        # .gitignore or .gitattributes backfill, no CLAUDE.md migration (see
+        # migrate_session).
+        _set_local_state "$state" git_bookkeeping exclude
+        [ -f "$wt_dir/.cs/README.md" ] || _bootstrap_adopted_worktree_meta "$wt_dir" "$session_name"
+        _set_local_state "$state" claude_session_id "$uuid"
+        _set_local_state "$state" session_name "$session_name"
+        _seed_readme_objective "$wt_dir/.cs/README.md" "$(_transcript_first_prompt "$proj/$uuid.jsonl")"
+        mkdir -p "$SESSIONS_ROOT"
+        ln -s "$wt_dir" "$link"
+        # Written last: its absence is what tells a half-done adoption apart
+        # from a session ags -rm removed.
+        _set_local_state "$state" adopted "$(date '+%Y-%m-%d')"
+        adopted=$((adopted + 1))
+        info "Adopted $wt_name as session '$session_name'"
+    done
+    [ "$dry_run" = 1 ] || echo -e "${DIM}$adopted adopted; open one with: ags $repo_name.<worktree>${NC}"
 }
 
 # Uninstall agent-sessions and all components
@@ -9983,17 +11113,26 @@ run_uninstall() {
         fi
     fi
 
-    # Ask about session data
+    # Ask about session data. rm -rf recurses into a mount, so with a volume
+    # mounted inside the sessions root (an open encrypted session's vault) the
+    # data stays and the question is not asked.
     if [ -d "$SESSIONS_ROOT" ]; then
         echo ""
-        warn "Session data exists at $SESSIONS_ROOT"
-        read -p "Delete session data? This cannot be undone. [y/N] " -n 1 -r
-        echo ""
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            rm -rf "$SESSIONS_ROOT"
-            info "Removed $SESSIONS_ROOT"
+        local mounted
+        if ! mounted=$(_volume_mounted_under "$SESSIONS_ROOT"); then
+            warn "Kept $SESSIONS_ROOT: ags could not read the mount table, so it cannot tell whether a volume is mounted inside it."
+        elif [ -n "$mounted" ]; then
+            warn "Kept $SESSIONS_ROOT: a volume is mounted inside it at $mounted, and deleting the directory would delete what the volume holds. Unmount it before you delete $SESSIONS_ROOT."
         else
-            info "Kept $SESSIONS_ROOT"
+            warn "Session data exists at $SESSIONS_ROOT"
+            read -p "Delete session data? This cannot be undone. [y/N] " -n 1 -r
+            echo ""
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                rm -rf "$SESSIONS_ROOT"
+                info "Removed $SESSIONS_ROOT"
+            else
+                info "Kept $SESSIONS_ROOT"
+            fi
         fi
     fi
 
@@ -10078,8 +11217,13 @@ main() {
             return 0
             ;;
         -adopt)
-            shift
-            adopt_session "$@"
+            if [ "${2:-}" = "--worktrees" ]; then
+                shift 2
+                adopt_worktrees "$@"
+            else
+                shift
+                adopt_session "$@"
+            fi
             return 0
             ;;
         -complete) # hidden: shell-completion plumbing, not a user-facing command
@@ -10183,6 +11327,11 @@ main() {
         -tag)
             shift
             run_tag "$@"
+            return $?
+            ;;
+        -encrypt)
+            shift
+            run_encrypt "$@"
             return $?
             ;;
         -archive)
@@ -10445,11 +11594,23 @@ main() {
         if [ ! -e "$base_dir" ]; then
             error "Base session not found: $wt_base"
         fi
+        # Checked on the base first: a worktree of an encrypted session is
+        # refused whether its vault is mounted or not, and a worktree's own
+        # copies of its links dangle with nothing to mount, so "mount it"
+        # would mislead.
+        _refuse_worktree_of_encrypted_base "$wt_base" "$base_dir"
         if [ ! -d "$session_dir" ]; then
             is_new="true"
+            # The base's vault links are refused above, so this catches a
+            # regular file where one belongs, or plaintext ags files beside a
+            # .cs/private made by hand.
+            _refuse_unmounted_meta "$wt_base" "$base_dir"
             confirm_clean_worktree_base "$base_dir" "$wt_base"
             session_dir=$(create_worktree_session "$base_dir" "$wt_base" "$wt_task" "$engine")
         else
+            # A worktree whose own checkout carries vault links refuses by
+            # name while they dangle; a base's links never get this far.
+            _refuse_unmounted_meta "$session_name" "$session_dir"
             # The backfill a base session gets from migrate_session, which the
             # worktree path below deliberately skips: an older worktree, or one
             # from a clone, still arrives at the umask's mode.

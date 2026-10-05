@@ -440,4 +440,96 @@ test_build_digest_fn_in_sync_across_hooks() {
 run_test test_ctx_threshold_env_override
 run_test test_5h_threshold_env_override
 run_test test_build_digest_fn_in_sync_across_hooks
+
+# An encrypted session keeps its queue, inbox and failure counter behind
+# .cs/private; the context and limit readings stay in .cs/local, since they are
+# numbers the status line writes. The drain must read each from its own place.
+_qs_private() {
+    mkdir -p "$TEST_TMPDIR/vault-${CS_SESSION_NAME:-${CLAUDE_SESSION_NAME:-}}/private"
+    ln -s "$TEST_TMPDIR/vault-${CS_SESSION_NAME:-${CLAUDE_SESSION_NAME:-}}/private" "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/private"
+    PRIV="$TEST_TMPDIR/vault-${CS_SESSION_NAME:-${CLAUDE_SESSION_NAME:-}}/private"
+}
+_arm_private_queue() {  # tasks...
+    local t i=0
+    mkdir -p "$PRIV/queue"
+    for t in "$@"; do
+        i=$((i + 1))
+        printf '%s\n' "$t" > "$PRIV/queue/$(printf '%010d' "$i")-seed"
+    done
+    printf 'armed\n' > "$PRIV/queue.state"
+}
+
+test_private_failure_counter_counts_in_the_vault() {
+    _qs_session "pfc"
+    _qs_private
+    _fail_once || return 1
+    assert_eq "1" "$(cat "$PRIV/failures")" "the counter is in the vault" || return 1
+    assert_not_exists "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/failures" "no plaintext counter" || return 1
+}
+
+test_private_drain_hands_tasks_and_records_in_the_vault() {
+    _qs_session "pdr"
+    _qs_private
+    _arm_private_queue "sealed one" "sealed two"
+    local out
+    out=$(_stop_turn) || return 1
+    assert_output_contains "$out" "sealed one" "the vault's first task is handed over" || return 1
+    assert_eq "draining" "$(cat "$PRIV/queue.state")" "state kept in the vault" || return 1
+    _stop_turn >/dev/null || return 1
+    assert_file_contains "$PRIV/queue.done" "sealed one" "done log in the vault" || return 1
+    assert_file_contains "$PRIV/notifications.jsonl" "sealed one" "inbox in the vault" || return 1
+    local f
+    for f in queue queue.state queue.done notifications.jsonl failures; do
+        assert_not_exists "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/$f" "no plaintext $f" || return 1
+    done
+}
+
+test_private_drain_reads_context_from_local() {
+    _qs_session "pcx"
+    _qs_private
+    _arm_private_queue "a" "b"
+    _stop_turn >/dev/null || return 1
+    printf '91\n' > "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/context-pct"
+    local out
+    out=$(_stop_turn) || return 1
+    assert_output_contains "$out" "circuit breaker" "the context reading in .cs/local trips it" || return 1
+    assert_eq "idle" "$(cat "$PRIV/queue.state")" "parked in the vault" || return 1
+}
+
+test_private_digest_reads_the_vault_inbox() {
+    _qs_session "pdg"
+    _qs_private
+    _arm_private_queue "only task"
+    _stop_turn >/dev/null || return 1
+    _stop_turn >/dev/null || return 1
+    local out
+    out=$(_prompt_turn "hello") || return 1
+    assert_output_contains "$out" "while you were away" "the prompt digest reads the vault" || return 1
+    assert_file_exists "$PRIV/notifications.seen" "the cursor is in the vault" || return 1
+    _arm_private_queue "second"
+    _stop_turn >/dev/null || return 1
+    _stop_turn >/dev/null || return 1
+    out=$(printf '{"source":"resume","session_id":"s1","cwd":"%s"}' "${CS_SESSION_DIR:-${CLAUDE_SESSION_DIR:-}}" \
+        | bash "$HOOKS_DIR/session-start.sh") || return 1
+    assert_output_contains "$out" "while you were away" "the start digest reads the vault" || return 1
+    assert_not_exists "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/notifications.seen" "no plaintext cursor" || return 1
+}
+
+test_locked_vault_queue_hooks_write_nothing() {
+    _qs_session "plk"
+    ln -s "$TEST_TMPDIR/unmounted-plk/private" "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/private"
+    _fail_once || return 1
+    _stop_turn >/dev/null || return 1
+    _prompt_turn "hello" >/dev/null || return 1
+    local f
+    for f in queue queue.state failures notifications.jsonl notifications.seen; do
+        assert_not_exists "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/$f" "no plaintext $f" || return 1
+    done
+}
+
+run_test test_private_failure_counter_counts_in_the_vault
+run_test test_private_drain_hands_tasks_and_records_in_the_vault
+run_test test_private_drain_reads_context_from_local
+run_test test_private_digest_reads_the_vault_inbox
+run_test test_locked_vault_queue_hooks_write_nothing
 report_results

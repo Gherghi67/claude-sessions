@@ -46,6 +46,7 @@ CS_HOOKS=(
 CS_HOOK_LIBS=(
     cs-resolve.sh
     cs-shared.sh
+    cs-iterm-tab.py
     prompt-rewriter.sh
     prompt-rewriter-model.sh
     prompt-rewriter-vendor.sh
@@ -109,6 +110,7 @@ CS_SKILL_FILES=(
     finish/scripts/finish.sh
     finish/agents/openai.yaml   # Codex ignores disable-model-invocation; this is its switch
     sweep/scripts/memory-index-guard.sh
+    sweep/scripts/cs-shared.sh  # build.sh's copy of hooks/cs-shared.sh, which the guard sources
 )
 
 # Mods cs ships: Claude Code function-hooks plugins, deployed file by file as

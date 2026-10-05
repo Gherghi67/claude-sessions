@@ -44,7 +44,7 @@ The one distinction that governs everything below is **shared vs machine-local**
 
 | Path | Purpose | Merge |
 |------|---------|-------|
-| `.cs/README.md` | Session objective (captured from the first prompt) and outcome. Human-edited. | default |
+| `.cs/README.md` | Session objective (captured from the first prompt) and outcome. Human-edited. An [encrypted session](#encrypted-sessions) keeps only the frontmatter here. | default |
 | `.cs/summary.md` | Distilled session summary, written by `/wrap` and `/summary`. | default |
 | `.cs/timeline.jsonl` | Structured event log — `started`, `ended`, `checkpoint`, `rotated`, and `narrative_rotated` events as newline-delimited JSON. A base session also records `worktree-retired` (with the feature's `task`) when a feature worktree is retired, and `feature-integrated` (with `task`, the integrated `sha` and a `result`) when `/finish` integrates one. | `union` |
 | `.cs/memory/MEMORY.md` | Index of Claude Code's native auto-memory (one line per fact). | `ours` |
@@ -53,7 +53,7 @@ The one distinction that governs everything below is **shared vs machine-local**
 | `.cs/narrative-archive/<actor>/<through-date>-<blob8>.md` | Sections `ags -narrative rotate` moved out of the live narrative, verbatim. Immutable once written; the name is derived from the content, so two machines archiving the same sections produce the same file. | default |
 | `.cs/checkpoints/` | Labelled state snapshots from `/checkpoint` (narrative + changes + git HEAD). | default |
 | `.cs/archived` | Archive marker written by `ags -archive` (date + actor). Tracked so the archived state syncs; removed on open or `ags -unarchive`. | default |
-| `.cs/handoffs/` | Lineage-stamped conversation handoffs written by the `rotate` skill (parent UUID, purpose, continuation plan). Each carries a `status:` field — `unconsumed` while pending, flipped to `consumed` by the SessionStart that rotates into it, to `discarded` by the resume prompt's `d` answer, or to `superseded` when a later rotation retires it. The `rotate` skill also prunes as it goes, deleting `consumed`, `discarded` and `superseded` files older than 30 days by `created:` unless they are among the 10 newest — instructions the skill follows, not a `ags` command; nothing in the agent-sessions launcher deletes a handoff. | default |
+| `.cs/handoffs/` | Lineage-stamped conversation handoffs written by the `rotate` skill (parent UUID, purpose, continuation plan). Each carries a `status:` field — `unconsumed` while pending, flipped to `consumed` by the SessionStart that rotates into it, to `discarded` by the resume prompt's `d` answer, or to `superseded` when a later rotation retires it. The `rotate` skill also prunes as it goes, deleting `consumed`, `discarded` and `superseded` files older than 30 days by `created:` unless they are among the 10 newest — instructions the skill follows, not a `ags` command; nothing in the agent-sessions launcher deletes a handoff. An [encrypted session](#encrypted-sessions) keeps them in `.cs/private/handoffs/` instead. | default |
 | `.cs/plans/` | Design plans and specs kept with the session. | default |
 | `.cs/brief.md` | The brief a `ags -spawn --brief` (or the `feature` skill) handed this session, moved in at launch; the wake-up line sends the session to it first. Written once per spawn, replacing an earlier one. | default |
 | `.cs/age-recipients/*.pub` | age public keys of everyone allowed to decrypt the session's synced secrets. | default |
@@ -75,6 +75,9 @@ user-owned `CLAUDE.md` is never touched.
 
 ## Machine-local files (`.cs/local/`, gitignored)
 
+An [encrypted session](#encrypted-sessions) keeps the content files among these
+in `.cs/private/` instead.
+
 | File | Purpose |
 |------|---------|
 | `session.log` | Human-readable audit trail — bash commands, session lifecycle, autosave notes, UUID rebinds. Per-checkout by nature; the shared structured record is `timeline.jsonl`. |
@@ -95,6 +98,10 @@ user-owned `CLAUDE.md` is never touched.
 | `wrapped` | The conversation a `/wrap` finished in (its `CLAUDE_CODE_SESSION_ID`), written by its last pass; the cs mod's band hides the wrap key while it names the conversation, and the next prompt empties it. |
 | `disabled` | Opts the directory out of cs's hooks entirely. Present, the hooks decline as if it were not a session, whichever front end opened it. Before hooks resolved a session from the directory, a `claude` started outside `ags` in a session folder was inert; this restores that on request instead of by accident. |
 | `pre-open` | An executable `ags <name>` runs before it opens an existing session, from the session directory on your terminal, so it can prompt (mounting the encrypted volume that `.cs/memory` and `.cs/plans` link into, for example). A non-zero exit aborts the open, and `ags` refuses a file that is not executable rather than skipping it. It lives here because this directory is never committed, so a cloned session cannot make `ags` run code. A session copied by a file sync (rsync, iCloud, Dropbox) carries it along, and `ags` runs it. Afterwards, if `.cs/memory` or `.cs/plans` is still a symlink to something missing, `ags` refuses to open the session and names the link, instead of creating plaintext directories in their place. |
+| `vault` | The path of the container `ags -encrypt` built, written only by `ags -encrypt`. The SessionEnd hook unmounts the vault only when this file exists. |
+| `vault-holders` | Process ids of every `ags` run that mounted or joined this session's vault. The volume unmounts only when none of them and no session lock is alive. |
+| `vault-waiter.pid` | The background waiter the SessionEnd hook leaves to unmount the vault once the lead conversation's Claude Code exits. An open that finds the vault mounted with nothing alive behind it stops this waiter first. |
+| `vault-detach.pid` | The `hdiutil detach` that waiter started, so a reopen can stop an unmount in flight. |
 | `queue/` | The walk-away task queue (`ags -queue`): one file per task, staged in `queue.tmp/` and renamed into place so the drain never reads a torn entry. The drain pops the lexically first file by moving it aside — atomic against a second drain. |
 | `queue.state` | Drain state machine for the queue: `idle`, `armed`, or `draining`. |
 | `queue.done` | Log of completed queued tasks, appended as each is drained. |
@@ -114,6 +121,150 @@ user-owned `CLAUDE.md` is never touched.
 | `mail/` | Cross-session mailbox, one JSON document per message: senders (`ags -msg`) write to the recipient's `tmp/` and rename into `new/` (atomic — a message is either entirely present or absent); `ags -msg` prints `new/*.json` and moves them to `cur/`. Unread is simply the count of `new/*.json`, the same basis for the prompt hook's digest, the status line, and the TUI. Filenames are `<zero-padded epoch>-<id>.json` — not a monotonic clock; nothing may treat name order as arrival order. `corrupt.jsonl` holds any legacy inbox lines that failed to parse during migration. (A legacy `inbox.jsonl` plus its `seen` cursor is converted on the next session open.) `out/` holds this session's own sent copies, so a thread can be re-read from either end. `woke` lists the filenames both mail wakes have already discharged — announced by a wake, or owned by the queue (`task` kind). Discharged means announced, never read: the message stays in `new/` until `ags -msg` prints it, so a spent announcement costs a wake and never a message. Anything that runs the hook against a live session's mailbox, a hand-run preview included, announces whatever it finds and leaves that mail silent but intact. The list is written tmp-then-rename under a per-process name because both wakes write it and the idle one overlaps itself. `wakes` counts wakes since the last user prompt, which clears it; `CS_MAIL_WAKE_MAX` (default 5) caps it. The directory is created at session start so Claude Code's file watcher has something to arm on: a watch given a path missing two levels never fires again for that process's lifetime. |
 | `rotation-kick/` | Arms the `/clear` auto-start. session-start.sh creates it (a watch given a missing path never fires again for that process's lifetime), hands it over as `watchPaths`, and leaves a detached child to write `rotation.kick` into it once Claude Code's watch is up; that `FileChanged` wakes the session into the handoff's next step. `delivered` marks the kick spent, so the unlink that cleanup fires cannot wake the session on its own tail. Cleared at the start of each rotation, since a stale marker would make the new kick look already spent. |
 | `spawned-by` | Spawner session name for a `ags -spawn`ed worker; deleted after the drain-finished notify (one-shot). A brief-only spawn writes it with no queue to drain, so it stays until a later queue in that session drains, and that drain reports to the spawner. |
+
+## Encrypted sessions
+
+A session can keep its private files on an encrypted volume. Four names under
+`.cs/` become symlinks into the volume's mountpoint (by convention
+`.cs/vault-mnt`), and each one is opt-in: agent-sessions only checks whether the link is
+there.
+
+| Link | What lives behind it |
+|------|----------------------|
+| `.cs/memory` | Auto-memory and the narratives. |
+| `.cs/plans` | Plans and specs. |
+| `.cs/claude-config` | Claude Code's config dir for this session. agent-sessions launches Claude Code with `CLAUDE_CONFIG_DIR` pointing here, so transcripts, prompt history, `.claude.json` and its backups never reach `~/.claude`. `CLAUDE_SECURESTORAGE_CONFIG_DIR` keeps the shell's login (empty selects the default keychain entry). On every launch agent-sessions links the shell's `settings.json`, `settings.local.json`, `CLAUDE.md`, `AGENTS.md`, `rules/`, `skills/`, `commands/`, `agents/`, `hooks/`, `plugins/`, `output-styles/`, `keybindings.json` and `vale/` into it, skipping any name the session already has. A setting you change inside the session (`/model`, `/config`) writes through the link into the shell's `settings.json`. The first launch seeds `.claude.json` from the shell's copy with `projects` emptied, since each project entry keeps that project's last prompt. agent-sessions reads the session's transcripts from `projects/` here, and the picker does not rename such a session, because its links and transcripts name its path. |
+| `.cs/private` | agent-sessions' own content files, which a plain session keeps in `.cs/local/`: `session.log`, `scope-prompt.trace`, `memory-index.snapshot`, `mail/`, the queue files (`queue/`, `queue.tmp/`, `queue.state`, `queue.done`, `queue.declined`, `queue.migrating`), `notifications.jsonl`, `notifications.seen`, `failures`, `rewrite.trace`, the rotation handoffs (`handoffs/`), `pending-handoff`, checkpoints (`checkpoints/`) and, when `.cs/memory` is a link, the rotated narrative sections (`narrative-archive/`). Numbers the status line writes (`context-pct`, `limits`) and ids (`state`, `spawned-by`, `rotate-nudged`, `ctx-warned`) stay in `.cs/local/`. |
+
+### Encrypting a session with `ags -encrypt`
+
+On macOS, `ags -encrypt <name>` sets this up for an existing session. Run it
+from a terminal, with the session closed. It:
+
+1. Creates an AES-256 encrypted sparse bundle at
+   `~/.local/share/cs/vaults/<name>.sparsebundle` with `hdiutil`, which asks
+   for a new password. The bundle grows as it fills, up to 50 GB. It lives
+   outside the session directory, so `ags -rm` never deletes it.
+2. Mounts it at `.cs/vault-mnt` (`hdiutil` asks for the password again) and
+   turns Spotlight indexing off for it.
+3. Moves `.cs/memory`, `.cs/plans`, the `.cs/local/` files listed under
+   `.cs/private` above, and `.cs/handoffs`, `.cs/checkpoints` and
+   `.cs/narrative-archive` into the volume, then links the four names into it.
+4. Writes `.cs/local/pre-open` and `.cs/local/vault` (the bundle's path), tags
+   the session `encrypted`, and unmounts the volume.
+
+From then on every open asks for the password in the terminal. `pre-open`
+refuses to open the session without a terminal, because without one `hdiutil`
+shows a dialog that offers to save the password in the keychain. When the lead
+conversation ends (not on `/clear` or `/resume`), the SessionEnd hook waits for
+Claude Code to exit and unmounts the volume, unless the session reopened in
+the meantime. The unmount is never forced: if something still holds the
+volume, it stays mounted, and the next open unmounts it and asks for the
+password. A second conversation opened while the session runs joins the
+mounted volume without asking. An open that stops before Claude Code starts
+(a refusal, or a cancelled prompt) unmounts the volume it mounted.
+
+Every open that mounts or joins the volume adds its process id to
+`.cs/local/vault-holders`. A process that replaces itself with Claude Code
+keeps its id, so the entry stays valid while that conversation runs. agent-sessions
+unmounts the volume only when no listed process and no session lock is
+still alive, so a second conversation keeps it mounted after the first one
+ends. An open that finds the volume mounted with nothing alive behind it
+stops the old SessionEnd unmount first, then unmounts the volume and asks
+for the password.
+
+`ags -encrypt` refuses, before it writes anything, when:
+
+- the machine is not a Mac, or stdin is not a terminal
+- the session is running, adopted, or a feature worktree (`base@task`)
+- any of the four names is already a link, or `.cs/claude-config` or
+  `.cs/private` already exists as a folder or file
+- `.cs/local/pre-open` already exists
+- the bundle already exists
+- `.cs/README.md` has no frontmatter for the tag
+
+If a move fails partway, it stops, lists what moved and what did not, and
+leaves the volume mounted so you can finish by hand; until you unmount it,
+`ags -rm` and the picker's delete refuse to remove the session. When it finishes, it lists
+the copies it cannot reach: the session's transcripts in `~/.claude/projects/`,
+its lines in `~/.claude/history.jsonl`, its entries in `~/.claude.json` and that
+file's backups, `.cs/summary.md` and `.cs/brief.md`, git history, and backups.
+
+### Setting it up by hand
+
+Mount the volume from `.cs/local/pre-open` (see the table above). While a link
+points at a missing directory, the vault is locked, and agent-sessions writes nothing in
+its place:
+
+- `ags <name>` refuses to open the session and names the link.
+- The hooks log nothing, deliver no mail wake and drain no queue.
+- `ags -msg` to the session refuses the send. `ags -queue` in it refuses too.
+- agent-sessions offers and consumes no rotation handoff.
+- Opening a feature worktree (`base@task`) of the session refuses the same way.
+
+A regular file at any of the four names also refuses the open. agent-sessions cannot tell
+it from a locked vault, so the error names it.
+
+Feature worktrees of an encrypted session are not supported yet. Creating or
+opening one refuses even while the vault is mounted: a checkout of the links
+`ags -encrypt` writes (`vault-mnt/<name>`, relative) points inside the worktree,
+where nothing is mounted, and a base whose `.cs/` is ignored would give the
+worktree plaintext files of its own.
+
+Opening an encrypted session also refuses when a plaintext copy of a vault
+file is still outside it: any of the `.cs/private` files above left in
+`.cs/local/`, or a `.cs/handoffs/` or `.cs/checkpoints/` folder, or a plain
+`.cs/narrative-archive/` beside a linked `.cs/memory`. The error names the file. Move it
+into the vault or delete it. agent-sessions does not move it for you, because backups and
+snapshots already hold the old copy.
+
+With `.cs/private` present, the session protocol changes too:
+
+- The objective, environment and outcome go at the top of the narrative. The
+  prompt hook does not copy the first prompt into `.cs/README.md`, which keeps
+  only its frontmatter. The first open adds a `cs:encrypted-protocol` section
+  to `CLAUDE.local.md` that says so. Delete its text but keep the comment to
+  opt out.
+- The rotate skill writes the handoff into `.cs/private/handoffs/` and commits
+  nothing from the vault.
+- The launch prompt after answering `r` does not name the handoff file, and
+  the `rotated` event in `timeline.jsonl` records the rotation without the
+  file name. A handoff's name is its topic, and both of those are plaintext.
+- `/checkpoint` saves into `.cs/private/checkpoints/`, and its `timeline.jsonl`
+  event carries no label or file name.
+
+A narrative behind a `.cs/memory` link rotates into the vault. `ags -narrative
+rotate` writes through a `.cs/narrative-archive` link when there is one, and
+into `.cs/private/narrative-archive/` otherwise. With neither, it refuses
+rather than write plaintext. `/checkpoint` refuses in that case too, since a
+checkpoint copies the narrative.
+
+The mounted volume stays out of git and out of the session's removal:
+
+- The autosave snapshot skips `.cs/vault-mnt` and every link target inside the
+  session directory. New `.gitignore` files ignore `.cs/vault-mnt/`.
+- `ags -rm` and the picker's delete refuse while a link resolves inside the
+  session directory, or while the mount table shows any volume mounted inside
+  it (an `ags -encrypt` that stopped before linking leaves one), even with
+  `--force`, because removing it would delete what the volume holds. Unmount
+  first. `/finish` does not retire a feature worktree with a volume mounted
+  inside it, and `ags -uninstall` keeps the sessions root, without asking,
+  while one is mounted anywhere inside it. All three also refuse when `mount`
+  cannot list the table.
+- Unmounted, the session removes like any other, `.cs/` included. Keep the
+  volume's container (a disk image, a cipher directory) outside the session
+  directory, or at its root where `ags -rm --force` names it and asks for
+  `--delete-files`.
+
+Link all four names. With only some of them, the rest leaks: `.cs/private`
+without `.cs/claude-config`, for example, keeps the handoffs in the vault, but
+Claude Code's transcript in `~/.claude/projects` records the start-of-session
+context that names the handoff file and quotes the conversation.
+
+Not covered: copies that backups and filesystem snapshots already made,
+third-party hooks that write under `~/.claude` directly, `.cs/summary.md`
+unless you link it into the vault yourself, the brief `ags -spawn --brief`
+delivers (`.cs/brief.md`, staged in the sessions root's `.spawn/`).
 
 ## Merge policy
 

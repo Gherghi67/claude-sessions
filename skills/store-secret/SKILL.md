@@ -38,9 +38,9 @@ If empty, inform the user that secrets storage requires a cs session and skip st
 4. **Store each secret** — feed the value on **stdin**, never on the command
    line. A value passed as an argument is visible via `ps`, and every shell
    command is recorded verbatim: by cs's bash-logger hook into
-   `.cs/local/session.log` under Claude Code, and in the engine's own
-   transcript under every engine. The shell command itself must not contain
-   the secret:
+   `.cs/local/session.log` (`.cs/private/session.log` in an encrypted
+   session) under Claude Code, and in the engine's own transcript under every
+   engine. The shell command itself must not contain the secret:
    - Run `ags -secrets list` first. `set` replaces an existing value silently
      (no diff, no prompt), so if the name you chose already exists, pick a more
      specific name or confirm with the user before overwriting.

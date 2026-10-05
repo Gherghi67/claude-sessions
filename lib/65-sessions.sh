@@ -34,7 +34,7 @@ search_sessions() {
 
     local found=0
     local search_files=".cs/README.md"
-    local -a search_globs=(".cs/memory/*.md" ".cs/narrative-archive/*/*.md")
+    local -a search_globs=(".cs/memory/*.md" ".cs/narrative-archive/*/*.md" ".cs/private/narrative-archive/*/*.md")
 
     for session_dir in "$SESSIONS_ROOT"/*/; do
         [ -d "$session_dir" ] || continue
@@ -281,8 +281,10 @@ list_sessions() {
         local created="-"
         local modified="-"
 
-        local log_file="$session_dir/.cs/local/session.log"
-        # Fall back to older locations for unmigrated sessions
+        local log_file="$session_dir/.cs/private/session.log"
+        # An encrypted session keeps its log behind .cs/private; every other
+        # one in .cs/local. Fall back to older locations for unmigrated sessions
+        [ ! -f "$log_file" ] && log_file="$session_dir/.cs/local/session.log"
         [ ! -f "$log_file" ] && log_file="$session_dir/.cs/logs/session.log"
         [ ! -f "$log_file" ] && log_file="$session_dir/logs/session.log"
         if [ -f "$log_file" ]; then
@@ -347,13 +349,14 @@ list_sessions() {
 # All names are validated before anything is deleted: an empty name would
 # resolve to the sessions root itself and rm -rf every session.
 remove_session() {
-    local force="" arg _name
+    local force="" delete_files="" arg _name
     local names
     names=()
     for arg in "$@"; do
         case "$arg" in
             --force|-f) force="true" ;;
-            -*) error "Unknown remove option: $arg. Usage: ags -remove <session-name>... [--force]" ;;
+            --delete-files) delete_files="true" ;;
+            -*) error "Unknown remove option: $arg. Usage: ags -remove <session-name>... [--force [--delete-files]]" ;;
             *)
                 [ -n "$arg" ] || error "Usage: ags -remove <session-name>... [--force] (empty session name)"
                 names+=("$arg") ;;
@@ -361,13 +364,97 @@ remove_session() {
     done
     [ "${#names[@]}" -ge 1 ] || error "Usage: ags -remove <session-name>... [--force]"
     for _name in "${names[@]}"; do
-        _remove_one_session "$_name" "$force"
+        _remove_one_session "$_name" "$force" "$delete_files"
     done
+}
+
+# Top-level entries of a session root that ags did not put there, as one
+# comma-separated line (empty when there are none). ags owns .cs/, .claude/,
+# the session git files and the two CLAUDE files; .DS_Store is Finder's.
+_session_foreign_entries() {  # session_dir
+    local dir="$1" entry name out=""
+    for entry in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
+        [ -e "$entry" ] || [ -L "$entry" ] || continue
+        name="${entry##*/}"
+        case "$name" in
+            .cs|.claude|.git|.gitignore|.gitattributes|CLAUDE.md|CLAUDE.local.md|.DS_Store) continue ;;
+        esac
+        out="${out:+$out, }$name"
+    done
+    printf '%s' "$out"
+}
+
+# The first mount point at or under a directory, from the mount table text on
+# stdin (empty when there is none). macOS lists "<dev> on <path> (<opts>)",
+# Linux "<dev> on <path> type <fs> (<opts>)", and neither escapes its fields:
+# a source may hold " on " and a path " on ", " type " or " (". So each line
+# is read the Linux way (cut at its last " type ") and then the macOS way, and
+# in each every absolute path that follows an " on " is a candidate. Each cut
+# keeps the space after "on", so a source ending in " on", whose " on" shares
+# that space with the separator, still leaves the separator to find. Each
+# candidate's ancestors are compared with -ef, which sees through letter case
+# and symlinks where a string prefix would not.
+_mount_under() {  # dir
+    local dir="$1" line body text mnt p
+    while IFS= read -r line; do
+        body="${line% (*}"
+        for text in "${body% type *}" "$body"; do
+            while :; do
+                case "$text" in
+                    *" on "*) text="${text#* on}" ;;
+                    *) break ;;
+                esac
+                case "$text" in " /"*) mnt="${text# }" ;; *) continue ;; esac
+                p="$mnt"
+                while [ -n "$p" ]; do
+                    if [ "$p" -ef "$dir" ]; then
+                        printf '%s' "$mnt"
+                        return 0
+                    fi
+                    p="${p%/*}"
+                done
+            done
+        done
+    done
+    return 0
+}
+
+# The first volume mounted at or under a directory, from the live mount
+# table; empty when there is none. rm -rf and git worktree remove recurse into
+# a mount, so every path that deletes a directory asks this first. Fails when
+# `mount` does, so the caller refuses instead of guessing.
+_volume_mounted_under() {  # dir
+    local table
+    table=$(mount) || return 1
+    _mount_under "$1" <<< "$table"
+}
+
+# Paths in a worktree session that git does not track (untracked or
+# ignored), as one comma-separated line; git worktree remove --force
+# deletes them with no copy on the branch. ags's own .cs/, .claude/ and
+# CLAUDE.local.md, and Finder's .DS_Store, are left out.
+_worktree_untracked_entries() {  # worktree_dir
+    local dir="$1" status line path top paths="" out=""
+    status=$(git -C "$dir" status --porcelain --ignored --untracked-files=normal) \
+        || error "git status failed in $dir; refusing to remove what it cannot list"
+    while IFS= read -r line; do
+        case "$line" in '?? '*|'!! '*) ;; *) continue ;; esac
+        path="${line:3}"
+        top="${path%%/*}"
+        case "$top" in .cs|.claude|CLAUDE.local.md|.DS_Store) continue ;; esac
+        paths="$paths$path"$'\n'
+    done <<< "$status"
+    [ -n "$paths" ] || return 0
+    while IFS= read -r path; do
+        out="${out:+$out, }$path"
+    done <<< "$(printf '%s' "$paths" | LC_ALL=C sort)"
+    printf '%s' "$out"
 }
 
 _remove_one_session() {
     local session_name="$1"
     local force="${2:-}"
+    local delete_files="${3:-}"
     [ -n "$session_name" ] || error "Refusing to remove an empty session name"
 
     # Reject path traversal before any filesystem action: '.'/'..' and any
@@ -387,6 +474,32 @@ _remove_one_session() {
         error "Session '$session_name' is live (pid $(read_lock_pid "$session_dir/.cs")); use --force to remove anyway"
     fi
 
+    # An encrypted session mounts its vault inside the session directory by
+    # convention, and rm -rf recurses into a mount: removing the session would
+    # delete what the vault holds. A link that resolves into this directory
+    # means the vault is mounted here, so refuse, --force or not. An adopted
+    # session loses only its link below, so it is exempt.
+    if [ ! -L "$session_dir" ]; then
+        local sub link real_dir real_target
+        real_dir=$(cd "$session_dir" && pwd -P)
+        for sub in $CS_VAULT_LINKS; do
+            link="$session_dir/.cs/$sub"
+            [ -L "$link" ] || continue
+            real_target=$(cd "$link" 2>/dev/null && pwd -P) || continue
+            case "$real_target" in
+                "$real_dir"/*)
+                    error "Session '$session_name' has encrypted storage mounted inside it: .cs/$sub points at $(readlink "$link"). Removing the session would delete what the vault holds; unmount it, then retry." ;;
+            esac
+        done
+        # An ags -encrypt that stopped partway leaves its volume mounted with no
+        # link yet, so the links above cannot see it; the mount table can.
+        local mounted
+        mounted=$(_volume_mounted_under "$session_dir") \
+            || error "ags -rm could not read the mount table, so it cannot tell whether a volume is mounted inside '$session_name'; refusing to remove it."
+        [ -z "$mounted" ] \
+            || error "Session '$session_name' has a volume mounted inside it at $mounted. Removing the session would delete what the volume holds; unmount it, then retry."
+    fi
+
     # Every confirmation below reads from stdin; a script piping input through
     # a non-tty without --force used to hit a `read` that failed silently and
     # exited 1 with no explanation. Refuse loudly, before any mutation, unless
@@ -404,10 +517,16 @@ _remove_one_session() {
             if [ -d "$wt_base_dir" ] && [ -f "$session_dir/.git" ]; then
                 local wt_branch
                 wt_branch=$(_read_local_state "$session_dir/.cs/local/state" task_branch)
+                local untracked
+                untracked=$(_worktree_untracked_entries "$session_dir")
+                if [ -n "$untracked" ] && [ -n "$force" ] && [ -z "$delete_files" ]; then
+                    error "Worktree session '$session_name' holds files git does not track: $untracked. Add --delete-files to remove them with --force"
+                fi
                 local confirm
                 if [ -n "$force" ]; then
                     confirm="y"
                 else
+                    [ -z "$untracked" ] || printf '%bAlso deletes files git does not track: %s%b\n' "$RED" "$untracked" "$NC" >&2
                     read -r -p $'\033[0;31mRemove worktree session '"'$session_name'"$'? Uncommitted work in it is discarded. [y/N] \033[0m' confirm
                 fi
                 if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
@@ -434,6 +553,17 @@ _remove_one_session() {
             ;;
     esac
 
+    # A cs-created root is also the user's workspace: rm -rf takes whatever
+    # they put beside ags's own files (an encrypted image, a checkout). Name
+    # those in the confirm, and make --force ask for them by name.
+    local foreign=""
+    if [ ! -L "$session_dir" ]; then
+        foreign=$(_session_foreign_entries "$session_dir")
+    fi
+    if [ -n "$foreign" ] && [ -n "$force" ] && [ -z "$delete_files" ]; then
+        error "Session '$session_name' holds files ags did not create: $foreign. Add --delete-files to remove them with --force"
+    fi
+
     # Confirm deletion
     local confirm
     if [ -n "$force" ]; then
@@ -443,6 +573,9 @@ _remove_one_session() {
         target="$(_resolve_symlink_dir "$session_dir")"
         read -r -p $'\033[0;31mRemove adopted session '"'$session_name'"$'? (removes symlink only, project at '"$target"$' is preserved) [y/N] \033[0m' confirm
     else
+        # read -p only shows its prompt on a terminal; the list must reach
+        # the user even when the answer is piped in.
+        [ -z "$foreign" ] || printf '%bAlso deletes files ags did not create: %s%b\n' "$RED" "$foreign" "$NC" >&2
         read -r -p $'\033[0;31mRemove session '"'$session_name'"$'? [y/N] \033[0m' confirm
     fi
     if [[ ! "$confirm" =~ ^[Yy]$ ]]; then

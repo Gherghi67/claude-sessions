@@ -437,6 +437,14 @@ test_bash_rm_completes_beyond_first_name() {
     assert_candidate "$out" "keep-two" "cs -rm <name> <TAB> must offer a second session" || return 1
 }
 
+test_bash_rm_completes_its_flags() {
+    create_test_session "flag-one" >/dev/null
+    put_built_cs_on_path
+    local out; out=$(bash_candidates_words "$BASH_COMP" ags -rm flag-one --)
+    assert_candidate "$out" "--force" "ags -rm <name> --<TAB> must offer --force" || return 1
+    assert_candidate "$out" "--delete-files" "ags -rm <name> --<TAB> must offer --delete-files" || return 1
+}
+
 test_bash_archive_completes_beyond_first_name() {
     create_test_session "arch-one" >/dev/null
     create_test_session "arch-two" >/dev/null
@@ -460,6 +468,39 @@ test_zsh_rm_completes_beyond_first_name() {
     put_built_cs_on_path
     local out; out=$(zsh_candidates_words cs -rm zkeep-one "")
     assert_candidate "$out" "zkeep-two" "zsh cs -rm <name> <TAB> must offer a second session" || return 1
+}
+
+test_zsh_rm_completes_its_flags() {
+    command -v zsh >/dev/null 2>&1 || { echo "    (zsh not installed, skipping)"; return 0; }
+    create_test_session "zflag-one" >/dev/null
+    put_built_cs_on_path
+    local out; out=$(zsh_candidates_words ags -rm zflag-one --)
+    assert_candidate "$out" "--force" "zsh ags -rm <name> --<TAB> must offer --force" || return 1
+    assert_candidate "$out" "--delete-files" "zsh ags -rm <name> --<TAB> must offer --delete-files" || return 1
+}
+
+test_bash_adopt_completes_its_flags() {
+    put_built_cs_on_path
+    local out; out=$(bash_candidates_words "$BASH_COMP" ags -adopt --)
+    assert_candidate "$out" "--worktrees" "ags -adopt --<TAB> must offer --worktrees" || return 1
+    # --dry-run alone is a refused session name, so it is not offered there.
+    if grep -qxF -- "--dry-run" <<< "$out"; then
+        echo "  FAIL: ags -adopt --<TAB> must not offer --dry-run before --worktrees"; return 1
+    fi
+    out=$(bash_candidates_words "$BASH_COMP" ags -adopt --worktrees --)
+    assert_candidate "$out" "--dry-run" "ags -adopt --worktrees --<TAB> must offer --dry-run" || return 1
+}
+
+test_zsh_adopt_completes_its_flags() {
+    command -v zsh >/dev/null 2>&1 || { echo "    (zsh not installed, skipping)"; return 0; }
+    put_built_cs_on_path
+    local out; out=$(zsh_candidates_words ags -adopt --)
+    assert_candidate "$out" "--worktrees" "zsh ags -adopt --<TAB> must offer --worktrees" || return 1
+    if grep -qxF -- "--dry-run" <<< "$out"; then
+        echo "  FAIL: zsh ags -adopt --<TAB> must not offer --dry-run before --worktrees"; return 1
+    fi
+    out=$(zsh_candidates_words ags -adopt --worktrees --)
+    assert_candidate "$out" "--dry-run" "zsh ags -adopt --worktrees --<TAB> must offer --dry-run" || return 1
 }
 
 echo ""
@@ -523,9 +564,13 @@ run_test test_completions_cover_all_queue_subcommands
 run_test test_bash_msg_completes_target_session
 run_test test_bash_spawn_completes_session_name
 run_test test_bash_rm_completes_beyond_first_name
+run_test test_bash_rm_completes_its_flags
 run_test test_bash_archive_completes_beyond_first_name
 run_test test_zsh_msg_completes_target_session
 run_test test_zsh_rm_completes_beyond_first_name
+run_test test_zsh_rm_completes_its_flags
+run_test test_bash_adopt_completes_its_flags
+run_test test_zsh_adopt_completes_its_flags
 
 # Extract the SESSION subcommand arms — the second dispatch site, `cs <name>
 # -verb`, which is a different vocabulary from the top-level one above. The arms

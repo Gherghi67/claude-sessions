@@ -147,6 +147,7 @@ CS_HOOKS=(
 CS_HOOK_LIBS=(
     cs-resolve.sh
     cs-shared.sh
+    cs-iterm-tab.py
     prompt-rewriter.sh
     prompt-rewriter-model.sh
     prompt-rewriter-vendor.sh
@@ -210,6 +211,7 @@ CS_SKILL_FILES=(
     finish/scripts/finish.sh
     finish/agents/openai.yaml   # Codex ignores disable-model-invocation; this is its switch
     sweep/scripts/memory-index-guard.sh
+    sweep/scripts/cs-shared.sh  # build.sh's copy of hooks/cs-shared.sh, which the guard sources
 )
 
 # Mods cs ships: Claude Code function-hooks plugins, deployed file by file as
@@ -1132,13 +1134,12 @@ else
         fi
     fi
     if [ -n "$_register_statusline" ]; then
-        # refreshInterval keeps the bar repainting once a second while idle;
-        # the logo's attention pulse animates on that timer. Registers BOTH
-        # settings keys, same as `ags -statusline enable` — the two recipes
-        # must stay equivalent (KEEP IN SYNC with lib/70-statusline.sh).
+        # Registers BOTH settings keys and a 60 s refreshInterval, same as
+        # `ags -statusline enable`; the two recipes must stay equivalent
+        # (KEEP IN SYNC with lib/70-statusline.sh).
         SETTINGS=$(echo "$SETTINGS" | jq --arg cmd "$_statusline_cmd" \
             --arg subcmd "$INSTALL_DIR/ags-subagent-statusline" \
-            '.statusLine = {type: "command", command: $cmd, refreshInterval: 1}
+            '.statusLine = {type: "command", command: $cmd, refreshInterval: 60}
              | .subagentStatusLine = {type: "command", command: $subcmd}')
         if [ "$_register_statusline" = "1" ]; then
             installed "status line" "ags-statusline + ags-subagent-statusline"

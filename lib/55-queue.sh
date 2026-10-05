@@ -196,7 +196,12 @@ run_queue() {
     if [ -z "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ]; then
         error "ags -queue must be run inside a cs session, or as: ags <session> -queue ..."
     fi
-    local qdir="${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local"
+    # The queue sits with the session's other ags files: behind .cs/private in
+    # an encrypted session, where a locked vault refuses rather than queue a
+    # task beside it in plaintext.
+    local qdir
+    qdir=$(cs_private_dir "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}") \
+        || error "this session keeps its queue in encrypted storage that is not mounted (.cs/private $(cs_private_state "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}")). Mount it, then retry."
     _queue_convert_legacy "$qdir"
     local sub="${1:-list}"
     case "$sub" in

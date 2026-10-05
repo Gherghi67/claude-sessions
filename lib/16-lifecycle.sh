@@ -16,6 +16,10 @@ _cs_run_cleanup() {
     fi
     [ -z "${_cs_run_gate:-}" ] || rm -f "$_cs_run_gate" 2>/dev/null || true
     release_session_lock "$_cs_run_meta" || true
+    # An encrypted session's vault, mounted by this open's pre-open hook, is
+    # detached when the last process holding it ends: here too, so a signal
+    # or an error mid-launch does not leave it mounted.
+    if declare -F _detach_opened_vault >/dev/null; then _detach_opened_vault || true; fi
     if declare -F reset_tab_title >/dev/null; then reset_tab_title || true; fi
     _cs_run_active=0
 }

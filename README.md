@@ -72,7 +72,8 @@ No git repo required. No project structure needed. Just a name for what you're w
 - **Cross-session search** - `ags -search <query>` greps across all sessions' narrative, memory, and README
 - **Health checks** - `ags -doctor` reports status of Keychain backend, hook registration, shadow-ref freshness, auto-memory writability, status line registration, Claude Code settings audit (hooks/MCPs/permissions/env vars counts), cumulative token usage for the current project, whether the cs and cs-update mods ran, and an authority section listing every hook that injects into the model's context together with the switch that turns each one off
 - **Usage attribution** - `ags -usage` shows which sessions are consuming the 5-hour and weekly rate-limit windows: per-session input/output token sums (deduplicated by API request, cache-read excluded), anchored at the true reset boundaries when the ags status line is active. `ags -usage <name>` breaks one session down per conversation with a lifetime column. Both views fold in every subagent and workflow-agent transcript beneath a conversation, however deep Claude Code nests them, while the model column stays the conversation's own. A `READS>350L` column counts Read tool results over 350 lines as `untargeted/all ~tokens`: a read is targeted when the model's own Read call carried an offset or a limit, so a bare read the harness capped at its line limit still counts as untargeted, and the token figure is the untargeted characters at four per token, the share a size gate could have intercepted. Subagent transcripts keep the file text in the tool result itself rather than in a file record; the column counts both shapes. Reads made through Bash (`cat`, `head`) carry no file shape in the transcript and are not counted.
-- **Session tags** - `ags -tag add api` tags the current session in its README frontmatter (`tags: [api]` — the same field Obsidian indexes); `ags -list --tag api` filters the listing, and the picker filters live with `#api` in the search query (combining with fuzzy name search). Tags show in the preview card.
+- **Session tags** - `ags -tag add api` tags the current session in its README frontmatter (`tags: [api]` — the same field Obsidian indexes); `ags -list --tag api` filters the listing, and the picker filters live with `#api` in the search query (combining with fuzzy name search). Tags show in the preview card. The `encrypted` tag marks a session that keeps its notes in an encrypted volume (`.cs/memory` linked into the mount): the picker draws a lock beside its name and a `vault` line in the preview reading `locked` or `unlocked`, from whether `.cs/memory` resolves, and the status line draws the same lock after the session name. The lock is a Nerd Font glyph, drawn once this machine has confirmed its font (the status line's `ags -statusline caps` answer); until then both show `enc`.
+- **Encrypted sessions** - A session can keep its notes, Claude Code's config and agent-sessions' own files on an encrypted volume by linking four names under `.cs/` into its mountpoint: `memory`, `plans`, `claude-config` (Claude Code's config dir for the session, so transcripts and prompt history never reach `~/.claude`) and `private` (agent-sessions' own log, mail, queue, traces, rotation handoffs and checkpoints). While the volume is not mounted, agent-sessions refuses to open the session and writes nothing in plaintext in its place. With the volume mounted inside the session, `ags -rm` refuses to remove the session, and neither `/finish` nor `ags -uninstall` deletes through it. On macOS, `ags -encrypt <name>` sets this up for an existing session. Every open then asks for the password, and the volume unmounts when the session's Claude Code exits. Some files stay outside the vault; the docs list them. See [docs/session-layout.md](docs/session-layout.md#encrypted-sessions).
 - **Session archive** - `ags -archive <name>` drops a tracked `.cs/archived` marker that hides a finished session from the picker, `ags -list`, and `ags -search` (the marker syncs with the session, so archiving on one machine archives everywhere). `ags -list --archived` lists only archived sessions, `ags -search <q> --include-archived` searches them, and the picker toggles visibility with `A` (archived rows render dimmed) and archives or unarchives the selected session with `a`. Opening an archived session unarchives it.
 
 ### Unattended and multi-agent work
@@ -86,7 +87,7 @@ No git repo required. No project structure needed. Just a name for what you're w
 
 ### Terminal experience
 
-- **Status line** - `ags-statusline` renders Claude Code's status bar as one line of rounded capsules on the terminal's own background: an identity capsule (the Claude mark, pulsing until your next prompt; the session name; a queued-task count and an unread cross-session mail count when there are any, both read from `.cs/local/`; the git branch with ahead/behind and dirty counts; the model and its effort level in Claude Code's own `/effort` colours), a context capsule whose pie icon fills with the band, and a quota capsule: the 5-hour window always, the weekly window beside it from 50%, and on a Fable session its model window in a capsule of its own from 50% (each gaining a reset countdown as it fills) — branch, model, context and limits all from the status-line JSON plus one bounded git call every five seconds, with no transcript parsing; a warm render forks nothing but the interpreter and one `jq`, so it survives a loaded machine. Colour is state: amber ink past a warn threshold, a red capsule at crit. The rounded capsule ends are the one glyph that needs a patched font, so the installer shows a sample once and asks whether they render; until a machine has answered, the capsules have square ends (`ags -statusline caps on|off|ask` revisits it). On a Fable session it folds Fable's own weekly window, which is model-scoped and so appears in none of the rate limits Claude Code puts on stdin, into the same rule; that one figure is fetched out of band into a machine-global cache, never from the render, and only while Fable is the active model — using Claude Code's own credential, which ags reads and never writes. It writes two machine-local files as it renders — `.cs/local/context-pct` and `.cs/local/limits` — which is what makes the liveness heartbeat and `ags -usage`'s reset anchoring work. Session cost is available as an opt-in segment. Enable or remove it any time with `ags -statusline enable|disable`; choose and order segments with `CS_STATUSLINE_SEGMENTS`. ags auto-detects the terminal's light/dark theme (override with `CS_TERM_THEME`; `ags -detect-theme` shows the result). A companion `ags-subagent-statusline` styles the agent-panel rows so each running subagent shows the model driving it, its own context %, and elapsed time; `ags -statusline enable` registers both (Claude Code reads the registration at startup, so restart it to see them). See [docs/statusline.md](docs/statusline.md)
+- **Status line** - `ags-statusline` renders Claude Code's status bar as one line of rounded capsules on the terminal's own background: an identity capsule (the Claude mark, a darker coral (red in a 16-colour terminal) from the end of a turn until your next prompt; the session name; a queued-task count and an unread cross-session mail count when there are any, both read from `.cs/local/`; the git branch with ahead/behind and dirty counts; the model and its effort level in Claude Code's own `/effort` colours), a context capsule whose pie icon fills with the band, and a quota capsule: the 5-hour window always, the weekly window beside it from 50%, and on a Fable session its model window in a capsule of its own from 50% (each gaining a reset countdown as it fills) — branch, model, context and limits all from the status-line JSON plus one bounded git call every five seconds, with no transcript parsing; a warm render forks nothing but the interpreter and one `jq`, so it survives a loaded machine. Colour is state: amber ink past a warn threshold, a red capsule at crit. The rounded capsule ends are the one glyph that needs a patched font, so the installer shows a sample once and asks whether they render; until a machine has answered, the capsules have square ends (`ags -statusline caps on|off|ask` revisits it). On a Fable session it folds Fable's own weekly window, which is model-scoped and so appears in none of the rate limits Claude Code puts on stdin, into the same rule; that one figure is fetched out of band into a machine-global cache, never from the render, and only while Fable is the active model — using Claude Code's own credential, which ags reads and never writes. It writes two machine-local files as it renders — `.cs/local/context-pct` and `.cs/local/limits` — which is what makes the liveness heartbeat and `ags -usage`'s reset anchoring work. Session cost is available as an opt-in segment. Enable or remove it any time with `ags -statusline enable|disable`; choose and order segments with `CS_STATUSLINE_SEGMENTS`. ags auto-detects the terminal's light/dark theme (override with `CS_TERM_THEME`; `ags -detect-theme` shows the result). A companion `ags-subagent-statusline` styles the agent-panel rows so each running subagent shows the model driving it, its own context %, and elapsed time; `ags -statusline enable` registers both (Claude Code reads the registration at startup, so restart it to see them). See [docs/statusline.md](docs/statusline.md)
 
   ![ags-statusline: the identity and context capsules, amber ink past a warn threshold, a red capsule at crit](assets/screenshot2.png)
 - **iTerm2 awareness** - inside iTerm2 the session color tints the tab (native escapes, reset on exit), and with iTerm2 shell integration installed a finished turn bounces the dock until your next prompt. `CS_NO_ITERM2=1` disables the bounce; `ags -doctor` reports the integration surface.
@@ -193,6 +194,7 @@ ags <base>@<feature>         # Create/resume a parallel feature worktree off <ba
 ags <base> -features         # List a base's feature worktrees and their merge readiness
 ags <base> -finish <feature> # Open <base> and run /finish for <feature> (integrate, then retire the worktree)
 ags -adopt <name>            # Adopt current directory as a session
+ags -adopt --worktrees        # Register Claude Code's .claude/worktrees/* here as <repo>.<worktree> sessions
 ags -whoami                  # Show the current actor (for shared, multi-person sessions)
 ags -who                     # Show who contributed to shared memory/narrative (git history)
 ags -search <query>          # Search across all sessions
@@ -211,13 +213,14 @@ ags -tag add|rm <tag>        # Tag the current session (also: `ags <name> -tag .
 ags -list --tag <tag>        # List only sessions carrying a tag
 ags -archive <name>...       # Archive sessions (hidden from listings; --force if live)
 ags -unarchive <name>...     # Restore archived sessions
+ags -encrypt <name>          # Move a closed session into an encrypted vault (macOS)
 ags -list --archived         # List only archived sessions
 ags -statusline enable|disable  # Enable or remove the ags status line + agent-panel rows
 ags -detect-theme            # Show the detected terminal light/dark theme
 ags -list, -ls               # List all sessions
 ags -live                    # List sessions running right now on this machine, with what each is doing
 ags -status "<text>"         # Set this session's status (also: `ags -status`, `ags -status --clear`)
-ags -remove, -rm <name>...   # Remove sessions (each asks its own confirm; --force skips the confirm and the live lock)
+ags -remove, -rm <name>...   # Remove sessions (each asks its own confirm, naming files agent-sessions did not create; --force skips the confirm and the live lock, and refuses a session holding such files unless --delete-files is added)
 ags -update [--check|--force]   # Update to latest (--check: check only; --force: reinstall)
 ags -uninstall               # Uninstall agent-sessions
 ags -help, -h                # Show help message (cs is a compatibility alias)
@@ -238,7 +241,7 @@ For `ags .`, the current directory decides, not any history: it opens a session 
 - **Worktree nesting** — `base@feature` sessions attach under their base with tree connectors as indented `@feature` rows, inherit the base's time section, and the preview names the lineage both ways (`worktree @feature · off base` on the feature, a `features` list on the base). Deleting a worktree row unregisters it from the base repo, like `ags -rm`
 - **Merge readiness** with `m` — replaces the panes with a base's feature worktrees and why each can or cannot merge (commits ahead, dirty tree, untracked files, a live lock, already merged). The detail pane names what finishing will do, down to the merge commit it will land. Enter leaves the picker and runs `ags <base> -finish <feature>`, which opens the base with `/finish <feature>` armed: it integrates the feature and then retires the worktree once its conversation is closed. The picker never merges or removes anything itself
 - **Symbol legend** — `● activity  ■ live  * marked  archived` sits in the table header's free width on wide terminals
-- **Fuzzy search** with `/` — matches characters in order with highlighting; Enter commits the filter. Add `#tag` anywhere in the query to AND-filter by tag (e.g. `#api backend`); combine multiple `#tag`s or mix with a fuzzy name remainder
+- **Fuzzy search** with `/` — matches characters in order with highlighting; Enter commits the filter. A session whose name misses stays in the list when the `## Objective` line of its README matches, after the name matches and without highlighting, so an adopted project named by its folder turns up when you search for the work. Add `#tag` anywhere in the query to AND-filter by tag (e.g. `#api backend`); combine multiple `#tag`s or mix with a fuzzy name remainder
 - **Time-based sections** — sessions grouped under Today, Yesterday, This Week, This Month, Older when sorted by date (the default view)
 - **Action menu** with `Enter` — a popup over the list, one action per row with its shortcut key; `j`/`k` move, `Enter` runs the highlighted action, `Esc` closes. Each letter shortcut (`d`, `r`, `s`, `a`, `R`) also works straight from the list, without opening the menu
 - **Preview & To-Do panes** — appear beside the list on wide landscape terminals (≥120 cols), or stacked below it (list, then details, then notes) on any window at least 40 cols by 26 rows; toggle with `p`
@@ -287,7 +290,10 @@ This converts the current directory into an agent-sessions session in place:
 - Symlinks `~/.claude-sessions/<name>` to the current directory
 - Writes the session protocol to `CLAUDE.local.md` (machine-local, gitignored, regenerated per machine); a project's existing `CLAUDE.md` is never touched
 - Initializes a git repo if one doesn't exist (preserves existing repos)
-- Since the working directory doesn't change, `claude --continue` picks up previous conversations
+- Since the working directory doesn't change, the first `ags <name>` finds Claude Code's own transcripts for the folder and offers to resume the newest one; a project with none starts a new conversation without asking
+- Seeds the session Objective from the newest conversation's first prompt, with the rules the prompt hook applies to a live session (no slash commands, nothing under 8 characters, clipped at 100), so the picker shows what the project is about from the first open; a project with no conversation keeps the placeholder for the first prompt you type
+
+Working in worktrees Claude Code made with `claude --worktree`? Run `ags -adopt --worktrees` inside the repo and each `.claude/worktrees/<name>/` that holds a conversation becomes a session named `<repo>.<name>`, bound to that conversation and with its first prompt as the Objective. The checkout is a live branch, so agent-sessions hides its files through the repo's `.git/info/exclude` and commits nothing and leaves the tracked `CLAUDE.md` alone. agent-sessions skips a worktree with no conversation, one whose branch tracks `CLAUDE.local.md` or `.claude/settings.local.json`, and anything there that is not a worktree of this repo. A re-run adopts only what is new, finishes an adoption that stopped part-way, and prunes the links of worktrees Claude Code has since deleted, and `--dry-run` prints the plan and writes nothing.
 
 ## Session Structure
 
@@ -300,7 +306,7 @@ This converts the current directory into an agent-sessions session in place:
 │   ├── plans/              # Claude Code plans
 │   ├── timeline.jsonl      # Session event log (starts, ends, checkpoints)
 │   ├── checkpoints/        # Labelled narrative snapshots (/checkpoint)
-│   ├── handoffs/           # Conversation rotation handoffs (rotate skill)
+│   ├── handoffs/           # Conversation rotation handoffs (rotate skill); .cs/private/handoffs in an encrypted session
 │   ├── brief.md            # Brief from ags -spawn --brief / the feature skill, when spawned with one
 │   └── local/              # Machine-local state + session.log audit trail (gitignored)
 ├── .claude/
@@ -371,8 +377,10 @@ exist.
 Each worktree is a full agent-sessions session (own conversation, color, crash
 recovery, task list) that shares the base session's secrets.
 
-agent-sessions never commits for you: retirement refuses dirty checkouts and tells you
-what to commit, and creating a feature from a base with uncommitted changes asks
+agent-sessions never commits for you: retirement refuses dirty checkouts and untracked
+files and tells you what to commit. Git-ignored files in the worktree (build
+output, local secrets) are not checked and go with it, so keep anything you
+need that git ignores outside a feature worktree. Creating a feature from a base with uncommitted changes asks
 before branching from the last commit (interactive sessions) or refuses
 (scripts). Abandon a feature with `ags -rm myproj@fix-auth`. Repos that
 gitignore `.cs/` get a per-worktree `.cs/` whose records are fused into the
@@ -443,7 +451,8 @@ goes: it deletes a `consumed`, `discarded` or `superseded` handoff older than 30
 days by its `created:` date, unless it is among the 10 newest in the store. That
 pass is part of the skill's instructions rather than something the provider runtime runs — the agent-sessions launcher never deletes a handoff — so the directory only shrinks when you rotate. Git
 history keeps every file the pass removes. The conversation keeps running;
-nothing has ended yet.
+nothing has ended yet. An [encrypted session](docs/session-layout.md#encrypted-sessions)
+keeps the handoff and the marker in `.cs/private/` and commits neither.
 
 Because the handoff is committed and becomes the next conversation's opening
 prompt, the skill redacts credentials, identifying data and sensitive
@@ -554,7 +563,7 @@ README objective instead.
 `/wrap`, `/sweep`, `/summary` and `/checkpoint` are skills, so Claude Code runs them by name and can start them itself (the wrap-up prompt does).
 
 - `/wrap` — The canonical end-of-session command: runs the `/sweep` memory pass, then the `/summary` narrative, then `ags -narrative rotate`
-- `/sweep` — Distill the session into durable auto-memory entries (strict bar) and sweep findings into the narrative; checks its `MEMORY.md` rewrites for removed links and the byte budget
+- `/sweep` — Distill the session into durable auto-memory entries (strict bar) and sweep findings into the narrative; checks its `MEMORY.md` rewrites for removed links and the byte budget; when a check could enforce a rule an entry states, adds a task to build that check and keeps the entry
 - `/summary` — Generate a narrative summary of the current session
 - `/checkpoint <label>` — Save a labelled state snapshot (narrative, changes, git HEAD)
 - `/queue <task>` — Add a task to this session's walk-away queue through `ags -queue add`, even mid-turn; `/queue` alone lists the queue and offers to start pending tasks (from the `cs` mod)

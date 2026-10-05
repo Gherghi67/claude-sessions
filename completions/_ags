@@ -114,6 +114,7 @@ _ags() {
         '-tag:Manage session tags'
         '-archive:Archive a session (hidden from listings)'
         '-unarchive:Restore an archived session'
+        '-encrypt:Move a closed session into an encrypted vault (macOS)'
         '-status:Set or show this session'\''s advertised status'
         '-search:Search across all sessions'
         '-statusline:Manage the cs status line (enable|disable|caps)'
@@ -129,7 +130,7 @@ _ags() {
     )
 
     # Determine context
-    local in_secrets=false in_update=false in_checkpoint=false in_queue=false in_narrative=false in_tag=false in_list=false has_session=false after_remove=false after_archive=false expect_engine=false
+    local in_secrets=false in_update=false in_checkpoint=false in_queue=false in_narrative=false in_tag=false in_list=false has_session=false after_remove=false after_archive=false expect_engine=false after_adopt=false
     local i word
 
     for ((i=2; i < CURRENT; i++)); do
@@ -148,10 +149,11 @@ _ags() {
             -tag) in_tag=true; in_secrets=false; in_update=false; in_checkpoint=false; in_queue=false; in_list=false; in_narrative=false ;;
             -list|-ls) in_list=true; in_secrets=false; in_update=false; in_checkpoint=false; in_queue=false; in_tag=false; in_narrative=false ;;
             -remove|-rm) after_remove=true ;;
-            -archive|-unarchive) after_archive=true ;;
+            -adopt) after_adopt=true ;;
+            -archive|-unarchive|-encrypt) after_archive=true ;;
             -*) ;;
             *)
-                if ! $in_secrets && ! $after_remove && ! $in_update && ! $in_checkpoint && ! $in_queue && ! $in_narrative && ! $in_tag && ! $in_list && ! $after_archive; then
+                if ! $in_secrets && ! $after_remove && ! $after_adopt && ! $in_update && ! $in_checkpoint && ! $in_queue && ! $in_narrative && ! $in_tag && ! $in_list && ! $after_archive; then
                     has_session=true
                 fi
                 ;;
@@ -183,10 +185,35 @@ _ags() {
         return
     fi
 
+    # Context: after -adopt. A new session name completes nothing; the options
+    # choose the engine, or register Claude Code's worktrees instead.
+    if $after_adopt; then
+        if [[ "$words[CURRENT]" == -* ]]; then
+            local -a adopt_opts
+            if [[ "$words[CURRENT-1]" == "--worktrees" ]]; then
+                adopt_opts=('--dry-run:Print what would be adopted and write nothing')
+            else
+                adopt_opts=('--worktrees:Register .claude/worktrees/* here as <repo>.<worktree> sessions'
+                    '--engine:Choose Claude Code or Codex CLI for this session')
+            fi
+            _describe 'option' adopt_opts
+        fi
+        return
+    fi
+
     # Context: after -remove/-rm. These verbs take several names, so every
     # positional past the flag completes, not just the first.
     if $after_remove; then
-        _cs_sessions
+        if [[ "$words[CURRENT]" == -* ]]; then
+            local -a rm_opts
+            rm_opts=(
+                '--force:Skip the confirm and the live lock'
+                '--delete-files:With --force, also remove files cs did not create'
+            )
+            _describe 'option' rm_opts
+        else
+            _cs_sessions
+        fi
         return
     fi
 

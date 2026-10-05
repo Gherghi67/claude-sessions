@@ -3,8 +3,7 @@
 
 _claude_encode_path() {
     local p="$1"
-    p="${p//\//-}"
-    p="${p//./-}"
+    p="${p//[^A-Za-z0-9]/-}"
     printf '%s' "$p"
 }
 
@@ -26,12 +25,17 @@ _alloc_random_color() {
 # macOS mktemp returns /var/folders/... which is a symlink to
 # /private/var/folders/... and claude realpaths cwd before encoding.
 # CS_TRANSCRIPTS_DIR overrides the base for tests (also used by doctor).
+# A session with .cs/claude-config runs Claude Code on that config dir, so its
+# transcripts live in the dir's projects/. A dangling link (vault locked) still
+# names that base: the shared one never holds the session's conversations.
 _claude_project_dir() {
     local cwd="$1"
-    local resolved
+    local resolved base="${CS_TRANSCRIPTS_DIR:-$HOME/.claude/projects}"
     resolved=$( (cd "$cwd" 2>/dev/null && pwd -P) || printf '%s' "$cwd" )
-    printf '%s/%s\n' "${CS_TRANSCRIPTS_DIR:-$HOME/.claude/projects}" \
-        "$(_claude_encode_path "$resolved")"
+    if [ -e "$cwd/.cs/claude-config" ] || [ -L "$cwd/.cs/claude-config" ]; then
+        base="$cwd/.cs/claude-config/projects"
+    fi
+    printf '%s/%s\n' "$base" "$(_claude_encode_path "$resolved")"
 }
 
 # Discover claude's most-recently-modified transcript UUID under a project
@@ -119,6 +123,9 @@ _discover_session_uuid_in() {
 # Stage a replacement UUID and launch it under the core controller.
 # SessionStart promotes the candidate only after verifying this run and lead.
 # Failure preserves the prior binding and the pending transition for inspection.
+# With no recorded conversation to leave (the first open after ags -adopt, a
+# clone without its machine-local state) this is the session's first
+# conversation, not a rotation: no CS_FRESH_REBIND.
 _exec_fresh_rebind() {
     local session_dir="$1"
     local reason="${2:-declined-resume}"
@@ -129,18 +136,32 @@ _exec_fresh_rebind() {
     # adopted session lives at the project's own path, so its basename is the
     # project directory and `--name` would open (and create) a different
     # session. cs_launch_session exported the resolved name before handing
-    # the launch to the engine; the basename is only the fallback for a
-    # session that lives under the sessions root, where the two agree.
-    local session_name="${CS_SESSION_NAME:-$(basename "$session_dir")}"
+    # the launch to the engine, and the open records it in local state; the
+    # basename is only the fallback for a session that lives under the
+    # sessions root, where the two agree.
+    local session_name="${CS_SESSION_NAME:-}"
+    [ -n "$session_name" ] || session_name=$(_read_local_state "$session_dir/.cs/local/state" session_name)
+    [ -n "$session_name" ] || session_name=$(basename "$session_dir")
+    # Only a UUID names a conversation to leave; the launch ignores anything
+    # else in the slot, and so does the rotation record.
     local old_uuid
     old_uuid=$(cs_binding_read "$session_dir" claude) || return 1
+    _is_uuid "$old_uuid" || old_uuid=""
     local new_uuid
     new_uuid=$(_alloc_uuid)
-    cs_binding_stage "$session_dir" claude "$old_uuid" "$new_uuid" "$reason" "$handoff" || return 1
+    # An encrypted session's handoff name is its topic, so it stays out of the
+    # plaintext pending record and timeline, and out of claude's argv (visible
+    # to ps and in a terminal title); the SessionStart hook names the file from
+    # the vault.
+    local public_handoff="$handoff"
+    if [ -L "$session_dir/.cs/private" ] || [ -e "$session_dir/.cs/private" ]; then
+        public_handoff=""
+    fi
+    cs_binding_stage "$session_dir" claude "$old_uuid" "$new_uuid" "$reason" "$public_handoff" || return 1
     local session_color
     session_color=$(_read_local_state "$session_dir/.cs/local/state" claude_session_color)
     local color_arg=""
-    [ -n "$session_color" ] && color_arg="/color $session_color"
+    _is_session_color "$session_color" && color_arg="/color $session_color"
     # A handoff kick makes the fresh conversation act on its first turn instead of
     # waiting for the user. It stays a bare trigger on purpose: the SessionStart
     # hook (which the same r answer arms via the pending-handoff marker) is the
@@ -150,10 +171,14 @@ _exec_fresh_rebind() {
     # color re-apply; all four ride claude's single prompt slot, so a displaced
     # color returns on the next open.
     local handoff_arg=""
-    [ -n "$handoff" ] && handoff_arg="Continue from the pending rotation handoff: read .cs/handoffs/$handoff first."
+    if [ -n "$public_handoff" ]; then
+        handoff_arg="Continue from the pending rotation handoff: read .cs/handoffs/$handoff first."
+    elif [ -n "$handoff" ]; then
+        handoff_arg="Continue from the pending rotation handoff."
+    fi
     local launch_prompt="${merge_kick:-${spawn_kick:-${handoff_arg:-$color_arg}}}"
     export CS_CLAUDE_SESSION_ID="$new_uuid"
-    export CS_FRESH_REBIND=1
+    [ -z "$old_uuid" ] || export CS_FRESH_REBIND=1
     # shellcheck disable=SC2086
     cs_run_child $CLAUDE_CODE_BIN --name "$session_name" --session-id "$new_uuid" ${launch_prompt:+"$launch_prompt"}
 }

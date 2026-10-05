@@ -106,7 +106,7 @@ while IFS= read -r f; do
         # "typed". Patterns mirror handoff_arg (lib/42-claude-state.sh) and spawn_kick
         # (lib/75-launch.sh); test_cs_launch_kicks_dropped pins both wordings.
         | ($src_machine
-           or ($t | test("^Continue from the pending rotation handoff: read \\.cs/handoffs/"))
+           or ($t | test("^Continue from the pending rotation handoff(: read \\.cs/handoffs/|\\.$)"))
            or ($t | test("^Spawned by .* Send results with: (?:ags|cs) -msg "))
            or ($t | test("^Your (brief is \\.cs/brief\\.md: read it first\\.|walk-away queue is armed with [0-9]+ task)"))) as $machine
         | (if ($t | length) == 0 then "not-typed"

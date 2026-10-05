@@ -197,6 +197,20 @@ test_search_finds_in_narrative_archive() {
     assert_output_contains "$output" ".cs/narrative-archive/alice/2026-07-01-0123abcd.md" "Should show the archive path" || return 1
 }
 
+# An encrypted session archives its narrative behind .cs/private.
+test_search_finds_in_a_private_narrative_archive() {
+    create_test_session "project-gamma"
+    mkdir -p "$CS_SESSIONS_ROOT/project-gamma/.cs/private/narrative-archive/alice"
+    printf '## 2026-06-30 — sealed\nrotated needle-sealed\n' \
+        > "$CS_SESSIONS_ROOT/project-gamma/.cs/private/narrative-archive/alice/2026-07-01-0123abcd.md"
+
+    local output
+    output=$("$CS_BIN" -search "needle-sealed" 2>&1)
+
+    assert_output_contains "$output" ".cs/private/narrative-archive/alice/2026-07-01-0123abcd.md" "Should show the private archive path" || return 1
+}
+
 run_test test_search_finds_in_narrative_archive
+run_test test_search_finds_in_a_private_narrative_archive
 
 report_results

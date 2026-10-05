@@ -163,12 +163,17 @@ test_adopted_project_first_launch_starts_fresh_without_asking() {
         return 1
     fi
     assert_output_contains "$output" "(+ new)" "the card calls the first conversation new" || return 1
-    new=$(awk '/^claude_session_id:/ { print $2; exit }' "$proj/.cs/local/state")
-    [ -n "$new" ] || { echo "  FAIL: the first launch bound no conversation"; return 1; }
+    # Staged for SessionStart to commit; the stub runs that hook only for a
+    # rebind, and a first conversation is not one.
+    new=$(jq -r '.candidate_id // empty' "$proj/.cs/local/pending-binding-claude.json" 2>/dev/null)
+    [ -n "$new" ] || { echo "  FAIL: the first launch staged no conversation"; return 1; }
     assert_output_contains "$output" "STUB_ARGS: --name rot-adopted --session-id $new" \
         "the first launch starts the conversation it then records" || return 1
-    ev=$(jq -c 'select(.event == "rotated")' "$proj/.cs/timeline.jsonl" 2>/dev/null | tail -1)
-    assert_output_contains "$ev" '"reason":"fresh"' "recorded as a fresh start, not a declined resume" || return 1
+    # A first conversation rotates from nothing, so the timeline records none.
+    if jq -e 'select(.event == "rotated")' "$proj/.cs/timeline.jsonl" >/dev/null 2>&1; then
+        echo "  FAIL: the first conversation rotates from nothing: $(grep rotated "$proj/.cs/timeline.jsonl")"
+        return 1
+    fi
 }
 
 # An explicit --fresh starts a new conversation. The card said "resuming" and
@@ -1009,6 +1014,106 @@ test_offer_leaves_a_local_handoff_unlabelled() {
         "a handoff this checkout wrote carries no foreign label" || return 1
 }
 
+# An encrypted session keeps its log behind .cs/private; the provenance check
+# reads it there, so the session's own handoff is not labelled foreign.
+test_offer_reads_provenance_from_the_private_log() {
+    _rot_session "rot-private"
+    local dir="$CS_SESSIONS_ROOT/rot-private"
+    _seed_handoff "$dir" "2026-07-16-mine.md" "unconsumed"
+    mkdir -p "$TEST_TMPDIR/vault/private"
+    mv "$dir/.cs/local/session.log" "$TEST_TMPDIR/vault/private/session.log"
+    # An encrypted session keeps its handoffs in the vault too.
+    mv "$dir/.cs/handoffs" "$TEST_TMPDIR/vault/private/handoffs"
+    ln -s "$TEST_TMPDIR/vault/private" "$dir/.cs/private"
+    printf '%s - Session started (source: startup, ID: %s)\n' \
+        "2026-07-16 10:00:00" "$UUID_A" >> "$TEST_TMPDIR/vault/private/session.log"
+    local output
+    output=$("$CS_BIN" rot-private <<< "n" 2>&1) || true
+    assert_output_contains "$output" "Rotation handoff pending" \
+        "the offer is still made for a local handoff" || return 1
+    assert_output_not_contains "$output" "another checkout" \
+        "a handoff this checkout wrote carries no foreign label" || return 1
+}
+
+# A session with no recorded conversation (the first open after ags -adopt, a
+# clone whose .cs/local did not travel) has nothing to resume, so it starts a
+# new conversation without asking. A pending handoff is still a choice the user
+# makes: the offer is made with the rows that apply, and resume is not one.
+_rot_unbound_session() {  # name
+    _rot_session "$1"
+    local state="$CS_SESSIONS_ROOT/$1/.cs/local/state"
+    awk 'index($0, "claude_session_id:") != 1' "$state" > "$state.tmp" && mv "$state.tmp" "$state"
+}
+
+test_unbound_session_with_a_pending_handoff_still_offers_it() {
+    _rot_unbound_session "rot-unbound-offer"
+    local dir="$CS_SESSIONS_ROOT/rot-unbound-offer"
+    _seed_handoff "$dir" "2026-07-16-test.md" "unconsumed"
+    local output
+    output=$("$CS_BIN" rot-unbound-offer <<< "n" 2>&1) || true
+    assert_output_contains "$output" "Rotation handoff pending: 2026-07-16-test.md" "the handoff is offered" || return 1
+    assert_output_not_contains "$output" "Continue previous conversation?" "nothing to resume, so no resume question" || return 1
+    local rows
+    rows=$(printf '%s\n' "$output" | grep -E '^    [yrnd]  ')
+    assert_eq "    r  from handoff    fresh conversation that picks up the handoff
+    n  fresh           fresh conversation; the handoff waits for later · default
+    d  discard         retire the handoff, then start fresh" "$rows" "the rows that apply, fresh as the default" || return 1
+    assert_file_contains "$dir/.cs/handoffs/2026-07-16-test.md" "status: unconsumed" "n leaves the handoff for later" || return 1
+    [ ! -f "$dir/.cs/local/pending-handoff" ] || { echo "  FAIL: n must not arm the marker"; return 1; }
+    assert_output_contains "$output" "STUB_ARGS: " "launch continues" || return 1
+    assert_output_contains "$output" "\-\-session-id " "a new conversation starts" || return 1
+    assert_output_not_contains "$output" "\-\-resume" "nothing to resume" || return 1
+}
+
+test_unbound_session_r_answer_arms_the_handoff() {
+    _rot_unbound_session "rot-unbound-r"
+    local dir="$CS_SESSIONS_ROOT/rot-unbound-r"
+    _seed_handoff "$dir" "2026-07-16-test.md" "unconsumed"
+    local output
+    output=$("$CS_BIN" rot-unbound-r <<< "r" 2>&1) || true
+    assert_eq "2026-07-16-test.md" "$(cat "$dir/.cs/local/pending-handoff" 2>/dev/null | tr -d '[:space:]')" \
+        "r arms the marker for the SessionStart hook" || return 1
+    local new
+    # Staged for SessionStart to commit (see the adopted first launch above).
+    new=$(jq -r '.candidate_id // empty' "$dir/.cs/local/pending-binding-claude.json" 2>/dev/null)
+    [ -n "$new" ] || { echo "  FAIL: r must stage the conversation it starts"; return 1; }
+    assert_output_contains "$output" "--session-id $new" "the new conversation is the recorded one" || return 1
+    assert_output_contains "$output" "Continue from the pending rotation handoff" "the handoff kick rides the launch" || return 1
+    if grep -q '"event":"rotated"' "$dir/.cs/timeline.jsonl" 2>/dev/null; then
+        echo "  FAIL: a first conversation rotates from nothing"; return 1
+    fi
+}
+
+# An armed marker on an unbound session: the default answer starts fresh and
+# disarms it, so the SessionStart hook never marks the handoff consumed under
+# a conversation nobody chose for it.
+test_unbound_session_default_answer_disarms_an_armed_marker() {
+    _rot_unbound_session "rot-unbound-armed"
+    local dir="$CS_SESSIONS_ROOT/rot-unbound-armed"
+    _seed_handoff "$dir" "2026-07-16-test.md" "unconsumed"
+    printf '2026-07-16-test.md\n' > "$dir/.cs/local/pending-handoff"
+    local output
+    output=$("$CS_BIN" rot-unbound-armed <<< "" 2>&1) || true
+    [ ! -f "$dir/.cs/local/pending-handoff" ] || { echo "  FAIL: the default answer must disarm the marker"; return 1; }
+    assert_file_contains "$dir/.cs/handoffs/2026-07-16-test.md" "status: unconsumed" "the handoff waits for later" || return 1
+    assert_output_contains "$output" "\-\-session-id " "a new conversation starts" || return 1
+}
+
+# A spawned launch is unattended: an unbound session starts fresh and leaves
+# the handoff pending rather than parking the window on the offer.
+test_unbound_spawned_launch_starts_fresh_and_keeps_the_handoff() {
+    _rot_unbound_session "rot-unbound-spawn"
+    local dir="$CS_SESSIONS_ROOT/rot-unbound-spawn"
+    _seed_handoff "$dir" "2026-07-16-test.md" "unconsumed"
+    mkdir -p "$CS_SESSIONS_ROOT/.spawn"
+    printf 'spawner\ndo the thing\n' > "$CS_SESSIONS_ROOT/.spawn/rot-unbound-spawn.seed"
+    local output
+    output=$("$CS_BIN" rot-unbound-spawn </dev/null 2>&1) || true
+    assert_output_not_contains "$output" "Rotation handoff pending" "an unattended launch asks nothing" || return 1
+    assert_output_contains "$output" "\-\-session-id " "a new conversation starts" || return 1
+    assert_file_contains "$dir/.cs/handoffs/2026-07-16-test.md" "status: unconsumed" "the handoff waits for an attended open" || return 1
+}
+
 test_discard_answer_dismisses_pending_handoff() {
     _rot_session "rot-d"
     local dir="$CS_SESSIONS_ROOT/rot-d"
@@ -1149,11 +1254,16 @@ run_test test_consumed_handoffs_do_not_trigger_prompt
 run_test test_newest_of_multiple_handoffs_wins
 run_test test_offer_labels_a_handoff_from_another_checkout
 run_test test_offer_leaves_a_local_handoff_unlabelled
+run_test test_offer_reads_provenance_from_the_private_log
 run_test test_a_logged_command_naming_a_uuid_is_not_provenance
 run_test test_a_trailing_carriage_return_still_reads_as_local
 run_test test_armed_marker_outranks_a_later_sorting_orphan
 run_test test_stale_marker_falls_back_to_the_scan
 run_test test_launcher_marker_with_a_path_falls_back_to_the_scan
+run_test test_unbound_session_with_a_pending_handoff_still_offers_it
+run_test test_unbound_session_r_answer_arms_the_handoff
+run_test test_unbound_session_default_answer_disarms_an_armed_marker
+run_test test_unbound_spawned_launch_starts_fresh_and_keeps_the_handoff
 run_test test_discard_answer_dismisses_pending_handoff
 run_test test_discard_flip_spares_a_body_quote
 
@@ -2437,5 +2547,144 @@ run_test test_ctx_warning_yields_to_nudge_at_high_ctx
 run_test test_ctx_warning_threshold_override
 run_test test_ctx_warning_escalates_to_nudge_same_conversation
 run_test test_ctx_warning_band_edges
+
+# ============================================================================
+# Encrypted session: handoffs and the marker live behind .cs/private
+# ============================================================================
+
+# Turn a launched session into an encrypted one: its .cs/private links into a
+# vault dir, and the plaintext session.log the first launch wrote moves in
+# (the open refuses one left beside the link).
+_encrypt_session() {  # session_dir -> prints the vault's private dir
+    local vault
+    vault="$TEST_TMPDIR/vault-${1##*/}/private"
+    mkdir -p "$vault/handoffs"
+    [ -f "$1/.cs/local/session.log" ] && mv "$1/.cs/local/session.log" "$vault/session.log"
+    ln -s "$vault" "$1/.cs/private"
+    echo "$vault"
+}
+
+test_encrypted_rotate_answer_arms_the_private_marker() {
+    _rot_session "rot-enc-r"
+    local dir="$CS_SESSIONS_ROOT/rot-enc-r" vault
+    vault=$(_encrypt_session "$dir")
+    _seed_handoff "$vault/.." "2026-07-16-secret-topic.md" "unconsumed"
+    mv "$vault/../.cs/handoffs/2026-07-16-secret-topic.md" "$vault/handoffs/" 2>/dev/null
+    local output
+    output=$("$CS_BIN" rot-enc-r <<< "r" 2>&1) || true
+    assert_output_contains "$output" "Rotation handoff pending: 2026-07-16-secret-topic.md" \
+        "the vault's handoff is offered" || return 1
+    # r arms the marker in the vault, and the SessionStart the stub runs for a
+    # rebind consumes it there: the hook reads the marker only from the vault,
+    # so a consumed handoff is the marker having been armed inside it.
+    assert_file_contains "$vault/handoffs/2026-07-16-secret-topic.md" "status: consumed" \
+        "the marker armed inside the vault rotated into the handoff" || return 1
+    assert_file_contains "$vault/handoffs/2026-07-16-secret-topic.md" \
+        "consumed_by: $(awk '/^claude_session_id:/ { print $2; exit }' "$dir/.cs/local/state")" \
+        "the new conversation consumed it" || return 1
+    [ ! -e "$dir/.cs/local/pending-handoff" ] \
+        || { echo "  FAIL: an encrypted session's marker must not land in .cs/local"; return 1; }
+    local args
+    args=$(grep '^STUB_ARGS: ' <<< "$output")
+    assert_output_contains "$args" "Continue from the pending rotation handoff" \
+        "the launch still kicks the fresh conversation" || return 1
+    assert_output_not_contains "$args" "secret-topic" \
+        "claude's argv never carries the handoff's name" || return 1
+    local ev
+    ev=$(jq -c 'select(.event == "rotated")' "$dir/.cs/timeline.jsonl" 2>/dev/null | tail -1)
+    assert_output_contains "$ev" '"reason":"handoff"' "the rotation is still recorded" || return 1
+    assert_output_not_contains "$ev" "secret-topic" \
+        "the plaintext timeline never carries the handoff's name" || return 1
+}
+
+test_encrypted_discard_retires_the_vault_handoff() {
+    _rot_session "rot-enc-d"
+    local dir="$CS_SESSIONS_ROOT/rot-enc-d" vault
+    vault=$(_encrypt_session "$dir")
+    _seed_handoff "$vault/.." "2026-07-16-test.md" "unconsumed"
+    mv "$vault/../.cs/handoffs/2026-07-16-test.md" "$vault/handoffs/" 2>/dev/null
+    "$CS_BIN" rot-enc-d <<< "d" >/dev/null 2>&1 || true
+    assert_file_contains "$vault/handoffs/2026-07-16-test.md" "status: discarded" \
+        "d flips the vault's handoff" || return 1
+}
+
+test_encrypted_session_with_plaintext_handoffs_refuses_to_open() {
+    _rot_session "rot-enc-leftover"
+    local dir="$CS_SESSIONS_ROOT/rot-enc-leftover"
+    _encrypt_session "$dir" >/dev/null
+    _seed_handoff "$dir" "2026-07-16-test.md" "consumed"
+    local output
+    output=$("$CS_BIN" rot-enc-leftover <<< "y" 2>&1) || true
+    assert_output_contains "$output" ".cs/handoffs" "the refusal names the plaintext handoffs" || return 1
+    assert_output_not_contains "$output" "STUB_ARGS" "claude is not launched" || return 1
+}
+
+test_encrypted_pending_handoff_is_consumed_in_the_vault() {
+    _rot_hook_session "rot-enc-consume"
+    local vault="$TEST_TMPDIR/vault-consume/private"
+    mkdir -p "$vault"
+    ln -s "$vault" "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/private"
+    _seed_handoff "$TEST_TMPDIR/vault-consume/stage" "2026-07-16-test.md" "unconsumed"
+    mkdir -p "$vault/handoffs"
+    mv "$TEST_TMPDIR/vault-consume/stage/.cs/handoffs/2026-07-16-test.md" "$vault/handoffs/"
+    printf '%s\n' "2026-07-16-test.md" > "$vault/pending-handoff"
+    printf 'claude_session_id: %s\n' "$UUID_B" > "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/state"
+    local out
+    out=$(_start_hook "$UUID_B") || return 1
+    assert_output_contains "$out" "Conversation Rotation" "rotation preamble injected" || return 1
+    assert_output_contains "$out" ".cs/private/handoffs/2026-07-16-test.md" \
+        "the preamble names the vault's handoff" || return 1
+    assert_file_contains "$vault/handoffs/2026-07-16-test.md" "consumed_by: $UUID_B" \
+        "the vault's handoff is consumed" || return 1
+    [ ! -f "$vault/pending-handoff" ] || { echo "  FAIL: the vault's marker must be removed"; return 1; }
+}
+
+test_encrypted_clear_rotation_keeps_the_handoff_name_out_of_the_timeline() {
+    _rot_hook_session "rot-enc-label"
+    local vault="$TEST_TMPDIR/vault-label/private"
+    mkdir -p "$vault"
+    ln -s "$vault" "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/private"
+    _seed_handoff "$TEST_TMPDIR/vault-label/stage" "2026-07-16-secret-topic.md" "unconsumed"
+    mkdir -p "$vault/handoffs"
+    mv "$TEST_TMPDIR/vault-label/stage/.cs/handoffs/2026-07-16-secret-topic.md" "$vault/handoffs/"
+    printf '%s\n' "2026-07-16-secret-topic.md" > "$vault/pending-handoff"
+    printf 'claude_session_id: %s\n' "$UUID_A" > "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/state"
+    _start_hook "$UUID_B" clear >/dev/null || return 1
+    local ev
+    ev=$(_timeline | jq -c 'select(.event == "rotated")' 2>/dev/null | tail -1)
+    assert_output_contains "$ev" '"reason":"handoff"' "clear rotation is a handoff" || return 1
+    assert_output_not_contains "$ev" "secret-topic" \
+        "the plaintext timeline never carries the handoff's name" || return 1
+}
+
+test_locked_encrypted_session_consumes_no_handoff() {
+    _rot_hook_session "rot-enc-locked"
+    ln -s "$TEST_TMPDIR/unmounted/private" "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/private"
+    _seed_handoff "${CS_SESSION_DIR:-${CLAUDE_SESSION_DIR:-}}" "2026-07-16-test.md" "unconsumed"
+    printf '%s\n' "2026-07-16-test.md" > "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/pending-handoff"
+    printf 'claude_session_id: %s\n' "$UUID_B" > "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/state"
+    local out
+    out=$(_start_hook "$UUID_B") || return 1
+    assert_output_not_contains "$out" "Conversation Rotation" \
+        "a locked session starts no rotation" || return 1
+    assert_file_contains "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/handoffs/2026-07-16-test.md" "status: unconsumed" \
+        "nothing outside the vault is consumed" || return 1
+}
+
+test_rotate_skill_routes_an_encrypted_session_into_the_vault() {
+    local skill="$SCRIPT_DIR/../skills/rotate/SKILL.md"
+    assert_file_contains "$skill" '\.cs/private/handoffs/' \
+        "the skill writes an encrypted session's handoff into the vault" || return 1
+    assert_file_contains "$skill" '\.cs/private/pending-handoff' \
+        "the skill arms an encrypted session's marker in the vault" || return 1
+}
+
+run_test test_encrypted_rotate_answer_arms_the_private_marker
+run_test test_encrypted_discard_retires_the_vault_handoff
+run_test test_encrypted_session_with_plaintext_handoffs_refuses_to_open
+run_test test_encrypted_pending_handoff_is_consumed_in_the_vault
+run_test test_encrypted_clear_rotation_keeps_the_handoff_name_out_of_the_timeline
+run_test test_locked_encrypted_session_consumes_no_handoff
+run_test test_rotate_skill_routes_an_encrypted_session_into_the_vault
 
 report_results

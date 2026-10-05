@@ -2,7 +2,7 @@
 # ABOUTME: Assembles bin/ags from its lib/*.sh fragments; edit lib/, never bin/ags.
 # ABOUTME: Concatenates the numbered fragments in order, dropping each fragment's
 # ABOUTME: own ABOUTME header so the built bin/ags keeps only lib/00-header.sh's.
-# ABOUTME: Also writes hooks/cs-shared.sh from lib/02-shared.sh, the code hooks share with cs,
+# ABOUTME: Also writes hooks/cs-shared.sh (and the sweep skill's copy) from lib/02-shared.sh, the code hooks share with cs,
 # ABOUTME: and install.sh from install.sh.in with lib/01-manifests.sh spliced in at its marker.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -88,6 +88,12 @@ chmod 755 "$tmp"
 mv "$tmp" "$SHARED_OUT"
 trap - EXIT
 echo "Built $SHARED_OUT from $SHARED_SRC"
+# The sweep skill's MEMORY.md guard reads the same rules, and it ships inside
+# the skill to every engine, where no hooks directory sits beside it. (A
+# partial checkout, as some installer tests build, has no skill to copy into.)
+if [ -d skills/sweep/scripts ]; then
+    cp "$SHARED_OUT" skills/sweep/scripts/cs-shared.sh
+fi
 
 # install.sh runs from a curl pipe on a web install and can source nothing, so
 # the manifests it shares with cs (which hooks, commands, skills and mods to

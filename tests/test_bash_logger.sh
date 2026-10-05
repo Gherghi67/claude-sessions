@@ -104,6 +104,30 @@ test_never_blocks_exit_zero() {
     fi
 }
 
+# An encrypted session keeps its ags files behind .cs/private, a link into its
+# vault; the command log is the file that most needs it.
+test_logs_into_the_private_dir() {
+    mkdir -p "$TEST_TMPDIR/vault/private"
+    ln -s "$TEST_TMPDIR/vault/private" "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/private"
+    send_bash "echo private words"
+    grep -q "BASH: echo private words" "$TEST_TMPDIR/vault/private/session.log" \
+        || { echo "  FAIL: command not in the private log"; return 1; }
+    assert_file_not_exists "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/session.log" \
+        "nothing may be logged in plaintext" || return 1
+}
+
+# A locked vault leaves the link dangling: the command still runs, and the log
+# line is dropped rather than written anywhere else.
+test_locked_private_dir_logs_nothing() {
+    ln -s "$TEST_TMPDIR/unmounted/private" "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/private"
+    local rc=0
+    send_bash "echo private words" || rc=$?
+    assert_eq "0" "$rc" "the hook must not block the command" || return 1
+    assert_file_not_exists "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/session.log" \
+        "nothing may be logged in plaintext" || return 1
+    assert_not_exists "$TEST_TMPDIR/unmounted" "nothing may be created where the vault mounts" || return 1
+}
+
 # ============================================================================
 
 echo ""
@@ -118,5 +142,7 @@ run_test test_skips_outside_session
 run_test test_truncates_long_commands
 run_test test_multiple_commands_appended
 run_test test_never_blocks_exit_zero
+run_test test_logs_into_the_private_dir
+run_test test_locked_private_dir_logs_nothing
 
 report_results

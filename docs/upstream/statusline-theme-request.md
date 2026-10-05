@@ -27,7 +27,7 @@ iTerm2:
 
 | Signal | Fails when |
 |---|---|
-| OSC 11 from the render | Unusable: the status line runs once a second into the tty Claude Code owns, so it would open a second reader racing Claude Code's stdin — it can swallow the reply or the user's keystrokes |
+| OSC 11 from the render | Unusable: the status line runs into the tty Claude Code owns, so it would open a second reader racing Claude Code's stdin — it can swallow the reply or the user's keystrokes |
 | macOS `AppleInterfaceStyle` | Reports the *system*, not the terminal. A terminal with a fixed dark scheme under a light macOS renders light |
 | `COLORFGBG` | Inside tmux it is the server's start-time snapshot; observed reading `15;0` (dark) under a cream terminal |
 | tmux `#{client_theme}` | Empty unless the terminal reports its theme; iTerm2 does not |

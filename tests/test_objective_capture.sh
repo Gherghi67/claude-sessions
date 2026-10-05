@@ -154,6 +154,25 @@ test_graceful_malformed_input() {
     assert_eq "$PLACEHOLDER" "$(objective_line)" "malformed stdin leaves the placeholder intact"
 }
 
+# An encrypted session keeps its objective in the vault (the narrative), so the
+# plaintext README never gains the prompt: unlocked or locked alike.
+test_skips_encrypted_session() {
+    make_readme
+    mkdir -p "$TEST_TMPDIR/vault/private"
+    ln -s "$TEST_TMPDIR/vault/private" "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/private"
+    run_hook "migrate the ledger into the new vault layout" >/dev/null
+    assert_eq "$PLACEHOLDER" "$(objective_line)" \
+        "an encrypted session's prompt stays out of the plaintext README"
+}
+
+test_skips_locked_encrypted_session() {
+    make_readme
+    ln -s "$TEST_TMPDIR/vault/missing" "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/private"
+    run_hook "migrate the ledger into the new vault layout" >/dev/null
+    assert_eq "$PLACEHOLDER" "$(objective_line)" \
+        "a locked encrypted session's prompt stays out of the plaintext README"
+}
+
 run_test test_captures_first_substantive_prompt
 run_test test_skips_slash_command
 run_test test_skips_bang_passthrough
@@ -166,5 +185,7 @@ run_test test_arbitrary_chars_are_data_not_code
 run_test test_opt_out_via_disable_env
 run_test test_noop_outside_cs_session
 run_test test_graceful_malformed_input
+run_test test_skips_encrypted_session
+run_test test_skips_locked_encrypted_session
 
 report_results

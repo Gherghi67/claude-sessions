@@ -77,8 +77,13 @@ main() {
             return 0
             ;;
         -adopt)
-            shift
-            adopt_session "$@"
+            if [ "${2:-}" = "--worktrees" ]; then
+                shift 2
+                adopt_worktrees "$@"
+            else
+                shift
+                adopt_session "$@"
+            fi
             return 0
             ;;
         -complete) # hidden: shell-completion plumbing, not a user-facing command
@@ -182,6 +187,11 @@ main() {
         -tag)
             shift
             run_tag "$@"
+            return $?
+            ;;
+        -encrypt)
+            shift
+            run_encrypt "$@"
             return $?
             ;;
         -archive)
@@ -444,11 +454,23 @@ main() {
         if [ ! -e "$base_dir" ]; then
             error "Base session not found: $wt_base"
         fi
+        # Checked on the base first: a worktree of an encrypted session is
+        # refused whether its vault is mounted or not, and a worktree's own
+        # copies of its links dangle with nothing to mount, so "mount it"
+        # would mislead.
+        _refuse_worktree_of_encrypted_base "$wt_base" "$base_dir"
         if [ ! -d "$session_dir" ]; then
             is_new="true"
+            # The base's vault links are refused above, so this catches a
+            # regular file where one belongs, or plaintext ags files beside a
+            # .cs/private made by hand.
+            _refuse_unmounted_meta "$wt_base" "$base_dir"
             confirm_clean_worktree_base "$base_dir" "$wt_base"
             session_dir=$(create_worktree_session "$base_dir" "$wt_base" "$wt_task" "$engine")
         else
+            # A worktree whose own checkout carries vault links refuses by
+            # name while they dangle; a base's links never get this far.
+            _refuse_unmounted_meta "$session_name" "$session_dir"
             # The backfill a base session gets from migrate_session, which the
             # worktree path below deliberately skips: an older worktree, or one
             # from a clone, still arrives at the umask's mode.

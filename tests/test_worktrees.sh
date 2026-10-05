@@ -76,6 +76,96 @@ test_worktree_create_tracked_mode() {
     [ "$base_uuid" != "$wt_uuid" ] || { echo "  FAIL: worktree must get its own UUID"; return 1; }
 }
 
+# A worktree of an encrypted session carries the same vault links; opening it
+# while the vault is locked refuses by name, as the base does, before
+# anything writes through the dangling links.
+test_worktree_open_refuses_a_locked_vault() {
+    create_test_session_with_git "myproj" > /dev/null
+    cs_launch "myproj@fix-auth"
+    local wt="$CS_SESSIONS_ROOT/myproj@fix-auth" out rc=0
+    rm -rf "$wt/.cs/memory"
+    ln -s "$TEST_TMPDIR/unmounted/memory" "$wt/.cs/memory"
+    _make_launch_sentinel
+    out=$("$CS_BIN" "myproj@fix-auth" < /dev/null 2>&1) || rc=$?
+    assert_eq "1" "$rc" "the open refuses" || return 1
+    assert_eq "Error: myproj@fix-auth: .cs/memory points at $TEST_TMPDIR/unmounted/memory, which is missing (encrypted storage not mounted?). Mount it, then reopen." \
+        "$out" "names the dangling link" || return 1
+    assert_not_exists "$TEST_TMPDIR/launched" "claude never starts" || return 1
+}
+
+# Creating a worktree checks out the base's committed vault links; with the
+# vault locked they dangle, and setup would mkdir through them halfway
+# through registering the worktree. Refuse before git sees anything, and
+# refuse the encrypted base outright, since mounting it would only lead there.
+test_worktree_create_refuses_a_locked_base_vault() {
+    local base_dir out rc=0
+    base_dir=$(create_test_session_with_git "myproj")
+    rm -rf "$base_dir/.cs/memory"
+    ln -s "$TEST_TMPDIR/unmounted/memory" "$base_dir/.cs/memory"
+    git -C "$base_dir" add -A .cs/memory
+    git -C "$base_dir" -c user.email=t@example.com -c user.name=t commit -qm "vault link"
+    out=$("$CS_BIN" "myproj@fix-auth" < /dev/null 2>&1) || rc=$?
+    assert_eq "1" "$rc" "the create refuses" || return 1
+    assert_eq "Error: myproj: .cs/memory links into encrypted storage, and feature worktrees of an encrypted session are not supported yet." \
+        "$out" "refuses the encrypted base instead of asking to mount it" || return 1
+    assert_not_exists "$CS_SESSIONS_ROOT/myproj@fix-auth" "no worktree on refusal" || return 1
+    assert_eq "" "$(git -C "$base_dir" branch --list cs/fix-auth)" "no task branch on refusal" || return 1
+}
+
+# ags -encrypt links the four names relative to .cs/ ("vault-mnt/<name>"), so a
+# checkout of them resolves inside the worktree, where nothing is mounted; and
+# a base whose .cs/ is ignored gives the worktree plaintext files of its own.
+# Until worktrees of an encrypted session are designed, both refuse by name.
+_encrypt_base_links() {  # base_dir; links shaped as ags -encrypt writes them, vault mounted
+    local base="$1" sub
+    rm -rf "$base/.cs/memory"
+    for sub in memory plans claude-config private; do
+        mkdir -p "$base/.cs/vault-mnt/$sub"
+        ln -s "vault-mnt/$sub" "$base/.cs/$sub"
+    done
+    echo sealed > "$base/.cs/vault-mnt/memory/narrative.md"
+}
+
+test_worktree_create_refuses_an_encrypted_base() {
+    local base_dir out rc=0
+    base_dir=$(create_test_session_with_git "myproj")
+    _encrypt_base_links "$base_dir"
+    git -C "$base_dir" add -A .cs
+    git -C "$base_dir" -c user.email=t@example.com -c user.name=t commit -qm "vault links"
+    _make_launch_sentinel
+    out=$("$CS_BIN" "myproj@fix-auth" < /dev/null 2>&1) || rc=$?
+    assert_eq "1" "$rc" "the create refuses" || return 1
+    assert_eq "Error: myproj: .cs/memory links into encrypted storage, and feature worktrees of an encrypted session are not supported yet." \
+        "$out" "names the base's vault link" || return 1
+    assert_not_exists "$CS_SESSIONS_ROOT/myproj@fix-auth" "no worktree on refusal" || return 1
+    assert_eq "" "$(git -C "$base_dir" branch --list cs/fix-auth)" "no task branch on refusal" || return 1
+    assert_not_exists "$TEST_TMPDIR/launched" "claude never starts" || return 1
+}
+
+test_worktree_create_refuses_an_encrypted_base_with_untracked_links() {
+    local base_dir out rc=0
+    base_dir=$(create_test_session_with_git "myproj")
+    _encrypt_base_links "$base_dir"
+    out=$("$CS_BIN" "myproj@fix-auth" < /dev/null 2>&1) || rc=$?
+    assert_eq "1" "$rc" "the create refuses" || return 1
+    assert_eq "Error: myproj: .cs/memory links into encrypted storage, and feature worktrees of an encrypted session are not supported yet." \
+        "$out" "names the base's vault link" || return 1
+    assert_not_exists "$CS_SESSIONS_ROOT/myproj@fix-auth" "no worktree on refusal" || return 1
+}
+
+test_worktree_open_refuses_once_its_base_is_encrypted() {
+    local base_dir out rc=0
+    base_dir=$(create_test_session_with_git "myproj")
+    cs_launch "myproj@fix-auth"
+    _encrypt_base_links "$base_dir"
+    _make_launch_sentinel
+    out=$("$CS_BIN" "myproj@fix-auth" < /dev/null 2>&1) || rc=$?
+    assert_eq "1" "$rc" "the open refuses" || return 1
+    assert_eq "Error: myproj: .cs/memory links into encrypted storage, and feature worktrees of an encrypted session are not supported yet." \
+        "$out" "names the base's vault link" || return 1
+    assert_not_exists "$TEST_TMPDIR/launched" "claude never starts" || return 1
+}
+
 test_worktree_create_refuses_dirty_base() {
     local base_dir
     base_dir=$(create_test_session_with_git "myproj")
@@ -355,6 +445,39 @@ test_retire_refuses_dirty_worktree() {
     output=$("$CS_BIN" "myproj" -retire-feature "fix-auth" "$sha" 2>&1 || true)
     assert_output_contains "$output" "uncommitted" "dirty worktree refused" || return 1
     assert_dir "$wt" "worktree preserved on refusal" || return 1
+}
+
+# git worktree remove --force recurses into a mount, so a volume mounted inside
+# the feature worktree would lose what it holds.
+test_retire_refuses_a_volume_mounted_inside_the_worktree() {
+    local wt sha stub="$TEST_TMPDIR/retire-mount" output status=0
+    create_test_session_with_git "myproj" >/dev/null
+    cs_launch "myproj@fix-auth"
+    wt="$CS_SESSIONS_ROOT/myproj@fix-auth"
+    sha=$(land_feature myproj fix-auth) || { echo "  FAIL: integrate fixture"; return 1; }
+    mkdir -p "$wt/.cs/vault-mnt"
+    echo sealed > "$wt/.cs/vault-mnt/notes.md"
+    _stub_mount_table "$stub" "/dev/disk9s1 on $wt/.cs/vault-mnt (apfs, local, nodev, nosuid, journaled)" || return 1
+    output=$(PATH="$stub:$PATH" "$CS_BIN" "myproj" -retire-feature "fix-auth" "$sha" 2>&1) || status=$?
+    assert_eq "1" "$status" "retirement refuses" || return 1
+    assert_eq "Error: The feature is landed, but its worktree has a volume mounted inside it at $wt/.cs/vault-mnt, and removing the worktree would delete what the volume holds. Unmount it, then run /finish fix-auth here again." \
+        "$output" "names the mount" || return 1
+    assert_file_exists "$wt/.cs/vault-mnt/notes.md" "the volume's contents survive" || return 1
+}
+
+test_retire_refuses_when_the_mount_table_cannot_be_read() {
+    local wt sha d="$TEST_TMPDIR/retire-mount-broken" output status=0
+    create_test_session_with_git "myproj" >/dev/null
+    cs_launch "myproj@fix-auth"
+    wt="$CS_SESSIONS_ROOT/myproj@fix-auth"
+    sha=$(land_feature myproj fix-auth) || { echo "  FAIL: integrate fixture"; return 1; }
+    _stub_mount_unreadable "$d" || return 1
+    output=$(PATH="$d:$PATH" "$CS_BIN" "myproj" -retire-feature "fix-auth" "$sha" 2>&1) || status=$?
+    assert_eq "1" "$status" "retirement refuses" || return 1
+    # The stub's own stderr line comes first; the refusal is the last line.
+    assert_eq "Error: ags could not read the mount table, so it cannot tell whether a volume is mounted inside $wt; refusing to remove the worktree." \
+        "$(printf '%s\n' "$output" | tail -n 1)" "says why" || return 1
+    assert_dir "$wt" "worktree preserved" || return 1
 }
 
 test_retire_refuses_a_live_feature_session_and_says_what_to_do() {
@@ -695,6 +818,11 @@ run_test test_worktree_name_rejects_bad_task_half
 run_test test_plain_names_still_work
 run_test test_worktree_create_tracked_mode
 run_test test_worktree_create_refuses_dirty_base
+run_test test_worktree_open_refuses_a_locked_vault
+run_test test_worktree_create_refuses_a_locked_base_vault
+run_test test_worktree_create_refuses_an_encrypted_base
+run_test test_worktree_create_refuses_an_encrypted_base_with_untracked_links
+run_test test_worktree_open_refuses_once_its_base_is_encrypted
 run_test test_worktree_create_reuses_existing_branch
 run_test test_worktree_create_ignored_mode_bootstraps_cs
 run_test test_ignored_mode_worktree_starts_with_nothing_untracked
@@ -710,6 +838,8 @@ run_test test_launch_enables_function_hooks_unless_opted_out
 run_test test_retire_after_integrate_removes_worktree_and_branch
 run_test test_retire_refuses_dirty_worktree
 run_test test_retire_refuses_a_live_feature_session_and_says_what_to_do
+run_test test_retire_refuses_a_volume_mounted_inside_the_worktree
+run_test test_retire_refuses_when_the_mount_table_cannot_be_read
 run_test test_retire_from_live_base_session_succeeds
 run_test test_retire_from_inside_the_feature_session_refuses
 run_test test_retire_foreign_live_base_lock_still_refuses
@@ -1860,6 +1990,29 @@ test_finish_warns_when_it_displaces_a_spawn_kick() {
 }
 
 run_test test_finish_warns_when_it_displaces_a_spawn_kick
+
+# A worktree open runs no migrate_session, so Phase 8 never binds a transcript
+# for it. With the recorded id gone and a conversation on disk, the open offers
+# that conversation rather than starting a new one over it.
+test_worktree_without_its_recorded_id_binds_the_folders_conversation() {
+    create_test_session_with_git "myproj" > /dev/null
+    cs_launch "myproj@fix-auth"
+    local wt="$CS_SESSIONS_ROOT/myproj@fix-auth" state uuid="55555555-5555-4555-8555-555555555555"
+    state="$wt/.cs/local/state"
+    awk 'index($0, "claude_session_id:") != 1' "$state" > "$state.tmp" && mv "$state.tmp" "$state"
+    local proj
+    proj="$CS_TRANSCRIPTS_DIR/$(_encode_cwd_for_claude_test "$wt")"
+    mkdir -p "$proj"
+    printf '{"type":"user","sessionId":"%s"}\n' "$uuid" > "$proj/$uuid.jsonl"
+    local output
+    output=$(CS_ASSUME_TTY=1 "$CS_BIN" "myproj@fix-auth" <<< "" 2>&1 || true)
+    assert_output_contains "$output" "Bound claude_session_id in .cs/local/state to $uuid" "the open binds the transcript it found" || return 1
+    assert_output_contains "$output" "Continue previous conversation?" "a real conversation is offered" || return 1
+    assert_output_contains "$output" "--resume $uuid" "the default answer resumes it" || return 1
+    assert_eq "$uuid" "$(awk '/^claude_session_id:/ { print $2; exit }' "$state")" "the binding is recorded" || return 1
+}
+
+run_test test_worktree_without_its_recorded_id_binds_the_folders_conversation
 
 test_finish_yields_to_an_explicit_rotation_choice() {
     # r is the user explicitly choosing the rotation handoff at the prompt;

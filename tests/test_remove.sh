@@ -156,6 +156,242 @@ test_remove_force_skips_the_prompt() {
     [ ! -d "$CS_SESSIONS_ROOT/n2" ] || { echo "  FAIL: --force did not remove the session"; return 1; }
 }
 
+test_remove_force_refuses_when_session_holds_files_cs_did_not_create() {
+    local dir
+    dir=$(create_test_session f1)
+    mkdir "$dir/journal.sparsebundle"
+    echo keep > "$dir/start"
+    local out rc=0
+    out=$("$CS_BIN" -rm f1 --force </dev/null 2>&1) || rc=$?
+    [ "$rc" -ne 0 ] || { echo "  FAIL: --force removed a session holding foreign files"; return 1; }
+    assert_output_contains "$out" "journal.sparsebundle, start" "refusal names the foreign entries" || return 1
+    assert_output_contains "$out" "--delete-files" "refusal names the override" || return 1
+    assert_dir "$dir/journal.sparsebundle" "foreign entry must survive the refusal" || return 1
+}
+
+test_remove_force_with_delete_files_removes_foreign_files() {
+    local dir
+    dir=$(create_test_session f2)
+    mkdir "$dir/journal.sparsebundle"
+    "$CS_BIN" -rm f2 --force --delete-files </dev/null >/dev/null 2>&1 || return 1
+    assert_not_exists "$dir" "session with foreign files should be gone" || return 1
+}
+
+test_remove_force_ignores_cs_owned_entries_and_ds_store() {
+    local dir
+    dir=$(create_test_session f3)
+    mkdir -p "$dir/.claude" "$dir/.git"
+    touch "$dir/.gitignore" "$dir/.gitattributes" "$dir/CLAUDE.local.md" "$dir/.DS_Store"
+    "$CS_BIN" -rm f3 --force </dev/null >/dev/null 2>&1 || return 1
+    assert_not_exists "$dir" "a session holding only cs-owned entries should still go under --force" || return 1
+}
+
+test_remove_confirm_lists_foreign_entries() {
+    local dir
+    dir=$(create_test_session f4)
+    touch "$dir/notes.txt"
+    local out
+    out=$(printf 'n\n' | CS_ASSUME_TTY=1 "$CS_BIN" -rm f4 2>&1) || return 1
+    assert_output_contains "$out" "Also deletes files ags did not create: notes.txt" "confirm lists the foreign entry" || return 1
+    assert_dir "$dir" "declined session must survive" || return 1
+}
+
+# An encrypted session mounts its vault inside the session directory by
+# convention; rm -rf would recurse into the mount and delete what the vault
+# holds, even under --force --delete-files. Unmounted, the links dangle and
+# removal goes ahead.
+_vaulted_session() {  # name; echoes the session dir
+    local dir
+    dir=$(create_test_session "$1")
+    mkdir -p "$dir/.cs/vault-mnt/memory"
+    echo sealed > "$dir/.cs/vault-mnt/memory/narrative.md"
+    rm -rf "$dir/.cs/memory"
+    ln -s "$dir/.cs/vault-mnt/memory" "$dir/.cs/memory"
+    echo "$dir"
+}
+
+test_remove_refuses_while_the_vault_is_mounted_inside() {
+    local dir out rc=0
+    dir=$(_vaulted_session v1)
+    out=$("$CS_BIN" -rm v1 --force --delete-files </dev/null 2>&1) || rc=$?
+    assert_eq "1" "$rc" "removal refuses" || return 1
+    assert_eq "Error: Session 'v1' has encrypted storage mounted inside it: .cs/memory points at $dir/.cs/vault-mnt/memory. Removing the session would delete what the vault holds; unmount it, then retry." \
+        "$out" "names the mounted link" || return 1
+    assert_file_exists "$dir/.cs/vault-mnt/memory/narrative.md" "the vault's contents survive" || return 1
+}
+
+test_remove_goes_ahead_once_the_vault_is_unmounted() {
+    local dir
+    dir=$(_vaulted_session v2)
+    rm -rf "$dir/.cs/vault-mnt/memory"
+    "$CS_BIN" -rm v2 --force --delete-files </dev/null >/dev/null 2>&1 || return 1
+    assert_not_exists "$dir" "an unmounted encrypted session is removed" || return 1
+}
+
+# An ags -encrypt that stops partway leaves its volume mounted at .cs/vault-mnt
+# before any vault link exists, so only the mount table shows it.
+_half_encrypted_session() {  # name; echoes the session dir
+    local dir
+    dir=$(create_test_session "$1")
+    mkdir -p "$dir/.cs/vault-mnt/memory"
+    echo sealed > "$dir/.cs/vault-mnt/memory/narrative.md"
+    echo "$dir"
+}
+
+test_remove_refuses_a_volume_mounted_inside_without_vault_links() {
+    local dir stub="$TEST_TMPDIR/mount-stub" out rc=0
+    dir=$(_half_encrypted_session h1)
+    _stub_mount_table "$stub" "/dev/disk3s5 on /System/Volumes/Data (apfs, local, journaled)" \
+        "/dev/disk9s1 on $dir/.cs/vault-mnt (apfs, local, nodev, nosuid, journaled, noowners, mounted by tester)" || return 1
+    out=$(PATH="$stub:$PATH" "$CS_BIN" -rm h1 --force --delete-files </dev/null 2>&1) || rc=$?
+    assert_eq "1" "$rc" "removal refuses" || return 1
+    assert_eq "Error: Session 'h1' has a volume mounted inside it at $dir/.cs/vault-mnt. Removing the session would delete what the volume holds; unmount it, then retry." \
+        "$out" "names the mount point" || return 1
+    assert_file_exists "$dir/.cs/vault-mnt/memory/narrative.md" "the volume's contents survive" || return 1
+}
+
+test_remove_reads_a_linux_mount_table() {
+    local dir stub="$TEST_TMPDIR/mount-stub" out rc=0
+    dir=$(_half_encrypted_session h2)
+    _stub_mount_table "$stub" "/dev/sda1 on / type ext4 (rw,relatime)" \
+        "/dev/loop9 on $dir/.cs/vault-mnt type ext4 (rw,relatime)" || return 1
+    out=$(PATH="$stub:$PATH" "$CS_BIN" -rm h2 --force --delete-files </dev/null 2>&1) || rc=$?
+    assert_eq "1" "$rc" "removal refuses" || return 1
+    assert_eq "Error: Session 'h2' has a volume mounted inside it at $dir/.cs/vault-mnt. Removing the session would delete what the volume holds; unmount it, then retry." \
+        "$out" "names the mount point without the filesystem type" || return 1
+    assert_file_exists "$dir/.cs/vault-mnt/memory/narrative.md" "the volume's contents survive" || return 1
+}
+
+# A sibling whose name extends this one's ("h3x" beside "h3") holds the mount:
+# a string-prefix match would refuse the wrong session.
+test_remove_ignores_a_volume_mounted_in_another_session() {
+    local dir other stub="$TEST_TMPDIR/mount-stub"
+    dir=$(create_test_session h3)
+    other=$(_half_encrypted_session h3x)
+    _stub_mount_table "$stub" "/dev/disk9s1 on $other/.cs/vault-mnt (apfs, local, nodev, nosuid, journaled)" || return 1
+    PATH="$stub:$PATH" "$CS_BIN" -rm h3 --force --delete-files </dev/null >/dev/null 2>&1 || return 1
+    assert_not_exists "$dir" "the session without a mount is removed" || return 1
+    assert_file_exists "$other/.cs/vault-mnt/memory/narrative.md" "the other session is untouched" || return 1
+}
+
+test_remove_refuses_when_the_mount_table_cannot_be_read() {
+    local dir d="$TEST_TMPDIR/mount-broken" out rc=0
+    dir=$(create_test_session h4)
+    _stub_mount_unreadable "$d" || return 1
+    out=$(PATH="$d:$PATH" "$CS_BIN" -rm h4 --force --delete-files </dev/null 2>&1) || rc=$?
+    assert_eq "1" "$rc" "removal refuses" || return 1
+    assert_output_contains "$out" "Error: ags -rm could not read the mount table, so it cannot tell whether a volume is mounted inside 'h4'; refusing to remove it." "says why" || return 1
+    assert_dir "$dir" "the session survives" || return 1
+}
+
+# Runs `ags -rm <args>` with a mount stub first on PATH and gives it 30 s, so a
+# parse that never ends fails the test instead of hanging the suite. The scan
+# runs in a command-substitution child of ags, so that child goes first. Prints
+# the output, then "rc=<status>" (124 for a run that had to be stopped).
+_rm_within_30s() {  # stub-dir args...
+    local stub="$1" out="$TEST_TMPDIR/rm-within.out" pid i=0 rc=0
+    shift
+    PATH="$stub:$PATH" "$CS_BIN" -rm "$@" </dev/null >"$out" 2>&1 &
+    pid=$!
+    while kill -0 "$pid" 2>/dev/null; do
+        if [ "$i" -ge 150 ]; then
+            pkill -9 -P "$pid" 2>/dev/null
+            kill -9 "$pid" 2>/dev/null
+            wait "$pid" 2>/dev/null
+            cat "$out"
+            echo "rc=124"
+            return 0
+        fi
+        sleep 0.2
+        i=$((i + 1))
+    done
+    wait "$pid" || rc=$?
+    cat "$out"
+    echo "rc=$rc"
+}
+
+# A mount source may itself hold " on " (an NFS export, an SMB share name).
+# Another session's line like that must not stall the scan.
+test_remove_reads_past_a_mount_source_holding_on() {
+    local dir other stub="$TEST_TMPDIR/mount-stub" out
+    dir=$(create_test_session h5)
+    other=$(_half_encrypted_session h5x)
+    _stub_mount_table "$stub" "host:/export on disk on $other/.cs/vault-mnt (nfs)" || return 1
+    out=$(_rm_within_30s "$stub" h5 --force --delete-files)
+    assert_eq "Removed session: h5
+rc=0" "$out" "removal finishes" || return 1
+    assert_not_exists "$dir" "the session without a mount is removed" || return 1
+}
+
+# In the last two lines the source ends in " on", so its " on" and the
+# separator share one space.
+test_remove_refuses_a_mount_whose_source_holds_on() {
+    local dir stub="$TEST_TMPDIR/mount-stub" out line
+    dir=$(_half_encrypted_session h6)
+    for line in "host:/export on disk on $dir/.cs/vault-mnt (nfs)" \
+        "host:/export on on $dir/.cs/vault-mnt (nfs)" \
+        "host:/export on on $dir/.cs/vault-mnt type nfs (rw)"; do
+        _stub_mount_table "$stub" "$line" || return 1
+        out=$(_rm_within_30s "$stub" h6 --force --delete-files)
+        assert_eq "Error: Session 'h6' has a volume mounted inside it at $dir/.cs/vault-mnt. Removing the session would delete what the volume holds; unmount it, then retry.
+rc=1" "$out" "names the mount point: $line" || return 1
+        assert_file_exists "$dir/.cs/vault-mnt/memory/narrative.md" "the volume's contents survive: $line" || return 1
+    done
+}
+
+# macOS never prints " type <fs>", so a path holding " type " (here in the
+# sessions root) is still the mount point, not a Linux line to cut short.
+test_remove_reads_a_macos_mount_point_holding_type() {
+    local root="$TEST_TMPDIR/project type archive" dir stub="$TEST_TMPDIR/mount-stub" out
+    mkdir -p "$root"
+    dir=$(CS_SESSIONS_ROOT="$root" _half_encrypted_session h7)
+    _stub_mount_table "$stub" "/dev/disk9s1 on $dir/.cs/vault-mnt (apfs, local, nodev, nosuid, journaled, noowners, mounted by tester)" || return 1
+    out=$(CS_SESSIONS_ROOT="$root" _rm_within_30s "$stub" h7 --force --delete-files)
+    assert_eq "Error: Session 'h7' has a volume mounted inside it at $dir/.cs/vault-mnt. Removing the session would delete what the volume holds; unmount it, then retry.
+rc=1" "$out" "names the mount point" || return 1
+    assert_file_exists "$dir/.cs/vault-mnt/memory/narrative.md" "the volume's contents survive" || return 1
+}
+
+# A worktree session beside a base repo, with one untracked and one
+# git-ignored file the user added. Echoes the worktree path.
+_worktree_with_user_files() {  # base-name
+    local base="$CS_SESSIONS_ROOT/$1" wt="$CS_SESSIONS_ROOT/$1@t"
+    create_test_session "$1" >/dev/null
+    printf '*.img\n.cs/local/\n' > "$base/.gitignore"
+    git -C "$base" init -q
+    git -C "$base" add CLAUDE.md .gitignore
+    git -C "$base" -c user.email=t@example.com -c user.name=t commit -qm seed
+    git -C "$base" worktree add -q "$wt" -b "cs/$1-t"
+    mkdir -p "$wt/.cs/local"
+    echo draft > "$wt/notes.txt"
+    echo secret > "$wt/journal.img"
+    echo "$wt"
+}
+
+test_remove_force_refuses_worktree_with_untracked_or_ignored_files() {
+    local wt out rc=0
+    wt=$(_worktree_with_user_files wf1)
+    out=$("$CS_BIN" -rm wf1@t --force </dev/null 2>&1) || rc=$?
+    [ "$rc" -ne 0 ] || { echo "  FAIL: --force removed a worktree holding untracked files"; return 1; }
+    assert_output_contains "$out" "journal.img, notes.txt" "refusal names the untracked and ignored files" || return 1
+    assert_file_exists "$wt/journal.img" "ignored file must survive the refusal" || return 1
+}
+
+test_remove_force_with_delete_files_removes_worktree() {
+    local wt
+    wt=$(_worktree_with_user_files wf2)
+    "$CS_BIN" -rm wf2@t --force --delete-files </dev/null >/dev/null 2>&1 || return 1
+    assert_not_exists "$wt" "worktree should be gone with --delete-files" || return 1
+}
+
+test_remove_worktree_confirm_lists_untracked_files() {
+    local wt out
+    wt=$(_worktree_with_user_files wf3)
+    out=$(printf 'n\n' | CS_ASSUME_TTY=1 "$CS_BIN" -rm wf3@t 2>&1) || return 1
+    assert_output_contains "$out" "Also deletes files git does not track: journal.img, notes.txt" "confirm lists untracked and ignored files" || return 1
+    assert_dir "$wt" "declined worktree must survive" || return 1
+}
+
 test_remove_force_on_adopted_removes_only_the_link() {
     local project_dir="$TEST_TMPDIR/adopted-project"
     mkdir -p "$project_dir"
@@ -179,6 +415,22 @@ run_test test_remove_no_name_errors
 run_test test_remove_unknown_name_fails_fast
 run_test test_remove_noninteractive_without_force_errors_loudly
 run_test test_remove_force_skips_the_prompt
+run_test test_remove_force_refuses_when_session_holds_files_cs_did_not_create
+run_test test_remove_force_with_delete_files_removes_foreign_files
+run_test test_remove_force_ignores_cs_owned_entries_and_ds_store
+run_test test_remove_confirm_lists_foreign_entries
+run_test test_remove_force_refuses_worktree_with_untracked_or_ignored_files
+run_test test_remove_force_with_delete_files_removes_worktree
+run_test test_remove_worktree_confirm_lists_untracked_files
 run_test test_remove_force_on_adopted_removes_only_the_link
+run_test test_remove_refuses_while_the_vault_is_mounted_inside
+run_test test_remove_goes_ahead_once_the_vault_is_unmounted
+run_test test_remove_refuses_a_volume_mounted_inside_without_vault_links
+run_test test_remove_reads_a_linux_mount_table
+run_test test_remove_ignores_a_volume_mounted_in_another_session
+run_test test_remove_refuses_when_the_mount_table_cannot_be_read
+run_test test_remove_reads_past_a_mount_source_holding_on
+run_test test_remove_refuses_a_mount_whose_source_holds_on
+run_test test_remove_reads_a_macos_mount_point_holding_type
 
 report_results

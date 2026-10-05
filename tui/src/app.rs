@@ -490,6 +490,12 @@ pub struct App {
     pub row_hit_spans: Vec<(u16, u16, usize)>,
     pub visible_sort_columns: Vec<SortColumn>,
     pub delete_countdown_start: Option<std::time::Instant>,
+    /// Lines the delete confirm shows for files beyond cs's own that the
+    /// removal would take, read when the confirm opens (never in render).
+    pub delete_warnings: Vec<String>,
+    /// Drawn beside a session tagged encrypted; resolved once at start from
+    /// the machine's font consent.
+    pub lock_marker: &'static str,
     /// Fuzzy match indices per session index (for highlighting matched chars in names).
     pub fuzzy_indices: HashMap<usize, Vec<usize>>,
     /// Worktree rows (`base@task`) currently attached under their base in
@@ -652,6 +658,8 @@ impl App {
             row_flashes: HashMap::new(),
             visible_sort_columns: Vec::new(),
             delete_countdown_start: None,
+            delete_warnings: Vec::new(),
+            lock_marker: session::lock_marker(),
             fuzzy_indices: HashMap::new(),
             attached_worktrees: HashSet::new(),
             revealed_secret: None,
@@ -919,8 +927,11 @@ impl App {
                 .filter(|&i| tag_ok(&self.sessions[i]) && visible(&self.sessions[i]))
                 .collect();
         } else {
-            // Fuzzy match and collect (index, score, matched_indices)
-            let mut matches: Vec<(usize, i32, Vec<usize>)> = self
+            // Fuzzy match the name, else the objective, and collect
+            // (index, name_hit, score, matched_indices). An objective hit
+            // carries no indices: fuzzy_match's indices address the string it
+            // matched, and the row draws the name.
+            let mut matches: Vec<(usize, bool, i32, Vec<usize>)> = self
                 .sessions
                 .iter()
                 .enumerate()
@@ -928,15 +939,19 @@ impl App {
                     if !tag_ok(s) || !visible(s) {
                         return None;
                     }
-                    fuzzy_match(query, &s.name).map(|(score, indices)| (i, score, indices))
+                    if let Some((score, indices)) = fuzzy_match(query, &s.name) {
+                        return Some((i, true, score, indices));
+                    }
+                    let objective = s.objective.as_deref()?;
+                    fuzzy_match(query, objective).map(|(score, _)| (i, false, score, Vec::new()))
                 })
                 .collect();
 
-            // Sort by score descending (best matches first)
-            matches.sort_by(|a, b| b.1.cmp(&a.1));
+            // Name hits first, then by score descending (best matches first)
+            matches.sort_by(|a, b| b.1.cmp(&a.1).then(b.2.cmp(&a.2)));
 
-            self.filtered = matches.iter().map(|(i, _, _)| *i).collect();
-            for (i, _, indices) in matches {
+            self.filtered = matches.iter().map(|(i, _, _, _)| *i).collect();
+            for (i, _, _, indices) in matches {
                 if !indices.is_empty() {
                     self.fuzzy_indices.insert(i, indices);
                 }
@@ -1187,8 +1202,16 @@ impl App {
                 if self.marked_sessions.is_empty() {
                     self.set_status("No sessions marked", StatusLevel::Info);
                 } else {
-                    self.delete_countdown_start = Some(std::time::Instant::now());
-                    self.mode = Mode::ConfirmBatchDelete;
+                    let mut names: Vec<String> = self.marked_sessions.iter().cloned().collect();
+                    names.sort();
+                    match self.unowned_warnings(&names) {
+                        Ok(warnings) => {
+                            self.delete_warnings = warnings;
+                            self.delete_countdown_start = Some(std::time::Instant::now());
+                            self.mode = Mode::ConfirmBatchDelete;
+                        }
+                        Err(e) => self.set_status(e, StatusLevel::Error),
+                    }
                 }
                 Action::None
             }
@@ -1572,9 +1595,15 @@ impl App {
                 // here only promises a deletion that will not happen.
                 if let Some(refusal) = self.locked_selection_refusal() {
                     self.set_status(refusal, StatusLevel::Error);
-                } else if self.selected_session().is_some() {
-                    self.mode = Mode::ConfirmDelete;
-                    self.delete_countdown_start = Some(std::time::Instant::now());
+                } else if let Some(name) = self.selected_session().map(|s| s.name.clone()) {
+                    match self.unowned_warnings(std::slice::from_ref(&name)) {
+                        Ok(warnings) => {
+                            self.delete_warnings = warnings;
+                            self.mode = Mode::ConfirmDelete;
+                            self.delete_countdown_start = Some(std::time::Instant::now());
+                        }
+                        Err(e) => self.set_status(e, StatusLevel::Error),
+                    }
                 }
                 Action::None
             }
@@ -2017,6 +2046,22 @@ impl App {
         ))
     }
 
+    /// The confirm lines for `names`: one per session holding files beyond
+    /// cs's own, prefixed with the session name when more than one is
+    /// being deleted. Errors when a listing fails, so the confirm never
+    /// opens on a list it could not read.
+    fn unowned_warnings(&self, names: &[String]) -> Result<Vec<String>, String> {
+        let mut lines = Vec::new();
+        for name in names {
+            let path = self.sessions_root.join(name);
+            let entries = session::unowned_entries(name, &path)?;
+            if let Some(warning) = entries.warning() {
+                lines.push(if names.len() > 1 { format!("{name}: {warning}") } else { warning });
+            }
+        }
+        Ok(lines)
+    }
+
     fn execute_delete(&mut self) {
         if let Some(refusal) = self.locked_selection_refusal() {
             self.set_status(refusal, StatusLevel::Error);
@@ -2046,6 +2091,7 @@ impl App {
         let mut deleted = 0;
         let mut errors = 0;
         let mut live: Vec<String> = Vec::new();
+        let mut reasons: Vec<String> = Vec::new();
         let names: Vec<String> = self.marked_sessions.iter().cloned().collect();
         for name in &names {
             // Resolved per name rather than from the selection: a batch mixes
@@ -2068,8 +2114,9 @@ impl App {
                     deleted += 1;
                     self.flash_row(name.clone(), FlashKind::Success);
                 }
-                Err(_) => {
+                Err(e) => {
                     errors += 1;
+                    reasons.push(e.to_string());
                     self.flash_row(name.clone(), FlashKind::Error);
                 }
             }
@@ -2078,16 +2125,15 @@ impl App {
         self.rescan_now();
         if errors == 0 {
             self.set_status(format!("Deleted {} sessions", deleted), StatusLevel::Success);
-        } else if live.is_empty() {
-            self.set_status(
-                format!("Deleted {}, {} failed", deleted, errors),
-                StatusLevel::Error,
-            );
         } else {
-            self.set_status(
-                format!("Deleted {}, {} failed — live: {}", deleted, errors, live.join(", ")),
-                StatusLevel::Error,
-            );
+            let mut text = format!("Deleted {}, {} failed", deleted, errors);
+            if !live.is_empty() {
+                text.push_str(&format!(" — live: {}", live.join(", ")));
+            }
+            if !reasons.is_empty() {
+                text.push_str(&format!(" — {}", reasons.join("; ")));
+            }
+            self.set_status(text, StatusLevel::Error);
         }
         self.mode = Mode::Normal;
         self.delete_countdown_start = None;
@@ -2115,6 +2161,20 @@ impl App {
             if session.name.contains('@') {
                 self.set_status(
                     "Can't rename a worktree session from the TUI",
+                    StatusLevel::Error,
+                );
+                self.mode = Mode::Normal;
+                return;
+            }
+            // An encrypted session reaches its vault through absolute links and
+            // keeps its transcripts under the current path's name; a rename
+            // strands both. symlink_metadata sees a link whose vault is locked.
+            let dir = self.sessions_root.join(&session.name);
+            let encrypted = std::fs::symlink_metadata(dir.join(".cs/claude-config")).is_ok()
+                || session::VAULT_LINKS.iter().any(|sub| session::is_vault_link(&dir, sub));
+            if encrypted {
+                self.set_status(
+                    "Can't rename an encrypted session: its vault links name this path",
                     StatusLevel::Error,
                 );
                 self.mode = Mode::Normal;
@@ -2515,10 +2575,14 @@ pub mod test_home {
 }
 
 /// Claude stores conversations under ~/.claude/projects/ keyed by encoded absolute path.
-/// Path encoding: replace '/' and '.' with '-'.
+/// Path encoding: every character outside [A-Za-z0-9] becomes '-' (Claude Code
+/// 2.1.289: `.replace(/[^a-zA-Z0-9]/g,"-")`), so '_' and ' ' collapse too.
 fn rename_claude_projects_dir(old_session_path: &std::path::Path, new_session_path: &std::path::Path) {
     fn encode_path(p: &std::path::Path) -> String {
-        p.to_string_lossy().replace('/', "-").replace('.', "-")
+        p.to_string_lossy()
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect()
     }
 
     let home = match claude_home() {
@@ -2557,6 +2621,8 @@ mod tests {
                 git_repo: Some("hex/alpha".into()),
                 tags: Vec::new(),
                 archived: false,
+                vault: None,
+                objective: None,
             },
             Session {
                 name: "beta".into(),
@@ -2572,6 +2638,8 @@ mod tests {
                 git_repo: Some("hex/beta".into()),
                 tags: Vec::new(),
                 archived: false,
+                vault: None,
+                objective: None,
             },
             Session {
                 name: "gamma".into(),
@@ -2587,6 +2655,8 @@ mod tests {
                 git_repo: None,
                 tags: Vec::new(),
                 archived: false,
+                vault: None,
+                objective: None,
             },
         ]
     }
@@ -2931,6 +3001,50 @@ mod tests {
         assert_eq!(app.filtered.len(), 3);
     }
 
+    fn session_about(name: &str, objective: &str) -> Session {
+        let mut s = session_with_tags(name, &[]);
+        s.objective = Some(objective.into());
+        s
+    }
+
+    // An adopted project or a harness-named worktree carries a name that says
+    // nothing about the work; the objective is the one field that does.
+    #[test]
+    fn filter_reaches_the_objective_when_the_name_misses() {
+        let mut app = App::new(vec![
+            session_about("brave-jang-0f6265", "Rewrite the electron UI shell"),
+            session_about("agent-a018e313", "Fix the login redirect"),
+        ]);
+        app.search_input.set("electron");
+        app.apply_filter_and_sort();
+        assert_eq!(app.filtered.len(), 1);
+        assert_eq!(app.sessions[app.filtered[0]].name, "brave-jang-0f6265");
+    }
+
+    // fuzzy_match's indices address the name string, so an objective hit must
+    // not highlight anything or the row would bold the wrong characters.
+    #[test]
+    fn objective_hit_highlights_nothing() {
+        let mut app = App::new(vec![session_about("brave-jang-0f6265", "Rewrite the electron UI shell")]);
+        app.search_input.set("electron");
+        app.apply_filter_and_sort();
+        assert_eq!(app.filtered, vec![0]);
+        assert!(!app.fuzzy_indices.contains_key(&0), "an objective match carries no highlight indices");
+    }
+
+    #[test]
+    fn name_hits_rank_before_objective_hits() {
+        let mut app = App::new(vec![
+            session_about("zzz-notes", "electron research"),
+            session_about("electron-app", "Ship v2"),
+        ]);
+        app.search_input.set("electron");
+        app.apply_filter_and_sort();
+        let names: Vec<&str> = app.filtered.iter().map(|&i| app.sessions[i].name.as_str()).collect();
+        assert_eq!(names, vec!["electron-app", "zzz-notes"]);
+        assert!(app.fuzzy_indices.contains_key(&1), "the name hit keeps its highlight");
+    }
+
     #[test]
     fn parse_tag_query_worked_examples() {
         assert_eq!(parse_tag_query("#api"), (vec!["api".into()], String::new()));
@@ -2960,6 +3074,8 @@ mod tests {
             git_repo: None,
             tags: tags.iter().map(|t| t.to_string()).collect(),
             archived: false,
+            vault: None,
+            objective: None,
         }
     }
 
@@ -2978,6 +3094,8 @@ mod tests {
             git_repo: None,
             tags: Vec::new(),
             archived: true,
+            vault: None,
+            objective: None,
         }
     }
 
@@ -3160,6 +3278,8 @@ mod tests {
             git_repo: None,
             tags: Vec::new(),
             archived: false,
+            vault: None,
+            objective: None,
         };
         // Insertion order deliberately differs from recency order.
         let app = App::new(vec![
@@ -3727,6 +3847,107 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    fn app_on(root: &std::path::Path, select: &str) -> App {
+        let mut app = App::new(crate::session::scan_sessions());
+        let pos = app.filtered.iter().position(|&i| app.sessions[i].name == select).unwrap();
+        app.table_state.select(Some(pos));
+        app
+    }
+
+    #[test]
+    fn delete_confirm_names_files_cs_did_not_create() {
+        use crate::session::test_root;
+        let root = std::env::temp_dir().join(format!("cs-test-del-warn-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("rel/.cs/local")).unwrap();
+        std::fs::create_dir_all(root.join("rel/journal.sparsebundle")).unwrap();
+        let _guard = test_root::scoped(root.clone());
+        let mut app = app_on(&root, "rel");
+
+        app.execute_menu_action(MenuAction::Delete);
+
+        assert!(matches!(app.mode, Mode::ConfirmDelete));
+        assert_eq!(
+            app.delete_warnings,
+            vec!["Also deletes files cs did not create: journal.sparsebundle".to_string()]
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn delete_confirm_stays_closed_when_the_file_list_cannot_be_read() {
+        use crate::session::test_root;
+        let root = std::env::temp_dir().join(format!("cs-test-del-broken-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("proj@t/.cs/local")).unwrap();
+        std::fs::write(root.join("proj@t/.git"), "gitdir: /nonexistent/worktree\n").unwrap();
+        let _guard = test_root::scoped(root.clone());
+        let mut app = app_on(&root, "proj@t");
+
+        app.execute_menu_action(MenuAction::Delete);
+
+        assert!(matches!(app.mode, Mode::Normal), "confirm must not open on an unreadable list");
+        assert!(root.join("proj@t").exists());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    // An encrypted session keeps Claude Code's config in its vault through
+    // absolute links, and its transcripts under the old path's name; a rename
+    // would strand both. A locked vault leaves the link dangling, so the
+    // refusal has to hold for a link that resolves to nothing.
+    #[test]
+    fn rename_refuses_a_session_with_its_own_claude_config() {
+        use crate::session::test_root;
+        let root = std::env::temp_dir().join(format!("cs-test-rename-vault-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("vt/.cs/local")).unwrap();
+        std::os::unix::fs::symlink(root.join("vt/.cs/vault-mnt/claude-config"), root.join("vt/.cs/claude-config"))
+            .unwrap();
+        let _guard = test_root::scoped(root.clone());
+        let mut app = app_on(&root, "vt");
+        app.mode = Mode::Rename;
+        app.rename_input.set("vt2");
+
+        app.execute_rename();
+
+        assert_eq!(
+            app.status_message.as_ref().map(|m| m.text.as_str()),
+            Some("Can't rename an encrypted session: its vault links name this path")
+        );
+        assert!(root.join("vt").is_dir(), "the session must stay where it is");
+        assert!(!root.join("vt2").exists());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    // .cs/memory, .cs/plans and .cs/private are vault links too, each naming
+    // the session's current path.
+    #[test]
+    fn rename_refuses_a_session_with_any_vault_link() {
+        use crate::session::test_root;
+        for sub in ["memory", "plans", "private"] {
+            let root = std::env::temp_dir()
+                .join(format!("cs-test-rename-{}-{}", sub, std::process::id()));
+            std::fs::create_dir_all(root.join("vt/.cs/local")).unwrap();
+            std::os::unix::fs::symlink(
+                root.join(format!("vt/.cs/vault-mnt/{sub}")),
+                root.join(format!("vt/.cs/{sub}")),
+            )
+            .unwrap();
+            let _guard = test_root::scoped(root.clone());
+            let mut app = app_on(&root, "vt");
+            app.mode = Mode::Rename;
+            app.rename_input.set("vt2");
+
+            app.execute_rename();
+
+            assert_eq!(
+                app.status_message.as_ref().map(|m| m.text.as_str()),
+                Some("Can't rename an encrypted session: its vault links name this path"),
+                "a .cs/{sub} link must refuse"
+            );
+            assert!(root.join("vt").is_dir(), "the session must stay where it is");
+            assert!(!root.join("vt2").exists());
+            std::fs::remove_dir_all(&root).ok();
+        }
+    }
+
     #[test]
     fn a_rescan_finishing_under_a_modal_waits_for_normal_mode() {
         use crate::session::test_root;
@@ -3807,14 +4028,23 @@ mod tests {
         let fake_projects = tmp.join(".claude/projects");
         let sessions = tmp.join("sessions");
 
-        let old_session = sessions.join("old-name");
-        let new_session = sessions.join("new-name");
+        let old_session = sessions.join("old_name");
+        let new_session = sessions.join("new_name");
 
-        // Create the fake Claude projects dir with encoded old path
+        // Claude Code names the projects dir by replacing every character
+        // outside [A-Za-z0-9] with '-' (measured on 2.1.289: 'enc_probe dir'
+        // became 'enc-probe-dir'), so the fixture is seeded under that name.
         fn encode_path(p: &std::path::Path) -> String {
-            p.to_string_lossy().replace('/', "-").replace('.', "-")
+            p.to_string_lossy()
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+                .collect()
         }
         let old_encoded = encode_path(&old_session);
+        assert!(
+            old_encoded.ends_with("-sessions-old-name"),
+            "fixture encoding drifted from claude's: {old_encoded}"
+        );
         let old_proj = fake_projects.join(&old_encoded);
         std::fs::create_dir_all(&old_proj).unwrap();
         // Put a marker file inside to verify it moved
@@ -4088,6 +4318,30 @@ mod tests {
             "status should name the locking pid, got: {}",
             status.text
         );
+    }
+
+    // A batch keeps the reason a delete failed: a mounted vault says to
+    // unmount it, and "1 failed" alone does not.
+    #[test]
+    fn batch_delete_names_a_mounted_vault() {
+        use crate::session::test_root;
+        let root = std::env::temp_dir().join(format!("cs-test-batch-vault-{}", std::process::id()));
+        let vault = root.join("vt/.cs/vault-mnt/memory");
+        std::fs::create_dir_all(&vault).unwrap();
+        std::os::unix::fs::symlink(&vault, root.join("vt/.cs/memory")).unwrap();
+        let _guard = test_root::scoped(root.clone());
+        let mut app = app_on(&root, "vt");
+        app.marked_sessions.insert("vt".to_string());
+
+        app.execute_batch_delete();
+
+        let status = app.status_message.as_ref().map(|m| m.text.clone()).unwrap_or_default();
+        assert!(
+            status.contains("vt has encrypted storage mounted inside it") && status.contains("unmount it"),
+            "status should carry the refusal, got: {status}"
+        );
+        assert!(vault.is_dir(), "the vault survives");
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
@@ -4924,6 +5178,8 @@ mod tests {
             git_repo: None,
             tags: Vec::new(),
             archived: false,
+            vault: None,
+            objective: None,
         };
         vec![
             session("today-a", 0),

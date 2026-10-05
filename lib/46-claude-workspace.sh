@@ -135,8 +135,12 @@ _claude_migrate_workspace() {
 
     _claude_ensure_workspace_protocol "$session_dir"
 
-    # Phase 7: prune retired command-tracker artifacts.
-    prune_commands_artifacts "$session_dir"
+    # Phase 7: prune retired command-tracker artifacts. Not in an adopted
+    # Claude Code worktree, whose tracked tree is the branch's (see
+    # _claude_tracked_tree_is_ours).
+    if _claude_tracked_tree_is_ours "$session_dir"; then
+        prune_commands_artifacts "$session_dir"
+    fi
 
     # Phase 8: Backfill only an absent binding. A missing native transcript
     # does not authorize replacing an existing conversation with a discovered one.
@@ -244,6 +248,15 @@ EOF
         warn "Appended session wrap-up cues to CLAUDE.local.md"
     fi
 
+    # Phase 14: an encrypted session (.cs/private present; a locked one was
+    # refused before migrate) gains the encrypted protocol. The sentinel is a
+    # tombstone like cs:wrap-cues: present means managed, never re-added.
+    if [ -f "$claude_md_p9" ] && [ -d "$session_dir/.cs/private" ] \
+        && ! grep -q 'cs:encrypted-protocol' "$claude_md_p9"; then
+        { echo; _emit_encrypted_protocol_block; } >> "$claude_md_p9"
+        warn "Added the encrypted-session protocol to CLAUDE.local.md"
+    fi
+
     # Phase 11: Backfill claude_session_color in local state when absent.
     # Picks one of the 8 colors claude's /color command accepts. Idempotent —
     # runs only when the field is missing. Legacy sessions (pre-v2026.5.7)
@@ -254,6 +267,14 @@ EOF
         _set_local_state_if_absent "$_state" claude_session_color "$_new_color"
         warn "Backfilled claude_session_color in .cs/local/state ($_new_color)"
     fi
+}
+
+# An adopted Claude Code worktree (git_bookkeeping: exclude) keeps its tracked
+# CLAUDE.md and files as the branch has them: nothing moves out of CLAUDE.md
+# and nothing tracked is pruned. migrate_session skips its own tracked-tree
+# work for the same sessions.
+_claude_tracked_tree_is_ours() {  # session_dir
+    [ "$(_read_local_state "$1/.cs/local/state" git_bookkeeping)" != "exclude" ]
 }
 
 _claude_ensure_workspace_protocol() {
@@ -269,7 +290,9 @@ _claude_ensure_workspace_protocol() {
     # present" in CLAUDE.local.md is any cs sentinel at all, not just the
     # leading one — otherwise this fallback would re-append a duplicate
     # fresh template on top of it.
-    migrate_claude_md_to_local "$session_dir"
+    if _claude_tracked_tree_is_ours "$session_dir"; then
+        migrate_claude_md_to_local "$session_dir"
+    fi
     local claude_md="$session_dir/CLAUDE.md"
     local claude_local="$session_dir/CLAUDE.local.md"
     if ! { [ -f "$claude_local" ] && grep -q '<!-- cs:' "$claude_local"; } \

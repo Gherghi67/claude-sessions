@@ -413,10 +413,8 @@ test_doctor_runs_token_cost_check() {
 
 test_doctor_token_cost_sums_jsonl() {
     local fake_transcripts="$TEST_TMPDIR/transcripts"
-    local resolved encoded
-    resolved=$( (cd "$CLAUDE_SESSION_DIR" && pwd -P) || printf '%s' "$CLAUDE_SESSION_DIR" )
-    encoded=$(echo "$resolved" | sed 's|/|-|g; s|\.|-|g')
-    local proj_dir="$fake_transcripts/$encoded"
+    local proj_dir
+    proj_dir="$fake_transcripts/$(_encode_cwd_for_claude_test "$CLAUDE_SESSION_DIR")"
     mkdir -p "$proj_dir"
     # req_dup appears twice (streamed content blocks repeat usage): its tokens
     # must count once. Naive sum would be 7.0K input / 1.75K output.

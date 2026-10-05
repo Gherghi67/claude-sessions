@@ -41,7 +41,8 @@ jobs:
         run: |
           bash build.sh
           git diff --exit-code bin/ags bin/cs bin/cs-secrets bin/cs-codex-thread \
-            bin/cs-statusline bin/cs-subagent-statusline hooks/cs-shared.sh install.sh \
+            bin/cs-statusline bin/cs-subagent-statusline hooks/cs-shared.sh \
+            skills/sweep/scripts/cs-shared.sh install.sh \
             || { echo "::error::bin/ags or its compatibility aliases, hooks/cs-shared.sh, or install.sh is out of sync with lib/ or install.sh.in. Run ./build.sh and commit the generated files."; exit 1; }
 
   shellcheck:

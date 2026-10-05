@@ -25,15 +25,8 @@ cs_split_worktree_name() {
 bootstrap_worktree_meta() {
     local wt_dir="$1" base_name="$2" task="$3"
     mkdir -p "$wt_dir/.cs"/{local,memory}
-    cat > "$wt_dir/.cs/README.md" << EOF
----
-status: active
-created: $(date '+%Y-%m-%d')
-tags: [worktree]
-aliases: ["$base_name@$task"]
----
-# Session: $base_name@$task
-
+    _write_session_readme_head "$wt_dir/.cs/README.md" "$base_name@$task" "[worktree]" "[\"$base_name@$task\"]"
+    cat >> "$wt_dir/.cs/README.md" << EOF
 Feature worktree of session '$base_name' on branch cs/$task.
 
 ## Objective
@@ -441,6 +434,14 @@ retire_feature_worktree() {  # base_name task sha [--force]
     if [ -n "$pid" ]; then
         error "Base session '$base_name' is open elsewhere (PID $pid); run /finish $task from that conversation"
     fi
+
+    # git worktree remove --force recurses into a mount, so a volume mounted
+    # inside the worktree would lose what it holds.
+    local mounted
+    mounted=$(_volume_mounted_under "$wt_dir") \
+        || error "ags could not read the mount table, so it cannot tell whether a volume is mounted inside $wt_dir; refusing to remove the worktree."
+    [ -z "$mounted" ] \
+        || error "The feature is landed, but its worktree has a volume mounted inside it at $mounted, and removing the worktree would delete what the volume holds. Unmount it, then run /finish $task here again."
 
     if _tree_is_dirty "$wt_dir"; then
         error "Worktree has uncommitted changes; commit them in $wt_dir first (cs never commits for you)"
@@ -877,11 +878,15 @@ fuse_session_records() {
     # Worktrees never run migrate_session, so a task branch created before the
     # log moved to .cs/local/ still keeps its audit trail at .cs/logs/; fuse
     # whichever the worktree has into the base's machine-local log.
-    local srclog
+    # An encrypted base keeps its log behind .cs/private; a locked one cannot
+    # take the log, and .cs/local must not take it in plaintext instead.
+    local srclog dstlog
     for srclog in "$src/local/session.log" "$src/logs/session.log"; do
         if [ -f "$srclog" ]; then
-            mkdir -p "$dst/local"
-            { echo ""; cat "$srclog"; } >> "$dst/local/session.log"
+            dstlog=$(cs_private_dir "$dst") \
+                || error "cannot fuse the worktree's log: $dst/private is locked. Mount it, then retry."
+            mkdir -p "$dstlog"
+            { echo ""; cat "$srclog"; } >> "$dstlog/session.log"
             break
         fi
     done

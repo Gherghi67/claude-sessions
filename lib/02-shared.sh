@@ -1,4 +1,4 @@
-# ABOUTME: Actor identity, narrative-budget and tmux window-title code that cs AND its hooks run. build.sh
+# ABOUTME: Actor identity, narrative budget, private-dir and tmux window-title code that cs AND its hooks run. build.sh
 # ABOUTME: folds this into bin/cs and writes it verbatim to hooks/cs-shared.sh for sourcing.
 
 # The core session identity is independent of the selected runtime. Keep the
@@ -84,6 +84,47 @@ _narrative_budget() {  # value, default
     if [ "$n" -gt 0 ]; then echo "$n"; else echo "$2"; fi
 }
 
+# The four names under .cs/ that an encrypted session links into its vault;
+# see docs/session-layout.md "Encrypted sessions".
+# shellcheck disable=SC2034  # read by ags and by the hooks that source this file
+CS_VAULT_LINKS="memory plans claude-config private"
+
+# The directory holding a session's ags content files (command log, mail,
+# traces). An encrypted session links .cs/private into its vault; any other
+# keeps them in .cs/local. Fails, printing nothing, when .cs/private is a link
+# whose vault is locked: a writer drops its line rather than write it anywhere
+# else in plaintext.
+cs_private_dir() {  # meta_dir
+    if [ -L "$1/private" ] || [ -e "$1/private" ]; then
+        [ -d "$1/private" ] || return 1
+        printf '%s\n' "$1/private"
+    else
+        printf '%s\n' "$1/local"
+    fi
+}
+
+# Says what an unusable .cs/private is, for an error message: the vault it
+# points at, or that it is not a directory at all.
+cs_private_state() {  # meta_dir
+    if [ -L "$1/private" ]; then
+        printf 'points at %s\n' "$(readlink "$1/private")"
+    else
+        printf 'is not a directory\n'
+    fi
+}
+
+# The rotation handoff store: .cs/private/handoffs in an encrypted session,
+# .cs/handoffs in every other. Fails, like cs_private_dir, while .cs/private
+# dangles: a locked vault has no handoffs to offer or consume.
+cs_handoff_dir() {  # meta_dir
+    if [ -L "$1/private" ] || [ -e "$1/private" ]; then
+        [ -d "$1/private" ] || return 1
+        printf '%s\n' "$1/private/handoffs"
+    else
+        printf '%s\n' "$1/handoffs"
+    fi
+}
+
 # Names a tmux window after every cs session running in its panes: "cs: a | b",
 # in pane order, each name once. Under iTerm's tmux integration the window name
 # is the tab's title, and one window holds every pane of a tab, so a single
@@ -117,6 +158,23 @@ cs_tmux_title_window() {  # pane, session name ("" releases the pane)
         tmux set-window-option -t "$pane" allow-set-title on 2>/dev/null || true
     fi
     [ -z "$lock" ] || { rm -f "$lock/pid"; rmdir "$lock" 2>/dev/null; } || true
+    _cs_iterm_tab_title "$pane"
+}
+
+# Under iTerm's tmux integration the tab shows a title iTerm keeps for itself:
+# tmux window renames never reach it, and only iTerm's Python API sets it.
+# Hands the window to cs-iterm-tab.py in the background, after the lock is
+# released, since the helper takes about a second and reads the claims itself
+# when it runs. Its output is discarded and nothing waits on it, so a machine
+# without iTerm's API or the iterm2 python module goes without the tab title
+# and nothing else.
+_cs_iterm_tab_title() {  # pane
+    local helper window
+    [ "${LC_TERMINAL:-}" = iTerm2 ] && [ -z "${CS_NO_ITERM2:-}" ] || return 0
+    helper="${CS_HOOKS_DIR:-$HOME/.claude/hooks/cs}/cs-iterm-tab.py"
+    [ -f "$helper" ] && command -v python3 >/dev/null 2>&1 || return 0
+    window=$(tmux display-message -p -t "$1" '#{window_id}' 2>/dev/null) || return 0
+    ( python3 "$helper" "$window" </dev/null >/dev/null 2>&1 & )
 }
 
 # Takes the lock on a pane's window and prints its directory: a directory per
@@ -169,7 +227,8 @@ cs_run_guarded() (  # meta_dir, callback, arguments...
     shift
     mkdir -p "$meta/local" || return 1
     umask 077
-    exec 9> "$meta/local/run-lease.guard" || return 1
+    { exec 9> "$meta/local/run-lease.guard"; } 2>/dev/null \
+        || { printf 'Error: could not write %s\n' "$meta/local/run-lease.guard" >&2; return 1; }
     if command -v flock >/dev/null 2>&1; then
         flock -w 5 9 || { printf 'Error: Could not acquire run ownership guard: %s\n' "$meta" >&2; return 1; }
     elif command -v lockf >/dev/null 2>&1; then

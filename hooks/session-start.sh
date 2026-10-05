@@ -44,6 +44,15 @@ set +e
 # shellcheck source=cs-shared.sh
 [ -r "$_cs_shared" ] && "${BASH:-/bin/bash}" -n "$_cs_shared" 2>/dev/null && . "$_cs_shared"
 if [ "$_cs_had_e" = 1 ]; then set -e; fi
+# Without the library there is no telling whether the session keeps its log in
+# a vault, so nothing is logged rather than risk writing it in plaintext.
+if ! command -v cs_private_dir >/dev/null 2>&1; then
+    cs_private_dir() { return 1; }
+fi
+# Nor whether its handoffs sit in a vault, so no rotation is offered or consumed.
+if ! command -v cs_handoff_dir >/dev/null 2>&1; then
+    cs_handoff_dir() { return 1; }
+fi
 if ! command -v cs_resolve_session >/dev/null 2>&1; then
     cs_resolve_session() {
         [ -n "${CLAUDE_SESSION_NAME:-}" ] && [ -n "${CLAUDE_SESSION_DIR:-}" ]
@@ -136,10 +145,13 @@ fi
 # Log session start. Ensure the machine-local dir exists first: it is gitignored,
 # so a freshly-cloned session has none until cs creates it, and an unguarded
 # append into a missing dir would abort this hook under set -e.
+# An encrypted session logs into its vault; while the vault is locked the log
+# goes nowhere, never into .cs/local.
 mkdir -p "$META_DIR/local" 2>/dev/null || true
-echo "$(date '+%Y-%m-%d %H:%M:%S') - Session started (source: $SOURCE, ID: $SESSION_ID)" >> "$META_DIR/local/session.log"
-echo "  Working directory: $CWD" >> "$META_DIR/local/session.log"
-echo "" >> "$META_DIR/local/session.log"
+if _log_dir=$(cs_private_dir "$META_DIR"); then SESSION_LOG="$_log_dir/session.log"; else SESSION_LOG=/dev/null; fi
+echo "$(date '+%Y-%m-%d %H:%M:%S') - Session started (source: $SOURCE, ID: $SESSION_ID)" >> "$SESSION_LOG"
+echo "  Working directory: $CWD" >> "$SESSION_LOG"
+echo "" >> "$SESSION_LOG"
 
 
 # Auto-pull and crash recovery only on fresh start or resume
@@ -262,7 +274,7 @@ if git -C "$SESSION_DIR" rev-parse --git-dir >/dev/null 2>&1; then
                 CRASH_CONTEXT="${CRASH_HEAD} WARNING: ${CRASH_WHY} A blanket restore would overwrite committed work with a divergent snapshot, so it is NOT offered. Inspect and restore per file, e.g.: git -C \"$SESSION_DIR\" diff HEAD $SHADOW_REF -- <file> then git -C \"$SESSION_DIR\" checkout $SHADOW_REF -- <file>\nTo discard the snapshot once reviewed, run: git -C \"$SESSION_DIR\" update-ref -d $SHADOW_REF"
             fi
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] Crash recovery: found ${CRASH_FILE_COUNT} unsaved file(s), awaiting user decision" \
-                >> "$META_DIR/local/session.log"
+                >> "$SESSION_LOG"
         else
             # No actual changes — just clean up the orphaned ref
             git -C "$SESSION_DIR" update-ref -d "$SHADOW_REF" 2>/dev/null || true
@@ -381,11 +393,18 @@ local_state_set() {
 # context-limit fork between the rotate skill and /clear cannot eat a pending
 # rotation. Only where a genuinely fresh conversation begins does a spent or
 # missing handoff make the marker stale and worth dropping.
+# An encrypted session keeps both the marker and its handoffs in the vault; a
+# locked one has neither to offer.
 ROTATION_HANDOFF=""
-PENDING_MARKER="$META_DIR/local/pending-handoff"
+PENDING_MARKER=""
+HANDOFF_DIR=""
+if _marker_dir=$(cs_private_dir "$META_DIR") && HANDOFF_DIR=$(cs_handoff_dir "$META_DIR"); then
+    PENDING_MARKER="$_marker_dir/pending-handoff"
+fi
+HANDOFF_REL=".cs/${HANDOFF_DIR#"$META_DIR"/}"
 case "$SOURCE" in
     startup|clear)
-        if [ -f "$PENDING_MARKER" ]; then
+        if [ -n "$PENDING_MARKER" ] && [ -f "$PENDING_MARKER" ]; then
             HANDOFF_BASENAME=$(cat "$PENDING_MARKER" 2>/dev/null | tr -d '[:space:]' || true)
             # The marker names a basename. Anything with a separator would
             # resolve outside the handoff store, and the file it landed on
@@ -395,7 +414,7 @@ case "$SOURCE" in
             case "$HANDOFF_BASENAME" in
                 */*|*\\*) HANDOFF_BASENAME="" ;;
             esac
-            HANDOFF_FILE="$META_DIR/handoffs/$HANDOFF_BASENAME"
+            HANDOFF_FILE="$HANDOFF_DIR/$HANDOFF_BASENAME"
             if [ -n "$HANDOFF_BASENAME" ] && [ -f "$HANDOFF_FILE" ] \
                 && _handoff_is_unconsumed "$HANDOFF_FILE"; then
                 ROTATION_HANDOFF="$HANDOFF_BASENAME"
@@ -443,7 +462,7 @@ _cs_acknowledge_claude_binding() {
     fi
     if [ "$RECORDED_UUID" != "$SESSION_ID" ] || [ "$pending_match" = 1 ]; then
         _cs_hook_local_state_set claude_session_id "$SESSION_ID" || return 1
-        echo "$(date '+%Y-%m-%d %H:%M:%S') - Rebound claude_session_id: ${RECORDED_UUID:-none} -> $SESSION_ID" >> "$META_DIR/local/session.log"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Rebound claude_session_id: ${RECORDED_UUID:-none} -> $SESSION_ID" >> "$SESSION_LOG"
         # Named literally: TIMELINE_FILE is not assigned until further down.
         _cs_terminate_jsonl "$META_DIR/timeline.jsonl" 2>/dev/null || true
         # Durable lineage: a UUID change the launch path did not pre-record.
@@ -451,6 +470,9 @@ _cs_acknowledge_claude_binding() {
         # (/clear) and carries the handoff name; otherwise it is one cs
         # discovered — CC's context-limit fork, or a manual resume of a
         # different conversation. Shape shared with bin/cs's _timeline_rotated.
+        # An encrypted session's handoff name is its topic: the plaintext
+        # timeline records that a handoff rotated, never which.
+        [ "$HANDOFF_REL" = ".cs/handoffs" ] || transition_handoff=""
         # Replay after an interrupted binding write must neither lose nor
         # duplicate its lineage. The pending record keeps the predecessor.
         if [ "$pending_match" = 1 ] && [ -f "$META_DIR/timeline.jsonl" ]; then
@@ -459,6 +481,10 @@ _cs_acknowledge_claude_binding() {
                  .engine == "claude" and .run_id == $run and .to == $to)] | length > 0
             ' "$META_DIR/timeline.jsonl" >/dev/null 2>&1; then lineage_recorded=1; fi
         fi
+        # A launch that staged the session's first conversation (none was
+        # recorded: the first open after ags -adopt, Claude's first open of a
+        # workspace) rotates from nothing, so it records no rotation.
+        if [ "$pending_match" = 1 ] && [ -z "$transition_from" ]; then lineage_recorded=1; fi
         if [ "$lineage_recorded" = 0 ]; then
         { jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
                --arg from "$transition_from" \
@@ -534,7 +560,7 @@ if [ "$SOURCE" = "resume" ]; then
     local_state_set last_resumed "$(date '+%Y-%m-%d')"
 fi
 
-# A fresh session is attended by definition: drop any stale finished-blink
+# A fresh session is attended by definition: drop any stale attention
 # marker left by the previous conversation's final Stop.
 rm -f "$META_DIR/local/attention" 2>/dev/null || true
 
@@ -625,7 +651,7 @@ if [ "$SOURCE" = "resume" ] && git -C "$SESSION_DIR" rev-parse --git-dir >/dev/n
     DYNAMIC=""
 
     # Time since last session activity
-    LAST_LOG_TIME=$(tail -1 "$META_DIR/local/session.log" 2>/dev/null | grep -oE '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}' | head -1 || true)
+    LAST_LOG_TIME=$(tail -1 "$SESSION_LOG" 2>/dev/null | grep -oE '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}' | head -1 || true)
     if [ -n "$LAST_LOG_TIME" ]; then
         DYNAMIC="${DYNAMIC}Last activity: ${LAST_LOG_TIME}${_NL}"
     fi
@@ -721,7 +747,9 @@ NUMSTAT
         SIBLINGS=""
         SIBLING_COUNT=0
         seen_siblings=""
-        # Sort sibling sessions by session.log mtime (most recent first)
+        # Sort sibling sessions by session.log mtime (most recent first). An
+        # encrypted session logs into .cs/private and so is never listed: its
+        # objective must not reach another session's conversation.
         while IFS= read -r log_file; do
             sibling_dir=$(dirname "$(dirname "$(dirname "$log_file")")")
             [ -d "$sibling_dir/.cs" ] || continue
@@ -787,7 +815,7 @@ fi
 # consumed, record the consumer, and drop the marker. Only the first status
 # line (the frontmatter's) flips; a body quoting it flush-left stays intact.
 if [ -n "$ROTATION_HANDOFF" ]; then
-    HANDOFF_FILE="$META_DIR/handoffs/$ROTATION_HANDOFF"
+    HANDOFF_FILE="$HANDOFF_DIR/$ROTATION_HANDOFF"
     { awk -v uuid="$SESSION_ID" '
         !flipped && $0 == "status: unconsumed" {
             print "status: consumed"
@@ -938,11 +966,11 @@ if [ -n "$ROTATION_HANDOFF" ]; then
     CONTEXT="${CONTEXT}
 
 --- Conversation Rotation ---
-This fresh conversation continues rotated work. Read .cs/handoffs/$ROTATION_HANDOFF FIRST — it is the previous conversation's handoff; the prior transcript is not loaded, and the handoff plus your own .cs/memory/narrative.$ACTOR_SLUG.md carry the context.
+This fresh conversation continues rotated work. Read $HANDOFF_REL/$ROTATION_HANDOFF FIRST — it is the previous conversation's handoff; the prior transcript is not loaded, and the handoff plus your own .cs/memory/narrative.$ACTOR_SLUG.md carry the context.
 
 Nothing has run yet. $ROTATION_START A BARE NUDGE — \"go\", \"continue\", \"ok\" — means begin: reconcile your native task list, which carried over from the previous conversation, with the handoff (mark what it says is done, add any next-step step that is missing, one task per step), then execute the next step and report what you did, without re-summarising it or asking which part to start with. A first message carrying its own content takes precedence over the handoff; answer that instead. Ask first only where you normally would: the handoff is missing, unreadable, or genuinely ambiguous, or its next step is destructive or irreversible.
 
-Once that next step is done, append a \`## Successor report\` section to the end of .cs/handoffs/$ROTATION_HANDOFF: each thing you had to look up again, re-derive, or found wrong in the handoff, with how you found out, or \`none\`. Append only; never rewrite what the previous conversation wrote."
+Once that next step is done, append a \`## Successor report\` section to the end of $HANDOFF_REL/$ROTATION_HANDOFF: each thing you had to look up again, re-derive, or found wrong in the handoff, with how you found out, or \`none\`. Append only; never rewrite what the previous conversation wrote."
 elif [ -n "$FRESH_NOTICE" ]; then
     CONTEXT="${CONTEXT}
 
@@ -973,7 +1001,10 @@ fi
 # Queue inbox digest (surface-once; same recipe as scope-prompt.sh).
 DIGEST=""
 DIGEST_PENDING=""
-_build_digest "$META_DIR/local"
+# The inbox sits behind .cs/private in an encrypted session; a locked vault has
+# nothing readable, and DIGEST_DIR stays empty so no cursor is written.
+DIGEST_DIR=""
+if DIGEST_DIR=$(cs_private_dir "$META_DIR"); then _build_digest "$DIGEST_DIR"; else DIGEST_DIR=""; fi
 if [ -n "$DIGEST" ]; then
     CONTEXT="${CONTEXT}
 
@@ -999,11 +1030,14 @@ fi
 # Only the lead arms it. Every claude resolving this session runs this hook,
 # teammates included, and N watchers on one maildir means one arrival wakes N
 # processes that then race to read it, where the first mv wins.
+#
+# The maildir sits with the session's other ags files (behind .cs/private in an
+# encrypted session); a locked vault arms no watch rather than a plaintext one.
 MAIL_WATCH=""
-if [ "$IS_LEAD" = 1 ] \
-    && mkdir -p "$META_DIR/local/mail/tmp" "$META_DIR/local/mail/new" \
-                "$META_DIR/local/mail/cur" 2>/dev/null; then
-    MAIL_WATCH="$META_DIR/local/mail/new"
+if [ "$IS_LEAD" = 1 ] && _mail_base=$(cs_private_dir "$META_DIR") \
+    && mkdir -p "$_mail_base/mail/tmp" "$_mail_base/mail/new" \
+                "$_mail_base/mail/cur" 2>/dev/null; then
+    MAIL_WATCH="$_mail_base/mail/new"
 fi
 
 # A /clear on an armed handoff consumes it and injects the preamble above, but
@@ -1059,7 +1093,7 @@ jq -n --arg context "$CONTEXT" --arg watch "$MAIL_WATCH" --arg kick "$ROTATION_K
 }
 + (if $sysmsg == "" then {} else {systemMessage: $sysmsg} end)'
 
-_commit_digest "$META_DIR/local"
+_commit_digest "$DIGEST_DIR"
 
 # The context block above told the conversation today's date. Record which day
 # this conversation heard, one file per conversation, so scope-prompt.sh can say

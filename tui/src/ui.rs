@@ -14,8 +14,7 @@ use unicode_width::UnicodeWidthStr;
 use ratatui::layout::Alignment;
 
 use crate::app::{
-    parse_tag_query, App, FlashKind, Focus, Mode, NotesFocus, SortColumn, SortDirection,
-    StatusLevel,
+    App, FlashKind, Focus, Mode, NotesFocus, SortColumn, SortDirection, StatusLevel,
 };
 use crate::theme::{self, Palette};
 
@@ -479,12 +478,6 @@ fn render_table(app: &mut App, frame: &mut Frame, area: Rect, preview_open: bool
 
     let header = Row::new(header_cells).bottom_margin(1);
 
-    // Dimming keys on the fuzzy remainder, not the raw search text: a
-    // tag-only query like "#api" has already narrowed `filtered` via the tag
-    // predicate and leaves no fuzzy match to dim against.
-    let (_, fuzzy_remainder) = parse_tag_query(app.search_input.text());
-    let is_searching = app.mode == Mode::Search && !fuzzy_remainder.is_empty();
-
     // One wall-clock read per frame, shared by every row's recency math and
     // the lock-square blink phase.
     let now = std::time::SystemTime::now();
@@ -505,8 +498,10 @@ fn render_table(app: &mut App, frame: &mut Frame, area: Rect, preview_open: bool
         .enumerate()
         .map(|(row_idx, &i)| {
             let s = &app.sessions[i];
-            // During search typing, dim rows that don't match
-            let dimmed = (is_searching && !app.fuzzy_indices.contains_key(&i)) || s.archived;
+            // Every row here passed the filter, by name or by objective; only
+            // a name hit carries highlight indices, so they say nothing about
+            // whether the row matched.
+            let dimmed = s.archived;
 
             // Recency heat: green when live, fading to grey when dormant. Computed
             // once and reused for the dot and the Age column.
@@ -666,6 +661,9 @@ fn render_table(app: &mut App, frame: &mut Frame, area: Rect, preview_open: bool
                 ]));
             }
 
+            if s.vault.is_some() {
+                name_spans.push(Span::styled(format!(" {}", app.lock_marker), Style::default().fg(p.comment)));
+            }
             name_lines.push(Line::from(name_spans));
 
             // Add preview lines when expanded
@@ -1138,7 +1136,7 @@ fn render_confirm_delete(app: &App, frame: &mut Frame) {
     };
     let hint_color = if remaining > 0 { p.comment } else { p.fg };
 
-    let popup_area = centered_rect(50, 7, frame.area());
+    let popup_area = centered_rect(50, 7 + warning_rows(&app.delete_warnings), frame.area());
     frame.render_widget(Clear, popup_area);
     let block = Block::default()
         .borders(Borders::ALL)
@@ -1146,11 +1144,10 @@ fn render_confirm_delete(app: &App, frame: &mut Frame) {
         .title(" Confirm Delete ")
         .title_style(Style::default().fg(p.red).add_modifier(Modifier::BOLD));
 
-    let lines = vec![
-        Line::from(Span::styled(action_msg, Style::default().fg(p.fg))),
-        Line::from(""),
-        Line::from(Span::styled(hint, Style::default().fg(hint_color))),
-    ];
+    let mut lines = vec![Line::from(Span::styled(action_msg, Style::default().fg(p.fg)))];
+    push_warning_lines(&mut lines, &app.delete_warnings, p.red);
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(hint, Style::default().fg(hint_color))));
     let text = Paragraph::new(lines)
         .block(block)
         .wrap(Wrap { trim: true });
@@ -1178,7 +1175,7 @@ fn render_confirm_batch_delete(app: &App, frame: &mut Frame) {
     };
     let hint_color = if remaining > 0 { p.comment } else { p.fg };
 
-    let popup_area = centered_rect(55, 7, frame.area());
+    let popup_area = centered_rect(55, 7 + warning_rows(&app.delete_warnings), frame.area());
     frame.render_widget(Clear, popup_area);
     let block = Block::default()
         .borders(Borders::ALL)
@@ -1186,20 +1183,41 @@ fn render_confirm_batch_delete(app: &App, frame: &mut Frame) {
         .title(format!(" Delete {} sessions ", count))
         .title_style(Style::default().fg(p.red).add_modifier(Modifier::BOLD));
 
-    let lines = vec![
+    let mut lines = vec![
         Line::from(Span::styled(
             format!("Delete {} sessions?", count),
             Style::default().fg(p.fg),
         )),
         Line::from(Span::styled(list, Style::default().fg(p.comment))),
-        Line::from(""),
-        Line::from(Span::styled("This cannot be undone.", Style::default().fg(p.red))),
-        Line::from(Span::styled(hint, Style::default().fg(hint_color))),
     ];
+    push_warning_lines(&mut lines, &app.delete_warnings, p.red);
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("This cannot be undone.", Style::default().fg(p.red))));
+    lines.push(Line::from(Span::styled(hint, Style::default().fg(hint_color))));
     let text = Paragraph::new(lines)
         .block(block)
         .wrap(Wrap { trim: true });
     frame.render_widget(text, popup_area);
+}
+
+/// Rows the delete warnings take in a confirm popup: a blank separator,
+/// then two rows per warning, since a file list usually wraps once.
+fn warning_rows(warnings: &[String]) -> u16 {
+    if warnings.is_empty() {
+        0
+    } else {
+        1 + 2 * warnings.len() as u16
+    }
+}
+
+fn push_warning_lines(lines: &mut Vec<Line<'static>>, warnings: &[String], color: Color) {
+    if warnings.is_empty() {
+        return;
+    }
+    lines.push(Line::from(""));
+    for warning in warnings {
+        lines.push(Line::from(Span::styled(warning.clone(), Style::default().fg(color))));
+    }
 }
 
 fn render_confirm_force_open(app: &App, frame: &mut Frame) {
@@ -1621,6 +1639,11 @@ fn render_preview_pane(app: &App, frame: &mut Frame, area: Rect) {
     }
     if !session.tags.is_empty() {
         meta.push(("tags", session.tags.join(", "), p.mut_, None));
+    }
+    match session.vault {
+        Some(crate::session::Vault::Locked) => meta.push(("vault", "locked".into(), p.red, None)),
+        Some(crate::session::Vault::Unlocked) => meta.push(("vault", "unlocked".into(), p.ink, None)),
+        None => {}
     }
     let cached_preview = app.preview_cache.get(&session.name);
     if let Some(preview) = cached_preview {
@@ -2170,6 +2193,8 @@ mod tests {
             git_repo: None,
             tags: Vec::new(),
             archived: false,
+            vault: None,
+            objective: None,
         }]
     }
 
@@ -2192,6 +2217,8 @@ mod tests {
                 git_repo: None,
                 tags: Vec::new(),
                 archived: false,
+                vault: None,
+                objective: None,
             },
             Session {
                 name: "recent".into(),
@@ -2207,6 +2234,8 @@ mod tests {
                 git_repo: None,
                 tags: Vec::new(),
                 archived: false,
+                vault: None,
+                objective: None,
             },
         ]
     }
@@ -3655,6 +3684,8 @@ mod tests {
                 git_repo: None,
                 tags: Vec::new(),
                 archived: false,
+                vault: None,
+                objective: None,
             });
         }
         let mut app = App::new(sessions);
@@ -3798,6 +3829,43 @@ mod tests {
             name_fg, p.comment,
             "a tag-only query should not dim rows that already passed the tag filter"
         );
+    }
+
+    #[test]
+    fn objective_hit_is_not_dimmed_while_searching() {
+        // A row the filter kept on its objective alone records no highlight
+        // indices (they would address the wrong string), so dimming cannot
+        // key on fuzzy_indices or the one row that matched renders grey.
+        let mut sessions = one_session();
+        sessions[0].name = "brave-jang-0f6265".into();
+        sessions[0].objective = Some("Rewrite the electron UI shell".into());
+        let mut app = App::new(sessions);
+        app.theme = Palette::dark();
+        app.show_preview = false;
+        let p = app.theme;
+        app.mode = Mode::Search;
+        app.search_input.set("electron");
+        app.apply_filter_and_sort();
+        assert_eq!(app.filtered.len(), 1, "the objective should keep the session");
+
+        let backend = TestBackend::new(100, 24);
+        let mut term = Terminal::new(backend).unwrap();
+        term.draw(|f| render(&mut app, f)).unwrap();
+        let buf = term.backend().buffer();
+
+        let row_text = |y: u16| -> String {
+            (0..100u16)
+                .map(|x| buf.cell(ratatui::layout::Position::new(x, y)).unwrap().symbol())
+                .collect()
+        };
+        let session_y = (0..24u16)
+            .find(|&y| row_text(y).contains("brave-jang"))
+            .expect("the session row should render");
+        let name_x = (0..100u16)
+            .find(|&x| buf.cell(ratatui::layout::Position::new(x, session_y)).unwrap().symbol() == "b")
+            .expect("the session name should render");
+        let name_fg = buf.cell(ratatui::layout::Position::new(name_x, session_y)).unwrap().fg;
+        assert_ne!(name_fg, p.comment, "an objective hit is a match and must not render dimmed");
     }
 
     #[test]
@@ -4091,6 +4159,33 @@ mod tests {
     }
 
     #[test]
+    fn an_encrypted_session_shows_its_marker_on_the_row_and_its_vault_in_the_preview() {
+        let mut app = preview_test_app();
+        app.lock_marker = "enc";
+        app.sessions[0].vault = Some(crate::session::Vault::Locked);
+        let text = render_wide(&mut app);
+        let name = app.sessions[0].name.clone();
+        assert!(text.contains(&format!("{name} enc")), "row must carry the marker after the name:\n{text}");
+        assert!(
+            text.lines().any(|l| l.contains("vault") && l.contains("locked")),
+            "preview must name the vault state:\n{text}"
+        );
+
+        app.sessions[0].vault = Some(crate::session::Vault::Unlocked);
+        let text = render_wide(&mut app);
+        assert!(text.lines().any(|l| l.contains("vault") && l.contains("unlocked")), "{text}");
+    }
+
+    #[test]
+    fn a_session_without_a_vault_shows_neither_marker_nor_vault_row() {
+        let mut app = preview_test_app();
+        app.lock_marker = "enc";
+        let text = render_wide(&mut app);
+        assert!(!text.contains(" enc"), "no marker on a plain session:\n{text}");
+        assert!(!text.contains("vault"), "no vault row on a plain session:\n{text}");
+    }
+
+    #[test]
     fn preview_state_row_carries_the_advertised_agent_status() {
         let mut app = preview_test_app();
         app.sessions[0].liveness = Liveness::Locked(4242);
@@ -4207,6 +4302,8 @@ mod tests {
             git_repo: None,
             tags: Vec::new(),
             archived: true,
+            vault: None,
+            objective: None,
         });
         v
     }

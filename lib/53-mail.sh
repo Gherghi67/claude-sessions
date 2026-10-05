@@ -14,6 +14,23 @@ _mail_ensure_maildir() {  # maildir
     mkdir -p "$1/tmp" "$1/new" "$1/cur" "$1/out"
 }
 
+# A session's mailbox sits with its other ags files: in its vault when
+# .cs/private links there, else in .cs/local. rc 1, printing nothing, when the
+# link dangles (the vault is locked): mail is never written beside it in
+# plaintext.
+_mail_dir() {  # meta_dir
+    local base
+    base=$(cs_private_dir "$1") || return 1
+    printf '%s/mail' "$base"
+}
+
+# The current session's own mailbox, or the error that its vault is locked.
+# Callers capture it, so error only ends their subshell: each one exits after.
+_mail_own_dir() {
+    _mail_dir "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" \
+        || error "this session keeps its mail in encrypted storage that is not mounted (.cs/private $(cs_private_state "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}")). Mount it, then retry."
+}
+
 # Thread ids are 6 hex digits because an agent has to retype them. RANDOM is 15
 # bits, so two draws cover the 24. Collisions matter — a repeat would merge two
 # unrelated transcripts and misroute replies — so generation avoids the roots
@@ -39,7 +56,8 @@ _mail_new_thread() {  # maildir
 # failure to file the copy must never report the send as failed.
 _mail_keep_sent() {  # line, fname
     [ -n "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ] || return 0
-    local mine="${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/mail"
+    local mine
+    mine=$(_mail_dir "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}") || return 0
     _mail_ensure_maildir "$mine" 2>/dev/null || return 0
     if ! { { printf '%s\n' "$1" > "$mine/tmp/$2"; } 2>/dev/null \
             && mv "$mine/tmp/$2" "$mine/out/$2" 2>/dev/null; }; then
@@ -99,8 +117,9 @@ _mail_send() {  # target, [--kind|-k KIND] [--reply THREAD] body
     if [ -n "$reply_thread" ]; then
         [ -n "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ] \
             || error "ags -msg --reply resolves the thread from a session's mailbox; run it inside a session"
-        local pair derived rc=0
-        pair=$(_mail_reply_peer "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/mail" "$reply_thread") || rc=$?
+        local pair derived rc=0 mine
+        mine=$(_mail_own_dir) || exit 1
+        pair=$(_mail_reply_peer "$mine" "$reply_thread") || rc=$?
         case "$rc" in
             0) : ;;
             2) error "thread $reply_thread names more than one correspondent; it is not a single conversation" ;;
@@ -136,6 +155,11 @@ _mail_send() {  # target, [--kind|-k KIND] [--reply THREAD] body
         body="$(_trim "$body")"
     fi
     [ -n "$body" ] || error "ags -msg needs a non-empty body"
+    # Resolved before anything is written: a locked recipient gets nothing at
+    # all, neither its queue task nor a plaintext mailbox beside the vault.
+    local target_files
+    target_files=$(cs_private_dir "$target_dir/.cs") \
+        || error "$target keeps its mail in encrypted storage that is not mounted (.cs/private $(cs_private_state "$target_dir/.cs")). Nothing was sent."
     local bytes
     bytes=$(LC_ALL=C printf '%s' "$body" | wc -c | tr -d '[:space:]')
     if [ "$bytes" -gt "$MAIL_BODY_MAX" ]; then
@@ -145,13 +169,13 @@ _mail_send() {  # target, [--kind|-k KIND] [--reply THREAD] body
         # Queue first, attribution second: if the queue write fails (a
         # multi-line body among the ways it refuses) nothing is sent; if the
         # mail write fails the work is still delivered.
-        _queue_add "$target_dir/.cs/local" "$body"
+        _queue_add "$target_files" "$body"
     fi
     # Deliver into the RECIPIENT's tmp/, then rename into its new/: both live
     # in one tree, so the rename is atomic even for adopted (symlinked)
     # sessions, where a sender-side tmp/ could sit on another volume and
     # degrade the mv to copy-then-unlink.
-    local maildir="$target_dir/.cs/local/mail"
+    local maildir="$target_files/mail"
     # Everything after _queue_add must fail gracefully for a task-kind send:
     # the work is already queued, so aborting here makes the sender believe the
     # send failed, and a retry queues the task a second time. The maildir
@@ -174,7 +198,11 @@ _mail_send() {  # target, [--kind|-k KIND] [--reply THREAD] body
     if [ -n "$reply_thread" ]; then
         thread="$reply_thread"
     else
-        thread="$(_mail_new_thread "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-$target_dir/.cs}}/local/mail")"
+        local roots="$maildir"
+        if [ -n "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ]; then
+            roots=$(_mail_dir "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}") || roots="$maildir"
+        fi
+        thread="$(_mail_new_thread "$roots")"
     fi
     # The body rides on stdin, never as an --arg: `ags -msg <target> -` exists
     # precisely so a multi-KB handoff need not go through argv, and putting it
@@ -230,7 +258,8 @@ _mail_print_files() {  # file...
 }
 
 _mail_read() {
-    local maildir="${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/mail"
+    local maildir
+    maildir=$(_mail_own_dir) || exit 1
     local f files=()
     for f in "$maildir"/new/*.json; do
         [ -f "$f" ] || continue
@@ -249,7 +278,8 @@ _mail_read() {
 }
 
 _mail_log() {
-    local maildir="${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/mail"
+    local maildir
+    maildir=$(_mail_own_dir) || exit 1
     local f files=()
     # Sent copies belong in the history too: without out/, a session cannot see
     # what it said, and cannot find the thread id of any conversation it started.
@@ -323,7 +353,8 @@ _mail_emit_subtree() {  # index
 _mail_thread() {  # thread id
     local id="${1:-}"
     [ -n "$id" ] || error "ags -msg thread needs a thread id (ags -msg log lists them)"
-    local maildir="${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/mail"
+    local maildir
+    maildir=$(_mail_own_dir) || exit 1
     local files=() f
     # Already in filename order, so siblings answering one parent stay in it.
     while IFS= read -r f; do

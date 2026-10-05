@@ -44,6 +44,11 @@ set +e
 # shellcheck source=cs-shared.sh
 [ -r "$_cs_shared" ] && "${BASH:-/bin/bash}" -n "$_cs_shared" 2>/dev/null && . "$_cs_shared"
 if [ "$_cs_had_e" = 1 ]; then set -e; fi
+# Without the library there is no telling whether the session keeps its log in
+# a vault, so nothing is logged rather than risk writing it in plaintext.
+if ! command -v cs_private_dir >/dev/null 2>&1; then
+    cs_private_dir() { return 1; }
+fi
 if ! command -v cs_resolve_session >/dev/null 2>&1; then
     cs_resolve_session() {
         [ -n "${CLAUDE_SESSION_NAME:-}" ] && [ -n "${CLAUDE_SESSION_DIR:-}" ]
@@ -81,9 +86,12 @@ fi
 
 # Log session end. Ensure the gitignored machine-local dir exists first so an
 # append into a missing dir cannot abort this hook (and its cleanup) under set -e.
+# An encrypted session logs into its vault; while the vault is locked the log
+# goes nowhere, never into .cs/local.
 mkdir -p "$META_DIR/local" 2>/dev/null || true
-echo "" >> "$META_DIR/local/session.log"
-echo "$(date '+%Y-%m-%d %H:%M:%S') - Session ended (source: $END_REASON, ID: $SESSION_ID)" >> "$META_DIR/local/session.log"
+if _log_dir=$(cs_private_dir "$META_DIR"); then SESSION_LOG="$_log_dir/session.log"; else SESSION_LOG=/dev/null; fi
+echo "" >> "$SESSION_LOG"
+echo "$(date '+%Y-%m-%d %H:%M:%S') - Session ended (source: $END_REASON, ID: $SESSION_ID)" >> "$SESSION_LOG"
 
 # Append structured event to timeline.jsonl
 TIMELINE_FILE="$META_DIR/timeline.jsonl"
@@ -123,6 +131,45 @@ _cs_end_legacy_lock_cleanup() {
 }
 if command -v cs_run_guarded >/dev/null 2>&1; then
     cs_run_guarded "$META_DIR" _cs_end_legacy_lock_cleanup || true
+fi
+
+# A session ags -encrypt built detaches its vault when the lead conversation
+# ends, so the next open asks for the password again. Claude Code still holds
+# the transcript under .cs/claude-config open while this hook runs, so a waiter
+# detaches once that claude exits. Before detaching it checks the lock again,
+# which SessionEnd removed above, so a reopen in the meantime holds the mount,
+# and .cs/local/vault-holders, where every ags that opened the vault is listed.
+# The detach is plain, never -force: whatever still holds the volume keeps it
+# mounted, and the next open's pre-open handles the leftover. A /clear or
+# /resume carries on in the same claude.
+if [ -f "$META_DIR/local/vault" ] && [ "${CS_RESOLVED_FROM:-env}" = "env" ] \
+    && command -v cs_is_lead >/dev/null 2>&1 && cs_is_lead; then
+    case "$END_REASON" in
+        clear|resume) ;;
+        *)
+            nohup /bin/bash -c '
+                dir=$1 pid=$2
+                while kill -0 "$pid" 2>/dev/null; do sleep 1; done
+                alive() { case "$1" in ""|*[!0-9]*) return 1 ;; esac; kill -0 "$1" 2>/dev/null; }
+                held=""
+                alive "$(tr -d "[:space:]" < "$dir/.cs/session.lock" 2>/dev/null)" && held=1
+                if [ -z "$held" ] && [ -f "$dir/.cs/local/vault-holders" ]; then
+                    while read -r h; do alive "$h" && held=1; done < "$dir/.cs/local/vault-holders"
+                fi
+                if [ -z "$held" ] && mnt=$(cd "$dir/.cs/vault-mnt" 2>/dev/null && pwd -P) \
+                    && mount | grep -F " on $mnt (" >/dev/null; then
+                    # A child with a recorded pid, so a reopen can stop it.
+                    hdiutil detach "$mnt" >/dev/null 2>&1 &
+                    echo "$!" > "$dir/.cs/local/vault-detach.pid"
+                    wait "$!" || true
+                    rm -f "$dir/.cs/local/vault-detach.pid"
+                fi
+                rm -f "$dir/.cs/local/vault-waiter.pid"
+            ' cs-vault-waiter "$SESSION_DIR" "$CLAUDE_PID" </dev/null >/dev/null 2>&1 &
+            echo "$!" > "$META_DIR/local/vault-waiter.pid"
+            disown 2>/dev/null || true
+            ;;
+    esac
 fi
 
 # Regenerate sessions index.md at the sessions root
@@ -214,7 +261,7 @@ if [ -n "$SESSIONS_ROOT" ] && [ -d "$SESSIONS_ROOT" ]; then
     } > "$INDEX_FILE"; } 2>/dev/null || true
 fi
 
-echo "Session management cleanup complete" >> "$META_DIR/local/session.log"
-echo "================================================================================" >> "$META_DIR/local/session.log"
+echo "Session management cleanup complete" >> "$SESSION_LOG"
+echo "================================================================================" >> "$SESSION_LOG"
 
 exit 0

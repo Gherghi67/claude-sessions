@@ -23,7 +23,11 @@ unset CLAUDE_PROJECT_DIR CS_ACTOR CLAUDE_CODE_SESSION_ID CS_CLAUDE_SESSION_ID 2>
 # CODEX_HOME goes too: an ags Codex session exports it, and an install under
 # test would deploy into that real Codex home instead of the test HOME.
 unset CS_DEFAULT_ENGINE CODEX_BIN CS_CODEX_THREAD_BIN CODEX_HOME 2>/dev/null || true
+# The session a suite runs inside is not the session under test: a cs or ags
+# session exports these, and a suite that inherits them writes into it (mail
+# copies in its mail/out, a tag in its README).
 unset CS_SESSION_NAME CS_SESSION_DIR CS_SESSION_META_DIR 2>/dev/null || true
+unset CLAUDE_SESSION_NAME CLAUDE_SESSION_DIR CLAUDE_SESSION_META_DIR 2>/dev/null || true
 
 # --- State ---
 TESTS_RUN=0
@@ -148,6 +152,35 @@ _stub_tools() {  # dir, tools...
     return 0
 }
 
+# Name claude's per-project transcript dir for a cwd the way Claude Code does:
+# realpath it, then replace every character outside [A-Za-z0-9] with '-'
+# (2.1.289: `.replace(/[^a-zA-Z0-9]/g,"-")`). Tests seed transcripts at this
+# name so ags's discovery (_claude_project_dir) finds them.
+_encode_cwd_for_claude_test() {  # cwd
+    local resolved
+    resolved=$(cd "$1" && pwd -P)
+    printf '%s' "$resolved" | sed 's/[^A-Za-z0-9]/-/g'
+}
+
+# Stage a `mount` into dir that prints the given lines as the mount table, for
+# a test that runs ags with dir first on PATH. Returns non-zero when the stub
+# cannot be staged.
+_stub_mount_table() {  # dir, line...
+    local dir="$1"; shift
+    mkdir -p "$dir" || return 1
+    printf '%s\n' "$@" > "$dir/table" || return 1
+    printf '#!/bin/sh\ncat "%s"\n' "$dir/table" > "$dir/mount" || return 1
+    chmod +x "$dir/mount"
+}
+
+# Stage a `mount` into dir that fails to read the mount table. Returns non-zero
+# when the stub cannot be staged.
+_stub_mount_unreadable() {  # dir
+    mkdir -p "$1" || return 1
+    printf '#!/bin/sh\necho "mount: cannot read table" >&2\nexit 1\n' > "$1/mount" || return 1
+    chmod +x "$1/mount"
+}
+
 
 # cs's live-duplicate guard scans the machine's whole process table for the
 # session name or its UUID. The gate runs suites in parallel and many of them
@@ -222,6 +255,10 @@ export CS_SCOPE_BUDGET_MS="600000"
 # so no suite has to remember to.
 unset TMUX TMUX_PANE
 export CS_TITLE_TTY="$HOME/title-tty"
+# A title claim under iTerm2 also runs the iTerm tab helper, which reaches the
+# developer's real iTerm through its Python API. Dropped here for the same
+# reason as TMUX; the tab-helper tests set it per call.
+unset LC_TERMINAL
 export CS_NO_UPDATE_CHECK=1
 # The binaries under review come first on PATH, so a test that runs
 # `cs-secrets` exercises this tree and not whatever install.sh last put in
@@ -475,6 +512,16 @@ env
 STUB_EOF
     chmod +x "$stub"
     echo "$stub"
+}
+
+# Point CLAUDE_CODE_BIN, exported, at a claude stub that appends "launched" to
+# $TEST_TMPDIR/launched on each launch, so a test can tell a refusal from a
+# launch. The export lands in the calling shell; a call inside $(...) would
+# leave CLAUDE_CODE_BIN as it was.
+_make_launch_sentinel() {
+    printf '#!/bin/bash\necho launched >> "%s"\n' "$TEST_TMPDIR/launched" > "$TEST_TMPDIR/claude"
+    chmod +x "$TEST_TMPDIR/claude"
+    export CLAUDE_CODE_BIN="$TEST_TMPDIR/claude"
 }
 
 # --- Session Helpers ---

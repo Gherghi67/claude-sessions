@@ -19,7 +19,7 @@ The label is free text describing what this moment represents — for example:
 
 ## What it does
 
-Runs `ags -checkpoint "<label>"` with your shell tool, which captures the current git state, the uncommitted-file list, and a snapshot of the session narrative, and records the checkpoint on the session timeline. The command's own output names the file it saved under `.cs/checkpoints/`.
+Runs `ags -checkpoint "<label>"` with your shell tool, which captures the current git state, the uncommitted-file list, and a snapshot of the session narrative, and records the checkpoint on the session timeline. The command's own output names the file it saved under `.cs/checkpoints/` (`.cs/private/checkpoints/` in an encrypted session).
 
 ## Related commands
 

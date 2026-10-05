@@ -14,10 +14,19 @@ target="${1:-}"
 # passthrough paths it took — the buffer looks identical for "not a composer
 # file", "disabled", "slash command" and "rewriter declined".
 _trace() {  # stage
-    local dir="${CLAUDE_SESSION_META_DIR:-}"
+    local dir="${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" base
     [ -n "$dir" ] && [ -d "$dir" ] || return 0
-    mkdir -p "$dir/local" 2>/dev/null || return 0
-    local f="$dir/local/rewrite.trace"
+    # An encrypted session keeps its ags files behind .cs/private, and a locked
+    # one gets no trace. cs_private_dir's rule, inlined: sourcing the library
+    # would put a fork on the keypress path.
+    if [ -L "$dir/private" ] || [ -e "$dir/private" ]; then
+        [ -d "$dir/private" ] || return 0
+        base="$dir/private"
+    else
+        base="$dir/local"
+        mkdir -p "$base" 2>/dev/null || return 0
+    fi
+    local f="$base/rewrite.trace"
     # Bound the file the way scope-prompt.sh bounds its own: one run in 64 trims
     # it, often enough that it cannot run away and rare enough that the fork
     # stays off the keypress path. Without this the trace grows for the life of

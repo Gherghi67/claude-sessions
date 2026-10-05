@@ -479,4 +479,57 @@ test_migrate_handles_a_crlf_protocol_block() {
 run_test test_migrate_rewrites_the_older_protocol_wording
 run_test test_migrate_handles_a_crlf_protocol_block
 
+# An encrypted session (.cs/private present) keeps its objective, outcome and
+# session log in the vault, so its protocol gains a block that says so and
+# overrides the plaintext-README instructions above it. Locked sessions are
+# refused before migrate runs, so only the mounted case reaches this phase.
+make_encrypted_test_session() {
+    local dir
+    dir=$(create_test_session "$1")
+    mkdir -p "$TEST_TMPDIR/vault-$1/private"
+    ln -s "$TEST_TMPDIR/vault-$1/private" "$dir/.cs/private"
+    echo "$dir"
+}
+
+test_encrypted_session_gains_the_encrypted_protocol() {
+    local dir
+    dir=$(make_encrypted_test_session "vaulted")
+    CS_ACTOR=alice "$CS_BIN" "vaulted" < /dev/null > /dev/null 2>&1 || true
+    # Positive control: the open reached migrate_session's later phases.
+    assert_file_contains "$dir/CLAUDE.local.md" "cs:wrap-cues" \
+        "migrate ran on the encrypted session" || return 1
+    assert_file_contains "$dir/CLAUDE.local.md" "cs:encrypted-protocol" \
+        "the encrypted session gains the encrypted-protocol block" || return 1
+    assert_file_contains "$dir/CLAUDE.local.md" "top of your narrative" \
+        "the objective and outcome go to the narrative" || return 1
+    assert_file_contains "$dir/CLAUDE.local.md" '\.cs/private/session\.log' \
+        "the block names the session log behind .cs/private" || return 1
+}
+
+test_plain_session_has_no_encrypted_protocol() {
+    local dir
+    dir=$(create_test_session "plainproto")
+    CS_ACTOR=alice "$CS_BIN" "plainproto" < /dev/null > /dev/null 2>&1 || true
+    assert_file_contains "$dir/CLAUDE.local.md" "cs:wrap-cues" \
+        "migrate ran on the plain session" || return 1
+    assert_file_not_contains "$dir/CLAUDE.local.md" "cs:encrypted-protocol" \
+        "a plain session never gains the encrypted block" || return 1
+}
+
+test_encrypted_protocol_is_idempotent() {
+    local dir once
+    dir=$(make_encrypted_test_session "vaulttwice")
+    CS_ACTOR=alice "$CS_BIN" "vaulttwice" < /dev/null > /dev/null 2>&1 || true
+    once=$(cat "$dir/CLAUDE.local.md")
+    CS_ACTOR=alice "$CS_BIN" "vaulttwice" < /dev/null > /dev/null 2>&1 || true
+    assert_eq "1" "$(grep -c 'cs:encrypted-protocol' "$dir/CLAUDE.local.md")" \
+        "the block is added once" || return 1
+    assert_eq "$once" "$(cat "$dir/CLAUDE.local.md")" \
+        "a second open leaves the file byte-identical" || return 1
+}
+
+run_test test_encrypted_session_gains_the_encrypted_protocol
+run_test test_plain_session_has_no_encrypted_protocol
+run_test test_encrypted_protocol_is_idempotent
+
 report_results

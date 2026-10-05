@@ -58,6 +58,50 @@ pub struct Session {
     pub git_repo: Option<String>,
     pub tags: Vec<String>,
     pub archived: bool,
+    /// Present only for a session tagged `encrypted`: whether its vault is
+    /// mounted right now.
+    pub vault: Option<Vault>,
+    /// The README's Objective line, so `/` search reaches what a session is
+    /// about when its name does not say (an adopted project named by its
+    /// folder, a harness-named worktree). None while the placeholder stands.
+    pub objective: Option<String>,
+}
+
+/// The tag a session carries in its README frontmatter to declare that it
+/// keeps its notes in an encrypted volume.
+pub const ENCRYPTED_TAG: &str = "encrypted";
+
+/// The marker drawn beside an encrypted session: a Nerd Font lock once this
+/// machine has confirmed its font draws private-use glyphs (the statusline's
+/// caps consent, `CS_STATUSLINE_CAPS` overriding the answer file), else a word.
+/// KEEP IN SYNC with `_caps_wanted` and ICON_LOCK in bin/cs-statusline.
+pub fn lock_marker() -> &'static str {
+    let env = std::env::var("CS_STATUSLINE_CAPS").ok();
+    let config = std::env::var("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|_| std::env::var("HOME").map(|h| PathBuf::from(h).join(".config")));
+    let answer = config
+        .ok()
+        .and_then(|dir| fs::read_to_string(dir.join("cs/statusline-caps")).ok());
+    lock_marker_for(env.as_deref(), answer.as_deref())
+}
+
+fn lock_marker_for(env: Option<&str>, caps_file: Option<&str>) -> &'static str {
+    let wanted = match env {
+        Some("1") => true,
+        Some("0") => false,
+        _ => caps_file.and_then(|f| f.lines().next()) == Some("on"),
+    };
+    if wanted { "\u{f023}" } else { "enc" }
+}
+
+/// Whether an encrypted session's volume is mounted. Read from `.cs/memory`,
+/// which such a session links into the volume: a link that resolves means
+/// mounted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Vault {
+    Locked,
+    Unlocked,
 }
 
 /// A pending cs update: the newer version and its release-note summaries as
@@ -127,39 +171,43 @@ pub struct SessionPreview {
     pub contributors: Vec<String>,
 }
 
+/// The first non-empty line under `## Objective` in a session README. Both the
+/// preview pane and the row's searchable objective read it, so the two can
+/// never disagree.
+pub fn read_objective(readme: &str) -> Option<String> {
+    let mut after_objective = false;
+    for line in readme.lines() {
+        if line.starts_with("## Objective") {
+            after_objective = true;
+            continue;
+        }
+        if after_objective {
+            // End of the Objective section without real content.
+            if line.starts_with("## ") {
+                return None;
+            }
+            let trimmed = line.trim();
+            if !trimmed.is_empty() {
+                // The README template seeds a bracketed placeholder
+                // (`[Describe ...]`); treat any whole-line `[...]` as
+                // "not filled in", matching the session-start hook.
+                if trimmed.starts_with('[') && trimmed.ends_with(']') {
+                    return None;
+                }
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
+
 /// Load preview info for a session by reading .cs/ metadata files.
 pub fn load_preview(session_dir: &Path) -> SessionPreview {
     let cs_dir = session_dir.join(".cs");
 
-    // First non-empty line from README.md after "## Objective" or first content line
     let objective = fs::read_to_string(cs_dir.join("README.md"))
         .ok()
-        .and_then(|content| {
-            let mut after_objective = false;
-            for line in content.lines() {
-                if line.starts_with("## Objective") {
-                    after_objective = true;
-                    continue;
-                }
-                if after_objective {
-                    // End of the Objective section without real content.
-                    if line.starts_with("## ") {
-                        return None;
-                    }
-                    let trimmed = line.trim();
-                    if !trimmed.is_empty() {
-                        // The README template seeds a bracketed placeholder
-                        // (`[Describe ...]`); treat any whole-line `[...]` as
-                        // "not filled in", matching the session-start hook.
-                        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-                            return None;
-                        }
-                        return Some(trimmed.to_string());
-                    }
-                }
-            }
-            None
-        });
+        .and_then(|content| read_objective(&content));
 
     // Narrative headings from every actor's lab notebook (all ## headings, most
     // recent last within each file)
@@ -434,9 +482,17 @@ pub mod test_root {
     }
 }
 
-/// Directory holding a session's per-machine queue files (`.cs/local`).
+/// Directory holding a session's cs content files (queue, mailbox): `.cs/private`
+/// in an encrypted session, a link into its vault that reads as empty while it
+/// dangles (the vault locked), else `.cs/local`. cs_private_dir's rule.
+fn cs_files_dir(meta_dir: &Path) -> PathBuf {
+    let private = meta_dir.join("private");
+    if private.symlink_metadata().is_ok() { private } else { meta_dir.join("local") }
+}
+
+/// Directory holding a session's queue files.
 pub fn queue_dir(name: &str) -> PathBuf {
-    sessions_root().join(name).join(".cs").join("local")
+    cs_files_dir(&sessions_root().join(name).join(".cs"))
 }
 
 /// True while the session's queue drain is live: cs's Stop hook writes
@@ -620,7 +676,7 @@ fn read_session(path: &Path, secret_counts: &HashMap<String, u32>) -> Session {
         None => Liveness::Dormant,
     };
     let secrets_count = secret_counts.get(&name).copied().unwrap_or(0);
-    let queue_depth = queue_task_files_in(&meta_dir.join("local/queue")).len() as u32;
+    let queue_depth = queue_task_files_in(&cs_files_dir(&meta_dir).join("queue")).len() as u32;
     let unread_mail = unread_mail_count(&meta_dir);
     let has_git = is_git_checkout(path);
     let git_repo = if has_git {
@@ -628,10 +684,20 @@ fn read_session(path: &Path, secret_counts: &HashMap<String, u32>) -> Session {
     } else {
         None
     };
-    let tags = fs::read_to_string(meta_dir.join("README.md"))
-        .map(|s| parse_frontmatter_tags(&s))
+    let readme = fs::read_to_string(meta_dir.join("README.md")).ok();
+    let tags = readme
+        .as_deref()
+        .map(parse_frontmatter_tags)
         .unwrap_or_default();
+    let objective = readme.as_deref().and_then(read_objective);
     let archived = meta_dir.join("archived").is_file();
+    let vault = tags.iter().any(|t| t == ENCRYPTED_TAG).then(|| {
+        if meta_dir.join("memory").exists() {
+            Vault::Unlocked
+        } else {
+            Vault::Locked
+        }
+    });
 
     Session {
         name,
@@ -647,13 +713,18 @@ fn read_session(path: &Path, secret_counts: &HashMap<String, u32>) -> Session {
         git_repo,
         tags,
         archived,
+        vault,
+        objective,
     }
 }
 
 fn find_log_file(session_dir: &Path) -> Option<PathBuf> {
-    // Machine-local is the current home; the older .cs/logs/ and flat logs/
-    // locations are kept as fallbacks for sessions not yet migrated.
+    // An encrypted session keeps its log behind .cs/private (a link into its
+    // vault, unreadable while locked); machine-local is every other session's
+    // home; the older .cs/logs/ and flat logs/ locations are kept as fallbacks
+    // for sessions not yet migrated.
     for candidate in [
+        ".cs/private/session.log",
         ".cs/local/session.log",
         ".cs/logs/session.log",
         "logs/session.log",
@@ -881,11 +952,194 @@ pub fn worktree_parts(name: &str) -> Option<(&str, &str)> {
     name.split_once('@')
 }
 
+/// What deleting a session would take beyond cs's own files, in the two
+/// shapes `cs -rm` names them: top-level entries cs did not create in a
+/// session root, or paths git does not track in a worktree session (the
+/// only files there with no copy on the branch).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnownedEntries {
+    NotCreatedByCs(Vec<String>),
+    NotTrackedByGit(Vec<String>),
+}
+
+impl UnownedEntries {
+    /// The confirm line, matching `cs -rm`'s wording; None when nothing is at risk.
+    pub fn warning(&self) -> Option<String> {
+        let (what, paths) = match self {
+            UnownedEntries::NotCreatedByCs(p) => ("cs did not create", p),
+            UnownedEntries::NotTrackedByGit(p) => ("git does not track", p),
+        };
+        (!paths.is_empty()).then(|| format!("Also deletes files {what}: {}", paths.join(", ")))
+    }
+}
+
+/// Names cs, Claude Code and Finder put in a session root; everything else
+/// there belongs to the user. Kept in step with `_session_foreign_entries`.
+const SESSION_ROOT_OWNED: &[&str] = &[
+    ".cs", ".claude", ".git", ".gitignore", ".gitattributes", "CLAUDE.md", "CLAUDE.local.md", ".DS_Store",
+];
+
+/// Top-level names in a worktree that are cs's, not the user's.
+const WORKTREE_OWNED: &[&str] = &[".cs", ".claude", "CLAUDE.local.md", ".DS_Store"];
+
+/// What removing the session at `path` would delete that cs did not put
+/// there. An adopted session (a symlink) loses only its link, so nothing.
+/// Errors when the listing itself fails: a delete must not proceed on a
+/// list it could not read.
+pub fn unowned_entries(name: &str, path: &Path) -> Result<UnownedEntries, String> {
+    if path.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+        return Ok(UnownedEntries::NotCreatedByCs(Vec::new()));
+    }
+    if worktree_parts(name).is_some() && path.join(".git").is_file() {
+        return worktree_untracked(path).map(UnownedEntries::NotTrackedByGit);
+    }
+    let entries = match fs::read_dir(path) {
+        Ok(entries) => entries,
+        // A row whose directory is already gone holds nothing to lose.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(UnownedEntries::NotCreatedByCs(Vec::new()))
+        }
+        Err(e) => return Err(format!("cannot list {}: {e}", path.display())),
+    };
+    let mut names = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("cannot list {}: {e}", path.display()))?;
+        let entry_name = entry.file_name().to_string_lossy().into_owned();
+        if !SESSION_ROOT_OWNED.contains(&entry_name.as_str()) {
+            names.push(entry_name);
+        }
+    }
+    names.sort();
+    Ok(UnownedEntries::NotCreatedByCs(names))
+}
+
+fn worktree_untracked(path: &Path) -> Result<Vec<String>, String> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(path)
+        .args(["status", "--porcelain", "--ignored", "--untracked-files=normal"])
+        .output()
+        .map_err(|e| format!("cannot run git status in {}: {e}", path.display()))?;
+    if !out.status.success() {
+        return Err(format!(
+            "git status failed in {}: {}",
+            path.display(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    let mut paths: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|l| l.starts_with("?? ") || l.starts_with("!! "))
+        .map(|l| l[3..].to_string())
+        .filter(|p| {
+            let top = p.split('/').next().unwrap_or(p);
+            !WORKTREE_OWNED.contains(&top)
+        })
+        .collect();
+    paths.sort();
+    Ok(paths)
+}
+
+/// The links an encrypted session keeps into its vault, under `.cs/`.
+pub const VAULT_LINKS: [&str; 4] = ["memory", "plans", "claude-config", "private"];
+
+/// Whether `.cs/<sub>` in `dir` is a symlink, resolving or not: a locked
+/// vault leaves it dangling.
+pub fn is_vault_link(dir: &Path, sub: &str) -> bool {
+    dir.join(".cs")
+        .join(sub)
+        .symlink_metadata()
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
+}
+
+/// The first vault link that resolves inside `dir`, with its target as
+/// written: the vault is mounted in the session directory itself.
+fn mounted_vault_link(dir: &Path) -> Option<(&'static str, PathBuf)> {
+    let real_dir = fs::canonicalize(dir).ok()?;
+    VAULT_LINKS.iter().find_map(|sub| {
+        if !is_vault_link(dir, sub) {
+            return None;
+        }
+        let link = dir.join(".cs").join(sub);
+        let real = fs::canonicalize(&link).ok()?;
+        real.starts_with(&real_dir)
+            .then(|| fs::read_link(&link).ok())
+            .flatten()
+            .map(|target| (*sub, target))
+    })
+}
+
+/// The first mount point at or under `dir` in `table`, the output of
+/// `mount`: macOS lists "<dev> on <path> (<opts>)", Linux
+/// "<dev> on <path> type <fs> (<opts>)", and neither escapes its fields: a
+/// source may hold " on " and a path " on ", " type " or " (". So each line
+/// is read the Linux way (cut at its last " type ") and then the macOS way,
+/// and in each every absolute path that follows an " on " is a candidate, as
+/// cs -rm reads it. Matches may overlap: a source ending in " on" shares its
+/// last space with the separator. Each candidate's ancestors are compared by
+/// device and inode, which see through letter case and symlinks where a path
+/// prefix would not.
+fn mount_under(dir: &Path, table: &str) -> Option<PathBuf> {
+    use std::os::unix::fs::MetadataExt;
+    let target = fs::metadata(dir).ok()?;
+    let same_as_dir = |p: &Path| {
+        fs::metadata(p)
+            .map(|m| m.dev() == target.dev() && m.ino() == target.ino())
+            .unwrap_or(false)
+    };
+    table.lines().find_map(|line| {
+        let body = line.rsplit_once(" (").map_or(line, |(head, _)| head);
+        let linux = body.rsplit_once(" type ").map(|(head, _)| head);
+        linux.into_iter().chain(std::iter::once(body)).find_map(|text| {
+            text.char_indices()
+                .filter_map(|(at, _)| text[at..].strip_prefix(" on "))
+                .find_map(|rest| {
+                    let mnt = Path::new(rest);
+                    (mnt.is_absolute() && mnt.ancestors().any(same_as_dir)).then(|| mnt.to_path_buf())
+                })
+        })
+    })
+}
+
+/// The mount table as `mount` prints it.
+fn read_mount_table() -> std::io::Result<String> {
+    let out = std::process::Command::new("mount").output()?;
+    if !out.status.success() {
+        return Err(std::io::Error::other(format!("mount exited with {}", out.status)));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
 /// Remove a session at `path` by whatever means its kind requires: symlinks
 /// are unlinked, worktree sessions are unregistered through git, and plain
 /// directories are removed outright.
 pub fn remove_session_path(root: &Path, name: &str, path: &Path) -> std::io::Result<()> {
-    if path.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+    let is_link = path.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false);
+    // remove_dir_all recurses into a mount, so a vault mounted inside the
+    // session would lose its contents. An adopted session loses only its link.
+    if !is_link {
+        if let Some((sub, target)) = mounted_vault_link(path) {
+            return Err(std::io::Error::other(format!(
+                "{name} has encrypted storage mounted inside it: .cs/{sub} points at {}; unmount it, then retry",
+                target.display()
+            )));
+        }
+        // A cs -encrypt that stopped partway leaves its volume mounted with
+        // no link yet, so the links cannot see it; the mount table can.
+        let table = read_mount_table().map_err(|e| {
+            std::io::Error::other(format!(
+                "could not read the mount table ({e}), so cannot tell whether a volume is mounted inside {name}; refusing to remove it"
+            ))
+        })?;
+        if let Some(mnt) = mount_under(path, &table) {
+            return Err(std::io::Error::other(format!(
+                "{name} has a volume mounted inside it at {}; unmount it, then retry",
+                mnt.display()
+            )));
+        }
+    }
+    if is_link {
         fs::remove_file(path)?;
     } else if worktree_parts(name).is_some() && path.join(".git").is_file() {
         remove_worktree_session(root, name, path)?;
@@ -932,8 +1186,9 @@ fn remove_worktree_session(root: &Path, name: &str, path: &Path) -> std::io::Res
 /// what it prints into `cur/`), matching the shell reader and the statusline.
 /// Only `*.json` files count — a `.DS_Store`, a staging leftover or a
 /// subdirectory would otherwise badge a phantom unread that never clears.
+/// A locked vault's read fails and counts 0.
 fn unread_mail_count(meta_dir: &Path) -> u32 {
-    fs::read_dir(meta_dir.join("local/mail/new"))
+    fs::read_dir(cs_files_dir(meta_dir).join("mail/new"))
         .map(|entries| {
             entries
                 .flatten()
@@ -1083,6 +1338,123 @@ mod tests {
     use super::*;
     use std::fs;
     use std::time::Duration;
+
+    fn git_in(dir: &Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["-c", "user.email=t@example.com", "-c", "user.name=t"])
+            .args(args)
+            .output()
+            .expect("git runs");
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    }
+
+    fn encrypted_session(root: &Path, name: &str, tags: &str) -> PathBuf {
+        let dir = root.join(name);
+        fs::create_dir_all(dir.join(".cs/local")).unwrap();
+        fs::write(dir.join(".cs/README.md"), format!("---\ntags: [{tags}]\n---\n# {name}\n")).unwrap();
+        dir
+    }
+
+    #[test]
+    fn lock_marker_follows_the_caps_consent_with_the_env_overriding_the_file() {
+        assert_eq!(lock_marker_for(None, None), "enc", "unanswered draws the word");
+        assert_eq!(lock_marker_for(None, Some("on\n")), "\u{f023}");
+        assert_eq!(lock_marker_for(None, Some("off\n")), "enc");
+        assert_eq!(lock_marker_for(Some("0"), Some("on\n")), "enc", "env 0 beats the file");
+        assert_eq!(lock_marker_for(Some("1"), None), "\u{f023}", "env 1 beats a missing file");
+    }
+
+    #[test]
+    fn a_session_tagged_encrypted_reads_locked_while_its_memory_link_dangles() {
+        let root = std::env::temp_dir().join(format!("cs-vault-locked-{}", std::process::id()));
+        let dir = encrypted_session(&root, "rel", "home, encrypted");
+        std::os::unix::fs::symlink(dir.join(".cs/vault-mnt/memory"), dir.join(".cs/memory")).unwrap();
+
+        let session = read_session(&dir, &HashMap::new());
+
+        assert_eq!(session.vault, Some(Vault::Locked));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_session_tagged_encrypted_reads_unlocked_once_its_memory_resolves() {
+        let root = std::env::temp_dir().join(format!("cs-vault-open-{}", std::process::id()));
+        let dir = encrypted_session(&root, "rel", "encrypted");
+        fs::create_dir_all(dir.join(".cs/vault-mnt/memory")).unwrap();
+        std::os::unix::fs::symlink(dir.join(".cs/vault-mnt/memory"), dir.join(".cs/memory")).unwrap();
+
+        let session = read_session(&dir, &HashMap::new());
+
+        assert_eq!(session.vault, Some(Vault::Unlocked));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_untagged_session_has_no_vault_even_with_a_dangling_memory_link() {
+        let root = std::env::temp_dir().join(format!("cs-vault-none-{}", std::process::id()));
+        let dir = encrypted_session(&root, "synced", "home");
+        std::os::unix::fs::symlink(dir.join("gone"), dir.join(".cs/memory")).unwrap();
+
+        let session = read_session(&dir, &HashMap::new());
+
+        assert_eq!(session.vault, None);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn unowned_entries_lists_top_level_files_cs_did_not_create() {
+        let root = std::env::temp_dir().join(format!("cs-unowned-plain-{}", std::process::id()));
+        let dir = root.join("rel");
+        for d in [".cs/local", ".claude", ".git", "journal.sparsebundle"] {
+            fs::create_dir_all(dir.join(d)).unwrap();
+        }
+        for f in [".gitignore", ".gitattributes", "CLAUDE.md", "CLAUDE.local.md", ".DS_Store", "start"] {
+            fs::write(dir.join(f), "x").unwrap();
+        }
+
+        let got = unowned_entries("rel", &dir).unwrap();
+
+        assert_eq!(got, UnownedEntries::NotCreatedByCs(vec!["journal.sparsebundle".into(), "start".into()]));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn unowned_entries_is_empty_for_an_adopted_link() {
+        let root = std::env::temp_dir().join(format!("cs-unowned-link-{}", std::process::id()));
+        let project = root.join("project");
+        fs::create_dir_all(&project).unwrap();
+        fs::write(project.join("main.rs"), "x").unwrap();
+        std::os::unix::fs::symlink(&project, root.join("adopted")).unwrap();
+
+        let got = unowned_entries("adopted", &root.join("adopted")).unwrap();
+
+        assert_eq!(got, UnownedEntries::NotCreatedByCs(vec![]));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn unowned_entries_lists_untracked_and_ignored_files_in_a_worktree() {
+        let root = std::env::temp_dir().join(format!("cs-unowned-wt-{}", std::process::id()));
+        let base = root.join("proj");
+        fs::create_dir_all(&base).unwrap();
+        fs::write(base.join("tracked.txt"), "x").unwrap();
+        fs::write(base.join(".gitignore"), "*.img\n.cs/local/\n").unwrap();
+        git_in(&base, &["init", "-q"]);
+        git_in(&base, &["add", "tracked.txt", ".gitignore"]);
+        git_in(&base, &["commit", "-qm", "seed"]);
+        let wt = root.join("proj@task");
+        git_in(&base, &["worktree", "add", "-q", wt.to_str().unwrap(), "-b", "cs/task"]);
+        fs::create_dir_all(wt.join(".cs/local")).unwrap();
+        fs::write(wt.join("notes.txt"), "draft").unwrap();
+        fs::write(wt.join("journal.img"), "secret").unwrap();
+
+        let got = unowned_entries("proj@task", &wt).unwrap();
+
+        assert_eq!(got, UnownedEntries::NotTrackedByGit(vec!["journal.img".into(), "notes.txt".into()]));
+        let _ = fs::remove_dir_all(&root);
+    }
 
     fn setup_session(root: &Path, name: &str) -> PathBuf {
         let dir = root.join(name);
@@ -1322,6 +1694,47 @@ mod tests {
         fs::remove_dir_all(&dir).unwrap();
     }
 
+    // An encrypted session keeps its queue behind .cs/private: the scan's
+    // depth, the notes panel and the editor all read it there, and a locked
+    // vault reads as an empty queue.
+    #[test]
+    fn queue_reads_the_private_dir() {
+        let dir = std::env::temp_dir().join(format!("cs-queue-private-{}", std::process::id()));
+        let vault = dir.join("vault/private");
+        fs::create_dir_all(vault.join("queue")).unwrap();
+        fs::create_dir_all(dir.join("root/vt/.cs/local")).unwrap();
+        std::os::unix::fs::symlink(&vault, dir.join("root/vt/.cs/private")).unwrap();
+        fs::write(vault.join("queue/0000000001-a"), "sealed task\n").unwrap();
+        fs::write(vault.join("queue.state"), "draining\n").unwrap();
+        let _root = test_root::scoped(dir.join("root"));
+        assert_eq!(queue_dir("vt"), dir.join("root/vt/.cs/private"));
+        assert_eq!(read_queue("vt"), vec!["sealed task".to_string()]);
+        assert!(queue_active("vt"));
+        let scanned = scan_sessions_in(&dir.join("root"));
+        assert_eq!(scanned.iter().find(|s| s.name == "vt").map(|s| s.queue_depth), Some(1));
+        fs::rename(dir.join("vault"), dir.join("unmounted")).unwrap();
+        assert!(read_queue("vt").is_empty());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    // An encrypted session keeps its mailbox behind .cs/private, a link into
+    // its vault; while that link dangles (the vault locked) nothing counts.
+    #[test]
+    fn unread_mail_counts_the_private_mailbox() {
+        let dir = std::env::temp_dir().join(format!("cs-unread-private-{}", std::process::id()));
+        let vault = dir.join("vault/private");
+        let new = vault.join("mail/new");
+        fs::create_dir_all(&new).unwrap();
+        fs::create_dir_all(dir.join("meta")).unwrap();
+        std::os::unix::fs::symlink(&vault, dir.join("meta/private")).unwrap();
+        fs::write(new.join("0000000001-a.json"), "{\"a\":1}\n").unwrap();
+        fs::write(new.join("0000000002-b.json"), "{\"a\":2}\n").unwrap();
+        assert_eq!(unread_mail_count(&dir.join("meta")), 2);
+        fs::rename(dir.join("vault"), dir.join("unmounted")).unwrap();
+        assert_eq!(unread_mail_count(&dir.join("meta")), 0);
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn unread_mail_is_zero_without_maildir() {
         let dir = std::env::temp_dir().join(format!("cs-unread-none-{}", std::process::id()));
@@ -1382,6 +1795,24 @@ mod tests {
     #[test]
     fn truncate_repo_one_char_is_ellipsis() {
         assert_eq!(truncate_repo("erp/firstborn-server", 1), "\u{2026}");
+    }
+
+    // An encrypted session keeps its log behind .cs/private, a link into its
+    // vault; the picker's created date comes from there.
+    #[test]
+    fn find_log_file_reads_the_private_log() {
+        let dir = std::env::temp_dir().join(format!("cs-test-private-log-{}", std::process::id()));
+        let vault = dir.join("vault/private");
+        fs::create_dir_all(&vault).unwrap();
+        fs::create_dir_all(dir.join("vt/.cs")).unwrap();
+        std::os::unix::fs::symlink(&vault, dir.join("vt/.cs/private")).unwrap();
+        fs::write(vault.join("session.log"), "Claude Code Session Log\nSession: vt\nStarted: 2026-03-04 05:06:00\n").unwrap();
+
+        let log = find_log_file(&dir.join("vt"));
+
+        assert_eq!(log, Some(dir.join("vt/.cs/private/session.log")));
+        assert_eq!(parse_created(&log.unwrap()), Some("2026-03-04 05:06".to_string()));
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -1464,6 +1895,115 @@ mod tests {
             "base repo must not keep a stale worktree registration"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // An encrypted session mounts its vault inside the session directory by
+    // convention, and remove_dir_all recurses into a mount: deleting the
+    // session would delete what the vault holds. Unmounted, the link dangles
+    // and the delete goes ahead.
+    #[test]
+    fn remove_session_path_refuses_while_the_vault_is_mounted_inside() {
+        let root = std::env::temp_dir().join(format!("cs-rm-vault-{}", std::process::id()));
+        let dir = root.join("vt");
+        let vault = dir.join(".cs/vault-mnt/memory");
+        fs::create_dir_all(&vault).unwrap();
+        fs::write(vault.join("narrative.md"), "sealed\n").unwrap();
+        std::os::unix::fs::symlink(&vault, dir.join(".cs/memory")).unwrap();
+
+        let err = remove_session_path(&root, "vt", &dir).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "vt has encrypted storage mounted inside it: .cs/memory points at {}; unmount it, then retry",
+                vault.display()
+            )
+        );
+        assert!(vault.join("narrative.md").exists(), "the vault's contents survive");
+
+        fs::remove_dir_all(&vault).unwrap();
+        remove_session_path(&root, "vt", &dir).unwrap();
+        assert!(!dir.exists(), "an unmounted encrypted session is removed");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    // A cs -encrypt that stops partway leaves its volume mounted at
+    // .cs/vault-mnt with no vault link yet, so only the mount table shows it.
+    #[test]
+    fn mount_under_finds_a_volume_mounted_inside_the_session() {
+        let root = std::env::temp_dir().join(format!("cs-mount-under-{}", std::process::id()));
+        let dir = root.join("h1");
+        let mnt = dir.join(".cs/vault-mnt");
+        fs::create_dir_all(&mnt).unwrap();
+        let macos = format!(
+            "/dev/disk3s5 on /System/Volumes/Data (apfs, local, journaled)\n\
+             /dev/disk9s1 on {} (apfs, local, nodev, nosuid, journaled, noowners, mounted by tester)\n",
+            mnt.display()
+        );
+        let linux = format!(
+            "/dev/sda1 on / type ext4 (rw,relatime)\n/dev/loop9 on {} type ext4 (rw,relatime)\n",
+            mnt.display()
+        );
+
+        assert_eq!(mount_under(&dir, &macos), Some(mnt.clone()), "macOS table");
+        assert_eq!(mount_under(&dir, &linux), Some(mnt.clone()), "Linux table, type dropped");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    // "h1x" beside "h1": a string-prefix match would refuse the wrong session.
+    #[test]
+    fn mount_under_ignores_a_volume_in_another_session() {
+        let root = std::env::temp_dir().join(format!("cs-mount-other-{}", std::process::id()));
+        let dir = root.join("h1");
+        let other = root.join("h1x/.cs/vault-mnt");
+        fs::create_dir_all(&dir).unwrap();
+        fs::create_dir_all(&other).unwrap();
+        let table = format!("/dev/r on / (apfs, local)\n/dev/disk9s1 on {} (apfs, local)\n", other.display());
+
+        assert_eq!(mount_under(&dir, &table), None);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    // A mount source may itself hold " on " (an NFS export, an SMB share), or
+    // end in " on", so that its " on" and the separator share one space.
+    #[test]
+    fn mount_under_reads_a_mount_whose_source_holds_on() {
+        let root = std::env::temp_dir().join(format!("cs-mount-src-on-{}", std::process::id()));
+        let dir = root.join("h1");
+        let mnt = dir.join(".cs/vault-mnt");
+        fs::create_dir_all(&mnt).unwrap();
+
+        for source in ["host:/export on disk", "host:/export on"] {
+            let macos = format!("{source} on {} (nfs)\n", mnt.display());
+            let linux = format!("{source} on {} type nfs (rw)\n", mnt.display());
+            assert_eq!(mount_under(&dir, &macos), Some(mnt.clone()), "{macos}");
+            assert_eq!(mount_under(&dir, &linux), Some(mnt.clone()), "{linux}");
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    // A mount point is always absolute: text after an " on " inside a source
+    // must not resolve against the working directory (the package root under
+    // cargo test, where src/ exists).
+    #[test]
+    fn mount_under_never_reads_a_relative_path() {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+
+        assert_eq!(mount_under(&src, "map on src (autofs, nobrowse)\n"), None);
+    }
+
+    // macOS never prints " type <fs>", so a path holding " type " is still the
+    // mount point, not a Linux line to cut short.
+    #[test]
+    fn mount_under_reads_a_macos_mount_point_holding_type() {
+        let root = std::env::temp_dir().join(format!("cs-mount-type-{}/project type archive", std::process::id()));
+        let dir = root.join("h1");
+        let mnt = dir.join(".cs/vault-mnt");
+        fs::create_dir_all(&mnt).unwrap();
+        let table = format!("/dev/disk9s1 on {} (apfs, local, nodev, nosuid, journaled)\n", mnt.display());
+
+        assert_eq!(mount_under(&dir, &table), Some(mnt.clone()));
+        let _ = fs::remove_dir_all(root.parent().unwrap());
     }
 
     #[test]
@@ -1878,6 +2418,37 @@ mod tests {
         let sessions = scan_sessions_in(&root);
         let s = sessions.iter().find(|s| s.name == "tagged").unwrap();
         assert_eq!(s.tags, vec!["api", "infra"]);
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    // The searched objective and the previewed one come from the same reader,
+    // and the scan has to call it, or a correct read_objective searches nothing.
+    #[test]
+    fn scan_populates_the_objective_the_preview_shows() {
+        let root = std::env::temp_dir().join(format!("cs-test-objective-{}", std::process::id()));
+        let _guard = test_root::scoped(root.clone());
+        let dir = root.join("brave-jang-0f6265");
+        fs::create_dir_all(dir.join(".cs/local")).unwrap();
+        fs::write(
+            dir.join(".cs/README.md"),
+            "---\nstatus: active\n---\n# Session\n\n## Objective\n\nRewrite the electron UI shell\n\n## Outcome\n",
+        )
+        .unwrap();
+        let placeholder = root.join("fresh");
+        fs::create_dir_all(placeholder.join(".cs/local")).unwrap();
+        fs::write(
+            placeholder.join(".cs/README.md"),
+            "---\nstatus: active\n---\n## Objective\n\n[Describe what you're trying to accomplish in this session]\n\n## Outcome\n",
+        )
+        .unwrap();
+
+        let sessions = scan_sessions_in(&root);
+        let s = sessions.iter().find(|s| s.name == "brave-jang-0f6265").unwrap();
+        assert_eq!(s.objective.as_deref(), Some("Rewrite the electron UI shell"));
+        assert_eq!(s.objective, load_preview(&dir).objective);
+        let f = sessions.iter().find(|s| s.name == "fresh").unwrap();
+        assert!(f.objective.is_none(), "the template placeholder is not an objective");
 
         fs::remove_dir_all(&root).unwrap();
     }

@@ -1308,7 +1308,7 @@ test_sl_tmux_fake_when_server_field_malformed() {
 }
 
 # A pid reused between the ps read and the walk can make the table cyclic; the
-# walk must give up rather than spin on a once-a-second render path.
+# walk must give up rather than spin.
 test_sl_tmux_walk_terminates_on_cycle() {
     ( _load_sl_functions
       _make_ps_chain "500:400 400:500 2216:1"
@@ -1797,6 +1797,42 @@ test_mail_segment_ignores_non_json_entries() {
     assert_output_contains "$out" "✉ 3" "non-.json entries are not counted as unread" || return 1
 }
 
+# An encrypted session's mailbox is behind .cs/private, a link into its vault;
+# while the link dangles (the vault locked) there is nothing to count.
+test_notes_segment_counts_the_vault_queue() {
+    export NO_COLOR=1
+    export CLAUDE_SESSION_NAME="vaultq"
+    make_cs_session "vaultq" 0 cyan
+    local meta="$CS_SESSIONS_ROOT/vaultq/.cs"
+    mkdir -p "$TEST_TMPDIR/vaultq/private/queue"
+    ln -s "$TEST_TMPDIR/vaultq/private" "$meta/private"
+    printf 'task a\n' > "$TEST_TMPDIR/vaultq/private/queue/0000000001-a"
+    printf 'task b\n' > "$TEST_TMPDIR/vaultq/private/queue/0000000002-b"
+    local out
+    out=$(run_sl "$FIXTURE_DOCS")
+    assert_output_contains "$out" "▤ 2" "the vault's queue is counted" || return 1
+    mv "$TEST_TMPDIR/vaultq" "$TEST_TMPDIR/vaultq-unmounted"
+    out=$(run_sl "$FIXTURE_DOCS")
+    assert_output_not_contains "$out" "▤" "a locked vault shows no queue" || return 1
+}
+
+test_mail_segment_counts_the_vault_mailbox() {
+    export NO_COLOR=1
+    export CLAUDE_SESSION_NAME="vaultmail"
+    make_cs_session "vaultmail" 0 cyan
+    local meta="$CS_SESSIONS_ROOT/vaultmail/.cs"
+    mkdir -p "$TEST_TMPDIR/vault/private/mail/new"
+    ln -s "$TEST_TMPDIR/vault/private" "$meta/private"
+    printf '{"a":1}\n' > "$TEST_TMPDIR/vault/private/mail/new/0000000001-a.json"
+    printf '{"a":2}\n' > "$TEST_TMPDIR/vault/private/mail/new/0000000002-b.json"
+    local out
+    out=$(run_sl "$FIXTURE_DOCS")
+    assert_output_contains "$out" "✉ 2" "the vault's unread mail is counted" || return 1
+    mv "$TEST_TMPDIR/vault" "$TEST_TMPDIR/unmounted"
+    out=$(run_sl "$FIXTURE_DOCS")
+    assert_output_not_contains "$out" "✉" "a locked vault shows no mail" || return 1
+}
+
 test_pane_segment_absent_outside_tmux() {
     export NO_COLOR=1
     export CS_STATUSLINE_SEGMENTS="session,pane,ctx"
@@ -1893,6 +1929,8 @@ run_test test_notes_segment_counts_only_files
 run_test test_mail_segment_shows_unread_count
 run_test test_mail_segment_absent_when_all_read
 run_test test_mail_segment_ignores_non_json_entries
+run_test test_mail_segment_counts_the_vault_mailbox
+run_test test_notes_segment_counts_the_vault_queue
 run_test test_pane_segment_hidden_when_tmux_is_foreign
 run_test test_pane_segment_absent_outside_tmux
 run_test test_pane_segment_needs_both_tmux_vars
@@ -1932,7 +1970,7 @@ test_limits_file_skipped_without_rate_limits() {
     assert_file_not_exists "$CS_SESSIONS_ROOT/limsess2/.cs/local/limits" "no limits file without rate_limits" || return 1
 }
 
-# Every render-time epoch read (limits stamp, countdown, pulse) goes through one
+# Every render-time epoch read (limits stamp, countdown) goes through one
 # shared clock; CS_STATUSLINE_NOW pins it, so the stamp reflects the pin rather
 # than a raw wall-clock fork.
 test_limits_stamp_uses_shared_clock() {
@@ -1946,7 +1984,7 @@ test_limits_stamp_uses_shared_clock() {
 
 # _sl_now initializes the shared clock in-process; an inherited _NOW from the
 # environment must NOT be trusted as already-computed (that would bypass the pin
-# and let a garbage value reach the stamp and the pulse arithmetic).
+# and let a garbage value reach the stamp).
 test_shared_clock_ignores_inherited_now() {
     export CLAUDE_SESSION_NAME="inhsess"
     mkdir -p "$CS_SESSIONS_ROOT/inhsess/.cs/local"
@@ -1967,21 +2005,6 @@ test_shared_clock_replaces_inherited_garbage() {
     assert_file_contains "$lim" "stamped_at: [0-9]" "stamp is a real epoch, not inherited garbage" || return 1
 }
 
-# The attention pulse parity uses the shared clock; an inherited garbage _NOW must
-# not reach the arithmetic (crashes bash 3.2 under set -u). With the pin at an even
-# second the mark renders brand regardless of the inherited value.
-test_pulse_ignores_inherited_now() {
-    export COLORTERM=truecolor
-    export CLAUDE_SESSION_NAME="inhpulse"
-    make_cs_session "inhpulse" 1024 blue
-    mkdir -p "$CS_SESSIONS_ROOT/inhpulse/.cs/local"
-    touch "$CS_SESSIONS_ROOT/inhpulse/.cs/local/attention"
-    local json='{"session_name":"inhpulse","workspace":{"current_dir":"/none"}}'
-    local out
-    out=$(_NOW=garbage CS_STATUSLINE_NOW=1000 run_sl "$json")
-    assert_output_contains_f "$out" '38;2;217;119;87;1m✳' "pin wins over inherited _NOW; even second stays brand" || return 1
-}
-
 # The memo ready-flag itself must not be trusted from the environment: with BOTH
 # _SL_NOW_READY and a garbage _NOW inherited, the render still sanitizes them and
 # honors the pin (not the inherited garbage) in the stamp.
@@ -1994,23 +2017,9 @@ test_shared_clock_ignores_inherited_ready_flag() {
     assert_file_contains "$lim" "stamped_at: 1234567890" "inherited ready flag + garbage _NOW sanitized; pin wins" || return 1
 }
 
-# Same both-inherited case on the pulse path: sanitized memo state means the
-# garbage _NOW never reaches the arithmetic (which would crash bash 3.2 set -u).
-test_pulse_ignores_inherited_ready_flag() {
-    export COLORTERM=truecolor
-    export CLAUDE_SESSION_NAME="inhrpulse"
-    make_cs_session "inhrpulse" 1024 blue
-    mkdir -p "$CS_SESSIONS_ROOT/inhrpulse/.cs/local"
-    touch "$CS_SESSIONS_ROOT/inhrpulse/.cs/local/attention"
-    local json='{"session_name":"inhrpulse","workspace":{"current_dir":"/none"}}'
-    local out
-    out=$(_SL_NOW_READY=1 _NOW=garbage CS_STATUSLINE_NOW=1000 run_sl "$json")
-    assert_output_contains_f "$out" '38;2;217;119;87;1m✳' "inherited ready flag + garbage _NOW sanitized; pin parity holds" || return 1
-}
-
 # A leading-zero clock value (e.g. a pin of 08) passes a bare digit check but is
 # read as octal by bash arithmetic, aborting on an 8/9 digit. The clock must be
-# normalized to canonical base-10 before it reaches the stamp/countdown/pulse.
+# normalized to canonical base-10 before it reaches the stamp/countdown.
 test_shared_clock_normalizes_leading_zero_pin() {
     export CLAUDE_SESSION_NAME="zeropin"
     mkdir -p "$CS_SESSIONS_ROOT/zeropin/.cs/local"
@@ -2202,9 +2211,7 @@ run_test test_limits_file_skipped_without_rate_limits
 run_test test_limits_stamp_uses_shared_clock
 run_test test_shared_clock_ignores_inherited_now
 run_test test_shared_clock_replaces_inherited_garbage
-run_test test_pulse_ignores_inherited_now
 run_test test_shared_clock_ignores_inherited_ready_flag
-run_test test_pulse_ignores_inherited_ready_flag
 run_test test_shared_clock_normalizes_leading_zero_pin
 run_test test_sl_theme_user_pin_overrides
 run_test test_sl_theme_non_macos_uses_frozen_launch_value
@@ -2837,7 +2844,7 @@ run_test test_iso_epoch_refuses_a_non_utc_offset
 
 # M1: with no curl on the machine the cache is never written, so every render is
 # perpetually "due" — and each one forked a subshell plus a full bash load of
-# this script only to bail. Once a second, per open Fable session.
+# this script only to bail. On every render, per open Fable session.
 test_fable_segment_does_not_spawn_a_refresher_without_curl() {
     _load_sl_functions
     seed_usage_cache org-abc 86 "2026-08-29T03:59:59Z" 1787816000 1787816300
@@ -3236,6 +3243,8 @@ test_sgr_ink_tokens_256_and_basic() {
     _sgr 38 amber;   assert_eq "38;5;130" "$_SGR" "amber 256 light" || return 1
     _sgr 48 crit;    assert_eq "48;5;160" "$_SGR" "crit 256 light" || return 1
     _sgr 38 critink; assert_eq "38;5;231" "$_SGR" "critink 256 light" || return 1
+    _sgr 38 brand;      assert_eq "38;5;173" "$_SGR" "brand 256" || return 1
+    _sgr 38 brandshade; assert_eq "38;5;167" "$_SGR" "brandshade 256, apart from brand" || return 1
     SL_THEME=dark
     _sgr 48 surface;    assert_eq "48;5;237" "$_SGR" "surface 256 dark" || return 1
     _sgr 38 ink;        assert_eq "38;5;255" "$_SGR" "ink 256 dark" || return 1
@@ -3250,6 +3259,8 @@ test_sgr_ink_tokens_256_and_basic() {
     _sgr 38 amber;   assert_eq "33" "$_SGR" "amber basic" || return 1
     _sgr 48 crit;    assert_eq "41" "$_SGR" "crit basic bg" || return 1
     _sgr 38 critink; assert_eq "97" "$_SGR" "critink basic light" || return 1
+    _sgr 38 brand;      assert_eq "33" "$_SGR" "brand basic" || return 1
+    _sgr 38 brandshade; assert_eq "31" "$_SGR" "brandshade basic, apart from brand" || return 1
     SL_THEME=dark
     _sgr 38 ink;     assert_eq "97" "$_SGR" "ink basic dark" || return 1
     _sgr 38 ink2;    assert_eq "97" "$_SGR" "ink2 basic dark" || return 1
@@ -3352,7 +3363,7 @@ test_caps_unanswered_renders_square() {
 }
 
 # A directory where the answer file should be is not an answer: square ends,
-# and nothing on stderr, since the bar repaints every second.
+# and nothing on stderr, since the bar repaints on every Claude Code event.
 test_caps_path_that_is_a_directory_renders_square_and_silent() {
     export COLORTERM=truecolor
     export CS_TERM_BG_RGB="253;246;227"
@@ -3450,7 +3461,7 @@ test_logo_is_brand_ink_inside_identity() {
         "one fill space between the mark and the session name" || return 1
 }
 
-test_logo_pulse_alternates_brand_and_brandshade() {
+test_logo_holds_brandshade_while_attention_is_raised() {
     export COLORTERM=truecolor
     export CS_TERM_BG_RGB="253;246;227"
     export CLAUDE_SESSION_NAME="blinksess"
@@ -3461,11 +3472,11 @@ test_logo_pulse_alternates_brand_and_brandshade() {
     local even odd
     even=$(CS_STATUSLINE_NOW=1000 run_sl "$json")
     odd=$(CS_STATUSLINE_NOW=1001 run_sl "$json")
-    assert_output_contains_f "$even" "38;2;217;119;87;1m✳" "even second: brand" || return 1
-    assert_output_contains_f "$odd"  "38;2;184;101;74;1m✳" "odd second: brandshade" || return 1
+    assert_output_contains_f "$even" "38;2;184;101;74;1m✳" "attention: brandshade on an even second" || return 1
+    assert_output_contains_f "$odd"  "38;2;184;101;74;1m✳" "attention: brandshade on an odd second" || return 1
 }
 
-test_crit_text_pulses_white_and_critshade() {
+test_crit_text_holds_white_on_the_red_fill() {
     export COLORTERM=truecolor
     export CS_TERM_BG_RGB="253;246;227"
     local json='{"session_name":"s","workspace":{"current_dir":"/none"},"context_window":{"used_percentage":71}}'
@@ -3473,9 +3484,9 @@ test_crit_text_pulses_white_and_critshade() {
     even=$(CS_STATUSLINE_NOW=1000 run_sl "$json")
     odd=$(CS_STATUSLINE_NOW=1001 run_sl "$json")
     assert_output_contains_f "$even" "48;2;215;0;21;38;2;255;255;255;1m71%" "even second: white on the red fill" || return 1
-    assert_output_contains_f "$odd"  "48;2;215;0;21;38;2;255;205;200;1m71%" "odd second: the reddish white" || return 1
-    assert_output_contains_f "$odd"  "48;2;215;0;21;38;2;255;205;200;1m◕ ctx" "the label pulses with the number" || return 1
-    assert_output_not_contains_f "$odd" "38;2;255;255;255" "no white left on the odd second" || return 1
+    assert_output_contains_f "$odd"  "48;2;215;0;21;38;2;255;255;255;1m71%" "odd second: still white on the red fill" || return 1
+    assert_output_contains_f "$odd"  "48;2;215;0;21;38;2;255;255;255;1m◕ ctx" "the label stays white with the number" || return 1
+    assert_output_not_contains_f "$odd" "38;2;255;205;200" "no reddish white on any second" || return 1
 }
 
 # The effort word takes Claude Code's own /effort colours (pixel-sampled from
@@ -3508,6 +3519,37 @@ test_effort_max_is_a_gradient_across_its_letters() {
     assert_output_contains "$out" "✦ Opus max" "plain mode keeps the word whole" || return 1
 }
 
+tag_session() {  # name tags
+    local readme="$CS_SESSIONS_ROOT/$1/.cs/README.md"
+    printf -- '---\ncreated: 2026-06-11\ntags: [%s]\n---\n# %s\n' "$2" "$1" > "$readme"
+}
+
+test_encrypted_session_shows_a_lock_after_its_name() {
+    export NO_COLOR=1 CS_STATUSLINE_CAPS=1 CLAUDE_SESSION_NAME="vsess"
+    make_cs_session "vsess" 1024 blue
+    tag_session vsess 'home, "encrypted"'
+    local out; out=$(run_sl '{"session_name":"vsess","workspace":{"current_dir":"/none"}}')
+    assert_output_contains "$out" $'vsess \xef\x80\xa3' "Nerd Font lock follows the name when caps are on" || return 1
+}
+
+test_encrypted_lock_falls_back_to_text_without_the_patched_font() {
+    export NO_COLOR=1 CS_STATUSLINE_CAPS=0 CLAUDE_SESSION_NAME="vsess"
+    make_cs_session "vsess" 1024 blue
+    tag_session vsess 'encrypted'
+    local out; out=$(run_sl '{"session_name":"vsess","workspace":{"current_dir":"/none"}}')
+    assert_output_contains "$out" "vsess enc" "text marker when the font is unconfirmed" || return 1
+    assert_output_not_contains "$out" $'\xef\x80\xa3' "no private-use glyph without consent" || return 1
+}
+
+test_untagged_or_lookalike_tag_shows_no_lock() {
+    export NO_COLOR=1 CS_STATUSLINE_CAPS=0 CLAUDE_SESSION_NAME="vsess"
+    make_cs_session "vsess" 1024 blue
+    tag_session vsess 'encrypted-later, notencrypted'
+    local out; out=$(run_sl '{"session_name":"vsess","workspace":{"current_dir":"/none"}}')
+    assert_output_not_contains "$out" "enc " "a tag that only contains the word is not the marker" || return 1
+    assert_output_contains "$out" "vsess" "the name still renders" || return 1
+}
+
 test_notes_and_mail_are_amber_ink_after_the_session() {
     export COLORTERM=truecolor
     export CS_TERM_BG_RGB="253;246;227"
@@ -3538,11 +3580,14 @@ run_test test_line_ends_at_the_last_cap_regardless_of_columns
 run_test test_ctx_amber_is_ink_on_the_surface
 run_test test_ctx_crit_inverts_only_its_capsule
 run_test test_logo_is_brand_ink_inside_identity
-run_test test_logo_pulse_alternates_brand_and_brandshade
-run_test test_crit_text_pulses_white_and_critshade
+run_test test_logo_holds_brandshade_while_attention_is_raised
+run_test test_crit_text_holds_white_on_the_red_fill
 run_test test_effort_takes_claude_codes_effort_colours
 run_test test_effort_max_is_a_gradient_across_its_letters
 run_test test_notes_and_mail_are_amber_ink_after_the_session
+run_test test_encrypted_session_shows_a_lock_after_its_name
+run_test test_encrypted_lock_falls_back_to_text_without_the_patched_font
+run_test test_untagged_or_lookalike_tag_shows_no_lock
 
 # ============================================================================
 # Limits: hidden until hot, tightest first, at most two, fable folded in
@@ -3836,7 +3881,7 @@ make_full_render_fixture() {
     }')
 }
 
-# The bar repaints once a second; a render that has painted once before, in
+# The bar repaints on every event; a render that has painted once before, in
 # the same second, forks exactly two external commands: the interpreter and jq
 # for stdin. Every other fork is behind a cache (git line, tmux ancestry, org
 # id, fable fields) or a stamp cadence, and comes back at most once in its
@@ -3870,7 +3915,8 @@ run_test test_warm_render_forks_only_the_interpreter_and_jq
 
 
 # The git line is reused for GIT_CACHE_TTL seconds and re-read after: a change
-# to the tree shows within the TTL, and the clock is the pinned one.
+# to the tree shows at the first render past the TTL, and the clock is the
+# pinned one.
 test_git_line_is_cached_for_the_ttl_then_refreshed() {
     export CS_TERM_THEME=light FORCE_COLOR=0
     local work json
@@ -3890,7 +3936,7 @@ run_test test_git_line_is_cached_for_the_ttl_then_refreshed
 
 # The tmux-ancestry verdict is kept for TMUX_REAL_CACHE_TTL under the parent
 # pid and the TMUX claim: the walk (ps and awk) runs once per conversation,
-# not once per second, and a stale verdict is re-walked.
+# not on every render, and a stale verdict is re-walked.
 test_tmux_ancestry_verdict_is_cached_then_rewalked() {
     ( _load_sl_functions
       export TMUX="/tmp/fake,2216,0" PATH="$TEST_TMPDIR/fakebin:$PATH"
@@ -3926,7 +3972,7 @@ run_test test_unusable_ps_verdict_is_not_cached
 # A conversation's first render is the only one that has ever paid for the
 # ancestry walk, and it is the render Claude Code kills. It no longer waits:
 # the verdict is taken as real, the walk runs in a detached child under the
-# render's own parent identity, and the next render — a second later — reads
+# render's own parent identity, and the next render reads
 # what the child left. A foreign environment is corrected by then; a real one,
 # which is every pane cs launches, never sees a wrong palette at all.
 test_first_render_defers_the_ancestry_walk() {
@@ -3984,7 +4030,7 @@ test_the_deferred_walk_starts_from_the_parent_and_caches_real() {
 
 run_test test_the_deferred_walk_starts_from_the_parent_and_caches_real
 
-# A `ps` that never answers must not mint a walker a second. The render that
+# A `ps` that never answers must not mint a walker every render. The render that
 # spawns one marks the walk in flight, and every render inside
 # TMUX_WALK_MARK_TTL renders without spawning another; past the TTL one render
 # tries again, so a walk whose child died leaves nothing wedged.
@@ -4112,7 +4158,7 @@ test_org_id_is_cached_then_reread() {
 
 run_test test_org_id_is_cached_then_reread
 
-# An unchanged context is stamped once a minute, not once a second: the mv is
+# An unchanged context is stamped once a minute, not on every render: the mv is
 # a fork, and the heartbeat readers allow fifteen minutes. A changed value is
 # written at once.
 test_context_pct_rewritten_on_change_or_once_a_minute() {
@@ -4245,7 +4291,7 @@ test_refresher_reads_the_account_fresh() {
 run_test test_refresher_reads_the_account_fresh
 
 # The attached client's answer is kept for TMUX_CLIENT_CACHE_TTL: a theme
-# toggle shows within it, and the once-a-second repaint asks once in five.
+# toggle shows at the first render past it, and no render inside it asks again.
 test_tmux_client_answer_is_cached_for_the_ttl() {
     ( _load_sl_functions
       export TMUX="/tmp/fake,2216,0" PATH="$TEST_TMPDIR/fakebin:$PATH"
@@ -4267,7 +4313,7 @@ run_test test_tmux_client_answer_is_cached_for_the_ttl
 
 # A teammate's heartbeat touch keeps its own cadence record, so lead and
 # teammate renders alternating do not read each other's value as a change and
-# rewrite the file every second between them.
+# rewrite the file on every render between them.
 test_teammate_heartbeat_does_not_reset_the_lead_cadence() {
     export CLAUDE_SESSION_NAME=altsess
     local dir="$CS_SESSIONS_ROOT/altsess/.cs/local"
@@ -4414,7 +4460,7 @@ test_git_branch_shows_from_a_subdirectory_of_the_checkout() {
 
 run_test test_git_branch_shows_from_a_subdirectory_of_the_checkout
 
-# The bar repaints once a second in every open session, and an endpoint agent
+# The bar repaints on every event in every open session, and an endpoint agent
 # charges the machine for every process born, so what a warm render costs is
 # the number of processes it starts, not the number of programs it runs: a
 # command substitution and each side of a pipeline are processes too. The only

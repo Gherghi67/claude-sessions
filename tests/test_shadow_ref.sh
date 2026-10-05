@@ -878,6 +878,41 @@ test_autosave_logs_per_actor_narrative_edit() {
         "autosave should log the per-actor narrative heading" || return 1
 }
 
+# An encrypted session keeps .cs/memory and friends as links into a mounted
+# volume. The snapshot's `git add -A` must not stage what the volume holds:
+# the blobs would sit in plaintext .git/objects, pinned by the autosave ref.
+# Covers the conventional mount (.cs/vault-mnt, anything inside it) and a link
+# target elsewhere in the tree. The fixture writes no ags .gitignore on purpose:
+# older and adopted sessions lack the ignore entry, so the hook must hold alone.
+test_autosave_never_stages_encrypted_storage() {
+    local s="${CS_SESSION_DIR:-${CLAUDE_SESSION_DIR:-}}" uuid=44444444-4444-4444-4444-444444444444
+    local stray="vault stray $RANDOM$RANDOM" inner="vault private $RANDOM$RANDOM"
+    local stray_blob inner_blob narr_blob objects
+    mkdir -p "$s/.cs/vault-mnt" "$s/enc/private"
+    mv "$s/.cs/memory" "$s/.cs/vault-mnt/memory"
+    ln -s "$s/.cs/vault-mnt/memory" "$s/.cs/memory"
+    ln -s "$s/enc/private" "$s/.cs/private"
+    printf '%s\n' "$stray" > "$s/.cs/vault-mnt/stray.txt"
+    printf '%s\n' "$inner" > "$s/enc/private/session.log"
+    echo "## Sealed finding $RANDOM$RANDOM" >> "$s/.cs/vault-mnt/memory/narrative.md"
+    echo "visible change" >> "$s/README.md"
+    stray_blob=$(git -C "$s" hash-object "$s/.cs/vault-mnt/stray.txt")
+    inner_blob=$(git -C "$s" hash-object "$s/enc/private/session.log")
+    narr_blob=$(git -C "$s" hash-object "$s/.cs/vault-mnt/memory/narrative.md")
+
+    echo '{"session_id":"'"$uuid"'","tool_name":"Edit","tool_input":{"file_path":"'"$s/README.md"'"}}' \
+        | bash "$HOOKS_DIR/autosave-commits.sh"
+
+    # Positive control: the snapshot ran and holds the ordinary edit.
+    git -C "$s" show "refs/worktree/cs/session/$uuid:README.md" 2>/dev/null | grep -qx "visible change" \
+        || { echo "  FAIL: the autosave ref must hold the README edit"; return 1; }
+    objects=$(git -C "$s" rev-list --objects "refs/worktree/cs/session/$uuid")
+    case "$objects" in *"$stray_blob"*) echo "  FAIL: a file under .cs/vault-mnt was staged"; return 1 ;; esac
+    case "$objects" in *"$inner_blob"*) echo "  FAIL: a file behind the .cs/private link was staged"; return 1 ;; esac
+    case "$objects" in *"$narr_blob"*) echo "  FAIL: the vault narrative was staged"; return 1 ;; esac
+    return 0
+}
+
 # ============================================================================
 # per-worktree ref isolation
 # ============================================================================
@@ -952,6 +987,7 @@ run_test test_legacy_claim_keeps_newer_when_both_present
 run_test test_gc_prunes_stale_foreign_refs_only
 run_test test_shadow_ref_not_pushed
 run_test test_autosave_logs_per_actor_narrative_edit
+run_test test_autosave_never_stages_encrypted_storage
 run_test test_autosave_refs_isolated_per_worktree
 # The lock is per-CHECKOUT: a feature worktree keeps snapshotting while its
 # base is being landed on, and stops only for a lock in its OWN gitdir. A
