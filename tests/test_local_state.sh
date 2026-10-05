@@ -455,6 +455,29 @@ test_state_write_waits_for_a_live_lock_holder() {
     [ "$took" -ge 4 ] || { echo "  FAIL: the writer must wait for a live holder (took ${took}s)"; return 1; }
 }
 
+# The state rewrite renders the old file through awk. When that read fails the
+# write must fail loudly and leave the file as it was; a renderer that swallows
+# the failure would replace the user's state with the one new line.
+test_state_write_fails_loudly_when_the_old_state_cannot_be_read() {
+    [ "$(id -u)" -ne 0 ] || { echo "  SKIP: root reads a mode-000 file"; return 77; }
+    local session_dir
+    session_dir=$(create_test_session_with_git unreadable-state)
+    local state="$session_dir/.cs/local/state"
+    mkdir -p "$session_dir/.cs/local"
+    printf 'session_name: unreadable-state\ncs_mode: keep-me\n' > "$state"
+    chmod 000 "$state"
+    _argv_claude_stub
+
+    local output rc=0
+    output=$("$CS_BIN" unreadable-state <<< "" 2>&1) || rc=$?
+    chmod 644 "$state"
+
+    [ "$rc" -ne 0 ] || { echo "  FAIL: a failed state read must end the launch"; return 1; }
+    assert_output_contains "$output" "Error: could not write $state" "the failure names the file" || return 1
+    assert_file_contains "$state" "^cs_mode: keep-me" "the old state survives" || return 1
+    [ ! -f "$TEST_TMPDIR/claude-args" ] || { echo "  FAIL: claude must not launch unrecorded"; return 1; }
+}
+
 test_state_write_takes_over_a_dead_holders_lock() {
     local session_dir
     session_dir=$(create_test_session_with_git stale-lock)
@@ -717,4 +740,5 @@ run_test test_launch_stops_loudly_when_state_cannot_be_written
 run_test test_state_and_gitattributes_rewrites_leave_tmp_siblings_alone_and_keep_modes
 run_test test_state_write_waits_for_a_live_lock_holder
 run_test test_state_write_takes_over_a_dead_holders_lock
+run_test test_state_write_fails_loudly_when_the_old_state_cannot_be_read
 report_results
