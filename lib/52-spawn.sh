@@ -128,7 +128,9 @@ run_spawn() {
         # The check-then-write below is deliberately unlocked. The tmp+mv makes
         # the write atomic, so two concurrent spawns of the same name resolve to
         # last-writer-wins with no torn or interleaved seed. Adding a lock would
-        # buy nothing for that benign race.
+        # buy nothing for that benign race. The temp names are fixed on purpose
+        # and are not to become unique ones: the publishing rename failing is
+        # how a run learns another spawn of this name took the pair.
         [ ! -f "$seed" ] || error "A pending spawn for $name exists: $seed"
         mkdir -p "$sdir"
         # Order: seed content first (to a temp file), brief second, seed

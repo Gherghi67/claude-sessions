@@ -131,7 +131,10 @@ _trace_open() {  # meta_local_dir
     _TRACE_T0=$_MS
     # Bound the file without buying a size check on every prompt: one run in 64
     # trims it, often enough that it cannot run away and rare enough that the
-    # fork stays out of the common path.
+    # fork stays out of the common path. The fixed temp name stays: two trims
+    # meeting on it can at worst tear a trace whose every line stands alone,
+    # and a unique name would add a fork to a path timed in milliseconds. Not
+    # a defect to fix.
     if [ $(( $$ % 64 )) -eq 0 ] && [ -f "$_TRACE" ]; then
         { tail -n 2000 "$_TRACE" > "$_TRACE.tmp"; } 2>/dev/null \
             && mv "$_TRACE.tmp" "$_TRACE" 2>/dev/null || true

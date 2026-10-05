@@ -386,7 +386,7 @@ needs_cs_migration() {
 # sed -i (BSD/GNU disagree on -i). Idempotent: nothing matches on the second run.
 migrate_narrative_resume_wording() {
     local session_dir="$1"
-    local mem="$session_dir/.cs/memory" f tmp
+    local mem="$session_dir/.cs/memory" f
     # Only the actor's own narrative: a teammate's file is theirs to migrate on
     # their own resume, and a committed edit to its head would show up in their
     # teammates' digests as growth that is not a tail.
@@ -399,18 +399,16 @@ migrate_narrative_resume_wording() {
     # silently skip the file.
     if [ -f "$f" ] \
         && awk 'NR <= 8 && /^description: .*Read (all|the live) narrative\.\*\.md on resume[.;]/ { f = 1 } NR > 8 { exit } END { exit !f }' "$f"; then
-        tmp="$f.tmp"
         # One replacement for both vintages: the pattern alternates, the
         # sentence appears once, so a typo cannot migrate half the population
         # to a wording no later gate matches.
-        sed -E '1,8{/^description: /s/Read (all narrative\.\*\.md on resume\.|the live narrative\.\*\.md on resume; older sections are archived under \.cs\/narrative-archive\/\.)/Its owner reads it in full on resume; anyone else reads only the lines the resume digest names. Older sections are archived under .cs\/narrative-archive\/./;}' "$f" > "$tmp" \
-            && mv "$tmp" "$f"
+        cs_write_atomic "$f" sed -E '1,8{/^description: /s/Read (all narrative\.\*\.md on resume\.|the live narrative\.\*\.md on resume; older sections are archived under \.cs\/narrative-archive\/\.)/Its owner reads it in full on resume; anyone else reads only the lines the resume digest names. Older sections are archived under .cs\/narrative-archive\/./;}' "$f" \
+            || error "could not rewrite $f"
     fi
     f="$mem/MEMORY.md"
     if [ -f "$f" ] && grep -qE 'read (all|the live) narrative\.\*\.md on resume' "$f"; then
-        tmp="$f.tmp"
-        sed -E 's/read (all narrative\.\*\.md on resume|the live narrative\.\*\.md on resume, older sections under \.cs\/narrative-archive\/)/its owner reads it in full on resume, anyone else only the lines the resume digest names; older sections under .cs\/narrative-archive\//' "$f" > "$tmp" \
-            && mv "$tmp" "$f"
+        cs_write_atomic "$f" sed -E 's/read (all narrative\.\*\.md on resume|the live narrative\.\*\.md on resume, older sections under \.cs\/narrative-archive\/)/its owner reads it in full on resume, anyone else only the lines the resume digest names; older sections under .cs\/narrative-archive\//' "$f" \
+            || error "could not rewrite $f"
     fi
     f="$session_dir/CLAUDE.local.md"
     # cs has shipped two protocol-block wordings for the same sentence: the
@@ -674,21 +672,12 @@ migrate_session() {
         fi
         local existing_content
         existing_content=$(cat "$readme")
-        # Temp+mv, like every neighbouring write: redirecting onto the README
-        # truncates the user's file before the block writes a byte, so a write
-        # that does not complete leaves nothing behind.
-        if { {
-            echo "---"
-            echo "status: active"
-            echo "created: $created_date"
-            echo "tags: []"
-            echo "aliases: [\"$session_name\"]"
-            echo "---"
-            echo "$existing_content"
-        } > "$readme.tmp"; } 2>/dev/null && mv "$readme.tmp" "$readme"; then
+        # Through a temp file, like every neighbouring write: redirecting onto
+        # the README truncates the user's file before a byte is written, so a
+        # write that does not complete leaves nothing behind.
+        if cs_write_atomic "$readme" printf -- '---\nstatus: active\ncreated: %s\ntags: []\naliases: ["%s"]\n---\n%s\n' \
+            "$created_date" "$session_name" "$existing_content" 2>/dev/null; then
             warn "Added frontmatter to .cs/README.md"
-        else
-            rm -f "$readme.tmp" 2>/dev/null || true
         fi
     fi
 
@@ -742,14 +731,13 @@ migrate_session() {
                 warn "ignoring claude_session_color in .cs/README.md: not one of claude's colours"
             fi
         fi
-        local _tmp="$readme.tmp"
-        awk -v re="$_fm_field_re" '
+        cs_write_atomic "$readme" awk -v re="$_fm_field_re" '
             { line = $0; sub(/\r$/, "", line) }
             NR == 1 && line == "---" { fm = 1; print; next }
             fm && line == "---"      { fm = 0; print; next }
             fm && line ~ re          { next }
             { print }
-        ' "$readme" > "$_tmp" && mv "$_tmp" "$readme"
+        ' "$readme" || error "could not rewrite $readme"
         warn "Moved machine-local fields from .cs/README.md to .cs/local/state"
     fi
 

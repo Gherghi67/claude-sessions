@@ -30,7 +30,9 @@ _trace() {  # stage
     # Bound the file the way scope-prompt.sh bounds its own: one run in 64 trims
     # it, often enough that it cannot run away and rare enough that the fork
     # stays off the keypress path. Without this the trace grows for the life of
-    # the session directory.
+    # the session directory. The fixed temp name stays: two trims meeting on it
+    # can at worst tear a trace whose every line stands alone, and this hook
+    # loads no library to take a unique name from. Not a defect to fix.
     if [ $(( $$ % 64 )) -eq 0 ] && [ -f "$f" ]; then
         { tail -n 2000 "$f" > "$f.tmp"; } 2>/dev/null && mv "$f.tmp" "$f" 2>/dev/null || true
     fi

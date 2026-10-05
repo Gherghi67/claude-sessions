@@ -413,10 +413,10 @@ check_update_notify() {
         if [ ! -f "$notes_cache" ] || [ ! -f "$full_cache" ]; then
             local notes
             if notes=$(fetch_remote_changelog); then
-                changelog_summaries "$notes" "$VERSION" 5 > "$notes_cache.tmp" \
-                    && mv "$notes_cache.tmp" "$notes_cache"
-                changelog_span "$notes" "$VERSION" > "$full_cache.tmp" \
-                    && mv "$full_cache.tmp" "$full_cache"
+                # A cache that cannot be written is left absent, and the next
+                # launch builds it again.
+                cs_write_atomic "$notes_cache" changelog_summaries "$notes" "$VERSION" 5 || true
+                cs_write_atomic "$full_cache" changelog_span "$notes" "$VERSION" || true
                 rm -f "$notes"
             else
                 : > "$notes_cache"

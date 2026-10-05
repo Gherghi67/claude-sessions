@@ -6,14 +6,14 @@ _presence_file() {  # meta_dir
     printf '%s' "$1/local/presence"
 }
 
-# Write a one-line status atomically (tmp+mv). Newlines/CRs collapse to spaces so
+# Write a one-line status atomically. Newlines/CRs collapse to spaces so
 # the file stays exactly one line. Arg: meta_dir, text.
 _write_presence() {  # meta_dir, text
     local meta_dir="$1" text="$2" file
     file="$(_presence_file "$meta_dir")"
     mkdir -p "$(dirname "$file")"
     text="$(printf '%s' "$text" | tr '\n\r' '  ')"
-    printf '%s\n' "$text" > "$file.tmp" && mv "$file.tmp" "$file"
+    cs_write_atomic "$file" printf '%s\n' "$text"
 }
 
 # Print a session's raw presence status (empty if unset). Arg: meta_dir.

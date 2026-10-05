@@ -762,7 +762,7 @@ fi
 # line (the frontmatter's) flips; a body quoting it flush-left stays intact.
 if [ -n "$ROTATION_HANDOFF" ]; then
     HANDOFF_FILE="$HANDOFF_DIR/$ROTATION_HANDOFF"
-    { awk -v uuid="$SESSION_ID" '
+    cs_write_atomic "$HANDOFF_FILE" awk -v uuid="$SESSION_ID" '
         !flipped && $0 == "status: unconsumed" {
             print "status: consumed"
             print "consumed_by: " uuid
@@ -770,9 +770,7 @@ if [ -n "$ROTATION_HANDOFF" ]; then
             next
         }
         { print }
-    ' "$HANDOFF_FILE" > "$HANDOFF_FILE.tmp"; } 2>/dev/null \
-        && mv "$HANDOFF_FILE.tmp" "$HANDOFF_FILE" 2>/dev/null \
-        || rm -f "$HANDOFF_FILE.tmp" 2>/dev/null || true
+    ' "$HANDOFF_FILE" 2>/dev/null || true
     rm -f "$PENDING_MARKER" 2>/dev/null || true
 fi
 
