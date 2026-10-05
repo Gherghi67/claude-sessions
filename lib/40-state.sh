@@ -196,8 +196,13 @@ _discover_session_uuid_in() {
 # worktree's dir is left empty. The moved file keeps a `worktree-state` record
 # naming the worktree path, which is what tells it apart from the parent's
 # conversations: the newest file in that dir is whatever was last opened on
-# the parent, not this worktree. Newest-first, the first non-bystander file
-# whose record names this worktree is its conversation. Empty when none does.
+# the parent, not this worktree. A parent conversation that stepped into the
+# worktree with the EnterWorktree tool gains the same record, so the record
+# alone does not make a file the worktree's: its first prompt must also be
+# stamped with the worktree as cwd, which is where a `claude --worktree`
+# session starts and where a parent conversation never does. Newest-first, the
+# first non-bystander file that passes both is the worktree's conversation.
+# Empty when none does.
 _discover_worktree_uuid_in() {  # parent_project_dir, wt_dir
     local proj="$1" wt_real
     [ -d "$proj" ] || return 0
@@ -208,12 +213,17 @@ _discover_worktree_uuid_in() {  # parent_project_dir, wt_dir
     local listing
     listing=$(ls -t "$proj"/*.jsonl 2>/dev/null) || true
     [ -n "$listing" ] || return 0
-    local f
+    local f first
     while IFS= read -r f; do
         [ -n "$f" ] || continue
         # The closing quote pins the whole path: a worktree named `wt` must not
         # claim `wt2`'s conversation.
         grep -m1 -F "\"worktreePath\":\"$wt_real\"" "$f" >/dev/null 2>&1 || continue
+        first=$(grep -m1 '"type":"user"' "$f" 2>/dev/null) || continue
+        case "$first" in
+            *"\"cwd\":\"$wt_real\""*) ;;
+            *) continue ;;
+        esac
         if ! _is_bystander_transcript "$f"; then
             basename "$f" .jsonl
             return 0
