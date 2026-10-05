@@ -24,7 +24,8 @@ never registered against an event. It carries the actor rules (`cs_actor_raw`,
 destination's mode kept, renamed into place only when the command succeeded) and the
 machine-local state writers (`cs_local_state_set`, `cs_local_state_unset`), which take a
 lock beside `.cs/local/state` so cs and session-start.sh never lose each other's
-update. Edit the `lib/` file and rebuild; CI's
+update, and the mkdir lock they and the window title share (`_cs_mkdir_lock`,
+`_cs_mkdir_unlock`). Edit the `lib/` file and rebuild; CI's
 build-sync job fails on a `hooks/cs-shared.sh` that differs from the build. A hook sources
 it under the same guard as `cs-resolve.sh`, and carries no copy of its own: without it,
 session-start.sh names the actor `unknown` and says the library is missing and that

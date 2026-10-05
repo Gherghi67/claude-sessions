@@ -288,7 +288,7 @@ cs_tmux_title_window() {  # pane, session name ("" releases the pane)
         tmux set-window-option -t "$pane" allow-rename on 2>/dev/null || true
         tmux set-window-option -t "$pane" allow-set-title on 2>/dev/null || true
     fi
-    [ -z "$lock" ] || { rm -f "$lock/pid"; rmdir "$lock" 2>/dev/null; } || true
+    _cs_mkdir_unlock "$lock"
     _cs_iterm_tab_title "$pane"
 }
 
@@ -309,42 +309,95 @@ _cs_iterm_tab_title() {  # pane
 }
 
 # Takes the lock on a pane's window and prints its directory: a directory per
-# tmux server and window under $TMPDIR, made by mkdir (atomic, and bash 3.2 has
-# no flock), holding the holder's pid. A holder whose pid is gone died holding
-# it, and the lock is taken over at once; a lock with no pid after a second is
-# one whose holder died between the mkdir and the write, and is taken over too.
-# A live holder is waited for, since a call is a few tmux round trips (385 ms
-# measured on a loaded machine, so six panes queue for two seconds), but for no
-# more than five seconds: past that the title is written without the lock, as
-# a title must never stall a hook. Prints nothing when it holds nothing.
+# tmux server and window under $TMPDIR, through _cs_mkdir_lock. A call is a few
+# tmux round trips (385 ms measured on a loaded machine, so six panes queue for
+# two seconds), and past the wait the title is written without the lock, as a
+# title must never stall a hook. Prints nothing when it holds nothing.
 _cs_tmux_title_lock() {  # pane
-    local key lock holder deadline=$((SECONDS + 5)) empty_since=""
+    local key lock
     key=$(tmux display-message -p -t "$1" '#{socket_path}#{window_id}' 2>/dev/null) || key=""
     [ -n "$key" ] || return 0
     lock="${TMPDIR:-/tmp}/cs-title-$(printf '%s' "$key" | tr -c 'A-Za-z0-9@_.-' '_').lock"
-    # One deadline, set once: a takeover never extends it, so a mkdir that
-    # fails for any other reason (TMPDIR gone or read-only, a full disk)
-    # still ends the wait. Two waiters that both see the same dead pid can
-    # both take over, and one then renames without the lock; the next claim
-    # repairs the name, so that race is left alone.
+    _cs_mkdir_lock "$lock" || return 0
+    printf '%s\n' "$lock"
+}
+
+# The one mkdir lock cs and its hooks take wherever two processes may write
+# the same thing at once (a window title, the state file): a directory holding
+# the holder's pid, since mkdir is atomic and bash 3.2 has no flock. A holder
+# whose pid is gone died holding it and is taken over at once; an empty pid
+# file older than two seconds is a holder that died between the mkdir and the
+# write, taken over too. A takeover renames the dead lock to a name of its own
+# before removing it, and rename is atomic, so of two waiters that saw the
+# same dead pid only one reclaims; the other's rename fails and it goes back
+# to waiting on whichever lock the winner then makes. Two windows are left
+# alone: a holder that pauses over two seconds between its mkdir and its pid
+# write is taken for dead, and a holder running as another user answers
+# kill -0 with EPERM, which reads as dead too; cs sessions run as one user,
+# and a line lost to either costs one resume prompt or one title, not data.
+# A live holder is waited for, but for no more than five seconds: past that
+# the caller goes ahead without the lock, since a launch or a hook must never
+# stall on a lock a stray process holds, and a lock older than a minute is
+# removed on the way out so the next caller is not taxed again (a real hold
+# lasts milliseconds). A lock that vanishes between the failed mkdir and the
+# look at it was just released, and the next mkdir is tried at once. Returns
+# 0 holding the lock with its pid written, 1 holding nothing; a directory
+# that cannot hold a lock at all (missing, read-only) is not waited on.
+_cs_mkdir_lock() {  # lock dir
+    local lock="$1" dir holder deadline=$((SECONDS + 5)) empty_since=""
+    dir=$(dirname "$lock")
     until mkdir "$lock" 2>/dev/null; do
-        [ "$SECONDS" -lt "$deadline" ] || return 0
+        [ -d "$dir" ] && [ -w "$dir" ] || return 1
+        if [ "$SECONDS" -ge "$deadline" ]; then
+            [ -z "$(find "$lock" -prune -mmin +1 2>/dev/null)" ] || _cs_mkdir_reclaim "$lock" ""
+            return 1
+        fi
+        if [ ! -d "$lock" ]; then
+            empty_since=""
+            continue
+        fi
         holder=""
         { read -r holder < "$lock/pid"; } 2>/dev/null || true
         if [ -n "$holder" ]; then
             empty_since=""
-            kill -0 "$holder" 2>/dev/null || { rm -f "$lock/pid"; rmdir "$lock" 2>/dev/null; }
+            kill -0 "$holder" 2>/dev/null || _cs_mkdir_reclaim "$lock" "$holder"
         else
             : "${empty_since:=$SECONDS}"
             if [ $((SECONDS - empty_since)) -ge 2 ]; then
-                rm -f "$lock/pid"; rmdir "$lock" 2>/dev/null
+                _cs_mkdir_reclaim "$lock" ""
                 empty_since=""
             fi
         fi
         sleep 0.05
     done
     echo "$$" > "$lock/pid" 2>/dev/null || true
-    printf '%s\n' "$lock"
+}
+
+# Remove a dead holder's lock through a rename only this process can win. The
+# pid the caller judged dead is checked again after the rename: a lock with a
+# different pid is a NEW holder's, made between the judgement and the rename,
+# and goes back where it was.
+_cs_mkdir_reclaim() {  # lock dir, judged pid ("" accepts any)
+    local moved="$1.dead.$$" now=""
+    mv "$1" "$moved" 2>/dev/null || return 0
+    if [ -n "$2" ]; then
+        { read -r now < "$moved/pid"; } 2>/dev/null || true
+        if [ -n "$now" ] && [ "$now" != "$2" ]; then
+            mv "$moved" "$1" 2>/dev/null || true
+            return 0
+        fi
+    fi
+    rm -f "$moved/pid"; rmdir "$moved" 2>/dev/null || true
+}
+
+# Release the lock, but only one this process still holds: a lock taken over
+# from us in the meantime belongs to someone else.
+_cs_mkdir_unlock() {  # lock dir ("" when none was held)
+    [ -n "$1" ] || return 0
+    local holder=""
+    { read -r holder < "$1/pid"; } 2>/dev/null || true
+    [ "$holder" = "$$" ] || return 0
+    rm -f "$1/pid"; rmdir "$1" 2>/dev/null || true
 }
 
 # Octal permission bits of a file, as chmod takes them (644), read through a
@@ -393,84 +446,13 @@ cs_write_atomic() {  # dest, command [args...]
 }
 
 # The machine-local state file (.cs/local/state) is rewritten whole from its
-# old contents, by cs and by the SessionStart hook, so two writers can lose
-# an update unless they take turns. The lock is a directory beside the file
-# holding the holder's pid (mkdir is atomic, and bash 3.2 has no flock). A
-# holder whose pid is gone died holding it and is taken over at once; an
-# empty pid file older than a second is a holder that died between the mkdir
-# and the write, taken over too. A takeover renames the dead lock to a name of
-# its own before removing it, and rename is atomic, so of two waiters that saw
-# the same dead pid only one reclaims; the other's rename fails and it goes
-# back to waiting on whichever lock the winner then makes. Two windows are
-# left alone, as in the title lock: a holder that pauses over a second between
-# its mkdir and its pid write is taken for dead, and a holder running as
-# another user answers kill -0 with EPERM, which reads as dead too; cs
-# sessions run as one user, and a state line lost to either costs one
-# resume prompt, not data. A live holder is waited for, but for no more
-# than five seconds: past that the write goes ahead without the lock, since a
-# launch or a hook must never stall on a lock a stray process holds. Prints
-# the lock directory when it holds it, nothing when it does not; a directory
-# that cannot hold a lock at all (missing, read-only) is not waited on. A lock
-# that vanishes between the failed mkdir and the look at it was just released,
-# and the next mkdir is tried at once. Past the deadline a lock older than a
-# minute is removed so the next writer is not taxed again: a real write takes
-# milliseconds, so such a lock belongs to a holder that will never release it.
+# old contents, by cs and by the SessionStart hook, so two writers can lose an
+# update unless they take turns: the lock is _cs_mkdir_lock on a directory
+# beside the file. Prints the lock directory when it holds it, nothing when it
+# does not.
 _cs_local_state_lock() {  # state
-    local lock="$1.lock" dir holder deadline=$((SECONDS + 5)) empty_since=""
-    dir=$(dirname "$1")
-    until mkdir "$lock" 2>/dev/null; do
-        [ -d "$dir" ] && [ -w "$dir" ] || return 0
-        if [ "$SECONDS" -ge "$deadline" ]; then
-            [ -z "$(find "$lock" -prune -mmin +1 2>/dev/null)" ] || _cs_local_state_reclaim "$lock" ""
-            return 0
-        fi
-        if [ ! -d "$lock" ]; then
-            empty_since=""
-            continue
-        fi
-        holder=""
-        { read -r holder < "$lock/pid"; } 2>/dev/null || true
-        if [ -n "$holder" ]; then
-            empty_since=""
-            kill -0 "$holder" 2>/dev/null || _cs_local_state_reclaim "$lock" "$holder"
-        else
-            : "${empty_since:=$SECONDS}"
-            if [ $((SECONDS - empty_since)) -ge 2 ]; then
-                _cs_local_state_reclaim "$lock" ""
-                empty_since=""
-            fi
-        fi
-        sleep 0.05
-    done
-    echo "$$" > "$lock/pid" 2>/dev/null || true
-    printf '%s\n' "$lock"
-}
-
-# Remove a dead holder's lock through a rename only this process can win. The
-# pid the caller judged dead is checked again after the rename: a lock with a
-# different pid is a NEW holder's, made between the judgement and the rename,
-# and goes back where it was.
-_cs_local_state_reclaim() {  # lock dir, judged pid ("" accepts any)
-    local moved="$1.dead.$$" now=""
-    mv "$1" "$moved" 2>/dev/null || return 0
-    if [ -n "$2" ]; then
-        { read -r now < "$moved/pid"; } 2>/dev/null || true
-        if [ -n "$now" ] && [ "$now" != "$2" ]; then
-            mv "$moved" "$1" 2>/dev/null || true
-            return 0
-        fi
-    fi
-    rm -f "$moved/pid"; rmdir "$moved" 2>/dev/null || true
-}
-
-# Release the lock, but only one this process still holds: a lock taken over
-# from us in the meantime belongs to someone else.
-_cs_local_state_unlock() {  # lock dir ("" when none was held)
-    [ -n "$1" ] || return 0
-    local holder=""
-    { read -r holder < "$1/pid"; } 2>/dev/null || true
-    [ "$holder" = "$$" ] || return 0
-    rm -f "$1/pid"; rmdir "$1" 2>/dev/null || true
+    _cs_mkdir_lock "$1.lock" || return 0
+    printf '%s\n' "$1.lock"
 }
 
 # The state file's new contents: every line but the key's, then the key's new
@@ -493,7 +475,7 @@ cs_local_state_set() {  # state, key, value
     local lock rc=0
     lock=$(_cs_local_state_lock "$1")
     cs_write_atomic "$1" _cs_local_state_render "$1" "$2" "$3" || rc=$?
-    _cs_local_state_unlock "$lock"
+    _cs_mkdir_unlock "$lock"
     return "$rc"
 }
 
@@ -504,7 +486,7 @@ cs_local_state_unset() {  # state, key
     local lock rc=0
     lock=$(_cs_local_state_lock "$1")
     cs_write_atomic "$1" _cs_local_state_render "$1" "$2" || rc=$?
-    _cs_local_state_unlock "$lock"
+    _cs_mkdir_unlock "$lock"
     return "$rc"
 }
 _claude_encode_path() {
