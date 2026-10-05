@@ -152,7 +152,10 @@ test_open_survives_an_index_it_cannot_rewrite() {
     _allow_writes "$project_dir/.cs/memory"
 
     assert_eq "0" "$rc" "the open goes on" || return 1
-    assert_output_contains "$out" "could not rewrite $index" "and names the file it left alone" || return 1
+    # The session path is printed resolved, so the temp root's own symlink
+    # (/var -> /private/var on a Mac) is left out of the expected text.
+    assert_output_contains "$out" "/projro/.cs/memory/MEMORY.md; the stale narrative.md pointer stays" \
+        "and names the file it left alone" || return 1
     assert_file_contains "$index" "(narrative.md)" "the index is as it was" || return 1
 }
 
