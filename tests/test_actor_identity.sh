@@ -117,6 +117,25 @@ test_narrative_is_per_actor() {
         "index should point at the per-actor narrative" || return 1
 }
 
+# Dropping the legacy index pointer rewrites MEMORY.md through a uniquely named
+# temp file: MEMORY.md.tmp is left alone and MEMORY.md keeps its mode.
+test_legacy_pointer_drop_leaves_a_tmp_sibling_alone_and_keeps_the_mode() {
+    local project_dir="$TEST_TMPDIR/projsib"
+    mkdir -p "$project_dir"
+    ( cd "$project_dir" && git init -q && git config user.email "bob@example.com" && git config user.name "Bob" )
+    ( cd "$project_dir" && "$CS_BIN" -adopt s1sib >/dev/null 2>&1 )
+    local index="$project_dir/.cs/memory/MEMORY.md"
+    printf '%s\n' '- [Session narrative (lab notebook)](narrative.md): old' > "$index"
+    printf 'USER-OWNED\n' > "$index.tmp"
+    chmod 640 "$index"
+
+    ( "$CS_BIN" s1sib <<< "" >/dev/null 2>&1 || true )
+
+    assert_file_not_contains "$index" "(narrative.md)" "stale legacy index pointer removed" || return 1
+    assert_eq "USER-OWNED" "$(cat "$index.tmp" 2>/dev/null)" "MEMORY.md.tmp is untouched" || return 1
+    assert_eq "640" "$(_file_mode "$index")" "MEMORY.md keeps its mode" || return 1
+}
+
 test_legacy_narrative_migrates_to_actor() {
     local project_dir="$TEST_TMPDIR/proj"
     mkdir -p "$project_dir"
@@ -202,6 +221,7 @@ run_test test_local_dir_created_on_adopt
 run_test test_guard_blocks_tracked_local
 run_test test_narrative_is_per_actor
 run_test test_legacy_narrative_migrates_to_actor
+run_test test_legacy_pointer_drop_leaves_a_tmp_sibling_alone_and_keeps_the_mode
 run_test test_who_lists_contributors
 run_test test_who_lists_contributors_in_linked_worktree
 run_test test_migrate_adds_local_to_existing_gitignore

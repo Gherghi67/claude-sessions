@@ -118,6 +118,15 @@ test_rotate_archives_oldest_sections_and_keeps_tail() {
     assert_eq "1590" "$tail_bytes" "the tail is exactly sections 8, 9 and 10" || return 1
 }
 
+# The live narrative is rewritten through a temp file; it keeps the mode it had.
+test_rotate_keeps_the_live_files_mode() {
+    _make_narrative "$LIVE" 10 500
+    chmod 640 "$LIVE"
+    "$CS_BIN" -narrative rotate > /dev/null 2>&1 || return 1
+    assert_file_not_contains "$LIVE" "section 1$" "the rotation happened" || return 1
+    assert_eq "640" "$(_file_mode "$LIVE")" "the live narrative keeps its mode" || return 1
+}
+
 test_rotate_keeps_the_header_block() {
     _make_narrative "$LIVE" 10 500
     "$CS_BIN" -narrative rotate > /dev/null 2>&1 || return 1
@@ -871,6 +880,7 @@ run_test test_rotate_requires_a_session
 run_test test_rotate_rejects_unknown_subcommand
 run_test test_help_shows_narrative
 run_test test_rotate_archives_oldest_sections_and_keeps_tail
+run_test test_rotate_keeps_the_live_files_mode
 run_test test_rotate_keeps_the_header_block
 run_test test_rotate_cuts_on_a_heading_boundary
 run_test test_rotate_writes_one_chunk_whose_body_is_verbatim

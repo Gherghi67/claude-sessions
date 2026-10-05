@@ -32,6 +32,14 @@ test_status_set_writes_presence_file() {
     assert_eq "1" "$(grep -c . "$(PFILE)")" "presence is a single line" || return 1
 }
 
+# The status is written through a uniquely named temp file, so a leftover at
+# the fixed name presence.tmp does not stop it.
+test_status_set_ignores_a_stale_presence_tmp() {
+    mkdir "$(PFILE).tmp"
+    "$CS_BIN" -status "past the leftover" >/dev/null 2>&1 || true
+    assert_eq "past the leftover" "$(cat "$(PFILE)" 2>/dev/null)" "set writes past a stale presence.tmp" || return 1
+}
+
 # assert_file_contains matches with grep BRE; the string below has no BRE
 # metacharacters, so it matches literally. The point is to prove quotes and '='
 # survive the write (unlike _read_local_state, which would strip the quotes).
@@ -103,6 +111,7 @@ test_status_get_filters_readme_placeholder() {
 }
 
 run_test test_status_set_writes_presence_file
+run_test test_status_set_ignores_a_stale_presence_tmp
 run_test test_status_preserves_quotes_and_equals
 run_test test_status_joins_multiple_words
 run_test test_status_get_shows_presence

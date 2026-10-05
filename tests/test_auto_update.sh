@@ -499,6 +499,29 @@ SCRIPT
     assert_output_contains "$out" "CS_BIN=$want_bin" "an inherited path is replaced by this launch's own" || return 1
 }
 
+# Both notes caches are written through a uniquely named temp file, so a
+# leftover at the fixed name <cache>.tmp that cannot be written (here: a
+# read-only file) does not cost the launch its notes.
+test_notify_writes_notes_cache_past_stale_tmp_files() {
+    local fix="$TEST_TMPDIR/CHANGELOG-fixture.md" stub="$TEST_TMPDIR/stub-bin"
+    _write_fixture_changelog "$fix"
+    mkdir -p "$stub"
+    _make_curl_stub "$stub" "$fix"
+    export HOME="$TEST_TMPDIR/home"
+    mkdir -p "$HOME/.cache/cs"
+    local cache="$HOME/.cache/cs/update-notes-2026.99.3" full="$HOME/.cache/cs/update-notes-full-2026.99.3"
+    _deny_file_write "$cache.tmp" || { export HOME="$ORIGINAL_HOME"; return 77; }
+    _deny_file_write "$full.tmp" || { export HOME="$ORIGINAL_HOME"; return 77; }
+    unset CS_NO_UPDATE_CHECK
+    PATH="$stub:$PATH" "$CS_BIN" "notes-stale-session" < /dev/null > /dev/null 2>&1 || true
+    export CS_NO_UPDATE_CHECK=1
+    assert_file_contains "$cache" "2026.99.3	One fix: the statusline is readable on light terminals." \
+        "the notes cache is written past a stale .tmp" || { export HOME="$ORIGINAL_HOME"; return 1; }
+    assert_file_contains "$full" "^## 2026\.99\.3$" \
+        "the full-notes cache is written past a stale .tmp" || { export HOME="$ORIGINAL_HOME"; return 1; }
+    export HOME="$ORIGINAL_HOME"
+}
+
 test_notify_writes_notes_cache() {
     local fix="$TEST_TMPDIR/CHANGELOG-fixture.md" stub="$TEST_TMPDIR/stub-bin"
     _write_fixture_changelog "$fix"
@@ -584,6 +607,7 @@ run_test test_launch_banner_quiet_on_empty_notes_cache
 run_test test_launch_banner_card_yields_to_the_mod
 run_test test_launch_exports_update_verdict_to_the_mod
 run_test test_notify_writes_notes_cache
+run_test test_notify_writes_notes_cache_past_stale_tmp_files
 run_test test_notify_writes_empty_full_cache_when_fetch_fails
 
 report_results

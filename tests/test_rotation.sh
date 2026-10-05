@@ -988,6 +988,20 @@ test_unbound_spawned_launch_starts_fresh_and_keeps_the_handoff() {
     assert_file_contains "$dir/.cs/handoffs/2026-07-16-test.md" "status: unconsumed" "the handoff waits for an attended open" || return 1
 }
 
+# The discarded flip holds the same promise as the consumed one.
+test_discarding_a_handoff_leaves_a_tmp_sibling_alone_and_keeps_the_mode() {
+    _rot_session "rot-d-sib"
+    local dir="$CS_SESSIONS_ROOT/rot-d-sib"
+    _seed_handoff "$dir" "2026-07-16-test.md" "unconsumed"
+    local f="$dir/.cs/handoffs/2026-07-16-test.md"
+    printf 'USER-OWNED\n' > "$f.tmp"
+    chmod 640 "$f"
+    "$CS_BIN" rot-d-sib <<< "d" >/dev/null 2>&1 || true
+    assert_file_contains "$f" "status: discarded" "d flips the handoff to discarded" || return 1
+    assert_eq "USER-OWNED" "$(cat "$f.tmp" 2>/dev/null)" "the .tmp sibling is untouched" || return 1
+    assert_eq "640" "$(_file_mode "$f")" "the handoff keeps its mode" || return 1
+}
+
 test_discard_answer_dismisses_pending_handoff() {
     _rot_session "rot-d"
     local dir="$CS_SESSIONS_ROOT/rot-d"
@@ -1139,6 +1153,7 @@ run_test test_unbound_session_r_answer_arms_the_handoff
 run_test test_unbound_session_default_answer_disarms_an_armed_marker
 run_test test_unbound_spawned_launch_starts_fresh_and_keeps_the_handoff
 run_test test_discard_answer_dismisses_pending_handoff
+run_test test_discarding_a_handoff_leaves_a_tmp_sibling_alone_and_keeps_the_mode
 run_test test_discard_flip_spares_a_body_quote
 
 # ============================================================================
@@ -1156,6 +1171,22 @@ _start_hook() {  # session_id [source] [extra env pre-exported by caller]
     [ -n "$no_wake" ] || [ -n "${CS_ROTATION_KICK_DELAY:-}" ] || no_wake=1
     echo "{\"session_id\":\"$1\",\"cwd\":\"$CLAUDE_SESSION_DIR\",\"source\":\"${2:-startup}\"}" \
         | CS_NO_ROTATION_WAKE="$no_wake" bash "$HOOKS_DIR/session-start.sh" 2>/dev/null
+}
+
+# The consumed flip rewrites the handoff through a uniquely named temp file: a
+# sibling named <handoff>.tmp is left alone and the handoff keeps its mode.
+test_consuming_a_handoff_leaves_a_tmp_sibling_alone_and_keeps_the_mode() {
+    _rot_hook_session "rot-consume-sib"
+    _seed_handoff "$CLAUDE_SESSION_DIR" "2026-07-16-test.md" "unconsumed"
+    local f="$CLAUDE_SESSION_META_DIR/handoffs/2026-07-16-test.md"
+    printf 'USER-OWNED\n' > "$f.tmp"
+    chmod 640 "$f"
+    printf '%s\n' "2026-07-16-test.md" > "$CLAUDE_SESSION_META_DIR/local/pending-handoff"
+    printf 'claude_session_id: %s\n' "$UUID_B" > "$CLAUDE_SESSION_META_DIR/local/state"
+    _start_hook "$UUID_B" >/dev/null || return 1
+    assert_file_contains "$f" "consumed_by: $UUID_B" "consumer recorded" || return 1
+    assert_eq "USER-OWNED" "$(cat "$f.tmp" 2>/dev/null)" "the .tmp sibling is untouched" || return 1
+    assert_eq "640" "$(_file_mode "$f")" "the handoff keeps its mode" || return 1
 }
 
 test_pending_handoff_is_consumed_and_injected() {
@@ -1740,6 +1771,7 @@ test_body_quote_does_not_revive_a_discarded_handoff() {
 }
 
 run_test test_pending_handoff_is_consumed_and_injected
+run_test test_consuming_a_handoff_leaves_a_tmp_sibling_alone_and_keeps_the_mode
 run_test test_rotation_preamble_wins_over_fresh_rebind_block
 run_test test_fresh_rebind_block_survives_without_handoff
 run_test test_stale_marker_is_removed_silently
