@@ -253,8 +253,24 @@ test_migration_rewrites_leave_tmp_siblings_alone_and_keep_modes() {
     assert_eq "640" "$(_file_mode "$dir/CLAUDE.local.md")" "CLAUDE.local.md keeps its mode" || return 1
 }
 
+# A CLAUDE.local.md that is a symlink keeps the TARGET's mode on rewrite: the
+# mode is read through the link, not off the link itself (which is 755).
+test_migration_rewrite_through_a_symlink_keeps_the_targets_mode() {
+    local dir
+    dir=$(create_test_session "linked")
+    printf '<!-- cs:session-protocol -->\n# Session Documentation Protocol\n\nAppend only to your own; read all narrative.*.md on resume to restore your\nworking narrative and see teammates'"'"' in-progress findings.\n\n<!-- cs:memory-note -->\nnote\n<!-- cs:wrap-cues -->\n' > "$dir/real-local.md"
+    chmod 640 "$dir/real-local.md"
+    ln -s real-local.md "$dir/CLAUDE.local.md"
+
+    "$CS_BIN" "linked" < /dev/null > /dev/null 2>&1 || true
+
+    assert_file_not_contains "$dir/CLAUDE.local.md" "read all narrative" "protocol wording rewritten" || return 1
+    assert_eq "640" "$(_file_mode "$dir/CLAUDE.local.md")" "the rewritten file keeps the target's mode" || return 1
+}
+
 run_test test_migrate_preserves_user_claude_md
 run_test test_migration_rewrites_leave_tmp_siblings_alone_and_keep_modes
+run_test test_migration_rewrite_through_a_symlink_keeps_the_targets_mode
 run_test test_migrate_claude_md_idempotent
 run_test test_create_path_writes_local_md
 run_test test_pure_cs_claude_md_moves_wholesale

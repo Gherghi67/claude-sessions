@@ -61,10 +61,9 @@ test_unparseable_settings_local_survives_merge() {
     local after
     after=$(cat "$settings")
     assert_eq "$before" "$after" "unparseable settings.local.json must be left intact" || return 1
-    if [ -e "$settings.tmp" ]; then
-        echo "  FAIL: left $settings.tmp behind"
-        return 1
-    fi
+    local leftover
+    leftover=$(find "$CS_SESSIONS_ROOT/test-session/.claude" -name '.settings.local.json.*' 2>/dev/null)
+    [ -z "$leftover" ] || { echo "  FAIL: left a temp file behind: $leftover"; return 1; }
     assert_output_not_contains "$out" "Could not parse" \
         "the complaint belongs on stderr, where a command substitution cannot capture it" || return 1
     # The absence above is only half the contract: with the warn deleted

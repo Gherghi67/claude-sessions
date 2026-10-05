@@ -50,13 +50,15 @@ _assert_readme_clean() {
 
 test_new_session_records_state_in_local_not_readme() {
     local output
-    output=$("$CS_BIN" state-session <<< "" 2>&1) || true
+    output=$(umask 022; "$CS_BIN" state-session <<< "" 2>&1) || true
 
     local session_dir="$CS_SESSIONS_ROOT/state-session"
     local state="$session_dir/.cs/local/state"
 
     assert_file_exists "$state" \
         ".cs/local/state should exist after first launch" || return 1
+    # A new file takes the umask's mode, not the 0600 mktemp gives its temp.
+    assert_eq "644" "$(_file_mode "$state")" "a new state file has the umask's mode" || return 1
 
     local uuid color
     uuid=$(_extract_state_value "$state" claude_session_id)
@@ -488,12 +490,13 @@ test_state_write_takes_over_a_dead_holders_lock() {
     echo "$dead" > "$state.lock/pid"
     _argv_claude_stub
 
-    local start=$SECONDS
     "$CS_BIN" stale-lock <<< "" >/dev/null 2>&1 || true
 
     assert_file_contains "$state" "^claude_session_id:" "the write went through" || return 1
-    [ $((SECONDS - start)) -lt 4 ] || { echo "  FAIL: a dead holder's lock must be taken over at once, not waited out"; return 1; }
-    assert_not_exists "$state.lock" "the writer released the lock it took over" || return 1
+    # A waited-out deadline leaves the dead lock in place; a takeover removes it
+    # and the writer then releases its own, so the directory's absence is the
+    # takeover, with no clock involved.
+    assert_not_exists "$state.lock" "the dead lock was taken over and released" || return 1
 }
 
 # ============================================================================

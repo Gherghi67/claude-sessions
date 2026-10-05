@@ -18,8 +18,13 @@ The code that must give the same answer in cs and in a hook is not copied: `./bu
 folds `lib/02-shared.sh` into `bin/cs` and writes it verbatim, under a shebang, to
 `hooks/cs-shared.sh`, which ships and goes with the hooks (`CS_HOOK_LIBS`) and is
 never registered against an event. It carries the actor rules (`cs_actor_raw`,
-`cs_actor_slug`, `_slugify`) and the narrative budget (`CS_NARRATIVE_MAX_DEFAULT`,
-`CS_NARRATIVE_KEEP_DEFAULT`, `_narrative_budget`). Edit the `lib/` file and rebuild; CI's
+`cs_actor_slug`, `_slugify`), the narrative budget (`CS_NARRATIVE_MAX_DEFAULT`,
+`CS_NARRATIVE_KEEP_DEFAULT`, `_narrative_budget`), the atomic file rewrite
+(`cs_write_atomic`: a uniquely named temp file in the destination's directory, the
+destination's mode kept, renamed into place only when the command succeeded) and the
+machine-local state writers (`cs_local_state_set`, `cs_local_state_unset`), which take a
+lock beside `.cs/local/state` so cs and session-start.sh never lose each other's
+update. Edit the `lib/` file and rebuild; CI's
 build-sync job fails on a `hooks/cs-shared.sh` that differs from the build. A hook sources
 it under the same guard as `cs-resolve.sh`, and carries no copy of its own: without it,
 session-start.sh names the actor `unknown` and says the library is missing and that
