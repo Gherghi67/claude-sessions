@@ -62,6 +62,12 @@ if ! command -v cs_local_state_set >/dev/null 2>&1; then
         return 1
     }
 fi
+# Nor is a file replaced whole without the library's writer: the digest cursor
+# stays where it was and the digest repeats, and a consumed handoff keeps its
+# unconsumed status line.
+if ! command -v cs_write_atomic >/dev/null 2>&1; then
+    cs_write_atomic() { return 1; }
+fi
 if ! command -v cs_resolve_session >/dev/null 2>&1; then
     cs_resolve_session() {
         [ -n "${CLAUDE_SESSION_NAME:-}" ] && [ -n "${CLAUDE_SESSION_DIR:-}" ]
@@ -117,8 +123,7 @@ _build_digest() {  # meta_local_dir
 # can at worst repeat a digest, which is the harmless direction to fail in.
 _commit_digest() {  # meta_local_dir
     [ -n "${DIGEST_PENDING:-}" ] || return 0
-    { printf '%s\n' "$DIGEST_PENDING" > "$1/notifications.seen.tmp"; } 2>/dev/null \
-        && mv "$1/notifications.seen.tmp" "$1/notifications.seen" 2>/dev/null || true
+    cs_write_atomic "$1/notifications.seen" printf '%s\n' "$DIGEST_PENDING" 2>/dev/null || true
     DIGEST_PENDING=""
 }
 
@@ -757,7 +762,7 @@ fi
 # line (the frontmatter's) flips; a body quoting it flush-left stays intact.
 if [ -n "$ROTATION_HANDOFF" ]; then
     HANDOFF_FILE="$HANDOFF_DIR/$ROTATION_HANDOFF"
-    { awk -v uuid="$SESSION_ID" '
+    cs_write_atomic "$HANDOFF_FILE" awk -v uuid="$SESSION_ID" '
         !flipped && $0 == "status: unconsumed" {
             print "status: consumed"
             print "consumed_by: " uuid
@@ -765,9 +770,7 @@ if [ -n "$ROTATION_HANDOFF" ]; then
             next
         }
         { print }
-    ' "$HANDOFF_FILE" > "$HANDOFF_FILE.tmp"; } 2>/dev/null \
-        && mv "$HANDOFF_FILE.tmp" "$HANDOFF_FILE" 2>/dev/null \
-        || rm -f "$HANDOFF_FILE.tmp" 2>/dev/null || true
+    ' "$HANDOFF_FILE" 2>/dev/null || true
     rm -f "$PENDING_MARKER" 2>/dev/null || true
 fi
 

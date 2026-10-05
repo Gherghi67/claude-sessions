@@ -40,6 +40,16 @@ test_failure_counter_recovers_from_garbage() {
     assert_eq "1" "$(cat "$CLAUDE_SESSION_META_DIR/local/failures")" "garbage reads as 0, then increments" || return 1
 }
 
+# The counter is written through a uniquely named temp file, so a leftover at
+# the fixed name failures.tmp does not stop the count.
+test_failure_counter_ignores_a_stale_tmp() {
+    _qs_session "fct"
+    mkdir "$CLAUDE_SESSION_META_DIR/local/failures.tmp"
+    _fail_once || return 1
+    assert_eq "1" "$(cat "$CLAUDE_SESSION_META_DIR/local/failures" 2>/dev/null)" \
+        "the failure counts past a stale failures.tmp" || return 1
+}
+
 test_failure_counter_still_logs_to_session_log() {
     _qs_session "fcl"
     _fail_once || return 1
@@ -102,6 +112,17 @@ test_failures_breaker_parks_the_drain() {
     # The remaining task is intact — nothing lost.
     grep -q "never reached" "$CLAUDE_SESSION_META_DIR/local/queue"/* \
         || { echo "  FAIL: remaining task lost on trip"; return 1; }
+}
+
+test_breaker_parks_the_drain_past_a_stale_state_tmp() {
+    _qs_session "fbt"
+    _arm_queue "will fail" "never reached"
+    _stop_turn >/dev/null || return 1              # armed -> draining
+    printf '5\n' > "$CLAUDE_SESSION_META_DIR/local/failures"
+    mkdir "$CLAUDE_SESSION_META_DIR/local/queue.state.tmp"
+    _stop_turn >/dev/null || true
+    assert_eq "idle" "$(cat "$CLAUDE_SESSION_META_DIR/local/queue.state")" \
+        "the trip parks the queue past a stale queue.state.tmp" || return 1
 }
 
 test_failures_reset_at_arm_and_each_advance() {
@@ -362,6 +383,36 @@ test_digest_at_session_start() {
     assert_output_not_contains "$out" "while you were away" "second start injects nothing" || return 1
 }
 
+# The surface-once cursor is written through a uniquely named temp file: a
+# leftover notifications.seen.tmp must not make every prompt repeat the digest.
+test_digest_cursor_advances_past_a_stale_tmp_at_prompt() {
+    _qs_session "dgt"
+    _arm_queue "only task"
+    _stop_turn >/dev/null || return 1
+    _stop_turn >/dev/null || return 1
+    mkdir "$CLAUDE_SESSION_META_DIR/local/notifications.seen.tmp"
+    local out
+    out=$(_prompt_turn "hello") || return 1
+    assert_output_contains "$out" "while you were away" "digest injected" || return 1
+    out=$(_prompt_turn "hello again") || return 1
+    assert_output_not_contains "$out" "while you were away" "second prompt injects nothing" || return 1
+}
+
+test_digest_cursor_advances_past_a_stale_tmp_at_session_start() {
+    _qs_session "dgrt"
+    _arm_queue "only task"
+    _stop_turn >/dev/null || return 1
+    _stop_turn >/dev/null || return 1
+    mkdir "$CLAUDE_SESSION_META_DIR/local/notifications.seen.tmp"
+    local out
+    out=$(printf '{"source":"resume","session_id":"s1","cwd":"%s"}' "$CLAUDE_SESSION_DIR" \
+        | bash "$HOOKS_DIR/session-start.sh") || return 1
+    assert_output_contains "$out" "while you were away" "resume surfaces the digest" || return 1
+    out=$(printf '{"source":"resume","session_id":"s1","cwd":"%s"}' "$CLAUDE_SESSION_DIR" \
+        | bash "$HOOKS_DIR/session-start.sh") || return 1
+    assert_output_not_contains "$out" "while you were away" "second start injects nothing" || return 1
+}
+
 test_partial_limits_skips_silently_without_stderr() {
     _qs_session "pl"
     _arm_queue "a" "b"
@@ -397,10 +448,12 @@ test_5h_threshold_env_override() {
 
 run_test test_failure_counter_increments
 run_test test_failure_counter_recovers_from_garbage
+run_test test_failure_counter_ignores_a_stale_tmp
 run_test test_failure_counter_still_logs_to_session_log
 run_test test_drain_writes_lifecycle_events
 run_test test_task_text_with_quotes_survives_jq_append
 run_test test_failures_breaker_parks_the_drain
+run_test test_breaker_parks_the_drain_past_a_stale_state_tmp
 run_test test_failures_reset_at_arm_and_each_advance
 run_test test_context_breaker_parks_and_missing_ctx_never_trips
 run_test test_five_hour_breaker_fresh_trips_stale_skips
@@ -416,6 +469,8 @@ run_test test_declined_only_inbox_stays_silent_but_cursor_advances
 run_test test_digest_on_code_prompt_splices_with_scope_block
 run_test test_killed_prompt_hook_does_not_swallow_the_digest
 run_test test_digest_at_session_start
+run_test test_digest_cursor_advances_past_a_stale_tmp_at_prompt
+run_test test_digest_cursor_advances_past_a_stale_tmp_at_session_start
 run_test test_partial_limits_skips_silently_without_stderr
 test_build_digest_fn_in_sync_across_hooks() {
     # _build_digest and _commit_digest are duplicated verbatim between the two

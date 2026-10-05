@@ -75,6 +75,20 @@ test_tag_add_inserts_line_and_preserves_rest_byte_for_byte() {
     }
 }
 
+# cs rewrites .cs/README.md through a uniquely named temp file: a sibling the
+# user named README.md.tmp is never clobbered, and the README keeps its mode.
+test_tag_add_leaves_a_tmp_sibling_alone_and_keeps_the_mode() {
+    _session_with_readme "sib" "tags: []" >/dev/null
+    _in_session "sib"
+    local readme="$CS_SESSIONS_ROOT/sib/.cs/README.md"
+    printf 'USER-OWNED\n' > "$readme.tmp"
+    chmod 750 "$readme"
+    "$CS_BIN" -tag add api >/dev/null 2>&1 || { echo "  FAIL: add exited non-zero"; return 1; }
+    assert_file_contains "$readme" "tags: \[api\]" "the tag landed" || return 1
+    assert_eq "USER-OWNED" "$(cat "$readme.tmp" 2>/dev/null)" "README.md.tmp is untouched" || return 1
+    assert_eq "750" "$(_file_mode "$readme")" "the README keeps its mode" || return 1
+}
+
 test_tag_validation() {
     _session_with_readme "val" "tags: []" >/dev/null
     _in_session "val"
@@ -258,6 +272,7 @@ test_list_tag_filter_matches_dots_literally() {
 run_test test_tag_subcommand_exists
 run_test test_tag_add_and_list_roundtrip
 run_test test_tag_add_inserts_line_and_preserves_rest_byte_for_byte
+run_test test_tag_add_leaves_a_tmp_sibling_alone_and_keeps_the_mode
 run_test test_tag_validation
 run_test test_tag_refuses_block_style_lists
 run_test test_tag_add_errors_when_no_frontmatter_fence

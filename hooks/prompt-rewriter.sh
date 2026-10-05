@@ -30,7 +30,9 @@ _trace() {  # stage
     # Bound the file the way scope-prompt.sh bounds its own: one run in 64 trims
     # it, often enough that it cannot run away and rare enough that the fork
     # stays off the keypress path. Without this the trace grows for the life of
-    # the session directory.
+    # the session directory. The fixed temp name stays: two trims meeting on it
+    # can at worst tear a trace whose every line stands alone, and this hook
+    # loads no library to take a unique name from. Not a defect to fix.
     if [ $(( $$ % 64 )) -eq 0 ] && [ -f "$f" ]; then
         { tail -n 2000 "$f" > "$f.tmp"; } 2>/dev/null && mv "$f.tmp" "$f" 2>/dev/null || true
     fi
@@ -428,7 +430,9 @@ rm -f "$out" 2>/dev/null
 # did not set a status. Writing it would silently erase what the user typed.
 [ -n "${rewritten//[[:space:]]/}" ] || { _trace 'exit empty-rewrite'; exit 0; }
 
-# tmp+rename so a crash mid-write cannot leave a truncated buffer.
+# tmp+rename so a crash mid-write cannot leave a truncated buffer. The fixed
+# temp name is safe: the target is the one-off file Claude Code made for this
+# editor run, and nothing else writes beside it.
 { printf '%s' "$rewritten" > "$target.cs-tmp"; } 2>/dev/null || exit 0
 mv "$target.cs-tmp" "$target" 2>/dev/null || rm -f "$target.cs-tmp" 2>/dev/null
 _trace 'exit rewritten'

@@ -499,6 +499,25 @@ test_adopt_seeds_the_objective_from_the_newest_conversations_first_prompt() {
         "the first substantive prompt becomes the Objective" || return 1
 }
 
+# Seeding the Objective rewrites the README adopt has just created; the file
+# keeps the mode it was created with, here the one umask 022 gives.
+test_adopt_objective_seed_keeps_the_readmes_mode() {
+    local project_dir="$TEST_TMPDIR/mode-project"
+    mkdir -p "$project_dir"
+    local proj
+    proj="$CS_TRANSCRIPTS_DIR/$(_encode_cwd_for_claude_test "$project_dir")"
+    mkdir -p "$proj"
+    printf '{"type":"user","message":{"role":"user","content":"Rewrite the electron UI shell for the desktop app"}}\n' \
+        > "$proj/$UUID_PRIOR.jsonl"
+
+    (umask 022; cd "$project_dir" && "$CS_BIN" -adopt modeprobe >/dev/null 2>&1) \
+        || { echo "  FAIL: adopt should succeed"; return 1; }
+
+    assert_eq "Rewrite the electron UI shell for the desktop app" "$(_adopt_readme_objective "$project_dir")" \
+        "the Objective was seeded" || return 1
+    assert_eq "644" "$(_file_mode "$project_dir/.cs/README.md")" "the README keeps the mode it was created with" || return 1
+}
+
 test_adopt_keeps_the_placeholder_objective_without_a_conversation() {
     local project_dir="$TEST_TMPDIR/my-project"
     mkdir -p "$project_dir"
@@ -673,6 +692,7 @@ run_test test_first_launch_after_adopt_starts_fresh_without_asking
 run_test test_first_launch_after_adopt_offers_the_projects_newest_conversation
 run_test test_second_launch_after_adopt_asks_and_resumes
 run_test test_adopt_seeds_the_objective_from_the_newest_conversations_first_prompt
+run_test test_adopt_objective_seed_keeps_the_readmes_mode
 run_test test_adopt_keeps_the_placeholder_objective_without_a_conversation
 run_test test_adopt_clips_a_long_first_prompt
 run_test test_readopt_keeps_the_prior_conversation_binding

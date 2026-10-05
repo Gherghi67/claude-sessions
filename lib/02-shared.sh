@@ -283,6 +283,10 @@ cs_write_atomic() {  # dest, command [args...]
             esac
             hops=$((hops + 1))
         done
+        if [ -d "$dest" ]; then
+            echo "cs_write_atomic: $dest is a directory" >&2
+            exit 1
+        fi
         dir=$(dirname "$dest")
         tmp=$(mktemp "$dir/.$(basename "$dest").XXXXXX") || exit 1
         trap 'rm -f "$tmp"' EXIT

@@ -42,6 +42,10 @@ fi
 if ! command -v cs_private_dir >/dev/null 2>&1; then
     cs_private_dir() { return 1; }
 fi
+# Nor is the failure count written without the library's writer.
+if ! command -v cs_write_atomic >/dev/null 2>&1; then
+    cs_write_atomic() { return 1; }
+fi
 # Only run in cs sessions
 cs_resolve_session "$INPUT" || exit 0
 
@@ -67,12 +71,15 @@ echo "[$(date '+%Y-%m-%d %H:%M:%S')] Tool failure: $TOOL_NAME - $ERROR_SHORT" >>
 
 # Count failures for the queue circuit breaker. Reset per task by the drain
 # (Stop hook); absent or non-numeric reads as 0. Best-effort — this hook
-# stays silent and non-blocking no matter what.
+# stays silent and non-blocking no matter what. Two failures landing at once
+# can count as one: the breaker is a soft threshold, and a lock on the
+# tool-failure path would cost more than the missed increment. Not a defect
+# to fix.
 {
     FAILS_FILE="$LOG_DIR/failures"
     CUR=$(cat "$FAILS_FILE" 2>/dev/null | tr -d '[:space:]')
     case "$CUR" in ''|*[!0-9]*) CUR=0;; esac
-    printf '%s\n' $((CUR + 1)) > "$FAILS_FILE.tmp" && mv "$FAILS_FILE.tmp" "$FAILS_FILE"
+    cs_write_atomic "$FAILS_FILE" printf '%s\n' $((CUR + 1))
 } 2>/dev/null || true
 
 exit 0

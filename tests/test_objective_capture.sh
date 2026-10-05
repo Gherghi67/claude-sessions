@@ -55,6 +55,18 @@ objective_line() {
 
 # --- Tests ---
 
+# The capture rewrites the README in place of the placeholder; the file keeps
+# the mode it had. 750 carries an execute bit, which no umask gives a newly
+# written file.
+test_capture_keeps_the_readmes_mode() {
+    make_readme
+    chmod 750 "$CLAUDE_SESSION_META_DIR/README.md"
+    run_hook "we need to fix the CS TUI on light terminal themes" >/dev/null
+    assert_eq "we need to fix the CS TUI on light terminal themes" "$(objective_line)" \
+        "the objective was captured" || return 1
+    assert_eq "750" "$(_file_mode "$CLAUDE_SESSION_META_DIR/README.md")" "the README keeps its mode" || return 1
+}
+
 test_captures_first_substantive_prompt() {
     make_readme
     run_hook "we need to fix the CS TUI on light terminal themes" >/dev/null
@@ -174,6 +186,7 @@ test_skips_locked_encrypted_session() {
 }
 
 run_test test_captures_first_substantive_prompt
+run_test test_capture_keeps_the_readmes_mode
 run_test test_skips_slash_command
 run_test test_skips_bang_passthrough
 run_test test_skips_trivially_short_prompt

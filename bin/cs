@@ -432,6 +432,10 @@ cs_write_atomic() {  # dest, command [args...]
             esac
             hops=$((hops + 1))
         done
+        if [ -d "$dest" ]; then
+            echo "cs_write_atomic: $dest is a directory" >&2
+            exit 1
+        fi
         dir=$(dirname "$dest")
         tmp=$(mktemp "$dir/.$(basename "$dest").XXXXXX") || exit 1
         trap 'rm -f "$tmp"' EXIT
@@ -1587,10 +1591,10 @@ check_update_notify() {
         if [ ! -f "$notes_cache" ] || [ ! -f "$full_cache" ]; then
             local notes
             if notes=$(fetch_remote_changelog); then
-                changelog_summaries "$notes" "$VERSION" 5 > "$notes_cache.tmp" \
-                    && mv "$notes_cache.tmp" "$notes_cache"
-                changelog_span "$notes" "$VERSION" > "$full_cache.tmp" \
-                    && mv "$full_cache.tmp" "$full_cache"
+                # A cache that cannot be written is left absent, and the next
+                # launch builds it again.
+                cs_write_atomic "$notes_cache" changelog_summaries "$notes" "$VERSION" 5 || true
+                cs_write_atomic "$full_cache" changelog_span "$notes" "$VERSION" || true
                 rm -f "$notes"
             else
                 : > "$notes_cache"
@@ -2710,10 +2714,11 @@ EOF
     fi
 
     # Drop the legacy single-narrative index pointer if a migration left it stale.
-    # Temp+mv instead of sed -i: the BSD `sed -i ''` form errors on GNU sed and
-    # would abort session resume on Linux under set -e.
+    # Through a temp file instead of sed -i: the BSD `sed -i ''` form errors on
+    # GNU sed and would abort session resume on Linux under set -e.
     if [ -f "$index" ] && grep -q '(narrative\.md)' "$index" 2>/dev/null; then
-        sed '/(narrative\.md)/d' "$index" > "$index.tmp" && mv "$index.tmp" "$index"
+        cs_write_atomic "$index" sed '/(narrative\.md)/d' "$index" \
+            || warn "could not rewrite $index; the stale narrative.md pointer stays"
     fi
 
     if [ ! -f "$index" ] || ! grep -q "(narrative\.$actor\.md)" "$index" 2>/dev/null; then
@@ -3244,21 +3249,18 @@ _transcript_first_prompt() {  # transcript_file
 
 # Replace the Objective placeholder (a whole line wrapped in [...] under
 # `## Objective`) with text, leaving every other line alone. A hand-written
-# objective has no placeholder and is never touched. tmp+mv keeps the write
-# atomic; ENVIRON sidesteps awk -v escape processing of arbitrary prompt text.
+# objective has no placeholder and is never touched. The README is replaced
+# whole and keeps its mode; ENVIRON sidesteps awk -v escape processing of
+# arbitrary prompt text. A README that cannot be rewritten keeps its
+# placeholder.
 _seed_readme_objective() {  # readme, text
-    local readme="$1" text="$2" tmp
+    local readme="$1" text="$2"
     [ -f "$readme" ] && [ -n "$text" ] || return 0
-    tmp=$(mktemp "${TMPDIR:-/tmp}/cs-objective.XXXXXX") || return 0
-    if OBJ="$text" awk '
+    OBJ="$text" cs_write_atomic "$readme" awk '
             /^## / { in_obj = ($0 ~ /^## Objective/) }
             in_obj && /^\[.*\]$/ { print ENVIRON["OBJ"]; next }
             { print }
-        ' "$readme" > "$tmp"; then
-        mv "$tmp" "$readme" || rm -f "$tmp"
-    else
-        rm -f "$tmp"
-    fi
+        ' "$readme" || return 0
 }
 
 # Terminate a JSONL file whose last line lost its newline to an interrupted
@@ -3789,7 +3791,7 @@ needs_cs_migration() {
 # sed -i (BSD/GNU disagree on -i). Idempotent: nothing matches on the second run.
 migrate_narrative_resume_wording() {
     local session_dir="$1"
-    local mem="$session_dir/.cs/memory" f tmp
+    local mem="$session_dir/.cs/memory" f
     # Only the actor's own narrative: a teammate's file is theirs to migrate on
     # their own resume, and a committed edit to its head would show up in their
     # teammates' digests as growth that is not a tail.
@@ -3802,18 +3804,16 @@ migrate_narrative_resume_wording() {
     # silently skip the file.
     if [ -f "$f" ] \
         && awk 'NR <= 8 && /^description: .*Read (all|the live) narrative\.\*\.md on resume[.;]/ { f = 1 } NR > 8 { exit } END { exit !f }' "$f"; then
-        tmp="$f.tmp"
         # One replacement for both vintages: the pattern alternates, the
         # sentence appears once, so a typo cannot migrate half the population
         # to a wording no later gate matches.
-        sed -E '1,8{/^description: /s/Read (all narrative\.\*\.md on resume\.|the live narrative\.\*\.md on resume; older sections are archived under \.cs\/narrative-archive\/\.)/Its owner reads it in full on resume; anyone else reads only the lines the resume digest names. Older sections are archived under .cs\/narrative-archive\/./;}' "$f" > "$tmp" \
-            && mv "$tmp" "$f"
+        cs_write_atomic "$f" sed -E '1,8{/^description: /s/Read (all narrative\.\*\.md on resume\.|the live narrative\.\*\.md on resume; older sections are archived under \.cs\/narrative-archive\/\.)/Its owner reads it in full on resume; anyone else reads only the lines the resume digest names. Older sections are archived under .cs\/narrative-archive\/./;}' "$f" \
+            || warn "could not rewrite $f; its description keeps the old wording"
     fi
     f="$mem/MEMORY.md"
     if [ -f "$f" ] && grep -qE 'read (all|the live) narrative\.\*\.md on resume' "$f"; then
-        tmp="$f.tmp"
-        sed -E 's/read (all narrative\.\*\.md on resume|the live narrative\.\*\.md on resume, older sections under \.cs\/narrative-archive\/)/its owner reads it in full on resume, anyone else only the lines the resume digest names; older sections under .cs\/narrative-archive\//' "$f" > "$tmp" \
-            && mv "$tmp" "$f"
+        cs_write_atomic "$f" sed -E 's/read (all narrative\.\*\.md on resume|the live narrative\.\*\.md on resume, older sections under \.cs\/narrative-archive\/)/its owner reads it in full on resume, anyone else only the lines the resume digest names; older sections under .cs\/narrative-archive\//' "$f" \
+            || warn "could not rewrite $f; its narrative pointer keeps the old wording"
     fi
     f="$session_dir/CLAUDE.local.md"
     # cs has shipped two protocol-block wordings for the same sentence: the
@@ -4077,21 +4077,12 @@ migrate_session() {
         fi
         local existing_content
         existing_content=$(cat "$readme")
-        # Temp+mv, like every neighbouring write: redirecting onto the README
-        # truncates the user's file before the block writes a byte, so a write
-        # that does not complete leaves nothing behind.
-        if { {
-            echo "---"
-            echo "status: active"
-            echo "created: $created_date"
-            echo "tags: []"
-            echo "aliases: [\"$session_name\"]"
-            echo "---"
-            echo "$existing_content"
-        } > "$readme.tmp"; } 2>/dev/null && mv "$readme.tmp" "$readme"; then
+        # Through a temp file, like every neighbouring write: redirecting onto
+        # the README truncates the user's file before a byte is written, so a
+        # write that does not complete leaves nothing behind.
+        if cs_write_atomic "$readme" printf -- '---\nstatus: active\ncreated: %s\ntags: []\naliases: ["%s"]\n---\n%s\n' \
+            "$created_date" "$session_name" "$existing_content" 2>/dev/null; then
             warn "Added frontmatter to .cs/README.md"
-        else
-            rm -f "$readme.tmp" 2>/dev/null || true
         fi
     fi
 
@@ -4145,15 +4136,17 @@ migrate_session() {
                 warn "ignoring claude_session_color in .cs/README.md: not one of claude's colours"
             fi
         fi
-        local _tmp="$readme.tmp"
-        awk -v re="$_fm_field_re" '
+        if cs_write_atomic "$readme" awk -v re="$_fm_field_re" '
             { line = $0; sub(/\r$/, "", line) }
             NR == 1 && line == "---" { fm = 1; print; next }
             fm && line == "---"      { fm = 0; print; next }
             fm && line ~ re          { next }
             { print }
-        ' "$readme" > "$_tmp" && mv "$_tmp" "$readme"
-        warn "Moved machine-local fields from .cs/README.md to .cs/local/state"
+        ' "$readme"; then
+            warn "Moved machine-local fields from .cs/README.md to .cs/local/state"
+        else
+            warn "could not rewrite $readme; its machine-local fields stay in it"
+        fi
     fi
 
     # Phase 8: Bind claude_session_id in local state to a real claude
@@ -4519,6 +4512,15 @@ EOF
     printf '%s\n' "$headings" | tail -1 | cut -d' ' -f1
 }
 
+# What the live narrative holds after a rotation: its header block from the
+# snapshot, then everything in the live file past the cut.
+_narrative_kept_text() {  # snap, live, head_end, cut
+    if [ "$3" -gt 0 ]; then
+        head -c "$3" "$1" || return 1
+    fi
+    tail -c +$(($4 + 1)) "$2"
+}
+
 # Archive the oldest sections of this actor's narrative when the file is over
 # CS_NARRATIVE_MAX_BYTES, leaving a tail of about CS_NARRATIVE_KEEP_BYTES.
 rotate_narrative() {
@@ -4595,6 +4597,9 @@ rotate_narrative() {
     local blob chunk chunk_tmp
     blob=$(git hash-object "$body" | cut -c1-8)
     chunk="$arch_dir/$through-$blob.md"
+    # The fixed temp name is safe here and needs no unique one: it carries the
+    # hash of the bytes it will hold, so two rotations that share it are
+    # writing the same file.
     chunk_tmp="$arch_dir/.$through-$blob.md.tmp"
     {
         printf '<!-- rotated from narrative.%s.md: %s sections through %s -->\n' "$actor" "$sections" "$through"
@@ -4631,9 +4636,8 @@ rotate_narrative() {
         [ "$created" -eq 1 ] && rm -f "$chunk"
         error "narrative.$actor.md changed during rotation; run cs -narrative rotate again"
     fi
-    local live_tmp="$meta_dir/memory/.narrative.$actor.md.tmp"
-    { [ "$head_end" -gt 0 ] && head -c "$head_end" "$snap"; tail -c +$((cut + 1)) "$live"; } > "$live_tmp"
-    mv "$live_tmp" "$live"
+    cs_write_atomic "$live" _narrative_kept_text "$snap" "$live" "$head_end" "$cut" \
+        || error "could not rewrite narrative.$actor.md"
     rm -f "$snap"
 
     local chunk_rel=".cs/${arch_root#"$meta_dir"/}/$actor/$(basename "$chunk")"
@@ -4830,10 +4834,12 @@ run_spawn() {
     if [ "${#tasks[@]}" -gt 0 ] || [ -n "$brief" ]; then
         local sdir="$SESSIONS_ROOT/.spawn" seed
         seed="$sdir/$name.seed"
-        # The check-then-write below is deliberately unlocked. The tmp+mv makes
-        # the write atomic, so two concurrent spawns of the same name resolve to
-        # last-writer-wins with no torn or interleaved seed. Adding a lock would
-        # buy nothing for that benign race.
+        # The check-then-write below is deliberately unlocked, and both temp
+        # names are fixed. Two spawns of one name started in the same instant
+        # can therefore interleave on them: one run fails at its publishing
+        # rename, or a seed is torn, or it is published beside the other
+        # run's brief. One user spawning one name twice at once is the only
+        # way in, so it is left as it is.
         [ ! -f "$seed" ] || error "A pending spawn for $name exists: $seed"
         mkdir -p "$sdir"
         # Order: seed content first (to a temp file), brief second, seed
@@ -5338,7 +5344,7 @@ _queue_set_state() {  # atomic single-word write; "" removes the file
     local qdir="$1" val="$2"
     mkdir -p "$qdir"
     if [ -z "$val" ]; then rm -f "$qdir/queue.state"; return 0; fi
-    printf '%s\n' "$val" > "$qdir/queue.state.tmp" && mv "$qdir/queue.state.tmp" "$qdir/queue.state"
+    cs_write_atomic "$qdir/queue.state" printf '%s\n' "$val"
 }
 
 # Convert a pre-directory queue (a single line-per-task FILE at the queue
@@ -5548,8 +5554,7 @@ run_queue() {
         rm)    shift; _queue_rm "$qdir" "${1:-}";;
         clear) _queue_clear "$qdir";;
         start) _queue_set_state "$qdir" armed;;
-        defer) mkdir -p "$qdir"; printf '%s\n' "$(date +%s)" > "$qdir/queue.declined.tmp" \
-                   && mv "$qdir/queue.declined.tmp" "$qdir/queue.declined"
+        defer) mkdir -p "$qdir"; cs_write_atomic "$qdir/queue.declined" printf '%s\n' "$(date +%s)"
                _terminate_jsonl "$qdir/notifications.jsonl"
                { jq -nc --arg ts "$(date +%s)" '{ts: ($ts|tonumber), event: "gate_declined"}' \
                    >> "$qdir/notifications.jsonl"; } 2>/dev/null || true;;
@@ -5563,14 +5568,14 @@ _presence_file() {  # meta_dir
     printf '%s' "$1/local/presence"
 }
 
-# Write a one-line status atomically (tmp+mv). Newlines/CRs collapse to spaces so
+# Write a one-line status atomically. Newlines/CRs collapse to spaces so
 # the file stays exactly one line. Arg: meta_dir, text.
 _write_presence() {  # meta_dir, text
     local meta_dir="$1" text="$2" file
     file="$(_presence_file "$meta_dir")"
     mkdir -p "$(dirname "$file")"
     text="$(printf '%s' "$text" | tr '\n\r' '  ')"
-    printf '%s\n' "$text" > "$file.tmp" && mv "$file.tmp" "$file"
+    cs_write_atomic "$file" printf '%s\n' "$text"
 }
 
 # Print a session's raw presence status (empty if unset). Arg: meta_dir.
@@ -6179,22 +6184,20 @@ _tags_write() {
         formatted="${formatted:+$formatted, }$t"
     done
     local newline="tags: [$formatted]"
-    local tmp="$readme.tmp"
     # Both branches end on `exit done ? 0 : 1`: awk otherwise exits 0 whether or
     # not it anchored anywhere, so a frontmatter block offering neither anchor
-    # sent every record through the catch-all print, the tmp+mv rewrote the file
+    # sent every record through the catch-all print, the rewrite replaced the file
     # byte-identically, and the caller reported success having written nothing.
     # Verifying the write landed is the whole point — a status quo the tool
     # cannot distinguish from a successful edit is not a successful edit.
-    local status=0
     if _tags_read_line_exists "$readme"; then
-        awk -v repl="$newline" '
+        cs_write_atomic "$readme" awk -v repl="$newline" '
             NR == 1 && $0 == "---" { fm = 1; print; next }
             fm == 1 && $0 == "---" { fm = 2; print; next }
             fm == 1 && /^tags:[[:space:]]*\[/ && !done { print repl; done = 1; next }
             { print }
             END { exit done ? 0 : 1 }
-        ' "$readme" > "$tmp" || status=$?
+        ' "$readme"
     else
         # The `eat` run below consumes tags lines sitting immediately after
         # status:. cs always inserts there, so those are its own from earlier
@@ -6203,7 +6206,7 @@ _tags_write() {
         # rather than to every /^tags:/ line: on an unterminated block there is
         # no frontmatter boundary, and a line further down that reads
         # "tags: [...]" belongs to the user.
-        awk -v repl="$newline" '
+        cs_write_atomic "$readme" awk -v repl="$newline" '
             NR == 1 && $0 == "---" { fm = 1; print; next }
             fm == 1 && /^status:/ && !done { print; print repl; done = 1; eat = 1; next }
             eat && /^tags:[[:space:]]*\[/ { next }
@@ -6212,13 +6215,8 @@ _tags_write() {
             fm == 1 && $0 == "---" { fm = 2; print; next }
             { print }
             END { exit done ? 0 : 1 }
-        ' "$readme" > "$tmp" || status=$?
+        ' "$readme"
     fi
-    if [ "$status" -ne 0 ]; then
-        rm -f "$tmp"
-        return 1
-    fi
-    mv "$tmp" "$readme"
 }
 
 # True when an inline tags line exists in the frontmatter. The "found" branch
@@ -9203,16 +9201,14 @@ EOF
                 if [ -n "$pending_handoff" ]; then
                     # Flip only the first status line (the frontmatter's); a
                     # body quoting the contract line flush-left stays intact.
-                    { awk '
+                    cs_write_atomic "$pending_handoff" awk '
                         !flipped && $0 == "status: unconsumed" {
                             print "status: discarded"
                             flipped = 1
                             next
                         }
                         { print }
-                    ' "$pending_handoff" > "$pending_handoff.tmp"; } 2>/dev/null \
-                        && mv "$pending_handoff.tmp" "$pending_handoff" 2>/dev/null \
-                        || rm -f "$pending_handoff.tmp" 2>/dev/null || true
+                    ' "$pending_handoff" 2>/dev/null || true
                     printf "${DIM}Handoff discarded:${NC} %s\n" "$(basename "$pending_handoff")"
                 fi
                 # d without a pending handoff was never offered: treat as the

@@ -158,27 +158,61 @@ EOF
 # Phase 6 reframes a README that has no frontmatter. Writing it in place means
 # the redirect truncates the user's file before anything is written back; a
 # write that does not complete leaves it empty. Through a temp file, a failed
-# write leaves the original untouched — which is what this asserts, by making
-# the temp path unwritable (a directory) so the write cannot succeed.
+# write leaves the original untouched — which is what this asserts. The README
+# is a link into a directory that takes no new files, so the temp file cannot
+# be created beside the real file while a write in place still could land.
 test_migration_readme_survives_a_failed_frontmatter_write() {
     local session_dir="$CS_SESSIONS_ROOT/no-frontmatter"
-    mkdir -p "$session_dir/.cs"/{local,memory}
-    local readme="$session_dir/.cs/README.md"
-    printf '# Session: no-frontmatter\n\n## Objective\n\nkeep me\n' > "$readme"
+    mkdir -p "$session_dir/.cs"/{local,memory} "$TEST_TMPDIR/readme-home"
+    local readme="$session_dir/.cs/README.md" real="$TEST_TMPDIR/readme-home/README.md"
+    printf '# Session: no-frontmatter\n\n## Objective\n\nkeep me\n' > "$real"
+    ln -s "$real" "$readme"
     echo "# Session narrative" > "$session_dir/.cs/memory/narrative.md"
     echo "# Session" > "$session_dir/CLAUDE.md"
     (cd "$session_dir" && git init -q && git add -A && git commit -q -m "init")
-    mkdir -p "$readme.tmp"   # the write cannot land here
+    _deny_writes "$TEST_TMPDIR/readme-home" || return 77
 
     "$CS_BIN" no-frontmatter <<< "" >/dev/null 2>&1 || true
+    _allow_writes "$TEST_TMPDIR/readme-home"
 
-    assert_file_contains "$readme" "^## Objective" "the user's README must survive" || return 1
-    assert_file_contains "$readme" "^keep me" "including its body" || return 1
-    if [ "$(head -1 "$readme")" = "---" ]; then
+    assert_file_contains "$real" "^## Objective" "the user's README must survive" || return 1
+    assert_file_contains "$real" "^keep me" "including its body" || return 1
+    if [ "$(head -1 "$real")" = "---" ]; then
         echo "  FAIL: rewrote the README in place despite the write failing"
         return 1
     fi
-    rmdir "$readme.tmp" 2>/dev/null || true
+    [ -L "$readme" ] || { echo "  FAIL: the README link was replaced by a file"; return 1; }
+}
+
+# Both README rewrites of the migration go through a uniquely named temp file:
+# a sibling the user named README.md.tmp is left alone and the README keeps
+# its mode. One session reaches the frontmatter reframe, the other the move of
+# machine-local fields.
+test_migration_readme_rewrites_leave_a_tmp_sibling_alone_and_keep_the_mode() {
+    local a="$CS_SESSIONS_ROOT/no-frontmatter-sib" b="$CS_SESSIONS_ROOT/legacy-frontmatter-sib" d
+    for d in "$a" "$b"; do
+        mkdir -p "$d/.cs"/{local,memory}
+        echo "# Session narrative" > "$d/.cs/memory/narrative.md"
+        echo "# Session" > "$d/CLAUDE.md"
+    done
+    printf '# Session: no-frontmatter-sib\n\n## Objective\n\nkeep me\n' > "$a/.cs/README.md"
+    printf -- '---\nstatus: active\ncreated: 2026-01-01\nclaude_session_id: abcd1234-5678-4abc-9def-fedcba987654\ntags: []\naliases: ["legacy-frontmatter-sib"]\n---\n# Session: legacy-frontmatter-sib\n' > "$b/.cs/README.md"
+    for d in "$a" "$b"; do
+        (cd "$d" && git init -q && git add -A && git commit -q -m "init")
+        printf 'USER-OWNED\n' > "$d/.cs/README.md.tmp"
+        chmod 750 "$d/.cs/README.md"
+    done
+
+    "$CS_BIN" no-frontmatter-sib <<< "" >/dev/null 2>&1 || true
+    "$CS_BIN" legacy-frontmatter-sib <<< "" >/dev/null 2>&1 || true
+
+    assert_eq "---" "$(head -1 "$a/.cs/README.md")" "frontmatter added" || return 1
+    assert_file_contains "$a/.cs/README.md" "^keep me" "the body is kept" || return 1
+    assert_file_not_contains "$b/.cs/README.md" "^claude_session_id:" "machine-local field moved out" || return 1
+    for d in "$a" "$b"; do
+        assert_eq "USER-OWNED" "$(cat "$d/.cs/README.md.tmp" 2>/dev/null)" "README.md.tmp is untouched in $(basename "$d")" || return 1
+        assert_eq "750" "$(_file_mode "$d/.cs/README.md")" "the README keeps its mode in $(basename "$d")" || return 1
+    done
 }
 
 test_migration_moves_fields_from_readme_to_local_state() {
@@ -511,6 +545,15 @@ test_atomic_write_keeps_the_mode_with_gnu_stat_on_a_mac() {
     assert_eq "640" "$(_file_mode "$f")" "and kept its mode" || return 1
 }
 
+# A destination that is a directory is refused: nothing is written into it.
+test_atomic_write_refuses_a_directory_destination() {
+    local d="$TEST_TMPDIR/a-directory" rc=0
+    mkdir -p "$d"
+    bash -c 'source "$1"; cs_write_atomic "$2" printf "new\n"' _ "$SCRIPT_DIR/../hooks/cs-shared.sh" "$d" 2>/dev/null || rc=$?
+    [ "$rc" -ne 0 ] || { echo "  FAIL: writing onto a directory must fail"; return 1; }
+    assert_eq "" "$(ls -A "$d")" "nothing is left inside the directory" || return 1
+}
+
 test_state_write_takes_over_a_dead_holders_lock() {
     local session_dir
     session_dir=$(create_test_session_with_git stale-lock)
@@ -755,6 +798,7 @@ run_test test_new_session_records_state_in_local_not_readme
 run_test test_resume_leaves_readme_untouched
 run_test test_migration_leaves_a_body_line_that_looks_like_a_field
 run_test test_migration_readme_survives_a_failed_frontmatter_write
+run_test test_migration_readme_rewrites_leave_a_tmp_sibling_alone_and_keep_the_mode
 run_test test_migration_moves_fields_from_readme_to_local_state
 run_test test_clone_with_a_readme_id_that_is_not_a_uuid_starts_fresh
 run_test test_migration_never_records_a_readme_id_that_is_not_a_uuid
@@ -777,4 +821,5 @@ run_test test_state_write_takes_over_a_dead_holders_lock
 run_test test_state_write_fails_loudly_when_the_old_state_cannot_be_read
 run_test test_two_state_writers_lose_no_update
 run_test test_atomic_write_keeps_the_mode_with_gnu_stat_on_a_mac
+run_test test_atomic_write_refuses_a_directory_destination
 report_results

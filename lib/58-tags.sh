@@ -64,22 +64,20 @@ _tags_write() {
         formatted="${formatted:+$formatted, }$t"
     done
     local newline="tags: [$formatted]"
-    local tmp="$readme.tmp"
     # Both branches end on `exit done ? 0 : 1`: awk otherwise exits 0 whether or
     # not it anchored anywhere, so a frontmatter block offering neither anchor
-    # sent every record through the catch-all print, the tmp+mv rewrote the file
+    # sent every record through the catch-all print, the rewrite replaced the file
     # byte-identically, and the caller reported success having written nothing.
     # Verifying the write landed is the whole point — a status quo the tool
     # cannot distinguish from a successful edit is not a successful edit.
-    local status=0
     if _tags_read_line_exists "$readme"; then
-        awk -v repl="$newline" '
+        cs_write_atomic "$readme" awk -v repl="$newline" '
             NR == 1 && $0 == "---" { fm = 1; print; next }
             fm == 1 && $0 == "---" { fm = 2; print; next }
             fm == 1 && /^tags:[[:space:]]*\[/ && !done { print repl; done = 1; next }
             { print }
             END { exit done ? 0 : 1 }
-        ' "$readme" > "$tmp" || status=$?
+        ' "$readme"
     else
         # The `eat` run below consumes tags lines sitting immediately after
         # status:. cs always inserts there, so those are its own from earlier
@@ -88,7 +86,7 @@ _tags_write() {
         # rather than to every /^tags:/ line: on an unterminated block there is
         # no frontmatter boundary, and a line further down that reads
         # "tags: [...]" belongs to the user.
-        awk -v repl="$newline" '
+        cs_write_atomic "$readme" awk -v repl="$newline" '
             NR == 1 && $0 == "---" { fm = 1; print; next }
             fm == 1 && /^status:/ && !done { print; print repl; done = 1; eat = 1; next }
             eat && /^tags:[[:space:]]*\[/ { next }
@@ -97,13 +95,8 @@ _tags_write() {
             fm == 1 && $0 == "---" { fm = 2; print; next }
             { print }
             END { exit done ? 0 : 1 }
-        ' "$readme" > "$tmp" || status=$?
+        ' "$readme"
     fi
-    if [ "$status" -ne 0 ]; then
-        rm -f "$tmp"
-        return 1
-    fi
-    mv "$tmp" "$readme"
 }
 
 # True when an inline tags line exists in the frontmatter. The "found" branch

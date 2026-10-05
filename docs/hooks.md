@@ -189,7 +189,7 @@ Runs when Claude Code spawns a subagent (via the Agent tool):
 Runs when a tool call fails (async, non-blocking):
 - Logs tool name and truncated error message to `.cs/local/session.log` (`.cs/private/session.log` in an encrypted session, and nowhere while its vault is locked)
 - Helps debug build failures, test errors, and other tool issues after the fact
-- Increments the per-task failure counter (`.cs/local/failures`, atomic tmp+mv) that feeds the queue's failures circuit breaker (see narrative-reminder.sh); absent or non-numeric reads as zero. A lost increment under exact concurrency with the Stop hook's reset degrades the breaker by one count but never corrupts state, and the increment stays silent and non-blocking like the rest of the hook
+- Increments the per-task failure counter (`.cs/local/failures`, written through `cs_write_atomic`) that feeds the queue's failures circuit breaker (see narrative-reminder.sh); absent or non-numeric reads as zero. A lost increment under exact concurrency with the Stop hook's reset degrades the breaker by one count but never corrupts state, and the increment stays silent and non-blocking like the rest of the hook
 
 ## session-auto-approve.sh (PermissionRequest on Write/Edit)
 

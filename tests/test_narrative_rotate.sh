@@ -118,6 +118,29 @@ test_rotate_archives_oldest_sections_and_keeps_tail() {
     assert_eq "1590" "$tail_bytes" "the tail is exactly sections 8, 9 and 10" || return 1
 }
 
+# The live narrative is rewritten through a temp file; it keeps the mode it
+# had. 750 carries an execute bit, which no umask gives a newly written file.
+test_rotate_keeps_the_live_files_mode() {
+    _make_narrative "$LIVE" 10 500
+    chmod 750 "$LIVE"
+    "$CS_BIN" -narrative rotate > /dev/null 2>&1 || return 1
+    assert_file_not_contains "$LIVE" "section 1$" "the rotation happened" || return 1
+    assert_eq "750" "$(_file_mode "$LIVE")" "the live narrative keeps its mode" || return 1
+}
+
+# A live narrative that is a symlink is rewritten through the link: the target
+# holds the kept tail and the link stays a link.
+test_rotate_writes_through_a_symlinked_narrative() {
+    local real="$TEST_TMPDIR/elsewhere/narrative.md"
+    mkdir -p "$TEST_TMPDIR/elsewhere"
+    _make_narrative "$real" 10 500
+    ln -s "$real" "$LIVE"
+    "$CS_BIN" -narrative rotate > /dev/null 2>&1 || return 1
+    [ -L "$LIVE" ] || { echo "  FAIL: the symlink was replaced by a regular file"; return 1; }
+    assert_file_not_contains "$real" "section 1$" "the target was rotated" || return 1
+    assert_file_contains "$real" "section 10$" "the target keeps the newest section" || return 1
+}
+
 test_rotate_keeps_the_header_block() {
     _make_narrative "$LIVE" 10 500
     "$CS_BIN" -narrative rotate > /dev/null 2>&1 || return 1
@@ -871,6 +894,8 @@ run_test test_rotate_requires_a_session
 run_test test_rotate_rejects_unknown_subcommand
 run_test test_help_shows_narrative
 run_test test_rotate_archives_oldest_sections_and_keeps_tail
+run_test test_rotate_keeps_the_live_files_mode
+run_test test_rotate_writes_through_a_symlinked_narrative
 run_test test_rotate_keeps_the_header_block
 run_test test_rotate_cuts_on_a_heading_boundary
 run_test test_rotate_writes_one_chunk_whose_body_is_verbatim

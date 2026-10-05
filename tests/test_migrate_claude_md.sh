@@ -379,6 +379,29 @@ test_migrate_rewrites_read_all_wording_cs_wrote() {
     assert_file_contains "$dir/CLAUDE.local.md" "<!-- cs:memory-note -->" "the following block is untouched" || return 1
 }
 
+# The two wording rewrites under .cs/memory go through a uniquely named temp
+# file too: <file>.tmp siblings are left alone and both files keep their mode.
+test_migrate_memory_wording_rewrites_leave_tmp_siblings_alone_and_keep_modes() {
+    local dir
+    dir=$(create_test_session "wordysib")
+    printf -- '---\nname: session-narrative-alice\ndescription: Session lab-notebook and work-in-progress narrative for alice. Looser bar than durable memory. Read all narrative.*.md on resume.\ntype: narrative\n---\n# Session narrative (alice)\n' \
+        > "$dir/.cs/memory/narrative.alice.md"
+    printf -- '- [Session narrative — alice (lab notebook)](narrative.alice.md): looser-bar work-in-progress; read all narrative.*.md on resume\n' \
+        > "$dir/.cs/memory/MEMORY.md"
+    printf 'USER-OWNED-NARRATIVE\n' > "$dir/.cs/memory/narrative.alice.md.tmp"
+    printf 'USER-OWNED-INDEX\n' > "$dir/.cs/memory/MEMORY.md.tmp"
+    chmod 750 "$dir/.cs/memory/narrative.alice.md" "$dir/.cs/memory/MEMORY.md"
+
+    CS_ACTOR=alice "$CS_BIN" "wordysib" < /dev/null > /dev/null 2>&1 || true
+
+    assert_file_not_contains "$dir/.cs/memory/narrative.alice.md" "Read all narrative" "description rewritten" || return 1
+    assert_file_not_contains "$dir/.cs/memory/MEMORY.md" "read all narrative" "index pointer rewritten" || return 1
+    assert_eq "USER-OWNED-NARRATIVE" "$(cat "$dir/.cs/memory/narrative.alice.md.tmp" 2>/dev/null)" "narrative .tmp sibling untouched" || return 1
+    assert_eq "USER-OWNED-INDEX" "$(cat "$dir/.cs/memory/MEMORY.md.tmp" 2>/dev/null)" "MEMORY.md.tmp untouched" || return 1
+    assert_eq "750" "$(_file_mode "$dir/.cs/memory/narrative.alice.md")" "the narrative keeps its mode" || return 1
+    assert_eq "750" "$(_file_mode "$dir/.cs/memory/MEMORY.md")" "MEMORY.md keeps its mode" || return 1
+}
+
 test_migrate_read_all_rewrite_is_idempotent() {
     local dir
     dir=$(create_test_session "wordy2")
@@ -471,6 +494,7 @@ test_migrated_protocol_matches_the_template() {
 }
 
 run_test test_migrate_rewrites_read_all_wording_cs_wrote
+run_test test_migrate_memory_wording_rewrites_leave_tmp_siblings_alone_and_keep_modes
 run_test test_migrated_protocol_matches_the_template
 run_test test_migrate_leaves_a_current_protocol_block_alone
 run_test test_migrate_rewrites_read_the_live_wording_cs_wrote

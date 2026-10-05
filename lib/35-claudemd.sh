@@ -78,10 +78,11 @@ EOF
     fi
 
     # Drop the legacy single-narrative index pointer if a migration left it stale.
-    # Temp+mv instead of sed -i: the BSD `sed -i ''` form errors on GNU sed and
-    # would abort session resume on Linux under set -e.
+    # Through a temp file instead of sed -i: the BSD `sed -i ''` form errors on
+    # GNU sed and would abort session resume on Linux under set -e.
     if [ -f "$index" ] && grep -q '(narrative\.md)' "$index" 2>/dev/null; then
-        sed '/(narrative\.md)/d' "$index" > "$index.tmp" && mv "$index.tmp" "$index"
+        cs_write_atomic "$index" sed '/(narrative\.md)/d' "$index" \
+            || warn "could not rewrite $index; the stale narrative.md pointer stays"
     fi
 
     if [ ! -f "$index" ] || ! grep -q "(narrative\.$actor\.md)" "$index" 2>/dev/null; then
