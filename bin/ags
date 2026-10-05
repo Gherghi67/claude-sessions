@@ -45,6 +45,7 @@ RETIRED_HOOKS=(
     changes-tracker.sh        # retired: PostToolUse change log re-narrating git history into .cs/changes.md; git log/diff/status is authoritative
     artifact-tracker.sh       # retired: PreToolUse:Write redirect was inert (updatedInput path rewrite is not honored by the harness); tracking removed entirely
     prose-lint.sh             # retired with the `ags -lint` verb it called; MUST stay listed, because a deployed copy calling the removed verb reads error()'s exit 1 as "violations found" and blocks every turn-end
+    memory-index-guard.sh     # moved into the sweep skill (sweep/scripts/), so the guard travels with the skill to every engine
 )
 
 # Hook scripts cs ships; deployed to ~/.claude/hooks/cs/ and registered in
@@ -64,26 +65,29 @@ CS_HOOKS=(
 # Files under hooks/ that the hooks source, or that cs points other tools at,
 # rather than files Claude Code invokes as hooks. Deployed and removed alongside
 # the hooks, never registered against an event. The prompt-rewriter scripts are
-# reached through $EDITOR, not through any hook event; memory-index-guard.sh is
-# run by the /sweep command.
+# reached through $EDITOR, not through any hook event.
 CS_HOOK_LIBS=(
     cs-resolve.sh
     cs-shared.sh
-    memory-index-guard.sh
     prompt-rewriter.sh
     prompt-rewriter-model.sh
     prompt-rewriter-vendor.sh
 )
 
-# Slash commands cs ships; deployed to ~/.claude/commands/.
-CS_COMMANDS=(
+# Slash commands earlier versions deployed to ~/.claude/commands/. cs ships
+# none now: they became skills of the same name, the one format every engine
+# reads. install.sh and run_uninstall delete these files; a command left
+# beside its skill would answer the same /name twice.
+RETIRED_COMMANDS=(
     summary.md
     checkpoint.md
     sweep.md
     wrap.md
 )
 
-# Skills cs ships; each deploys as ~/.claude/skills/<name>/SKILL.md.
+# Skills cs ships; each deploys as <skills dir>/<name>/SKILL.md, for Claude
+# under ~/.claude/skills and for Codex under $CODEX_HOME/skills (default
+# ~/.codex/skills). Both engines get the same files.
 CS_SKILLS=(
     store-secret
     prose-hygiene
@@ -91,6 +95,10 @@ CS_SKILLS=(
     finish
     feature
     write-as-me
+    checkpoint
+    summary
+    sweep
+    wrap
 )
 
 # Skills retired or renamed in past versions but possibly still installed from
@@ -98,6 +106,11 @@ CS_SKILLS=(
 # When retiring or renaming a skill in a release, add its OLD name here: a skill
 # directory left behind keeps answering its slash command forever, and nothing
 # else ever removes it.
+#
+# Only the Claude skills directory is swept. Every name below retired before
+# cs deployed skills to Codex, so in a Codex skills directory it can only be
+# the user's own skill. A skill retired after shipping to Codex must also be
+# removed from there.
 #
 # Do not add a doctor row for a leftover directory; it cannot report one. The
 # only cs that could still hold it is one older than the retirement, and that cs
@@ -112,9 +125,13 @@ RETIRED_SKILLS=(
 )
 
 # Support files skills ship beyond SKILL.md, as skills/<skill>/<path> entries.
+# Files under scripts/ are executables; agents/openai.yaml is Codex's
+# per-skill settings, which Claude ignores.
 CS_SKILL_FILES=(
     write-as-me/scripts/build-corpus.sh
     finish/scripts/finish.sh
+    finish/agents/openai.yaml   # Codex ignores disable-model-invocation; this is its switch
+    sweep/scripts/memory-index-guard.sh
 )
 
 # Mods cs ships: Claude Code function-hooks plugins, deployed file by file as
@@ -143,6 +160,130 @@ _strip_hook_registration() {
             )
         else . end
     '
+}
+
+# The SessionStart hook ags registers for Codex: Codex runs the command through
+# a shell, so a path outside the plain-word alphabet is single-quoted.
+_codex_hook_command() {  # ags_path
+    case "$1" in
+        *[!A-Za-z0-9_./+-]*)
+            printf "'%s' -codex-hook session-start" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")" ;;
+        *) printf '%s -codex-hook session-start' "$1" ;;
+    esac
+}
+
+# Codex skips a hook, silently, until config.toml trusts it: a table
+# [hooks.state."<hooks.json path>:session_start:<group>:<handler>"] holding the
+# sha256 of the handler group's definition, as compact sorted-key JSON with
+# Codex's defaults filled in. ags writes that hash in the same step that
+# registers its hook, so the hook runs without a review prompt.
+_codex_hook_trust_hash() {  # command
+    local json
+    json=$(jq -ncS --arg c "$1" \
+        '{event_name: "session_start", hooks: [{async: false, command: $c, timeout: 600, type: "command"}]}' \
+        | tr -d '\n') || return 1
+    if command -v sha256sum >/dev/null 2>&1; then
+        printf '%s' "$json" | sha256sum | cut -c1-64
+    else
+        printf '%s' "$json" | shasum -a 256 | cut -c1-64
+    fi
+}
+
+# A config.toml rewrite: drop the trust table for each listed key, then rename
+# trust tables for SessionStart groups past a removed one down by one index
+# (shift_from, empty for none), keeping every other line as it was.
+_codex_trust_tables_edit() {  # config, hooks_file, shift_from, keys...
+    local config="$1" file="$2" shift_from="$3" tmp
+    shift 3
+    [ -f "$config" ] || return 0
+    tmp=$(mktemp "$config.ags.XXXXXX") || return 1
+    awk -v prefix="[hooks.state.\"$file:session_start:" -v shift_from="$shift_from" -v drops="$(printf '%s\n' "$@")" '
+        BEGIN {
+            n = split(drops, list, "\n")
+            for (i = 1; i <= n; i++) if (list[i] != "") drop["[hooks.state.\"" list[i] "\"]"] = 1
+        }
+        # Blank lines wait for the next line that survives, so a dropped table
+        # takes its separating blank with it and trailing blanks never pile up.
+        /^[[:space:]]*$/ { if (!skip) blanks++; next }
+        $0 in drop { skip = 1; next }
+        skip && /^[[:space:]]*\[/ { skip = 0 }
+        skip { next }
+        { while (blanks > 0) { print ""; blanks-- } }
+        shift_from != "" && index($0, prefix) == 1 {
+            rest = substr($0, length(prefix) + 1)
+            split(rest, parts, ":")
+            if (parts[1] ~ /^[0-9]+$/ && parts[1] + 0 > shift_from + 0) {
+                print prefix (parts[1] - 1) substr(rest, length(parts[1]) + 1)
+                next
+            }
+        }
+        { print }
+    ' "$config" > "$tmp" || { rm -f "$tmp"; return 1; }
+    mv "$tmp" "$config" || { rm -f "$tmp"; return 1; }
+}
+
+# Index of ags's own SessionStart group in a hooks.json document, or nothing.
+_codex_hook_group_index() {  # hooks.json content
+    printf '%s' "$1" | jq -r '
+        [(.hooks.SessionStart // [])
+         | to_entries[]
+         | select(any(.value.hooks[]?; (.command // "") | endswith(" -codex-hook session-start")))
+         | .key] | first // empty'
+}
+
+# Register ags's SessionStart hook in <codex_dir>/hooks.json and trust it in
+# <codex_dir>/config.toml. A reinstall replaces the group in place and a first
+# install appends it, so the user's own groups keep their indices, and with
+# them their trust. A hooks.json that is not valid JSON is left alone.
+_codex_hooks_register() {  # codex_dir, command
+    local dir="$1" cmd="$2" file="$1/hooks.json" config="$1/config.toml"
+    local doc index tmp hash key
+    case "$file" in *'"'*|*\\*) return 1 ;; esac
+    if [ -f "$file" ]; then
+        doc=$(cat "$file") || return 1
+        printf '%s' "$doc" | jq -e 'type == "object"' >/dev/null 2>&1 || return 1
+    else
+        doc='{}'
+    fi
+    index=$(_codex_hook_group_index "$doc")
+    doc=$(printf '%s' "$doc" | jq --arg c "$cmd" --arg i "$index" '
+        {hooks: [{type: "command", command: $c}]} as $ours
+        | .hooks = (.hooks // {})
+        | .hooks.SessionStart = (.hooks.SessionStart // [])
+        | if $i == "" then .hooks.SessionStart += [$ours]
+          else .hooks.SessionStart[($i | tonumber)] = $ours end') || return 1
+    [ -n "$index" ] || index=$(printf '%s' "$doc" | jq '.hooks.SessionStart | length - 1')
+    mkdir -p "$dir" || return 1
+    tmp=$(mktemp "$file.ags.XXXXXX") || return 1
+    printf '%s\n' "$doc" > "$tmp" && chmod 600 "$tmp" && mv "$tmp" "$file" || { rm -f "$tmp"; return 1; }
+    hash=$(_codex_hook_trust_hash "$cmd") || return 1
+    key="$file:session_start:$index:0"
+    _codex_trust_tables_edit "$config" "$file" "" "$key" || return 1
+    [ -f "$config" ] || { : > "$config" && chmod 600 "$config"; } || return 1
+    if [ -s "$config" ]; then printf '\n' >> "$config" || return 1; fi
+    printf '[hooks.state."%s"]\ntrusted_hash = "sha256:%s"\n' "$key" "$hash" >> "$config"
+}
+
+# Remove ags's SessionStart group and its trust table. Groups after it move up
+# one index, so their trust tables are renamed to match. A hooks.json left with
+# nothing in it is removed.
+_codex_hooks_unregister() {  # codex_dir
+    local dir="$1" file="$1/hooks.json" config="$1/config.toml" doc index tmp
+    [ -f "$file" ] || return 0
+    doc=$(cat "$file") || return 1
+    index=$(_codex_hook_group_index "$doc" 2>/dev/null) || return 1
+    [ -n "$index" ] || return 0
+    doc=$(printf '%s' "$doc" | jq --argjson i "$index" '
+        .hooks.SessionStart |= (to_entries | map(select(.key != $i)) | map(.value))
+        | if .hooks.SessionStart == [] then del(.hooks.SessionStart) else . end
+        | if .hooks == {} then del(.hooks) else . end') || return 1
+    if [ "$doc" = '{}' ]; then
+        rm -f "$file" || return 1
+    else
+        tmp=$(mktemp "$file.ags.XXXXXX") || return 1
+        printf '%s\n' "$doc" > "$tmp" && chmod 600 "$tmp" && mv "$tmp" "$file" || { rm -f "$tmp"; return 1; }
+    fi
+    _codex_trust_tables_edit "$config" "$file" "$index" "$file:session_start:$index:0"
 }
 # The core session identity is independent of the selected runtime. Keep the
 # aliases while shipped hooks and shared commands still read the older names.
@@ -680,6 +821,7 @@ Commands:
   -adopt <name> [--engine claude|codex]  Adopt current directory as a session
   -whoami             Show the current actor (for shared, multi-person sessions)
   -who                Show who contributed to shared memory/narrative (git history)
+  -engine [supports <capability>]  Show this session's engine, conversation and capabilities
   -live               List sessions running right now on this machine
   -usage              Per-session token usage over the 5h/weekly rate-limit windows
   -tag add|rm <tag>   Tag the current session (frontmatter); -tag list [<name>] to view
@@ -1650,13 +1792,57 @@ cs_engine_call() {  # engine operation [arguments...]
 }
 
 cs_engine_supports() {  # engine capability
-    local capabilities capability
+    local capabilities
     capabilities=$(cs_engine_call "${1:-}" capabilities) || return $?
-    while IFS= read -r capability; do
-        [ -n "$capability" ] || continue
-        [ "$capability" != "${2:-}" ] || return 0
-    done <<< "$capabilities"
+    # A whole-line match in memory. A here-string loop needs a temp file under
+    # bash 3.2, which Codex's read-only sandbox refuses; the loop then read no
+    # capabilities and every skill's probe answered "not supported".
+    [ -n "${2:-}" ] || return 1
+    case $'\n'"$capabilities"$'\n' in
+        *$'\n'"$2"$'\n'*) return 0 ;;
+    esac
     return 1
+}
+
+# The engine this conversation runs under. A launch exports CS_RUN_ENGINE into
+# the native child, so a skill's shell sees the run's own engine. Outside a run
+# the session's saved preference answers, as the next launch would read it.
+_cs_current_engine() {
+    if [ -n "${CS_RUN_ENGINE:-}" ]; then
+        cs_engine_known "$CS_RUN_ENGINE" || error "Unknown engine in CS_RUN_ENGINE: $CS_RUN_ENGINE"
+        printf '%s\n' "$CS_RUN_ENGINE"
+        return 0
+    fi
+    [ -n "${CS_SESSION_DIR:-}" ] && [ -d "$CS_SESSION_DIR/.cs" ] \
+        || error "Not in a cs session: CS_SESSION_DIR is unset and no run names its engine"
+    _session_engine "$CS_SESSION_DIR" ""
+}
+
+# What a skill asks before it relies on an adapter feature: which engine, which
+# native conversation the session has bound for it, and what it supports.
+# `supports <capability>` answers by exit status alone, so a skill can refuse
+# cleanly under an engine that lacks the feature instead of half-running.
+cmd_engine() {  # [supports <capability>]
+    local engine conversation="" capabilities
+    engine=$(_cs_current_engine) || exit 1
+    case "${1:-}" in
+        '')
+            if [ -n "${CS_SESSION_DIR:-}" ] && [ -d "$CS_SESSION_DIR/.cs" ]; then
+                conversation=$(cs_binding_read "$CS_SESSION_DIR" "$engine") \
+                    || error "Unreadable $engine conversation binding under $CS_SESSION_DIR/.cs/local"
+            fi
+            capabilities=$(cs_engine_call "$engine" capabilities | tr '\n' ' ')
+            printf 'engine: %s\nconversation: %s\ncapabilities: %s\n' \
+                "$engine" "$conversation" "${capabilities% }"
+            ;;
+        supports)
+            [ -n "${2:-}" ] && [ $# -eq 2 ] || error "Usage: ags -engine supports <capability>"
+            cs_engine_supports "$engine" "$2" && return 0
+            printf '%s is not supported under %s in ags\n' "$2" "$engine" >&2
+            return 1
+            ;;
+        *) error "Usage: ags -engine [supports <capability>]" ;;
+    esac
 }
 check_dependencies() {
     local engine="${1:-claude}"
@@ -6450,13 +6636,12 @@ _doctor_check_hook_files_executable() {
 }
 
 # Compares deployable artifacts in the current directory's cs source checkout
-# (hooks/*.sh, commands/*.md, skills/*/SKILL.md) against their deployed
-# copies. A source edit only takes effect once install.sh deploys it, so
+# (hooks/*.sh, skills/*/SKILL.md and their support files, mods) against their
+# deployed copies, Codex's copies of the skills included. A source edit only takes effect once install.sh deploys it, so
 # silent drift between the two means the running install doesn't match what
 # the source says it does. Silent outside a checkout.
 _doctor_check_hook_drift() {
     local hooks_dir="$HOOKS_DEPLOY_DIR"
-    local commands_dir="${CS_COMMANDS_DIR:-$HOME/.claude/commands}"
     local skills_dir="${CS_SKILLS_DIR:-$HOME/.claude/skills}"
     [ -d "hooks" ] && [ -f "install.sh" ] && [ -f "bin/ags" ] || return 0
 
@@ -6493,7 +6678,7 @@ _doctor_check_hook_drift() {
             if [[ "$src" == */SKILL.md ]]; then
                 name=$(basename "$(dirname "$src")")
                 deployed="$deploy_root/$name/SKILL.md"
-            elif [[ "$src" == skills/*/scripts/* ]]; then
+            elif [[ "$src" == skills/* ]]; then
                 name="${src#skills/}"
                 deployed="$deploy_root/$name"
             elif [[ "$src" == mods/* ]]; then
@@ -6520,12 +6705,20 @@ _doctor_check_hook_drift() {
     }
 
     _drift_scan "Hook" "$hooks_dir" hooks/*.sh hooks/*.png
-    _drift_scan "Command" "$commands_dir" commands/*.md
-    _drift_scan "Skill" "$skills_dir" skills/*/SKILL.md skills/*/scripts/*.sh
+    local skill_sources=(skills/*/SKILL.md skills/*/scripts/*.sh skills/*/agents/*.yaml)
+    _drift_scan "Skill" "$skills_dir" "${skill_sources[@]}"
     _drift_scan "Mod" "$skills_dir" mods/*/.claude-plugin/plugin.json mods/*/hooks/*
 
+    # Codex gets the same skills in its own home. A machine where Codex never
+    # ran has no such home, and nothing there to compare.
+    local engines codex_dir="${CODEX_HOME:-$HOME/.codex}"
+    engines=$(cat "${CS_INSTALL_DIR:-$HOME/.local/bin}/.cs-install-engines" 2>/dev/null) || engines=claude,codex
+    if [[ ",$engines," == *,codex,* ]] && [ -d "$codex_dir" ]; then
+        _drift_scan "Codex skill" "$codex_dir/skills" "${skill_sources[@]}"
+    fi
+
     if [ "$clean" = "1" ]; then
-        _doctor_ok "Deploy drift: hooks, commands, skills, and mods match checkout source"
+        _doctor_ok "Deploy drift: hooks, skills, and mods match checkout source"
     fi
 }
 
@@ -8077,6 +8270,76 @@ _handoff_is_local() {  # handoff_file, session_dir
         && grep -E -q "Session started \(.*ID: $parent\)" "$log" 2>/dev/null
 }
 
+# The handoff a launch offers: the armed one when the marker names an
+# unconsumed handoff, otherwise the lexicographically last unconsumed file (the
+# YYYY-MM-DD- prefix makes that the newest date). Prints the path, or nothing.
+# Shared by the Claude and Codex launch prompts.
+#
+# .cs/handoffs/ is shared and nothing ever deletes a handoff, so a file
+# belonging to another checkout keeps status: unconsumed indefinitely — the
+# rotate skill will not supersede one whose parent is absent from this
+# machine's session.log, and correctly so. Sorting last, it would shadow the
+# handoff this machine armed and r would rotate into someone else's plan. An
+# armed marker is an explicit choice, so it outranks the scan; a marker naming
+# a spent or absent file is stale and the scan still answers. The marker names
+# a basename, never a path: a separator would resolve outside the handoff store.
+_pending_handoff_pick() {  # session_dir
+    local session_dir="$1" pending="" hf armed
+    for hf in "$session_dir/.cs/handoffs"/*.md; do
+        [ -f "$hf" ] || continue
+        _handoff_is_unconsumed "$hf" || continue
+        pending="$hf"
+    done
+    armed=$(_rotation_marker_basename "$session_dir")
+    if [ -n "$armed" ] && [ -f "$session_dir/.cs/handoffs/$armed" ] \
+        && _handoff_is_unconsumed "$session_dir/.cs/handoffs/$armed"; then
+        pending="$session_dir/.cs/handoffs/$armed"
+    fi
+    printf '%s' "$pending"
+}
+
+# The basename the pending-handoff marker names, or nothing when there is no
+# marker or it names something with a path separator.
+_rotation_marker_basename() {  # session_dir
+    local marker="$1/.cs/local/pending-handoff" armed=""
+    [ -f "$marker" ] || return 0
+    armed=$(tr -d '[:space:]' < "$marker" 2>/dev/null) || armed=""
+    case "$armed" in */*|*\\*) armed="" ;; esac
+    printf '%s' "$armed"
+}
+
+# The handoff an armed marker names while it is still unconsumed. A marker
+# naming anything else is stale, and is dropped so a later /clear cannot trip
+# over it. hooks/session-start.sh resolves Claude's marker the same way.
+_rotation_armed_handoff() {  # session_dir
+    local armed
+    armed=$(_rotation_marker_basename "$1")
+    if [ -n "$armed" ] && [ -f "$1/.cs/handoffs/$armed" ] \
+        && _handoff_is_unconsumed "$1/.cs/handoffs/$armed"; then
+        printf '%s' "$armed"
+        return 0
+    fi
+    rm -f "$1/.cs/local/pending-handoff" 2>/dev/null || true
+}
+
+# Retire a handoff by flipping its frontmatter status. Only the first
+# "status: unconsumed" line flips (the frontmatter's); a body quoting the
+# contract line flush-left stays intact. A consumed handoff names its consumer.
+_handoff_set_status() {  # handoff_file, status, [consumed_by]
+    local file="$1"
+    { awk -v status="$2" -v by="${3:-}" '
+        !flipped && $0 == "status: unconsumed" {
+            print "status: " status
+            if (by != "") print "consumed_by: " by
+            flipped = 1
+            next
+        }
+        { print }
+    ' "$file" > "$file.tmp"; } 2>/dev/null \
+        && mv "$file.tmp" "$file" 2>/dev/null \
+        || { rm -f "$file.tmp" 2>/dev/null; return 1; }
+}
+
 # The last context usage stamped in this session, 0-100, or nothing.
 # cs-statusline keys the stamp by SESSION NAME, not by conversation, so it is
 # the newest render from any conversation opened here — usually the one being
@@ -8177,7 +8440,12 @@ _cs_claude_adapter_dependencies() {
 
 _cs_claude_adapter_capabilities() {
     # These describe this integration, not every feature a runtime may offer.
-    printf '%s\n' launch exact_resume startup_context feature_finish
+    # rotation: handoff marker consumed by SessionStart, /clear rebinds.
+    # spawn_brief: a spawned session's first turn reads .cs/brief.md.
+    # memory_index: .cs/memory/MEMORY.md loads at every session start.
+    # mail_delivery: hooks surface `ags -msg` mail inside the conversation.
+    printf '%s\n' launch exact_resume startup_context feature_finish \
+        rotation spawn_brief memory_index mail_delivery
 }
 
 _claude_native_id_valid() {  # native conversation ID
@@ -8637,32 +8905,9 @@ EOF
         fi
 
         # Deliberate rotation: an unconsumed handoff written by the rotate
-        # skill adds a third answer. Lexicographically last basename wins
-        # (the YYYY-MM-DD- prefix makes that the newest date).
-        local pending_handoff="" _hf
-        for _hf in "$session_dir/.cs/handoffs"/*.md; do
-            [ -f "$_hf" ] || continue
-            _handoff_is_unconsumed "$_hf" || continue
-            pending_handoff="$_hf"
-        done
-        # .cs/handoffs/ is shared and nothing ever deletes a handoff, so a file
-        # belonging to another checkout keeps status: unconsumed indefinitely —
-        # the rotate skill will not supersede one whose parent is absent from
-        # this machine's session.log, and correctly so. Sorting last, it would
-        # shadow the handoff this machine armed and r would rotate into someone
-        # else's plan. An armed marker is an explicit choice, so it outranks the
-        # scan; a marker naming a spent or absent file is stale and the scan
-        # still answers. The marker names a basename, never a path: a separator
-        # would resolve outside the handoff store.
-        local _marker="$session_dir/.cs/local/pending-handoff" _armed
-        if [ -f "$_marker" ]; then
-            _armed=$(cat "$_marker" 2>/dev/null | tr -d '[:space:]' || true)
-            case "$_armed" in */*|*\\*) _armed="" ;; esac
-            if [ -n "$_armed" ] && [ -f "$session_dir/.cs/handoffs/$_armed" ] \
-                && _handoff_is_unconsumed "$session_dir/.cs/handoffs/$_armed"; then
-                pending_handoff="$session_dir/.cs/handoffs/$_armed"
-            fi
-        fi
+        # skill adds a third answer (_pending_handoff_pick says which).
+        local pending_handoff
+        pending_handoff=$(_pending_handoff_pick "$session_dir")
         # A spawned launch is unattended: take the default (resume) instead
         # of parking the tmux window on an interactive ask.
         if [ "$intent" = resume ] || [ -n "$spawn_kick" ] || ! cs_interactive; then
@@ -8729,18 +8974,7 @@ EOF
                 # an orphaned marker had none to begin with.
                 _disarm_rotation_marker "$session_dir"
                 if [ -n "$pending_handoff" ]; then
-                    # Flip only the first status line (the frontmatter's); a
-                    # body quoting the contract line flush-left stays intact.
-                    { awk '
-                        !flipped && $0 == "status: unconsumed" {
-                            print "status: discarded"
-                            flipped = 1
-                            next
-                        }
-                        { print }
-                    ' "$pending_handoff" > "$pending_handoff.tmp"; } 2>/dev/null \
-                        && mv "$pending_handoff.tmp" "$pending_handoff" 2>/dev/null \
-                        || rm -f "$pending_handoff.tmp" 2>/dev/null || true
+                    _handoff_set_status "$pending_handoff" discarded || true
                     printf "${DIM}Handoff discarded:${NC} %s\n" "$(basename "$pending_handoff")"
                 fi
                 # d without a pending handoff was never offered: treat as the
@@ -8817,7 +9051,9 @@ _cs_codex_adapter_dependencies() {
 }
 
 _cs_codex_adapter_capabilities() {
-    printf '%s\n' launch exact_resume startup_context
+    # rotation: `ags -codex-hook session-start` rebinds after /clear and loads
+    # the armed handoff; the launch prompt's r starts a thread from it.
+    printf '%s\n' launch exact_resume startup_context rotation
 }
 
 _cs_codex_adapter_prepare_workspace() {  # session_dir, mode
@@ -8929,7 +9165,13 @@ _codex_commit_prepared() {  # session_dir, previous_id, thread_id, source
         ' "$timeline" >/dev/null 2>&1; then started_recorded=1; fi
     fi
     if [ -n "$previous_id" ] && [ "$rotated_recorded" = 0 ]; then
-        _timeline_rotated "$session_dir" "$previous_id" "$thread_id" fresh "" codex || return 1
+        # A launch that continues a rotation handoff stages that reason and the
+        # handoff's name; every other new thread is a plain fresh start.
+        local reason handoff
+        reason=$(jq -r '.reason // ""' "$pending") || return 1
+        handoff=$(jq -r '.handoff // ""' "$pending") || return 1
+        [ "$reason" = handoff ] || { reason=fresh; handoff=""; }
+        _timeline_rotated "$session_dir" "$previous_id" "$thread_id" "$reason" "$handoff" codex || return 1
     fi
     if [ "$started_recorded" = 0 ]; then
         _timeline_started "$session_dir" codex "$thread_id" "$source" || return 1
@@ -9001,16 +9243,64 @@ _launch_codex_bound() {
         }
     fi
 
-    if [ "$intent" = auto ] && [ -n "$recorded_id" ] && cs_interactive; then
+    # A rotation handoff the rotate skill wrote adds r (and d) to the question,
+    # as on Claude: r starts a fresh thread that continues from it.
+    local pending_handoff rotation_handoff=""
+    pending_handoff=$(_pending_handoff_pick "$session_dir")
+    if [ "$intent" = auto ] && cs_interactive && { [ -n "$recorded_id" ] || [ -n "$pending_handoff" ]; }; then
         local response=""
-        printf 'Continue previous Codex conversation? [Y/n] '
+        if [ -n "$pending_handoff" ]; then
+            local origin=""
+            _handoff_is_local "$pending_handoff" "$session_dir" \
+                || origin=" ${DIM}(from another checkout)${NC}"
+            printf "${DIM}Rotation handoff pending:${NC} %s%b\n" "$(basename "$pending_handoff")" "$origin"
+            echo
+            if [ -n "$recorded_id" ]; then
+                _resume_menu_row y "$GREEN" 'resume' 'continue the previous Codex conversation · default'
+            else
+                _resume_menu_row y "$GREEN" 'start' 'a new Codex conversation · default'
+            fi
+            _resume_menu_row r "$GOLD" 'from handoff' 'fresh conversation that picks up the handoff'
+            _resume_menu_row n "$COMMENT" 'fresh' 'fresh conversation; the handoff waits for later'
+            _resume_menu_row d "$ORANGE" 'discard' 'retire the handoff, then continue as y'
+            echo
+            printf '    %b›%b ' "$GOLD" "$NC"
+        else
+            printf 'Continue previous Codex conversation? [Y/n] '
+        fi
         IFS= read -rsn1 response || { printf '\n'; return 130; }
         printf '\n'
         case "$response" in
-            [nN]) intent=fresh ;;
             $'\e') return 130 ;;
-            *) intent=resume ;;
+            [nN])
+                _disarm_rotation_marker "$session_dir" "$pending_handoff"
+                intent=fresh
+                ;;
+            [rR])
+                if [ -n "$pending_handoff" ]; then
+                    rotation_handoff=$(basename "$pending_handoff")
+                    intent=fresh
+                else
+                    _disarm_rotation_marker "$session_dir"
+                fi
+                ;;
+            [dD])
+                _disarm_rotation_marker "$session_dir"
+                if [ -n "$pending_handoff" ]; then
+                    _handoff_set_status "$pending_handoff" discarded || true
+                    printf "${DIM}Handoff discarded:${NC} %s\n" "$(basename "$pending_handoff")"
+                fi
+                ;;
+            *) _disarm_rotation_marker "$session_dir" "$pending_handoff" ;;
         esac
+    elif [ "$intent" = fresh ]; then
+        # An explicit fresh start with a rotation armed continues it, as a
+        # Claude fresh launch does (its SessionStart consumes the marker).
+        rotation_handoff=$(_rotation_armed_handoff "$session_dir")
+    else
+        # Resuming, or unattended: the armed rotation is not taken, so it must
+        # not survive to be consumed by an unrelated /clear later.
+        _disarm_rotation_marker "$session_dir" "$pending_handoff"
     fi
     if [ "$intent" = resume ] && [ -z "$recorded_id" ]; then
         _codex_launch_error "Cannot resume: no recorded Codex conversation. Use --fresh."
@@ -9037,6 +9327,12 @@ _launch_codex_bound() {
         _codex_launch_error "Could not write Codex context: $context_file"
         return 1
     }
+    if [ -n "$rotation_handoff" ]; then
+        { printf '\n'; _rotation_preamble_codex "$rotation_handoff" "$actor"; } >> "$context_file" || {
+            _codex_launch_error "Could not add the rotation handoff to the Codex context: $context_file"
+            return 1
+        }
+    fi
 
     # The helper uses app-server to create or refresh a *persistent* thread and
     # injects context without starting a user/model turn. A failed refresh must
@@ -9074,7 +9370,9 @@ _launch_codex_bound() {
             return 1
         }
     else
-        if ! cs_binding_stage "$session_dir" codex "$previous_id" "$thread_id" "${intent:-fresh}" ""; then
+        local stage_reason="${intent:-fresh}"
+        [ -z "$rotation_handoff" ] || stage_reason=handoff
+        if ! cs_binding_stage "$session_dir" codex "$previous_id" "$thread_id" "$stage_reason" "$rotation_handoff"; then
             _codex_launch_error "Could not stage Codex thread binding: $binding_file"
             return 1
         fi
@@ -9087,14 +9385,121 @@ _launch_codex_bound() {
         cs_run_with_lease "$meta_dir" _codex_ack_resume "$session_dir" "$thread_id" || return 1
     fi
 
-    printf '%s\n' 'Codex via ags: session context and exact resume are enabled; Claude hooks, autosave, and task queue integration are unavailable.'
+    # The new thread is bound now, so the handoff it continues is spent. The
+    # kick is Codex's starting prompt, the counterpart of Claude's positional
+    # prompt on the same answer: without it the thread would wait for a message.
+    local kick=""
+    if [ -n "$rotation_handoff" ]; then
+        _handoff_set_status "$session_dir/.cs/handoffs/$rotation_handoff" consumed "$thread_id" || true
+        rm -f "$local_dir/pending-handoff" 2>/dev/null || true
+        kick="Continue from the pending rotation handoff: read .cs/handoffs/$rotation_handoff first."
+        printf "${DIM}Continuing from handoff:${NC} %s\n" "$rotation_handoff"
+    fi
+
+    printf '%s\n' 'Codex via ags: session context, exact resume and rotation are enabled; Claude hooks, autosave, and task queue integration are unavailable.'
     # A dedicated native writer lives for this supervised CLI lifetime.
     # Signals and lock cleanup belong to the shared controller.
-    cs_run_child "$codex_bin" --no-daemon resume "$thread_id" -C "$session_dir"
+    cs_run_child "$codex_bin" --no-daemon resume "$thread_id" -C "$session_dir" ${kick:+"$kick"}
 }
 
 launch_codex() {
     cs_launch_session codex "$@"
+}
+# What a fresh Codex conversation is told when it continues a rotation, both
+# after /clear (this hook) and after `r` at launch (the launch context). The
+# Claude wording lives in hooks/session-start.sh, which cannot source ags.
+# Codex starts no turn on its own after /clear, so the context arrives with the
+# user's first message and says how to read it. printf, not a here-document:
+# bash 3.2 writes a here-document to a temp file.
+_rotation_preamble_codex() {  # handoff_basename, actor_slug
+    printf '%s\n' \
+        '--- Conversation Rotation ---' \
+        "This fresh conversation continues rotated work. Read .cs/handoffs/$1 FIRST — it is the previous conversation's handoff; the prior conversation is not loaded, and the handoff plus your own .cs/memory/narrative.$2.md carry the context." \
+        '' \
+        'The message that arrives with this context starts the work. A bare nudge — "go", "continue", "ok" — means begin: execute the handoff'"'"'s next step and report what you did, without re-summarising the handoff or asking which part to start with. A message carrying its own content takes precedence over the handoff; answer that instead. Ask first only where you normally would: the handoff is missing, unreadable, or genuinely ambiguous, or its next step is destructive or irreversible.' \
+        '' \
+        "Once that next step is done, append a \`## Successor report\` section to the end of .cs/handoffs/$1: each thing you had to look up again, re-derive, or found wrong in the handoff, with how you found out, or \`none\`. Append only; never rewrite what the previous conversation wrote."
+}
+
+# A /clear with nothing armed: a clean break, said so the conversation does not
+# act on history it no longer has.
+_fresh_notice_codex() {  # actor_slug
+    printf '%s\n' \
+        '--- Fresh Conversation ---' \
+        'The user explicitly started a fresh conversation in this cs session with /clear; the prior conversation is not loaded. Treat this as a clean break, not a continuation.' \
+        '' \
+        'For prior context, read as needed:' \
+        "- .cs/memory/narrative.$1.md — your findings and decisions from earlier work (append only here)" \
+        '- .cs/README.md — session objective'
+}
+
+cmd_codex_hook() {  # event
+    case "${1:-}" in
+        session-start) _codex_hook_session_start ;;
+        *)
+            printf 'Usage: ags -codex-hook session-start\n' >&2
+            return 2
+            ;;
+    esac
+}
+
+# Codex fires SessionStart on the first turn of a thread, before the model
+# call: source `resume` for every ags launch (ags creates the thread, then
+# resumes it), `clear` for the first message after /clear, with the new
+# thread's id. Only `clear` changes anything here; the launch path owns every
+# other binding and its own rotation (`r`). The hook must never fail a turn,
+# so every path returns 0 and anything it cannot do it skips.
+_codex_hook_session_start() {
+    local input session_id source session_dir meta actor handoff context="" sysmsg=""
+    input=$(cat) || input=""
+    session_id=$(printf '%s' "$input" | jq -r '.session_id // ""' 2>/dev/null) || session_id=""
+    source=$(printf '%s' "$input" | jq -r '.source // ""' 2>/dev/null) || source=""
+    # Only a conversation ags launched carries a session; a plain codex run
+    # anywhere else passes through untouched.
+    [ "${CS_RUN_ENGINE:-}" = codex ] && [ -n "${CS_SESSION_DIR:-}" ] || return 0
+    session_dir="$CS_SESSION_DIR"
+    meta="$session_dir/.cs"
+    [ -d "$meta/local" ] || return 0
+    _codex_thread_id_valid "$session_id" || return 0
+    # The rotate skill and the launch prompt read which conversations this
+    # checkout ran from this line; hooks/session-start.sh writes it for Claude.
+    { printf '%s - Session started (source: %s, ID: %s)\n' "$(date '+%Y-%m-%d %H:%M:%S')" \
+        "${source:-unknown}" "$session_id" >> "$meta/local/session.log"; } 2>/dev/null || true
+    [ "$source" = clear ] || return 0
+    # The launched conversation alone may rebind: the slot is one per checkout.
+    cs_run_lease_owned "$meta" || return 0
+    handoff=$(_rotation_armed_handoff "$session_dir")
+    cs_run_with_lease "$meta" _codex_hook_rebind "$session_dir" "$session_id" "$handoff" || return 0
+    actor=$(cs_actor_slug "$session_dir" 2>/dev/null) || actor=unknown
+    if [ -n "$handoff" ]; then
+        _handoff_set_status "$session_dir/.cs/handoffs/$handoff" consumed "$session_id" || true
+        rm -f "$meta/local/pending-handoff" 2>/dev/null || true
+        context=$(_rotation_preamble_codex "$handoff" "$actor")
+        sysmsg="Rotation loaded from $handoff; this conversation continues from it."
+    else
+        context=$(_fresh_notice_codex "$actor")
+    fi
+    jq -n --arg context "$context" --arg sysmsg "$sysmsg" '
+        {hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $context}}
+        + (if $sysmsg == "" then {} else {systemMessage: $sysmsg} end)' 2>/dev/null || true
+    return 0
+}
+
+# Under the run lease: point the session at the thread /clear opened, so the
+# next `ags <name>` resumes it, and record the lineage the way a launch does.
+_codex_hook_rebind() {  # session_dir, thread_id, handoff
+    local session_dir="$1" thread_id="$2" handoff="$3" previous reason=rebind
+    previous=$(cs_binding_read "$session_dir" codex) || return 1
+    [ "$previous" != "$thread_id" ] || return 0
+    cs_binding_write "$session_dir" codex "$thread_id" || return 1
+    _cs_set_local_state_unlocked "$session_dir/.cs/local/state" engine codex || return 1
+    [ -z "$handoff" ] || reason=handoff
+    { printf '%s - Rebound codex thread: %s -> %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" \
+        "${previous:-none}" "$thread_id" >> "$session_dir/.cs/local/session.log"; } 2>/dev/null || true
+    if [ -n "$previous" ]; then
+        _timeline_rotated "$session_dir" "$previous" "$thread_id" "$reason" "$handoff" codex || true
+    fi
+    _timeline_started "$session_dir" codex "$thread_id" clear || true
 }
 run_secrets() {
     local secrets_script
@@ -9321,6 +9726,7 @@ run_uninstall() {
     local hooks_dir="$hooks_parent_dir/cs"
     local commands_dir="$HOME/.claude/commands"
     local skills_dir="$HOME/.claude/skills"
+    local codex_skills_dir="${CODEX_HOME:-$HOME/.codex}/skills"
     local settings_file="${CS_CLAUDE_DIR:-$HOME/.claude}/settings.json"
     local bash_completion_dir="$HOME/.bash_completion.d"
     # install.sh picks the zsh completion dir from the user's fpath line: its
@@ -9340,8 +9746,11 @@ run_uninstall() {
     warn "This will uninstall agent-sessions (ags) and its cs compatibility aliases:"
     echo "  - $install_dir/ags and $install_dir/cs, plus ags/cs companion commands"
     echo "  - Hooks in $hooks_dir/"
-    echo "  - Commands in $commands_dir/"
+    echo "  - Retired cs commands in $commands_dir/"
     echo "  - Skills in $skills_dir/"
+    if [[ ",$install_engines," == *,codex,* ]]; then
+        echo "  - Codex skills in $codex_skills_dir/ and the ags hook in ${codex_skills_dir%/skills}/hooks.json"
+    fi
     echo "  - Shell completions"
     echo "  - Update-check cache in $update_cache_dir/"
     echo "  - Hook entries in $settings_file"
@@ -9426,8 +9835,8 @@ run_uninstall() {
     rm -f "$hooks_dir/.version"
     rmdir "$hooks_dir" 2>/dev/null || true
 
-    # Remove commands
-    for cmd in "${CS_COMMANDS[@]}"; do
+    # Remove the slash commands earlier versions shipped (now skills)
+    for cmd in "${RETIRED_COMMANDS[@]}"; do
         if [ -f "$commands_dir/$cmd" ]; then
             rm "$commands_dir/$cmd"
             info "Removed $commands_dir/$cmd"
@@ -9457,6 +9866,27 @@ run_uninstall() {
         fi
     done
 
+    fi
+
+    # Remove the Codex copies of the skills. Only the names cs ships: the rest
+    # of Codex's skills directory is the user's, and RETIRED_SKILLS never
+    # deployed there.
+    if [[ ",$install_engines," == *,codex,* ]]; then
+    local skill
+    for skill in "${CS_SKILLS[@]}"; do
+        if [ -d "$codex_skills_dir/$skill" ]; then
+            rm -rf "$codex_skills_dir/$skill"
+            info "Removed $codex_skills_dir/$skill/"
+        fi
+    done
+    if command -v jq >/dev/null 2>&1 \
+        && grep -q -- '-codex-hook session-start' "${codex_skills_dir%/skills}/hooks.json" 2>/dev/null; then
+        if _codex_hooks_unregister "${codex_skills_dir%/skills}"; then
+            info "Removed the ags hook from ${codex_skills_dir%/skills}/hooks.json"
+        else
+            warn "Could not remove the ags hook from ${codex_skills_dir%/skills}/hooks.json; remove its SessionStart entry by hand"
+        fi
+    fi
     fi
 
     # Remove shell completions
@@ -9656,6 +10086,11 @@ main() {
             cmd_complete "${2:-}"
             return 0
             ;;
+        -codex-hook) # hidden: the command Codex runs from $CODEX_HOME/hooks.json, not typed by a user
+            shift
+            cmd_codex_hook "$@"
+            return $?
+            ;;
         -whoami)
             cmd_whoami
             return 0
@@ -9663,6 +10098,11 @@ main() {
         -who)
             cmd_who
             return 0
+            ;;
+        -engine)
+            shift
+            cmd_engine "$@"
+            return $?
             ;;
         -secrets)
             shift

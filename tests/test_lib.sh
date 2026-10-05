@@ -20,7 +20,9 @@ set -euo pipefail
 unset CLAUDE_PROJECT_DIR CS_ACTOR CLAUDE_CODE_SESSION_ID CS_CLAUDE_SESSION_ID 2>/dev/null || true
 # A developer's preferred runtime must not turn a legacy Claude fixture into
 # a real Codex launch. Runtime suites set their own isolated overrides.
-unset CS_DEFAULT_ENGINE CODEX_BIN CS_CODEX_THREAD_BIN 2>/dev/null || true
+# CODEX_HOME goes too: an ags Codex session exports it, and an install under
+# test would deploy into that real Codex home instead of the test HOME.
+unset CS_DEFAULT_ENGINE CODEX_BIN CS_CODEX_THREAD_BIN CODEX_HOME 2>/dev/null || true
 unset CS_SESSION_NAME CS_SESSION_DIR CS_SESSION_META_DIR 2>/dev/null || true
 
 # --- State ---

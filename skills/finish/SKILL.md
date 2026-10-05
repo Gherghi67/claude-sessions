@@ -10,15 +10,16 @@ reviewed to the user's standard; it is the mechanical closer, not a review.
 The landing never touches the feature worktree. Retirement (fuse its session
 records into the base, remove the worktree, delete the branch) runs in the
 same ritual, but only once the feature conversation is closed: a directory
-cannot be removed from under a running Claude, so while that conversation is
+cannot be removed from under a running engine, so while that conversation is
 still open the skill says so plainly and the user closes it and runs
 `/finish <task>` again. Abandoning a feature instead is `ags -rm <base>@<task>`,
 the user's own call.
 
 ## Detect the context
 
-Run `~/.claude/skills/finish/scripts/finish.sh prepare [feature]` from the
-workspace and read its `key: value` lines.
+Run `scripts/finish.sh prepare [feature]` from the workspace and read its
+`key: value` lines. The script ships with this skill: `scripts/` is relative
+to this skill's directory, the folder this SKILL.md was loaded from.
 
 1. **`role: feature`** — this workspace is a cs feature worktree. Print the
    `handoff:` line verbatim (`run /finish <task> in session <base>`) and stop.
@@ -30,7 +31,7 @@ workspace and read its `key: value` lines.
    printed. An `error:` line is a stop: print it and stop.
 3. **`role: base`, `cs_session: yes`, no task** — a cs base session with no
    feature named. Run `ags <base> -features`, show the list, and ask which
-   feature to finish (AskUserQuestion). Never enter **Plain branch** from a
+   feature to finish (AskUserQuestion on Claude Code). Never enter **Plain branch** from a
    cs session, whatever branch it is on: that path checks out another branch
    and deletes the current one.
 4. **`role: base`, `cs_session: no`, non-default `base_branch`** — an
@@ -74,10 +75,10 @@ what creates them and fold it into the gate: `-- sh -c 'npm ci && npm test'`.
    - `MERGED` — the PR path (step 4). `pr_merge_commit` and `pr_base_ref`
      are the inputs.
    - `OPEN` — report `pr_url`. A local integrate now would land work whose
-     PR is still open; ask with AskUserQuestion (integrate locally anyway /
+     PR is still open; ask the user (AskUserQuestion on Claude Code: integrate locally anyway /
      stop) and proceed only on an explicit yes.
    - `CLOSED` — report it as closed-unmerged; treat as `none`.
-   - `unknown` — report `pr_reason` verbatim. Same AskUserQuestion as OPEN
+   - `unknown` — report `pr_reason` verbatim. Same question as OPEN
      before any local integrate. Never treat a gh failure as no PR.
    - `skipped` — origin is not GitHub; say so, local path.
 3. **Local path.** Run, from the base session:
@@ -116,7 +117,7 @@ what creates them and fold it into the gate: `-- sh -c 'npm ci && npm test'`.
    never touched.
 
    Only after an `integrated` or `already-integrated` line, run
-   `~/.claude/skills/finish/scripts/finish.sh report <base> <task> <sha>`
+   `scripts/finish.sh report <base> <task> <sha>` (this skill's directory)
    and read its `retire:` key.
 6. **Retire.** The worktree goes through one entry and nothing else:
    - `retire: ready` — run `ags <base> -retire-feature <task> <sha>`.

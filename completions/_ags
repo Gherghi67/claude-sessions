@@ -101,6 +101,7 @@ _ags() {
         '-rm:Remove a session (alias)'
         '-whoami:Show the current actor (multi-person sessions)'
         '-who:Show who contributed to shared memory/narrative'
+        '-engine:Show the engine, conversation and capabilities of this session'
         '-secrets:Manage session secrets'
         '-checkpoint:Save or manage session checkpoints'
         '-narrative:Archive the oldest sections of your session narrative'

@@ -11,12 +11,16 @@ source "$SCRIPT_DIR/../lib/24-engine-adapters.sh"
 source "$SCRIPT_DIR/../lib/36-context.sh"
 source "$SCRIPT_DIR/../lib/40-state.sh"
 source "$SCRIPT_DIR/../lib/41-bindings.sh"
+source "$SCRIPT_DIR/../lib/75-launch.sh"
 source "$SCRIPT_DIR/../lib/76-codex.sh"
+source "$SCRIPT_DIR/../lib/77-codex-hooks.sh"
 
 _set_local_state() {  # state key value
     printf '%s: %s\n' "$2" "$3" >> "$1"
 }
 cs_interactive() { return 1; }
+# The launch prompt's palette; empty keeps escape codes out of asserted output.
+DIM='' NC='' BOLD='' WHITE='' GREEN='' GOLD='' COMMENT='' ORANGE=''
 warn() { printf 'Warning: %s\n' "$1" >&2; }
 cs_actor_slug() { printf '%s\n' "${CS_ACTOR:-test-actor}"; }
 
@@ -297,10 +301,106 @@ test_resume_without_binding_does_not_create() {
     assert_not_exists "$CS_HELPER_COUNT" "no native create on resume" || return 1
 }
 
+# A bound Codex thread and a handoff the rotate skill wrote and armed.
+ROTATION_OLD_THREAD=99999999-9999-4999-8999-999999999999
+ROTATION_HANDOFF=2026-10-05-next-step.md
+_rotation_fixture() {  # handoff status
+    printf '%s\n' "$ROTATION_OLD_THREAD" > "$CS_TEST_SESSION_DIR/.cs/local/codex-thread-id"
+    mkdir -p "$CS_TEST_SESSION_DIR/.cs/handoffs"
+    printf -- '---\nparent: %s\ncreated: 2026-10-05T10:00:00Z\npurpose: next step\nstatus: %s\n---\n\n## 1. Next Step\n' \
+        "$ROTATION_OLD_THREAD" "$1" > "$CS_TEST_SESSION_DIR/.cs/handoffs/$ROTATION_HANDOFF"
+    printf '%s\n' "$ROTATION_HANDOFF" > "$CS_TEST_SESSION_DIR/.cs/local/pending-handoff"
+}
+
+# Launch interactively, answering the prompt with one key.
+_launch_answering() {  # key, [intent]
+    cs_interactive() { return 0; }
+    launch_codex demo "$CS_TEST_SESSION_DIR" false false "" "${2:-auto}" <<< "$1"
+}
+
+# r at launch is Codex's other way into a rotation (the first is /clear): a
+# fresh thread whose launch context carries the handoff, started with a kick
+# so it acts without waiting for a message.
+test_r_starts_a_thread_from_the_rotation_handoff() {
+    _rotation_fixture unconsumed
+    local output status=0 h="$CS_TEST_SESSION_DIR/.cs/handoffs/$ROTATION_HANDOFF"
+    output=$(_launch_answering r 2>&1) || status=$?
+    assert_eq 0 "$status" "r launch failed: $output" || return 1
+    assert_output_contains "$output" "Rotation handoff pending:" || return 1
+    assert_output_contains "$output" "from handoff" "the prompt offers r" || return 1
+    assert_eq "$CS_THREAD_ID" "$(cat "$CS_TEST_SESSION_DIR/.cs/local/codex-thread-id")" "bound to the new thread" || return 1
+    assert_output_not_contains "$(cat "$CS_HELPER_ARGS")" '--thread-id' "r creates a thread" || return 1
+    assert_file_contains "$CS_TEST_SESSION_DIR/.cs/local/codex-instructions.md" "Read .cs/handoffs/$ROTATION_HANDOFF FIRST" \
+        "the new thread's context names the handoff" || return 1
+    assert_eq "Continue from the pending rotation handoff: read .cs/handoffs/$ROTATION_HANDOFF first." \
+        "$(sed -n '6p' "$CS_CODEX_LOG")" "codex resume gets the kick as its starting prompt" || return 1
+    assert_file_contains "$h" "^status: consumed$" || return 1
+    assert_file_contains "$h" "^consumed_by: $CS_THREAD_ID$" || return 1
+    assert_not_exists "$CS_TEST_SESSION_DIR/.cs/local/pending-handoff" || return 1
+    jq -e --arg from "$ROTATION_OLD_THREAD" --arg to "$CS_THREAD_ID" --arg h "$ROTATION_HANDOFF" \
+        'select(.event == "rotated") | .engine == "codex" and .from == $from and .to == $to
+         and .reason == "handoff" and .handoff == $h' \
+        "$CS_TEST_SESSION_DIR/.cs/timeline.jsonl" >/dev/null || { echo "  FAIL: rotated lineage missing"; return 1; }
+}
+
+# n starts fresh without the handoff, and must disarm the marker, or an
+# unrelated /clear later would load a handoff the user just passed on.
+test_n_starts_fresh_and_leaves_the_handoff_pending() {
+    _rotation_fixture unconsumed
+    local output status=0
+    output=$(_launch_answering n 2>&1) || status=$?
+    assert_eq 0 "$status" "n launch failed: $output" || return 1
+    assert_eq "$CS_THREAD_ID" "$(cat "$CS_TEST_SESSION_DIR/.cs/local/codex-thread-id")" || return 1
+    assert_not_exists "$CS_TEST_SESSION_DIR/.cs/local/pending-handoff" "n disarms" || return 1
+    assert_file_contains "$CS_TEST_SESSION_DIR/.cs/handoffs/$ROTATION_HANDOFF" "^status: unconsumed$" || return 1
+    assert_file_not_contains "$CS_TEST_SESSION_DIR/.cs/local/codex-instructions.md" "Conversation Rotation" || return 1
+    assert_eq 5 "$(wc -l < "$CS_CODEX_LOG" | tr -d ' ')" "no kick" || return 1
+}
+
+test_d_discards_the_handoff_then_resumes() {
+    _rotation_fixture unconsumed
+    export CS_THREAD_ID="$ROTATION_OLD_THREAD"
+    local output status=0
+    output=$(_launch_answering d 2>&1) || status=$?
+    assert_eq 0 "$status" "d launch failed: $output" || return 1
+    assert_file_contains "$CS_TEST_SESSION_DIR/.cs/handoffs/$ROTATION_HANDOFF" "^status: discarded$" || return 1
+    assert_not_exists "$CS_TEST_SESSION_DIR/.cs/local/pending-handoff" || return 1
+    assert_eq "$ROTATION_OLD_THREAD" "$(sed -n '3p' "$CS_CODEX_LOG")" "resumes the bound thread" || return 1
+    assert_eq 5 "$(wc -l < "$CS_CODEX_LOG" | tr -d ' ')" "no kick" || return 1
+}
+
+# Claude's fresh launch consumes an armed marker at SessionStart; an explicit
+# Codex --fresh does the same through the launch.
+test_explicit_fresh_continues_an_armed_rotation() {
+    _rotation_fixture unconsumed
+    local output status=0
+    output=$(launch_codex demo "$CS_TEST_SESSION_DIR" false false "" fresh 2>&1) || status=$?
+    assert_eq 0 "$status" "fresh launch failed: $output" || return 1
+    assert_file_contains "$CS_TEST_SESSION_DIR/.cs/handoffs/$ROTATION_HANDOFF" "^consumed_by: $CS_THREAD_ID$" || return 1
+    assert_output_contains "$(sed -n '6p' "$CS_CODEX_LOG")" "$ROTATION_HANDOFF" "kicked from the handoff" || return 1
+}
+
+# Unattended or explicit resume never takes the rotation, so the marker goes.
+test_resume_disarms_an_armed_rotation() {
+    _rotation_fixture unconsumed
+    export CS_THREAD_ID="$ROTATION_OLD_THREAD"
+    local output status=0
+    output=$(launch_codex demo "$CS_TEST_SESSION_DIR" false false 2>&1) || status=$?
+    assert_eq 0 "$status" "resume failed: $output" || return 1
+    assert_not_exists "$CS_TEST_SESSION_DIR/.cs/local/pending-handoff" || return 1
+    assert_file_contains "$CS_TEST_SESSION_DIR/.cs/handoffs/$ROTATION_HANDOFF" "^status: unconsumed$" || return 1
+    assert_eq 5 "$(wc -l < "$CS_CODEX_LOG" | tr -d ' ')" "no kick" || return 1
+}
+
 echo 'Codex launch tests'
 run_test test_explicit_fresh_replaces_only_codex_binding
 run_test test_failed_fresh_preserves_codex_binding
 run_test test_resume_without_binding_does_not_create
+run_test test_r_starts_a_thread_from_the_rotation_handoff
+run_test test_n_starts_fresh_and_leaves_the_handoff_pending
+run_test test_d_discards_the_handoff_then_resumes
+run_test test_explicit_fresh_continues_an_armed_rotation
+run_test test_resume_disarms_an_armed_rotation
 run_test test_new_thread_binding_and_context
 run_test test_resume_refreshes_exact_thread
 run_test test_failed_refresh_never_starts_fresh

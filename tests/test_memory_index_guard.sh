@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# ABOUTME: Tests for hooks/memory-index-guard.sh, the /sweep MEMORY.md rewrite guard
+# ABOUTME: Tests for skills/sweep/scripts/memory-index-guard.sh, the /sweep MEMORY.md rewrite guard
 # ABOUTME: Covers removed links, the byte budget, a missing snapshot, and restore
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=tests/test_lib.sh
 source "$SCRIPT_DIR/test_lib.sh"
 
-GUARD="$SCRIPT_DIR/../hooks/memory-index-guard.sh"
+GUARD="$SCRIPT_DIR/../skills/sweep/scripts/memory-index-guard.sh"
 
 # A session root holding a MEMORY.md with two pointers; the guard runs from it.
 _guard_session() {

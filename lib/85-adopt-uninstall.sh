@@ -201,6 +201,7 @@ run_uninstall() {
     local hooks_dir="$hooks_parent_dir/cs"
     local commands_dir="$HOME/.claude/commands"
     local skills_dir="$HOME/.claude/skills"
+    local codex_skills_dir="${CODEX_HOME:-$HOME/.codex}/skills"
     local settings_file="${CS_CLAUDE_DIR:-$HOME/.claude}/settings.json"
     local bash_completion_dir="$HOME/.bash_completion.d"
     # install.sh picks the zsh completion dir from the user's fpath line: its
@@ -220,8 +221,11 @@ run_uninstall() {
     warn "This will uninstall agent-sessions (ags) and its cs compatibility aliases:"
     echo "  - $install_dir/ags and $install_dir/cs, plus ags/cs companion commands"
     echo "  - Hooks in $hooks_dir/"
-    echo "  - Commands in $commands_dir/"
+    echo "  - Retired cs commands in $commands_dir/"
     echo "  - Skills in $skills_dir/"
+    if [[ ",$install_engines," == *,codex,* ]]; then
+        echo "  - Codex skills in $codex_skills_dir/ and the ags hook in ${codex_skills_dir%/skills}/hooks.json"
+    fi
     echo "  - Shell completions"
     echo "  - Update-check cache in $update_cache_dir/"
     echo "  - Hook entries in $settings_file"
@@ -306,8 +310,8 @@ run_uninstall() {
     rm -f "$hooks_dir/.version"
     rmdir "$hooks_dir" 2>/dev/null || true
 
-    # Remove commands
-    for cmd in "${CS_COMMANDS[@]}"; do
+    # Remove the slash commands earlier versions shipped (now skills)
+    for cmd in "${RETIRED_COMMANDS[@]}"; do
         if [ -f "$commands_dir/$cmd" ]; then
             rm "$commands_dir/$cmd"
             info "Removed $commands_dir/$cmd"
@@ -337,6 +341,27 @@ run_uninstall() {
         fi
     done
 
+    fi
+
+    # Remove the Codex copies of the skills. Only the names cs ships: the rest
+    # of Codex's skills directory is the user's, and RETIRED_SKILLS never
+    # deployed there.
+    if [[ ",$install_engines," == *,codex,* ]]; then
+    local skill
+    for skill in "${CS_SKILLS[@]}"; do
+        if [ -d "$codex_skills_dir/$skill" ]; then
+            rm -rf "$codex_skills_dir/$skill"
+            info "Removed $codex_skills_dir/$skill/"
+        fi
+    done
+    if command -v jq >/dev/null 2>&1 \
+        && grep -q -- '-codex-hook session-start' "${codex_skills_dir%/skills}/hooks.json" 2>/dev/null; then
+        if _codex_hooks_unregister "${codex_skills_dir%/skills}"; then
+            info "Removed the ags hook from ${codex_skills_dir%/skills}/hooks.json"
+        else
+            warn "Could not remove the ags hook from ${codex_skills_dir%/skills}/hooks.json; remove its SessionStart entry by hand"
+        fi
+    fi
     fi
 
     # Remove shell completions

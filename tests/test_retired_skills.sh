@@ -122,9 +122,65 @@ test_uninstall_removes_a_retired_skill_directory() {
 # The rename itself: nothing shipped may still point at the old name.
 test_no_shipped_file_references_the_old_skill_name() {
     local hits
-    hits=$(grep -rl 'skills/voice' "$REPO_ROOT/skills" "$REPO_ROOT/commands" \
+    hits=$(grep -rl 'skills/voice' "$REPO_ROOT/skills" \
         "$REPO_ROOT/hooks" "$REPO_ROOT/README.md" 2>/dev/null || true)
     assert_eq "" "$hits" "no shipped file may reference the old skills/voice path" || return 1
+}
+
+# The four slash commands became skills of the same name. A command file left
+# from an earlier install answers that /name beside the skill, so install and
+# uninstall delete the ones cs shipped, and nothing else in that directory.
+test_retired_commands_are_skills_now() {
+    local cmd
+    [ -n "$(rs_extract_array "$INSTALL_SH" RETIRED_COMMANDS)" ] \
+        || { echo "  FAIL: RETIRED_COMMANDS not found in install.sh"; return 1; }
+    assert_eq "$(rs_extract_array "$INSTALL_SH" RETIRED_COMMANDS | sort)" \
+        "$(rs_extract_array "$CS_BIN" RETIRED_COMMANDS | sort)" \
+        "RETIRED_COMMANDS must match between install.sh and bin/ags" || return 1
+    for cmd in $(rs_extract_array "$INSTALL_SH" RETIRED_COMMANDS); do
+        rs_extract_array "$INSTALL_SH" CS_SKILLS | grep -qx "${cmd%.md}" \
+            || { echo "  FAIL: retired command $cmd has no skill of the same name"; return 1; }
+    done
+}
+
+test_install_removes_retired_command_files() {
+    local fake_home="$TEST_TMPDIR/retired-command-home" cmd
+    mkdir -p "$fake_home/.claude/commands"
+    for cmd in checkpoint summary sweep wrap; do
+        echo 'stale command' > "$fake_home/.claude/commands/$cmd.md"
+    done
+    echo 'keep me' > "$fake_home/.claude/commands/not-ours.md"
+
+    HOME="$fake_home" bash "$INSTALL_SH" > /dev/null 2>&1 || {
+        echo "  FAIL: install.sh exited non-zero"; return 1; }
+
+    for cmd in checkpoint summary sweep wrap; do
+        assert_file_not_exists "$fake_home/.claude/commands/$cmd.md" \
+            "install must delete the retired $cmd command" || return 1
+        assert_file_exists "$fake_home/.claude/skills/$cmd/SKILL.md" \
+            "install must deploy $cmd as a skill" || return 1
+    done
+    assert_file_exists "$fake_home/.claude/skills/sweep/scripts/memory-index-guard.sh" \
+        "the guard must deploy inside the sweep skill" || return 1
+    assert_file_not_exists "$fake_home/.claude/hooks/cs/memory-index-guard.sh" \
+        "the guard no longer deploys with the hooks" || return 1
+    assert_file_exists "$fake_home/.claude/commands/not-ours.md" \
+        "a command cs does not own must survive" || return 1
+}
+
+test_uninstall_removes_retired_command_files() {
+    local fake_home="$TEST_TMPDIR/retired-command-uninstall"
+    mkdir -p "$fake_home/.claude/commands"
+    echo 'stale command' > "$fake_home/.claude/commands/wrap.md"
+    echo 'keep me' > "$fake_home/.claude/commands/not-ours.md"
+
+    printf 'y\n' | HOME="$fake_home" "$CS_BIN" -uninstall > /dev/null 2>&1 || {
+        echo "  FAIL: cs -uninstall exited non-zero"; return 1; }
+
+    assert_file_not_exists "$fake_home/.claude/commands/wrap.md" \
+        "uninstall must delete a retired command cs shipped" || return 1
+    assert_file_exists "$fake_home/.claude/commands/not-ours.md" \
+        "uninstall must not remove a command cs does not own" || return 1
 }
 
 echo ""
@@ -140,5 +196,8 @@ run_test test_retired_skills_are_not_in_the_repo
 run_test test_install_removes_a_retired_skill_directory
 run_test test_uninstall_removes_a_retired_skill_directory
 run_test test_no_shipped_file_references_the_old_skill_name
+run_test test_retired_commands_are_skills_now
+run_test test_install_removes_retired_command_files
+run_test test_uninstall_removes_retired_command_files
 
 report_results

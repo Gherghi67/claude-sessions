@@ -22,6 +22,7 @@ RETIRED_HOOKS=(
     changes-tracker.sh        # retired: PostToolUse change log re-narrating git history into .cs/changes.md; git log/diff/status is authoritative
     artifact-tracker.sh       # retired: PreToolUse:Write redirect was inert (updatedInput path rewrite is not honored by the harness); tracking removed entirely
     prose-lint.sh             # retired with the `ags -lint` verb it called; MUST stay listed, because a deployed copy calling the removed verb reads error()'s exit 1 as "violations found" and blocks every turn-end
+    memory-index-guard.sh     # moved into the sweep skill (sweep/scripts/), so the guard travels with the skill to every engine
 )
 
 # Hook scripts cs ships; deployed to ~/.claude/hooks/cs/ and registered in
@@ -41,26 +42,29 @@ CS_HOOKS=(
 # Files under hooks/ that the hooks source, or that cs points other tools at,
 # rather than files Claude Code invokes as hooks. Deployed and removed alongside
 # the hooks, never registered against an event. The prompt-rewriter scripts are
-# reached through $EDITOR, not through any hook event; memory-index-guard.sh is
-# run by the /sweep command.
+# reached through $EDITOR, not through any hook event.
 CS_HOOK_LIBS=(
     cs-resolve.sh
     cs-shared.sh
-    memory-index-guard.sh
     prompt-rewriter.sh
     prompt-rewriter-model.sh
     prompt-rewriter-vendor.sh
 )
 
-# Slash commands cs ships; deployed to ~/.claude/commands/.
-CS_COMMANDS=(
+# Slash commands earlier versions deployed to ~/.claude/commands/. cs ships
+# none now: they became skills of the same name, the one format every engine
+# reads. install.sh and run_uninstall delete these files; a command left
+# beside its skill would answer the same /name twice.
+RETIRED_COMMANDS=(
     summary.md
     checkpoint.md
     sweep.md
     wrap.md
 )
 
-# Skills cs ships; each deploys as ~/.claude/skills/<name>/SKILL.md.
+# Skills cs ships; each deploys as <skills dir>/<name>/SKILL.md, for Claude
+# under ~/.claude/skills and for Codex under $CODEX_HOME/skills (default
+# ~/.codex/skills). Both engines get the same files.
 CS_SKILLS=(
     store-secret
     prose-hygiene
@@ -68,6 +72,10 @@ CS_SKILLS=(
     finish
     feature
     write-as-me
+    checkpoint
+    summary
+    sweep
+    wrap
 )
 
 # Skills retired or renamed in past versions but possibly still installed from
@@ -75,6 +83,11 @@ CS_SKILLS=(
 # When retiring or renaming a skill in a release, add its OLD name here: a skill
 # directory left behind keeps answering its slash command forever, and nothing
 # else ever removes it.
+#
+# Only the Claude skills directory is swept. Every name below retired before
+# cs deployed skills to Codex, so in a Codex skills directory it can only be
+# the user's own skill. A skill retired after shipping to Codex must also be
+# removed from there.
 #
 # Do not add a doctor row for a leftover directory; it cannot report one. The
 # only cs that could still hold it is one older than the retirement, and that cs
@@ -89,9 +102,13 @@ RETIRED_SKILLS=(
 )
 
 # Support files skills ship beyond SKILL.md, as skills/<skill>/<path> entries.
+# Files under scripts/ are executables; agents/openai.yaml is Codex's
+# per-skill settings, which Claude ignores.
 CS_SKILL_FILES=(
     write-as-me/scripts/build-corpus.sh
     finish/scripts/finish.sh
+    finish/agents/openai.yaml   # Codex ignores disable-model-invocation; this is its switch
+    sweep/scripts/memory-index-guard.sh
 )
 
 # Mods cs ships: Claude Code function-hooks plugins, deployed file by file as
@@ -120,4 +137,128 @@ _strip_hook_registration() {
             )
         else . end
     '
+}
+
+# The SessionStart hook ags registers for Codex: Codex runs the command through
+# a shell, so a path outside the plain-word alphabet is single-quoted.
+_codex_hook_command() {  # ags_path
+    case "$1" in
+        *[!A-Za-z0-9_./+-]*)
+            printf "'%s' -codex-hook session-start" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")" ;;
+        *) printf '%s -codex-hook session-start' "$1" ;;
+    esac
+}
+
+# Codex skips a hook, silently, until config.toml trusts it: a table
+# [hooks.state."<hooks.json path>:session_start:<group>:<handler>"] holding the
+# sha256 of the handler group's definition, as compact sorted-key JSON with
+# Codex's defaults filled in. ags writes that hash in the same step that
+# registers its hook, so the hook runs without a review prompt.
+_codex_hook_trust_hash() {  # command
+    local json
+    json=$(jq -ncS --arg c "$1" \
+        '{event_name: "session_start", hooks: [{async: false, command: $c, timeout: 600, type: "command"}]}' \
+        | tr -d '\n') || return 1
+    if command -v sha256sum >/dev/null 2>&1; then
+        printf '%s' "$json" | sha256sum | cut -c1-64
+    else
+        printf '%s' "$json" | shasum -a 256 | cut -c1-64
+    fi
+}
+
+# A config.toml rewrite: drop the trust table for each listed key, then rename
+# trust tables for SessionStart groups past a removed one down by one index
+# (shift_from, empty for none), keeping every other line as it was.
+_codex_trust_tables_edit() {  # config, hooks_file, shift_from, keys...
+    local config="$1" file="$2" shift_from="$3" tmp
+    shift 3
+    [ -f "$config" ] || return 0
+    tmp=$(mktemp "$config.ags.XXXXXX") || return 1
+    awk -v prefix="[hooks.state.\"$file:session_start:" -v shift_from="$shift_from" -v drops="$(printf '%s\n' "$@")" '
+        BEGIN {
+            n = split(drops, list, "\n")
+            for (i = 1; i <= n; i++) if (list[i] != "") drop["[hooks.state.\"" list[i] "\"]"] = 1
+        }
+        # Blank lines wait for the next line that survives, so a dropped table
+        # takes its separating blank with it and trailing blanks never pile up.
+        /^[[:space:]]*$/ { if (!skip) blanks++; next }
+        $0 in drop { skip = 1; next }
+        skip && /^[[:space:]]*\[/ { skip = 0 }
+        skip { next }
+        { while (blanks > 0) { print ""; blanks-- } }
+        shift_from != "" && index($0, prefix) == 1 {
+            rest = substr($0, length(prefix) + 1)
+            split(rest, parts, ":")
+            if (parts[1] ~ /^[0-9]+$/ && parts[1] + 0 > shift_from + 0) {
+                print prefix (parts[1] - 1) substr(rest, length(parts[1]) + 1)
+                next
+            }
+        }
+        { print }
+    ' "$config" > "$tmp" || { rm -f "$tmp"; return 1; }
+    mv "$tmp" "$config" || { rm -f "$tmp"; return 1; }
+}
+
+# Index of ags's own SessionStart group in a hooks.json document, or nothing.
+_codex_hook_group_index() {  # hooks.json content
+    printf '%s' "$1" | jq -r '
+        [(.hooks.SessionStart // [])
+         | to_entries[]
+         | select(any(.value.hooks[]?; (.command // "") | endswith(" -codex-hook session-start")))
+         | .key] | first // empty'
+}
+
+# Register ags's SessionStart hook in <codex_dir>/hooks.json and trust it in
+# <codex_dir>/config.toml. A reinstall replaces the group in place and a first
+# install appends it, so the user's own groups keep their indices, and with
+# them their trust. A hooks.json that is not valid JSON is left alone.
+_codex_hooks_register() {  # codex_dir, command
+    local dir="$1" cmd="$2" file="$1/hooks.json" config="$1/config.toml"
+    local doc index tmp hash key
+    case "$file" in *'"'*|*\\*) return 1 ;; esac
+    if [ -f "$file" ]; then
+        doc=$(cat "$file") || return 1
+        printf '%s' "$doc" | jq -e 'type == "object"' >/dev/null 2>&1 || return 1
+    else
+        doc='{}'
+    fi
+    index=$(_codex_hook_group_index "$doc")
+    doc=$(printf '%s' "$doc" | jq --arg c "$cmd" --arg i "$index" '
+        {hooks: [{type: "command", command: $c}]} as $ours
+        | .hooks = (.hooks // {})
+        | .hooks.SessionStart = (.hooks.SessionStart // [])
+        | if $i == "" then .hooks.SessionStart += [$ours]
+          else .hooks.SessionStart[($i | tonumber)] = $ours end') || return 1
+    [ -n "$index" ] || index=$(printf '%s' "$doc" | jq '.hooks.SessionStart | length - 1')
+    mkdir -p "$dir" || return 1
+    tmp=$(mktemp "$file.ags.XXXXXX") || return 1
+    printf '%s\n' "$doc" > "$tmp" && chmod 600 "$tmp" && mv "$tmp" "$file" || { rm -f "$tmp"; return 1; }
+    hash=$(_codex_hook_trust_hash "$cmd") || return 1
+    key="$file:session_start:$index:0"
+    _codex_trust_tables_edit "$config" "$file" "" "$key" || return 1
+    [ -f "$config" ] || { : > "$config" && chmod 600 "$config"; } || return 1
+    if [ -s "$config" ]; then printf '\n' >> "$config" || return 1; fi
+    printf '[hooks.state."%s"]\ntrusted_hash = "sha256:%s"\n' "$key" "$hash" >> "$config"
+}
+
+# Remove ags's SessionStart group and its trust table. Groups after it move up
+# one index, so their trust tables are renamed to match. A hooks.json left with
+# nothing in it is removed.
+_codex_hooks_unregister() {  # codex_dir
+    local dir="$1" file="$1/hooks.json" config="$1/config.toml" doc index tmp
+    [ -f "$file" ] || return 0
+    doc=$(cat "$file") || return 1
+    index=$(_codex_hook_group_index "$doc" 2>/dev/null) || return 1
+    [ -n "$index" ] || return 0
+    doc=$(printf '%s' "$doc" | jq --argjson i "$index" '
+        .hooks.SessionStart |= (to_entries | map(select(.key != $i)) | map(.value))
+        | if .hooks.SessionStart == [] then del(.hooks.SessionStart) else . end
+        | if .hooks == {} then del(.hooks) else . end') || return 1
+    if [ "$doc" = '{}' ]; then
+        rm -f "$file" || return 1
+    else
+        tmp=$(mktemp "$file.ags.XXXXXX") || return 1
+        printf '%s\n' "$doc" > "$tmp" && chmod 600 "$tmp" && mv "$tmp" "$file" || { rm -f "$tmp"; return 1; }
+    fi
+    _codex_trust_tables_edit "$config" "$file" "$index" "$file:session_start:$index:0"
 }

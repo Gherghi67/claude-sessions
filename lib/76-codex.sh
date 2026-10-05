@@ -14,7 +14,9 @@ _cs_codex_adapter_dependencies() {
 }
 
 _cs_codex_adapter_capabilities() {
-    printf '%s\n' launch exact_resume startup_context
+    # rotation: `ags -codex-hook session-start` rebinds after /clear and loads
+    # the armed handoff; the launch prompt's r starts a thread from it.
+    printf '%s\n' launch exact_resume startup_context rotation
 }
 
 _cs_codex_adapter_prepare_workspace() {  # session_dir, mode
@@ -126,7 +128,13 @@ _codex_commit_prepared() {  # session_dir, previous_id, thread_id, source
         ' "$timeline" >/dev/null 2>&1; then started_recorded=1; fi
     fi
     if [ -n "$previous_id" ] && [ "$rotated_recorded" = 0 ]; then
-        _timeline_rotated "$session_dir" "$previous_id" "$thread_id" fresh "" codex || return 1
+        # A launch that continues a rotation handoff stages that reason and the
+        # handoff's name; every other new thread is a plain fresh start.
+        local reason handoff
+        reason=$(jq -r '.reason // ""' "$pending") || return 1
+        handoff=$(jq -r '.handoff // ""' "$pending") || return 1
+        [ "$reason" = handoff ] || { reason=fresh; handoff=""; }
+        _timeline_rotated "$session_dir" "$previous_id" "$thread_id" "$reason" "$handoff" codex || return 1
     fi
     if [ "$started_recorded" = 0 ]; then
         _timeline_started "$session_dir" codex "$thread_id" "$source" || return 1
@@ -198,16 +206,64 @@ _launch_codex_bound() {
         }
     fi
 
-    if [ "$intent" = auto ] && [ -n "$recorded_id" ] && cs_interactive; then
+    # A rotation handoff the rotate skill wrote adds r (and d) to the question,
+    # as on Claude: r starts a fresh thread that continues from it.
+    local pending_handoff rotation_handoff=""
+    pending_handoff=$(_pending_handoff_pick "$session_dir")
+    if [ "$intent" = auto ] && cs_interactive && { [ -n "$recorded_id" ] || [ -n "$pending_handoff" ]; }; then
         local response=""
-        printf 'Continue previous Codex conversation? [Y/n] '
+        if [ -n "$pending_handoff" ]; then
+            local origin=""
+            _handoff_is_local "$pending_handoff" "$session_dir" \
+                || origin=" ${DIM}(from another checkout)${NC}"
+            printf "${DIM}Rotation handoff pending:${NC} %s%b\n" "$(basename "$pending_handoff")" "$origin"
+            echo
+            if [ -n "$recorded_id" ]; then
+                _resume_menu_row y "$GREEN" 'resume' 'continue the previous Codex conversation · default'
+            else
+                _resume_menu_row y "$GREEN" 'start' 'a new Codex conversation · default'
+            fi
+            _resume_menu_row r "$GOLD" 'from handoff' 'fresh conversation that picks up the handoff'
+            _resume_menu_row n "$COMMENT" 'fresh' 'fresh conversation; the handoff waits for later'
+            _resume_menu_row d "$ORANGE" 'discard' 'retire the handoff, then continue as y'
+            echo
+            printf '    %b›%b ' "$GOLD" "$NC"
+        else
+            printf 'Continue previous Codex conversation? [Y/n] '
+        fi
         IFS= read -rsn1 response || { printf '\n'; return 130; }
         printf '\n'
         case "$response" in
-            [nN]) intent=fresh ;;
             $'\e') return 130 ;;
-            *) intent=resume ;;
+            [nN])
+                _disarm_rotation_marker "$session_dir" "$pending_handoff"
+                intent=fresh
+                ;;
+            [rR])
+                if [ -n "$pending_handoff" ]; then
+                    rotation_handoff=$(basename "$pending_handoff")
+                    intent=fresh
+                else
+                    _disarm_rotation_marker "$session_dir"
+                fi
+                ;;
+            [dD])
+                _disarm_rotation_marker "$session_dir"
+                if [ -n "$pending_handoff" ]; then
+                    _handoff_set_status "$pending_handoff" discarded || true
+                    printf "${DIM}Handoff discarded:${NC} %s\n" "$(basename "$pending_handoff")"
+                fi
+                ;;
+            *) _disarm_rotation_marker "$session_dir" "$pending_handoff" ;;
         esac
+    elif [ "$intent" = fresh ]; then
+        # An explicit fresh start with a rotation armed continues it, as a
+        # Claude fresh launch does (its SessionStart consumes the marker).
+        rotation_handoff=$(_rotation_armed_handoff "$session_dir")
+    else
+        # Resuming, or unattended: the armed rotation is not taken, so it must
+        # not survive to be consumed by an unrelated /clear later.
+        _disarm_rotation_marker "$session_dir" "$pending_handoff"
     fi
     if [ "$intent" = resume ] && [ -z "$recorded_id" ]; then
         _codex_launch_error "Cannot resume: no recorded Codex conversation. Use --fresh."
@@ -234,6 +290,12 @@ _launch_codex_bound() {
         _codex_launch_error "Could not write Codex context: $context_file"
         return 1
     }
+    if [ -n "$rotation_handoff" ]; then
+        { printf '\n'; _rotation_preamble_codex "$rotation_handoff" "$actor"; } >> "$context_file" || {
+            _codex_launch_error "Could not add the rotation handoff to the Codex context: $context_file"
+            return 1
+        }
+    fi
 
     # The helper uses app-server to create or refresh a *persistent* thread and
     # injects context without starting a user/model turn. A failed refresh must
@@ -271,7 +333,9 @@ _launch_codex_bound() {
             return 1
         }
     else
-        if ! cs_binding_stage "$session_dir" codex "$previous_id" "$thread_id" "${intent:-fresh}" ""; then
+        local stage_reason="${intent:-fresh}"
+        [ -z "$rotation_handoff" ] || stage_reason=handoff
+        if ! cs_binding_stage "$session_dir" codex "$previous_id" "$thread_id" "$stage_reason" "$rotation_handoff"; then
             _codex_launch_error "Could not stage Codex thread binding: $binding_file"
             return 1
         fi
@@ -284,10 +348,21 @@ _launch_codex_bound() {
         cs_run_with_lease "$meta_dir" _codex_ack_resume "$session_dir" "$thread_id" || return 1
     fi
 
-    printf '%s\n' 'Codex via ags: session context and exact resume are enabled; Claude hooks, autosave, and task queue integration are unavailable.'
+    # The new thread is bound now, so the handoff it continues is spent. The
+    # kick is Codex's starting prompt, the counterpart of Claude's positional
+    # prompt on the same answer: without it the thread would wait for a message.
+    local kick=""
+    if [ -n "$rotation_handoff" ]; then
+        _handoff_set_status "$session_dir/.cs/handoffs/$rotation_handoff" consumed "$thread_id" || true
+        rm -f "$local_dir/pending-handoff" 2>/dev/null || true
+        kick="Continue from the pending rotation handoff: read .cs/handoffs/$rotation_handoff first."
+        printf "${DIM}Continuing from handoff:${NC} %s\n" "$rotation_handoff"
+    fi
+
+    printf '%s\n' 'Codex via ags: session context, exact resume and rotation are enabled; Claude hooks, autosave, and task queue integration are unavailable.'
     # A dedicated native writer lives for this supervised CLI lifetime.
     # Signals and lock cleanup belong to the shared controller.
-    cs_run_child "$codex_bin" --no-daemon resume "$thread_id" -C "$session_dir"
+    cs_run_child "$codex_bin" --no-daemon resume "$thread_id" -C "$session_dir" ${kick:+"$kick"}
 }
 
 launch_codex() {

@@ -43,6 +43,76 @@ _handoff_is_local() {  # handoff_file, session_dir
         && grep -E -q "Session started \(.*ID: $parent\)" "$log" 2>/dev/null
 }
 
+# The handoff a launch offers: the armed one when the marker names an
+# unconsumed handoff, otherwise the lexicographically last unconsumed file (the
+# YYYY-MM-DD- prefix makes that the newest date). Prints the path, or nothing.
+# Shared by the Claude and Codex launch prompts.
+#
+# .cs/handoffs/ is shared and nothing ever deletes a handoff, so a file
+# belonging to another checkout keeps status: unconsumed indefinitely — the
+# rotate skill will not supersede one whose parent is absent from this
+# machine's session.log, and correctly so. Sorting last, it would shadow the
+# handoff this machine armed and r would rotate into someone else's plan. An
+# armed marker is an explicit choice, so it outranks the scan; a marker naming
+# a spent or absent file is stale and the scan still answers. The marker names
+# a basename, never a path: a separator would resolve outside the handoff store.
+_pending_handoff_pick() {  # session_dir
+    local session_dir="$1" pending="" hf armed
+    for hf in "$session_dir/.cs/handoffs"/*.md; do
+        [ -f "$hf" ] || continue
+        _handoff_is_unconsumed "$hf" || continue
+        pending="$hf"
+    done
+    armed=$(_rotation_marker_basename "$session_dir")
+    if [ -n "$armed" ] && [ -f "$session_dir/.cs/handoffs/$armed" ] \
+        && _handoff_is_unconsumed "$session_dir/.cs/handoffs/$armed"; then
+        pending="$session_dir/.cs/handoffs/$armed"
+    fi
+    printf '%s' "$pending"
+}
+
+# The basename the pending-handoff marker names, or nothing when there is no
+# marker or it names something with a path separator.
+_rotation_marker_basename() {  # session_dir
+    local marker="$1/.cs/local/pending-handoff" armed=""
+    [ -f "$marker" ] || return 0
+    armed=$(tr -d '[:space:]' < "$marker" 2>/dev/null) || armed=""
+    case "$armed" in */*|*\\*) armed="" ;; esac
+    printf '%s' "$armed"
+}
+
+# The handoff an armed marker names while it is still unconsumed. A marker
+# naming anything else is stale, and is dropped so a later /clear cannot trip
+# over it. hooks/session-start.sh resolves Claude's marker the same way.
+_rotation_armed_handoff() {  # session_dir
+    local armed
+    armed=$(_rotation_marker_basename "$1")
+    if [ -n "$armed" ] && [ -f "$1/.cs/handoffs/$armed" ] \
+        && _handoff_is_unconsumed "$1/.cs/handoffs/$armed"; then
+        printf '%s' "$armed"
+        return 0
+    fi
+    rm -f "$1/.cs/local/pending-handoff" 2>/dev/null || true
+}
+
+# Retire a handoff by flipping its frontmatter status. Only the first
+# "status: unconsumed" line flips (the frontmatter's); a body quoting the
+# contract line flush-left stays intact. A consumed handoff names its consumer.
+_handoff_set_status() {  # handoff_file, status, [consumed_by]
+    local file="$1"
+    { awk -v status="$2" -v by="${3:-}" '
+        !flipped && $0 == "status: unconsumed" {
+            print "status: " status
+            if (by != "") print "consumed_by: " by
+            flipped = 1
+            next
+        }
+        { print }
+    ' "$file" > "$file.tmp"; } 2>/dev/null \
+        && mv "$file.tmp" "$file" 2>/dev/null \
+        || { rm -f "$file.tmp" 2>/dev/null; return 1; }
+}
+
 # The last context usage stamped in this session, 0-100, or nothing.
 # cs-statusline keys the stamp by SESSION NAME, not by conversation, so it is
 # the newest render from any conversation opened here — usually the one being
@@ -143,7 +213,12 @@ _cs_claude_adapter_dependencies() {
 
 _cs_claude_adapter_capabilities() {
     # These describe this integration, not every feature a runtime may offer.
-    printf '%s\n' launch exact_resume startup_context feature_finish
+    # rotation: handoff marker consumed by SessionStart, /clear rebinds.
+    # spawn_brief: a spawned session's first turn reads .cs/brief.md.
+    # memory_index: .cs/memory/MEMORY.md loads at every session start.
+    # mail_delivery: hooks surface `ags -msg` mail inside the conversation.
+    printf '%s\n' launch exact_resume startup_context feature_finish \
+        rotation spawn_brief memory_index mail_delivery
 }
 
 _claude_native_id_valid() {  # native conversation ID
@@ -603,32 +678,9 @@ EOF
         fi
 
         # Deliberate rotation: an unconsumed handoff written by the rotate
-        # skill adds a third answer. Lexicographically last basename wins
-        # (the YYYY-MM-DD- prefix makes that the newest date).
-        local pending_handoff="" _hf
-        for _hf in "$session_dir/.cs/handoffs"/*.md; do
-            [ -f "$_hf" ] || continue
-            _handoff_is_unconsumed "$_hf" || continue
-            pending_handoff="$_hf"
-        done
-        # .cs/handoffs/ is shared and nothing ever deletes a handoff, so a file
-        # belonging to another checkout keeps status: unconsumed indefinitely —
-        # the rotate skill will not supersede one whose parent is absent from
-        # this machine's session.log, and correctly so. Sorting last, it would
-        # shadow the handoff this machine armed and r would rotate into someone
-        # else's plan. An armed marker is an explicit choice, so it outranks the
-        # scan; a marker naming a spent or absent file is stale and the scan
-        # still answers. The marker names a basename, never a path: a separator
-        # would resolve outside the handoff store.
-        local _marker="$session_dir/.cs/local/pending-handoff" _armed
-        if [ -f "$_marker" ]; then
-            _armed=$(cat "$_marker" 2>/dev/null | tr -d '[:space:]' || true)
-            case "$_armed" in */*|*\\*) _armed="" ;; esac
-            if [ -n "$_armed" ] && [ -f "$session_dir/.cs/handoffs/$_armed" ] \
-                && _handoff_is_unconsumed "$session_dir/.cs/handoffs/$_armed"; then
-                pending_handoff="$session_dir/.cs/handoffs/$_armed"
-            fi
-        fi
+        # skill adds a third answer (_pending_handoff_pick says which).
+        local pending_handoff
+        pending_handoff=$(_pending_handoff_pick "$session_dir")
         # A spawned launch is unattended: take the default (resume) instead
         # of parking the tmux window on an interactive ask.
         if [ "$intent" = resume ] || [ -n "$spawn_kick" ] || ! cs_interactive; then
@@ -695,18 +747,7 @@ EOF
                 # an orphaned marker had none to begin with.
                 _disarm_rotation_marker "$session_dir"
                 if [ -n "$pending_handoff" ]; then
-                    # Flip only the first status line (the frontmatter's); a
-                    # body quoting the contract line flush-left stays intact.
-                    { awk '
-                        !flipped && $0 == "status: unconsumed" {
-                            print "status: discarded"
-                            flipped = 1
-                            next
-                        }
-                        { print }
-                    ' "$pending_handoff" > "$pending_handoff.tmp"; } 2>/dev/null \
-                        && mv "$pending_handoff.tmp" "$pending_handoff" 2>/dev/null \
-                        || rm -f "$pending_handoff.tmp" 2>/dev/null || true
+                    _handoff_set_status "$pending_handoff" discarded || true
                     printf "${DIM}Handoff discarded:${NC} %s\n" "$(basename "$pending_handoff")"
                 fi
                 # d without a pending handoff was never offered: treat as the

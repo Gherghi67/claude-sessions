@@ -73,18 +73,23 @@ fi
 SHELL=${SHELL:-/bin/sh}
 export SHELL
 mkdir -p "$profile_home" "$HOME/.local/bin"
-# install.sh lays files out under HOME, so it runs inside the profile. The
-# launcher it deploys keeps the user's HOME, hence the absolute hook paths.
-HOME="$profile_home" XDG_CONFIG_HOME="$profile_home/.config" CS_HOOK_PATHS=absolute \
-    XDG_DATA_HOME="$profile_home/.local/share" XDG_CACHE_HOME="$profile_home/.cache" \
-    PATH="$profile_home/.local/bin:$PATH" bash ./install.sh
 
 # The launcher exports CODEX_HOME as the profile's .codex, and Codex refuses a
 # CODEX_HOME that does not exist, so a first Codex launch could never reach
-# its login. Private like ~/.codex.
+# its login. Private like ~/.codex. Made before the install, which deploys
+# Codex's skills into it.
 case ",$CS_INSTALL_ENGINES," in
     *,codex,*) mkdir -p "$profile_home/.codex" && chmod 700 "$profile_home/.codex" ;;
 esac
+
+# install.sh lays files out under HOME, so it runs inside the profile. The
+# launcher it deploys keeps the user's HOME, hence the absolute hook paths.
+# CODEX_HOME is set for the same reason: one inherited from the caller's shell
+# would deploy the profile's skills into the user's own Codex.
+HOME="$profile_home" XDG_CONFIG_HOME="$profile_home/.config" CS_HOOK_PATHS=absolute \
+    XDG_DATA_HOME="$profile_home/.local/share" XDG_CACHE_HOME="$profile_home/.cache" \
+    CODEX_HOME="$profile_home/.codex" \
+    PATH="$profile_home/.local/bin:$PATH" bash ./install.sh
 
 # The profile's Claude starts from a fresh config, and Claude Code gives a fresh
 # config its fullscreen renderer, which takes trackpad gestures such as iTerm2's

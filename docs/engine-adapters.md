@@ -30,11 +30,29 @@ before adapter launch side effects.
 The capability check `cs_engine_supports <engine> <capability>` performs an
 exact line match against `capabilities` output. The initial capabilities
 describe the checked-in integration: Claude supports `launch`, `exact_resume`,
-`startup_context`, and `feature_finish`; Codex supports the first three. These
+`startup_context`, `feature_finish`, `rotation`, `spawn_brief`,
+`memory_index`, and `mail_delivery`; Codex supports the first three. These
 names describe the integration's behavior, not a guarantee about every
 installed runtime version. Shared commands should check a capability before
 performing any side effect that depends on it. In particular, feature finish
 must fail before session creation or adapter preparation when unsupported.
+
+The four session-manager capabilities name what the shipped skills rely on:
+
+| Capability | Means | Checked by |
+| --- | --- | --- |
+| `rotation` | a fresh conversation consumes the armed handoff and the binding follows `/clear` (Claude and Codex) | the rotate skill |
+| `spawn_brief` | a spawned session's first turn reads `.cs/brief.md` | the feature skill |
+| `memory_index` | `.cs/memory/MEMORY.md` loads at every session start, against a byte budget | the sweep skill |
+| `mail_delivery` | `ags -msg` mail surfaces inside the open conversation | the feature skill |
+
+`ags -engine` gives skills and scripts the same answers without sourcing the
+library. It prints `engine:`, `conversation:` (the native ID the session has
+bound for that engine, through `cs_binding_read`) and `capabilities:` lines.
+`ags -engine supports <capability>` prints nothing and exits 0 when the engine
+declares the capability, and names both and exits 1 when it does not. The engine
+is the run's own (`CS_RUN_ENGINE`, which every launch exports into the native
+child); outside a run it is the session's saved preference.
 
 `check_dependencies` calls the selected adapter's probe and turns any reported
 names into the established user-facing missing-dependency error. Claude keeps
@@ -135,8 +153,10 @@ Claude binding. Core workspace preparation can be tested with a fake adapter
 without native helper functions or executables.
 
 The installer selects first-party adapter payloads with `CS_INSTALL_ENGINES`.
-Codex-only installations omit Claude hooks, commands, skills, mods, statuslines,
-and settings. Shared CLI identity resolution and ags-secrets prefer neutral
+Codex-only installations omit Claude hooks, mods, statuslines,
+and settings. Skills deploy to every selected engine: the same files go to
+`~/.claude/skills/` and to `$CODEX_HOME/skills/` (default `~/.codex/skills/`),
+and uninstall removes only the names cs ships from either. Shared CLI identity resolution and ags-secrets prefer neutral
 variables and accept older callers. Exported Claude aliases remain during the
 migration for shipped native hooks and commands.
 
@@ -166,8 +186,33 @@ an engine as Claude records. Each engine retains its own current binding.
 
 ## Deferred boundaries
 
-Hooks, rotation, recovery, usage, and TUI runtime observations retain their
-Claude integration. They are not a normalized core event bus yet. A full move to
+Hooks, recovery, usage, and TUI runtime observations retain their Claude
+integration, apart from the one Codex hook below. They are not a normalized
+core event bus yet. A full move to
 `core/` and `adapters/` directories should follow these behavior boundaries.
 Codex native event delivery remains separate work; shared supervision does not
-provide turn-boundary observation, queue delivery, or automatic native rotation.
+provide turn-boundary observation, queue delivery, or forced rotation.
+The shipped skills deploy to Claude and Codex alike. Each one reaches its
+helpers through its own directory and checks `ags -engine supports` before an
+adapter feature. Codex declares `rotation` and none of the other three, so under
+Codex `feature` refuses before writing anything.
+Codex ignores `disable-model-invocation`, so `finish` also ships
+`agents/openai.yaml` with `allow_implicit_invocation: false`, which keeps it out
+of the skill list Codex gives the model.
+
+Codex rotation runs through one hook. The installer registers
+`ags -codex-hook session-start` in `$CODEX_HOME/hooks.json`, after any groups
+already there, and writes its `trusted_hash` under `[hooks.state."<hooks.json
+path>:session_start:<group>:0"]` in `config.toml` in the same step: Codex skips an
+untrusted hook without a word, and keys trust by the group's position. The hash
+is the sha256 of the group as compact sorted-key JSON with Codex's defaults
+(`async: false`, `timeout: 600`). Codex fires SessionStart on a thread's first
+turn, before the model call: `resume` for every ags launch, because ags creates
+the thread and then resumes it, and `clear` for the first message after `/clear`,
+carrying the new thread's id. On `clear`, under the run lease, the hook rebinds
+`.cs/local/codex-thread-id`, records `rotated` and `started` events, consumes an
+armed handoff and returns the rotation context; on every source it logs the
+`Session started` line the rotate skill and the launch prompt read. The launch
+owns the other way in: `r` at the `[Y/n/r/d]` prompt (or an explicit `--fresh`
+with a rotation armed) adds the handoff to the new thread's context, consumes it,
+and starts the thread with `codex resume <id> <prompt>`.

@@ -45,7 +45,7 @@ test_feature_registered_in_all_manifests() {
 test_feature_skill_teaches_the_spawn_with_a_brief() {
     assert_file_contains "$SKILL" "ags -spawn" "the skill runs the spawner" || return 1
     assert_file_contains "$SKILL" "\-\-brief" "the brief travels as --brief" || return 1
-    assert_file_contains "$SKILL" "CLAUDE_SESSION_NAME" "the base defaults to the current session" || return 1
+    assert_file_contains "$SKILL" "CS_SESSION_NAME" "the base defaults to the current session" || return 1
     assert_file_contains "$SKILL" "<base>@<feature>" "a full worktree name is accepted" || return 1
     assert_file_contains "$SKILL" "\.cs/brief\.md" "the skill says where the brief lands" || return 1
     assert_file_contains "$SKILL" "ags -msg <spawner>" "the report-back goes to the spawning session" || return 1

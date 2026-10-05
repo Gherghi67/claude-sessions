@@ -110,8 +110,22 @@ continues to apply only to Claude Code.
 ## Current boundary
 
 The Codex integration currently covers engine selection, launch and exact
-thread resume, shared-context bootstrap, and packaging of the adapter. The
-existing Claude hooks and function-hook mods do not run in Codex. Codex does
+thread resume, shared-context bootstrap, packaging of the adapter, and the
+shipped skills. The installer copies the skills into `$CODEX_HOME/skills/`,
+where Codex lists them by name and a message starts one with `$<name>` (for
+example `$checkpoint`); `finish` runs only when asked that way. A skill that
+needs an adapter feature Codex lacks says so and stops: `feature` refuses under
+Codex for now.
+
+`$rotate` works. It writes and arms a handoff, then tells you to run `/clear`
+and send any message: Codex starts no turn by itself, and the handoff loads with
+that first message through the one hook ags registers for Codex
+(`ags -codex-hook session-start` in `$CODEX_HOME/hooks.json`, trusted in
+`config.toml` by the installer). The same hook rebinds the session after every
+`/clear`, so the next `ags <name>` resumes the conversation you were in.
+Exiting instead and answering `r` at the next launch starts a fresh thread from
+the handoff and runs its first turn on its own. The Claude hooks and
+function-hook mods do not run in Codex. Codex does
 not yet participate in CS autosave and crash recovery, queue delivery, usage
 reporting, automatic cross-engine handoffs, observed runtime status, or native terminal
 controls. CS session-management commands continue to manage the shared

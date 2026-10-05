@@ -44,6 +44,87 @@ teardown() {
     CS_ENGINE_IDS=(claude codex)
 }
 
+# A session directory with both engines bound, as a launch leaves it.
+_engine_verb_session() {
+    local dir="$TEST_TMPDIR/session"
+    mkdir -p "$dir/.cs/local"
+    printf 'engine: claude\nclaude_session_id: 11111111-2222-4333-8444-555555555555\n' > "$dir/.cs/local/state"
+    printf 'thread-abc\n' > "$dir/.cs/local/codex-thread-id"
+    printf '%s\n' "$dir"
+}
+
+# A skill's shell inherits the run's engine; the verb names it, the native
+# conversation that engine is bound to, and the engine's capabilities.
+test_engine_verb_reports_the_running_engine() {
+    local dir output
+    dir=$(_engine_verb_session)
+    output=$(CS_SESSION_DIR="$dir" CS_RUN_ENGINE=codex "$CS_BIN" -engine 2>&1) \
+        || { echo "  FAIL: ags -engine failed: $output"; return 1; }
+    assert_output_contains "$output" "engine: codex" "the run's engine wins over the saved one" || return 1
+    assert_output_contains "$output" "conversation: thread-abc" "Codex reads its own binding" || return 1
+    assert_output_contains "$output" "capabilities: launch exact_resume startup_context" \
+        "capabilities come from the adapter" || return 1
+    output=$(CS_SESSION_DIR="$dir" CS_RUN_ENGINE=claude "$CS_BIN" -engine 2>&1) || return 1
+    assert_output_contains "$output" "conversation: 11111111-2222-4333-8444-555555555555" \
+        "Claude reads claude_session_id" || return 1
+    assert_output_contains "$output" "rotation" "Claude lists rotation" || return 1
+}
+
+test_engine_verb_falls_back_to_the_saved_engine() {
+    local dir output
+    dir=$(_engine_verb_session)
+    printf 'engine: codex\n' > "$dir/.cs/local/state"
+    output=$(env -u CS_RUN_ENGINE CS_SESSION_DIR="$dir" "$CS_BIN" -engine 2>&1) \
+        || { echo "  FAIL: ags -engine failed: $output"; return 1; }
+    assert_output_contains "$output" "engine: codex" "outside a run the saved preference answers" || return 1
+}
+
+test_engine_verb_supports_answers_by_exit_status() {
+    local dir output status
+    dir=$(_engine_verb_session)
+    output=$(CS_SESSION_DIR="$dir" CS_RUN_ENGINE=claude "$CS_BIN" -engine supports rotation 2>&1) \
+        || { echo "  FAIL: Claude must support rotation: $output"; return 1; }
+    assert_eq "" "$output" "a supported capability prints nothing" || return 1
+    status=0
+    output=$(CS_SESSION_DIR="$dir" CS_RUN_ENGINE=codex "$CS_BIN" -engine supports spawn_brief 2>&1) || status=$?
+    assert_eq 1 "$status" "an unsupported capability exits 1" || return 1
+    assert_output_contains "$output" "spawn_brief is not supported under codex" "and names both" || return 1
+    status=0
+    output=$(CS_SESSION_DIR="$dir" CS_RUN_ENGINE=claude "$CS_BIN" -engine supports 2>&1) || status=$?
+    [ "$status" -ne 0 ] || { echo "  FAIL: a missing capability name must be refused"; return 1; }
+    assert_output_contains "$output" "Usage: ags -engine supports <capability>" || return 1
+}
+
+# Codex runs a skill's commands in a sandbox that can refuse every file write,
+# temp files included, and macOS's /bin/bash 3.2 writes each here-string to a
+# temp file. The probe a skill runs before an adapter feature has to answer
+# without one: it once read no capabilities there and called all of them
+# unsupported.
+test_engine_verb_supports_answers_without_temp_files() {
+    command -v sandbox-exec >/dev/null 2>&1 \
+        || { echo "    SKIP (sandbox-exec is macOS-only)"; return 77; }
+    local dir output status=0
+    dir=$(_engine_verb_session)
+    # Every write refused, as in Codex's read-only sandbox. Denying only the
+    # temp directories is not enough: bash 3.2 falls back to /var/tmp.
+    local policy='(version 1)(allow default)(deny file-write*)(allow file-write* (literal "/dev/null") (literal "/dev/dtracehelper"))'
+    output=$(CS_SESSION_DIR="$dir" CS_RUN_ENGINE=claude \
+        sandbox-exec -p "$policy" /bin/bash "$CS_BIN" -engine supports rotation 2>&1) \
+        || { echo "  FAIL: with temp files refused, Claude must still support rotation: $output"; return 1; }
+    assert_eq "" "$output" "a supported capability prints nothing, warnings included" || return 1
+    output=$(CS_SESSION_DIR="$dir" CS_RUN_ENGINE=codex \
+        sandbox-exec -p "$policy" /bin/bash "$CS_BIN" -engine supports spawn_brief 2>&1) || status=$?
+    assert_eq 1 "$status" "an unsupported capability still exits 1" || return 1
+    assert_eq "spawn_brief is not supported under codex in ags" "$output" "with only its own line" || return 1
+}
+
+test_engine_verb_refuses_outside_a_session() {
+    local output status=0
+    output=$(env -u CS_RUN_ENGINE -u CS_SESSION_DIR -u CLAUDE_SESSION_DIR "$CS_BIN" -engine 2>&1) || status=$?
+    [ "$status" -ne 0 ] || { echo "  FAIL: ags -engine outside a session must fail"; return 1; }
+    assert_output_contains "$output" "Not in a cs session" || return 1
+}
+
 test_builtin_registry_and_safe_names() {
     cs_engine_known claude || { echo '  FAIL: Claude is not registered'; return 1; }
     cs_engine_known codex || { echo '  FAIL: Codex is not registered'; return 1; }
@@ -101,6 +182,22 @@ test_capabilities_are_exact_and_runtime_independent() {
         echo '  FAIL: Codex must not claim unsupported feature finish'
         return 1
     fi
+    # The session-manager features skills check before relying on an adapter.
+    # Claude hosts all four through its hooks and launch path. Codex hosts
+    # rotation (its SessionStart hook and the launch prompt's r); the rest it
+    # must decline rather than let a skill half-run.
+    local capability
+    for capability in rotation spawn_brief memory_index mail_delivery; do
+        cs_engine_supports claude "$capability" \
+            || { echo "  FAIL: Claude must declare $capability"; return 1; }
+    done
+    cs_engine_supports codex rotation || { echo "  FAIL: Codex must declare rotation"; return 1; }
+    for capability in spawn_brief memory_index mail_delivery; do
+        if cs_engine_supports codex "$capability"; then
+            echo "  FAIL: Codex must not claim $capability before its adapter hosts it"
+            return 1
+        fi
+    done
     cs_engine_supports fixture startup_context || { echo '  FAIL: fixture capability missing'; return 1; }
     if cs_engine_supports fixture startup; then
         echo '  FAIL: capability check must match a complete line'
@@ -161,6 +258,11 @@ run_test test_fake_adapter_forwards_exact_arguments_and_status
 run_test test_unknown_engine_and_operation_fail_without_invocation
 run_test test_missing_handler_fails_without_side_effect
 run_test test_capabilities_are_exact_and_runtime_independent
+run_test test_engine_verb_reports_the_running_engine
+run_test test_engine_verb_falls_back_to_the_saved_engine
+run_test test_engine_verb_supports_answers_by_exit_status
+run_test test_engine_verb_supports_answers_without_temp_files
+run_test test_engine_verb_refuses_outside_a_session
 run_test test_fake_dependencies_do_not_require_native_runtimes
 run_test test_shared_context_exports_neutral_and_legacy_names
 run_test test_fake_adapter_prepares_portable_workspace_without_native_helpers

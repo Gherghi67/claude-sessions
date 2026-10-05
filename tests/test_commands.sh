@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# ABOUTME: Content invariants for commands/*.md and skills/*/SKILL.md
-# ABOUTME: Guards single-source doctrine, deployed-path references, and frontmatter correctness
+# ABOUTME: Content invariants for skills/*/SKILL.md (the four former commands included)
+# ABOUTME: Guards single-source doctrine, engine-neutral helper paths, and frontmatter correctness
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=tests/test_lib.sh
 source "$SCRIPT_DIR/test_lib.sh"
 
-COMMANDS_DIR="$SCRIPT_DIR/../commands"
 SKILLS_DIR="$SCRIPT_DIR/../skills"
 HOOKS_DIR="$SCRIPT_DIR/../hooks"
 RELEASE_MD="$SCRIPT_DIR/../.claude/commands/release.md"
@@ -16,9 +15,9 @@ RELEASE_MD="$SCRIPT_DIR/../.claude/commands/release.md"
 # ============================================================================
 
 test_checkpoint_allowed_tools_hyphenated() {
-    assert_file_contains "$COMMANDS_DIR/checkpoint.md" "allowed-tools:" \
+    assert_file_contains "$SKILLS_DIR/checkpoint/SKILL.md" "allowed-tools:" \
         "checkpoint.md must use the hyphenated allowed-tools key" || return 1
-    assert_file_not_contains "$COMMANDS_DIR/checkpoint.md" "allowed_tools" \
+    assert_file_not_contains "$SKILLS_DIR/checkpoint/SKILL.md" "allowed_tools" \
         "the underscore form is silently ignored by Claude Code" || return 1
 }
 
@@ -45,31 +44,31 @@ test_store_secret_backend_neutral() {
 
 test_no_dangling_bucket_guidance_reference() {
     # The CLAUDE.md bucket-guidance table was retired in v2026.5.5 (bin/cs
-    # Phase 9 strips it); no command may still point at it.
+    # Phase 9 strips it); no skill may still point at it.
     local hits
-    hits=$(grep -l "bucket-guidance" "$COMMANDS_DIR"/*.md 2>/dev/null || true)
+    hits=$(grep -l "bucket-guidance" "$SKILLS_DIR"/*/SKILL.md 2>/dev/null || true)
     assert_eq "" "$hits" \
-        "no command may reference the retired CLAUDE.md bucket-guidance table" || return 1
+        "no skill may reference the retired CLAUDE.md bucket-guidance table" || return 1
 }
 
 test_sweep_owns_bucket_routing_table() {
-    assert_file_contains "$COMMANDS_DIR/sweep.md" 'user_\*.md' \
+    assert_file_contains "$SKILLS_DIR/sweep/SKILL.md" 'user_\*.md' \
         "sweep.md must carry the bucket routing table (user row)" || return 1
-    assert_file_contains "$COMMANDS_DIR/sweep.md" 'reference_\*.md' \
+    assert_file_contains "$SKILLS_DIR/sweep/SKILL.md" 'reference_\*.md' \
         "sweep.md must carry the bucket routing table (reference row)" || return 1
 }
 
 test_sweep_routes_discovered_constraints() {
     # The project_* bucket is dominated by constraints found through work, not user
     # utterances. sweep must route them and must NOT blanket-drop them as "just a discovery".
-    assert_file_not_contains "$COMMANDS_DIR/sweep.md" "that's a discovery, not a memory" \
+    assert_file_not_contains "$SKILLS_DIR/sweep/SKILL.md" "that's a discovery, not a memory" \
         "the blanket 'discovery is not a memory' exclusion drops the project_* class" || return 1
-    assert_file_contains "$COMMANDS_DIR/sweep.md" "discover while working" \
+    assert_file_contains "$SKILLS_DIR/sweep/SKILL.md" "discover while working" \
         "sweep must carry a routing path for constraints discovered through work" || return 1
 }
 
 test_sweep_updates_memory_index() {
-    assert_file_contains "$COMMANDS_DIR/sweep.md" "MEMORY.md" \
+    assert_file_contains "$SKILLS_DIR/sweep/SKILL.md" "MEMORY.md" \
         "sweep.md must instruct updating the MEMORY.md index after writing an entry" || return 1
 }
 
@@ -80,48 +79,138 @@ test_wrap_family_pinned_to_opus() {
     # The family alias, not a point release: `claude-opus-5` would keep an
     # older Opus once a newer one ships.
     local cmd
-    for cmd in wrap.md sweep.md summary.md; do
-        assert_file_contains "$COMMANDS_DIR/$cmd" "^model: opus$" \
+    for cmd in wrap sweep summary; do
+        assert_file_contains "$SKILLS_DIR/$cmd/SKILL.md" "^model: opus$" \
             "$cmd must pin the opus family, not a point release, in frontmatter" || return 1
-        if [ "$(head -1 "$COMMANDS_DIR/$cmd")" != "---" ]; then
+        if [ "$(head -1 "$SKILLS_DIR/$cmd/SKILL.md")" != "---" ]; then
             echo "  FAIL: $cmd must open with a YAML frontmatter block"
             return 1
         fi
     done
 }
 
-test_wrap_references_deployed_commands() {
-    assert_file_contains "$COMMANDS_DIR/wrap.md" "~/.claude/commands/sweep.md" \
-        "wrap.md must reference the deployed sweep.md path" || return 1
-    assert_file_contains "$COMMANDS_DIR/wrap.md" "~/.claude/commands/summary.md" \
-        "wrap.md must reference the deployed summary.md path" || return 1
-    assert_file_not_contains "$COMMANDS_DIR/wrap.md" '`commands/sweep.md`' \
-        "repo-relative paths are dead pointers at runtime" || return 1
+# wrap reads its passes from the sibling skills wherever this engine deployed
+# them. A ~/.claude path resolves against the real HOME, which under the ags
+# profile is the stable cs install, and under Codex is no install at all.
+test_wrap_references_sibling_skills() {
+    assert_file_contains "$SKILLS_DIR/wrap/SKILL.md" '`../sweep/SKILL.md`' \
+        "wrap must read the sweep skill beside its own directory" || return 1
+    assert_file_contains "$SKILLS_DIR/wrap/SKILL.md" '`../summary/SKILL.md`' \
+        "wrap must read the summary skill beside its own directory" || return 1
+    assert_file_not_contains "$SKILLS_DIR/wrap/SKILL.md" 'commands/' \
+        "the passes are skills now, never command files" || return 1
 }
 
-# The guard ships as a hook library, so sweep must call it at its deployed path,
-# and must take the snapshot that check and restore compare against.
+# The guard ships inside the sweep skill, so sweep runs it relative to its own
+# directory, and must take the snapshot that check and restore compare against.
 test_sweep_runs_the_memory_index_guard() {
     local sub
     for sub in snapshot check restore; do
-        assert_file_contains "$COMMANDS_DIR/sweep.md" "bash ~/.claude/hooks/cs/memory-index-guard.sh $sub" \
-            "sweep.md must run the deployed guard's $sub" || return 1
+        assert_file_contains "$SKILLS_DIR/sweep/SKILL.md" "bash <skill-dir>/scripts/memory-index-guard.sh $sub" \
+            "sweep must run its bundled guard's $sub" || return 1
     done
-    assert_file_contains "$SCRIPT_DIR/../lib/01-manifests.sh" "^    memory-index-guard.sh$" \
-        "the guard must ship with the hooks for that path to exist" || return 1
+    assert_file_contains "$SCRIPT_DIR/../lib/01-manifests.sh" "^    sweep/scripts/memory-index-guard.sh$" \
+        "the guard must ship as a sweep skill file for that path to exist" || return 1
+    [ -f "$SKILLS_DIR/sweep/scripts/memory-index-guard.sh" ] \
+        || { echo "  FAIL: skills/sweep/scripts/memory-index-guard.sh missing"; return 1; }
+}
+
+# Every shipped skill reaches its helpers through its own directory or an ags
+# verb. A path under ~/.claude names whichever install owns the real HOME: the
+# stable cs under the ags profile, nothing at all under Codex.
+test_no_skill_names_a_claude_home_path() {
+    local hits
+    hits=$(grep -lE '~/\.claude/|\$HOME/\.claude/(skills|commands|hooks)' "$SKILLS_DIR"/*/SKILL.md 2>/dev/null || true)
+    assert_eq "" "$hits" \
+        "no SKILL.md may name a ~/.claude path for a helper" || return 1
+}
+
+# A skill that relies on an adapter feature asks the session manager first and
+# refuses cleanly, rather than half-running under an engine that lacks it.
+test_skills_check_adapter_capabilities_before_use() {
+    assert_file_contains "$SKILLS_DIR/rotate/SKILL.md" 'ags -engine supports rotation' \
+        "rotate must check the rotation capability" || return 1
+    assert_file_contains "$SKILLS_DIR/feature/SKILL.md" 'ags -engine supports spawn_brief' \
+        "feature must check the spawn_brief capability" || return 1
+    assert_file_contains "$SKILLS_DIR/feature/SKILL.md" 'ags -engine supports mail_delivery' \
+        "feature must say where the result mail surfaces" || return 1
+    assert_file_contains "$SKILLS_DIR/sweep/SKILL.md" 'ags -engine supports memory_index' \
+        "sweep must say which engines load the index" || return 1
+    local hits
+    hits=$(grep -l 'CLAUDE_SESSION_NAME' "$SKILLS_DIR"/*/SKILL.md 2>/dev/null || true)
+    assert_eq "" "$hits" "skills read the neutral CS_SESSION_NAME, not the Claude alias" || return 1
+}
+
+# Forced rotation is on by default (80%), and while it is on the mod counts
+# down after ANY armed handoff, a hand-run /rotate included; only
+# CS_ROTATE_FORCE_CTX=off leaves the /clear to the person.
+test_rotate_describes_the_default_countdown() {
+    assert_file_not_contains "$SKILLS_DIR/rotate/SKILL.md" 'The keystroke is theirs unless' \
+        "the pre-2026.9.18 'only with CS_ROTATE_FORCE_CTX' sentence is stale" || return 1
+    assert_file_contains "$SKILLS_DIR/rotate/SKILL.md" 'CS_ROTATE_FORCE_CTX=off' \
+        "the skill must name the switch that turns the countdown off" || return 1
+    assert_file_contains "$SKILLS_DIR/rotate/SKILL.md" 'whether or not the rotation was forced' \
+        "the countdown follows a hand-run /rotate too" || return 1
+}
+
+# Under Codex no turn starts by itself after /clear, and there is no capsule
+# or countdown, so the skill's closing line has a Codex form that says to send
+# a message. Claude's line stays exactly as it was.
+test_rotate_names_the_codex_closing_line() {
+    local skill="$SKILLS_DIR/rotate/SKILL.md"
+    assert_file_contains "$skill" '\*\*Run `/clear` now, then send `go`\*\* — this conversation is ready to rotate.' \
+        "the Codex form of the final line" || return 1
+    assert_file_contains "$skill" 'Codex starts no turn by itself' \
+        "step 10 says why the message is needed" || return 1
+    assert_file_not_contains "$skill" 'only the Claude adapter declares' \
+        "Codex declares rotation now" || return 1
+}
+
+# The four former commands are skills: each declares its name and the
+# description an engine lists it by.
+test_former_commands_are_skills() {
+    local cmd
+    for cmd in checkpoint summary sweep wrap; do
+        assert_file_contains "$SKILLS_DIR/$cmd/SKILL.md" "^name: $cmd$" \
+            "$cmd/SKILL.md must declare its name" || return 1
+        assert_file_contains "$SKILLS_DIR/$cmd/SKILL.md" "^description: " \
+            "$cmd/SKILL.md must declare a description" || return 1
+    done
+    [ ! -d "$SCRIPT_DIR/../commands" ] \
+        || { echo "  FAIL: commands/ must be gone; every former command ships as a skill"; return 1; }
+}
+
+# Codex accepts disable-model-invocation in SKILL.md and ignores it, so a skill
+# meant to run only when the user asks needs Codex's own switch beside it, and
+# the installer has to ship that file to both engines.
+test_explicit_only_skills_ship_a_codex_policy() {
+    local manifest="$SCRIPT_DIR/../lib/01-manifests.sh" skill_md skill found=0
+    for skill_md in "$SKILLS_DIR"/*/SKILL.md; do
+        awk 'NR==1&&/^---$/{f=1;next} f&&/^---$/{exit} f' "$skill_md" \
+            | grep -qx 'disable-model-invocation: true' || continue
+        found=1
+        skill=$(basename "$(dirname "$skill_md")")
+        assert_file_contains "$SKILLS_DIR/$skill/agents/openai.yaml" '^  allow_implicit_invocation: false$' \
+            "$skill is explicit-only, so Codex needs policy.allow_implicit_invocation: false" || return 1
+        assert_file_contains "$SKILLS_DIR/$skill/agents/openai.yaml" '^policy:$' \
+            "$skill's openai.yaml must nest the switch under policy" || return 1
+        assert_file_contains "$manifest" "^    $skill/agents/openai.yaml" \
+            "CS_SKILL_FILES must ship $skill/agents/openai.yaml" || return 1
+    done
+    assert_eq 1 "$found" "finish at least is explicit-only; the frontmatter scan found none" || return 1
 }
 
 test_wrap_does_not_duplicate_memory_bars() {
-    assert_file_contains "$COMMANDS_DIR/sweep.md" "three months" \
+    assert_file_contains "$SKILLS_DIR/sweep/SKILL.md" "three months" \
         "sweep.md owns the three-bar discipline" || return 1
-    assert_file_not_contains "$COMMANDS_DIR/wrap.md" "three months" \
+    assert_file_not_contains "$SKILLS_DIR/wrap/SKILL.md" "three months" \
         "wrap.md must reference the bars, not restate them" || return 1
 }
 
 test_wrap_does_not_duplicate_summary_skeleton() {
-    assert_file_contains "$COMMANDS_DIR/summary.md" "# Session Summary:" \
+    assert_file_contains "$SKILLS_DIR/summary/SKILL.md" "# Session Summary:" \
         "summary.md owns the summary skeleton" || return 1
-    assert_file_not_contains "$COMMANDS_DIR/wrap.md" "# Session Summary:" \
+    assert_file_not_contains "$SKILLS_DIR/wrap/SKILL.md" "# Session Summary:" \
         "wrap.md must reference the skeleton, not embed a second copy" || return 1
 }
 
@@ -129,9 +218,9 @@ test_scoring_threshold_owned_by_skill() {
     assert_file_contains "$SKILLS_DIR/prose-hygiene/SKILL.md" "35/50" \
         "the prose-hygiene skill owns the revise threshold" || return 1
     local hits
-    hits=$(grep -l "35/50" "$COMMANDS_DIR"/*.md 2>/dev/null || true)
+    hits=$(grep -l "35/50" "$SKILLS_DIR"/*/SKILL.md 2>/dev/null | grep -v '/prose-hygiene/' || true)
     assert_eq "" "$hits" \
-        "no command may restate the skill's 35/50 threshold" || return 1
+        "no other skill may restate the prose-hygiene 35/50 threshold" || return 1
 }
 
 # ============================================================================
@@ -139,23 +228,23 @@ test_scoring_threshold_owned_by_skill() {
 # ============================================================================
 
 test_summary_reads_narrative() {
-    assert_file_contains "$COMMANDS_DIR/summary.md" 'memory/narrative\.<actor>\.md' \
+    assert_file_contains "$SKILLS_DIR/summary/SKILL.md" 'memory/narrative\.<actor>\.md' \
         "summary must read the per-actor session narratives" || return 1
-    assert_file_contains "$COMMANDS_DIR/summary.md" "your own in full; a teammate's only from the line the resume digest named" \
+    assert_file_contains "$SKILLS_DIR/summary/SKILL.md" "your own in full; a teammate's only from the line the resume digest named" \
         "summary reads its own narrative whole and a teammate's by the digest delta, never the whole file" || return 1
 }
 
 test_prose_critic_pinned_and_contracted() {
-    assert_file_contains "$COMMANDS_DIR/summary.md" "model: opus" \
+    assert_file_contains "$SKILLS_DIR/summary/SKILL.md" "model: opus" \
         "the prose critic is a quality-judge task and must pin a capable tier" || return 1
-    assert_file_contains "$COMMANDS_DIR/summary.md" "final message" \
+    assert_file_contains "$SKILLS_DIR/summary/SKILL.md" "final message" \
         "the critic's deliverable must be demanded in its final message" || return 1
     # The critic scores; the caller decides. A judge asked for its own verdict
     # grades to the bar it was told, so the pass criterion stays out of its
     # output contract and the comparison happens in summary.md.
-    assert_file_contains "$COMMANDS_DIR/summary.md" "the critic scores, it does not decide" \
+    assert_file_contains "$SKILLS_DIR/summary/SKILL.md" "the critic scores, it does not decide" \
         "the critic must return scores and rewrites only, no verdict line" || return 1
-    if grep -q 'PASS\|REVISE' "$COMMANDS_DIR/summary.md"; then
+    if grep -q 'PASS\|REVISE' "$SKILLS_DIR/summary/SKILL.md"; then
         echo "  FAIL: summary.md still asks the critic for a PASS/REVISE verdict"; return 1
     fi
 }
@@ -202,72 +291,72 @@ test_prose_hygiene_records_upstream_sync() {
 test_summary_replaces_existing_file() {
     # /summary run standalone must not stall deciding whether to overwrite a
     # pre-existing summary; the replace rule lives in summary.md, not only wrap.md.
-    assert_file_contains "$COMMANDS_DIR/summary.md" "already exists, replace it" \
+    assert_file_contains "$SKILLS_DIR/summary/SKILL.md" "already exists, replace it" \
         "summary.md step 3 must say to replace a pre-existing .cs/summary.md" || return 1
 }
 
 test_summary_bounds_git_log_to_session() {
     # 'derive from git history' is unbounded; the file list must be scoped to this
     # session via the timeline's earliest started timestamp, not the whole repo.
-    assert_file_contains "$COMMANDS_DIR/summary.md" "git log --since" \
+    assert_file_contains "$SKILLS_DIR/summary/SKILL.md" "git log --since" \
         "summary.md must bound the git log to the session, not the whole repo history" || return 1
 }
 
 test_summary_prose_loop_is_bounded() {
     # The apply/re-run critic loop must terminate: one re-run cap, stop regardless of
     # the second verdict — otherwise the model loops or stalls below threshold.
-    assert_file_contains "$COMMANDS_DIR/summary.md" "stop regardless" \
+    assert_file_contains "$SKILLS_DIR/summary/SKILL.md" "stop regardless" \
         "summary.md must cap the critic loop so it terminates" || return 1
 }
 
 test_wrap_report_is_not_two_line() {
     # 'two-line report' contradicts item 1's 'one path per line' once Pass 1 wrote
     # more than one file; the report must be sectioned, not line-capped.
-    assert_file_not_contains "$COMMANDS_DIR/wrap.md" "two-line" \
+    assert_file_not_contains "$SKILLS_DIR/wrap/SKILL.md" "two-line" \
         "wrap.md must not cap the report at two lines (item 1 lists one path per line)" || return 1
 }
 
 test_checkpoint_routes_reserved_subcommands() {
     # run_checkpoint reserves list/ls/show; '/checkpoint list' must route to the
     # subcommand, not save a checkpoint labelled 'list' and report a phantom save.
-    assert_file_contains "$COMMANDS_DIR/checkpoint.md" "Route reserved words to the matching subcommand" \
+    assert_file_contains "$SKILLS_DIR/checkpoint/SKILL.md" "Route reserved words to the matching subcommand" \
         "checkpoint.md must route list/ls/show to their subcommands instead of saving a label" || return 1
 }
 
 test_checkpoint_quotes_label_and_stops_on_failure() {
     # A label with a double quote, $, or backtick breaks or injects under double quotes;
     # single-quote it, and never silently retry a failed save.
-    assert_file_contains "$COMMANDS_DIR/checkpoint.md" "single-quoting the label" \
+    assert_file_contains "$SKILLS_DIR/checkpoint/SKILL.md" "single-quoting the label" \
         "checkpoint.md must single-quote the label, not double-quote it" || return 1
-    assert_file_contains "$COMMANDS_DIR/checkpoint.md" "do not retry" \
+    assert_file_contains "$SKILLS_DIR/checkpoint/SKILL.md" "do not retry" \
         "checkpoint.md must stop (not retry) when ags -checkpoint fails" || return 1
 }
 
 test_sweep_supersedes_stale_entries() {
     # 'skip; do not append' with no supersede path leaves reversed/refined facts stale
     # forever; a contradicting or extending fact must update the entry in place.
-    assert_file_contains "$COMMANDS_DIR/sweep.md" "contradicts or materially extends" \
+    assert_file_contains "$SKILLS_DIR/sweep/SKILL.md" "contradicts or materially extends" \
         "sweep.md must give a supersede/update-in-place path, not only skip-or-duplicate" || return 1
 }
 
 test_sweep_states_filename_convention() {
     # The <bucket>_<short_slug>.md convention was only implied by the glob; a first
     # entry in an empty bucket needs it stated explicitly.
-    assert_file_contains "$COMMANDS_DIR/sweep.md" "<bucket>_<short_slug>.md" \
+    assert_file_contains "$SKILLS_DIR/sweep/SKILL.md" "<bucket>_<short_slug>.md" \
         "sweep.md must state the memory-entry filename convention" || return 1
 }
 
 test_sweep_scopes_when_not_to_write() {
     # The exclusion section must be scoped to the strict buckets so it does not
     # suppress the looser-bar narrative appends step 4 invites.
-    assert_file_contains "$COMMANDS_DIR/sweep.md" "strict-bucket entry" \
+    assert_file_contains "$SKILLS_DIR/sweep/SKILL.md" "strict-bucket entry" \
         "sweep.md 'When NOT to write' must scope to the strict buckets, not the narrative" || return 1
 }
 
 test_sweep_states_memory_pointer_format() {
     # 'Add a one-line pointer' with no format leaves the model to invent the MEMORY.md
     # line shape; it must match the existing [title](file.md) format.
-    assert_file_contains "$COMMANDS_DIR/sweep.md" '\[title\](file.md)' \
+    assert_file_contains "$SKILLS_DIR/sweep/SKILL.md" '\[title\](file.md)' \
         "sweep.md must state the MEMORY.md pointer format" || return 1
 }
 
@@ -275,7 +364,7 @@ test_sweep_resolves_actor_before_narrative_append() {
     # ags -whoami resolution must be repeated at the narrative step, not left only in the
     # framing parenthetical, so a multi-actor session appends to the right file.
     local count
-    count=$(grep -c "ags -whoami" "$COMMANDS_DIR/sweep.md" || true)
+    count=$(grep -c "ags -whoami" "$SKILLS_DIR/sweep/SKILL.md" || true)
     if [ "$count" -lt 2 ]; then
         echo "  FAIL: sweep.md must repeat 'ags -whoami' in the narrative step (found $count)"
         return 1
@@ -408,7 +497,7 @@ echo ""
 # and still succeeds, since a wrap outside Claude Code has no band to hide.
 test_wrap_marks_the_wrapped_conversation() {
     local block dir
-    block=$(awk '/^## Pass 4/{p=1; next} /^## /{p=0} p && /^```/{f=!f; next} p && f' "$COMMANDS_DIR/wrap.md")
+    block=$(awk '/^## Pass 4/{p=1; next} /^## /{p=0} p && /^```/{f=!f; next} p && f' "$SKILLS_DIR/wrap/SKILL.md")
     [ -n "$block" ] || { echo "  FAIL: wrap.md has no Pass 4 command block"; return 1; }
     dir="$TEST_TMPDIR/wrapped"
     mkdir -p "$dir/.cs/local"
@@ -431,8 +520,14 @@ run_test test_sweep_owns_bucket_routing_table
 run_test test_sweep_routes_discovered_constraints
 run_test test_sweep_updates_memory_index
 run_test test_wrap_family_pinned_to_opus
-run_test test_wrap_references_deployed_commands
+run_test test_wrap_references_sibling_skills
 run_test test_sweep_runs_the_memory_index_guard
+run_test test_no_skill_names_a_claude_home_path
+run_test test_former_commands_are_skills
+run_test test_explicit_only_skills_ship_a_codex_policy
+run_test test_skills_check_adapter_capabilities_before_use
+run_test test_rotate_describes_the_default_countdown
+run_test test_rotate_names_the_codex_closing_line
 run_test test_wrap_does_not_duplicate_memory_bars
 run_test test_wrap_does_not_duplicate_summary_skeleton
 run_test test_scoring_threshold_owned_by_skill
@@ -482,9 +577,9 @@ run_test test_release_has_code_review_gate
 # files they point at are only read lazily, so a poisoned pointer reaches
 # context even when nothing opens the entry.
 test_sweep_requires_identity_facts_to_be_keyed() {
-    assert_file_contains "$COMMANDS_DIR/sweep.md" "keyed" \
+    assert_file_contains "$SKILLS_DIR/sweep/SKILL.md" "keyed" \
         "sweep.md must require identity facts to be keyed to an actor" || return 1
-    assert_file_contains "$COMMANDS_DIR/sweep.md" "pointers load at startup" \
+    assert_file_contains "$SKILLS_DIR/sweep/SKILL.md" "pointers load at startup" \
         "the rule must govern index pointer lines, not just entry bodies" || return 1
 }
 
@@ -508,18 +603,18 @@ test_release_gate_mandates_an_empirical_pass() {
 run_test test_release_gate_mandates_an_empirical_pass
 
 test_wrap_rotates_the_narrative_after_the_summary() {
-    assert_file_contains "$COMMANDS_DIR/wrap.md" "## Pass 3 — Narrative rotation" \
+    assert_file_contains "$SKILLS_DIR/wrap/SKILL.md" "## Pass 3 — Narrative rotation" \
         "wrap has a third pass" || return 1
-    assert_file_contains "$COMMANDS_DIR/wrap.md" 'ags -narrative rotate' \
+    assert_file_contains "$SKILLS_DIR/wrap/SKILL.md" 'ags -narrative rotate' \
         "the pass runs the ags helper rather than describing file surgery" || return 1
-    assert_file_contains "$COMMANDS_DIR/wrap.md" '3\. \*\*Narrative:\*\*' \
+    assert_file_contains "$SKILLS_DIR/wrap/SKILL.md" '3\. \*\*Narrative:\*\*' \
         "the report gains a third item" || return 1
 }
 
 test_summary_reads_live_narratives_not_archives() {
-    assert_file_not_contains "$COMMANDS_DIR/summary.md" "read all of them" \
+    assert_file_not_contains "$SKILLS_DIR/summary/SKILL.md" "read all of them" \
         "the read-all instruction is gone" || return 1
-    assert_file_contains "$COMMANDS_DIR/summary.md" "narrative-archive" \
+    assert_file_contains "$SKILLS_DIR/summary/SKILL.md" "narrative-archive" \
         "summary knows where older sections went" || return 1
 }
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ABOUTME: Installation script for agent-sessions (ags command, with cs compatibility)
-# ABOUTME: Installs binaries, hooks, commands, skills, and shell completions
+# ABOUTME: Installs binaries, hooks, skills, and shell completions
 # ABOUTME: build.sh splices lib/01-manifests.sh in at the marker to write install.sh.
 
 set -euo pipefail
@@ -122,7 +122,6 @@ if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/bin/ags" ]; then
     # Running from cloned repo
     AGS_SOURCE="$SCRIPT_DIR/bin/ags"
     HOOKS_SOURCE="$SCRIPT_DIR/hooks"
-    COMMANDS_SOURCE="$SCRIPT_DIR/commands"
     INSTALL_METHOD="local"
 else
     # Running from web (curl | bash)
@@ -348,6 +347,38 @@ fi
 # name this platform installs.
 rm -f "$INSTALL_DIR/ags-tui.exe" "$INSTALL_DIR/cs-tui.exe"
 
+# Deploy every shipped skill into one engine's skills directory: each
+# SKILL.md, then the support files listed in CS_SKILL_FILES. Claude and Codex
+# get identical copies.
+_deploy_skills() {
+    local dest="$1" skill skill_file
+    for skill in "${CS_SKILLS[@]}"; do
+        mkdir -p "$dest/$skill"
+        if [ "$INSTALL_METHOD" = "local" ]; then
+            cp "$SCRIPT_DIR/skills/$skill/SKILL.md" "$dest/$skill/"
+        elif command -v curl >/dev/null 2>&1; then
+            curl -fsSL "$REPO_URL/skills/$skill/SKILL.md" -o "$dest/$skill/SKILL.md" || error "Failed to download $skill skill"
+        elif command -v wget >/dev/null 2>&1; then
+            wget -q "$REPO_URL/skills/$skill/SKILL.md" -O "$dest/$skill/SKILL.md" || error "Failed to download $skill skill"
+        fi
+    done
+    for skill_file in "${CS_SKILL_FILES[@]}"; do
+        mkdir -p "$dest/$(dirname "$skill_file")"
+        if [ "$INSTALL_METHOD" = "local" ]; then
+            cp -p "$SCRIPT_DIR/skills/$skill_file" "$dest/$skill_file"
+            continue
+        elif command -v curl >/dev/null 2>&1; then
+            curl -fsSL "$REPO_URL/skills/$skill_file" -o "$dest/$skill_file" || error "Failed to download $skill_file"
+        elif command -v wget >/dev/null 2>&1; then
+            wget -q "$REPO_URL/skills/$skill_file" -O "$dest/$skill_file" || error "Failed to download $skill_file"
+        fi
+        # A download carries no mode; only the helper scripts run.
+        case "$skill_file" in
+            */scripts/*) chmod +x "$dest/$skill_file" ;;
+        esac
+    done
+}
+
 if _install_has_engine claude; then
 # Install hooks
 installed "${#CS_HOOKS[@]} hooks" "$HOOKS_DIR/"
@@ -395,29 +426,18 @@ fi
 chmod +x "$HOOKS_DIR"/*.sh
 
 
-# Install commands
-installed "commands" "$COMMANDS_DIR/"
-mkdir -p "$COMMANDS_DIR"
-
-if [ "$INSTALL_METHOD" = "local" ]; then
-    for cmd in "${CS_COMMANDS[@]}"; do
-        cp "$COMMANDS_SOURCE/$cmd" "$COMMANDS_DIR/"
-    done
-else
-    if command -v curl >/dev/null 2>&1; then
-        for cmd in "${CS_COMMANDS[@]}"; do
-            curl -fsSL "$REPO_URL/commands/$cmd" -o "$COMMANDS_DIR/$cmd" || error "Failed to download $cmd"
-        done
-    elif command -v wget >/dev/null 2>&1; then
-        for cmd in "${CS_COMMANDS[@]}"; do
-            wget -q "$REPO_URL/commands/$cmd" -O "$COMMANDS_DIR/$cmd" || error "Failed to download $cmd"
-        done
+# cs ships no slash commands now: each became a skill of the same name. A
+# command file left from an earlier install would answer the same /name as
+# its skill, so drop the ones cs itself deployed and nothing else.
+for retired in "${RETIRED_COMMANDS[@]}"; do
+    if [ -f "$COMMANDS_DIR/$retired" ]; then
+        rm "$COMMANDS_DIR/$retired"
+        info "  Removed retired command: $COMMANDS_DIR/$retired (now a skill)"
     fi
-fi
+done
 
 # Install skills
 SKILLS_DIR="$HOME/.claude/skills"
-SKILLS_SOURCE="$SCRIPT_DIR/skills"
 MODS_SOURCE="$SCRIPT_DIR/mods"
 installed "skills" "$SKILLS_DIR/"
 
@@ -431,9 +451,7 @@ for retired in "${RETIRED_SKILLS[@]}"; do
     fi
 done
 
-for skill in "${CS_SKILLS[@]}"; do
-    mkdir -p "$SKILLS_DIR/$skill"
-done
+_deploy_skills "$SKILLS_DIR"
 
 # A symlink anywhere on a mod file's deploy path (an earlier opt-in had the
 # person link the whole directory at the checkout) is replaced by a real
@@ -450,51 +468,41 @@ _mod_path_real() {
     done
 }
 
-if [ "$INSTALL_METHOD" = "local" ]; then
-    for skill in "${CS_SKILLS[@]}"; do
-        cp "$SKILLS_SOURCE/$skill/SKILL.md" "$SKILLS_DIR/$skill/"
-    done
-    for skill_file in "${CS_SKILL_FILES[@]}"; do
-        mkdir -p "$SKILLS_DIR/$(dirname "$skill_file")"
-        cp -p "$SKILLS_SOURCE/$skill_file" "$SKILLS_DIR/$skill_file"
-    done
-    for mod_file in "${CS_MOD_FILES[@]}"; do
-        _mod_path_real "$mod_file"
-        mkdir -p "$SKILLS_DIR/$(dirname "$mod_file")"
+for mod_file in "${CS_MOD_FILES[@]}"; do
+    _mod_path_real "$mod_file"
+    mkdir -p "$SKILLS_DIR/$(dirname "$mod_file")"
+    if [ "$INSTALL_METHOD" = "local" ]; then
         cp -p "$MODS_SOURCE/$mod_file" "$SKILLS_DIR/$mod_file"
-    done
-else
-    if command -v curl >/dev/null 2>&1; then
-        for skill in "${CS_SKILLS[@]}"; do
-            curl -fsSL "$REPO_URL/skills/$skill/SKILL.md" -o "$SKILLS_DIR/$skill/SKILL.md" || error "Failed to download $skill skill"
-        done
-        for skill_file in "${CS_SKILL_FILES[@]}"; do
-            mkdir -p "$SKILLS_DIR/$(dirname "$skill_file")"
-            curl -fsSL "$REPO_URL/skills/$skill_file" -o "$SKILLS_DIR/$skill_file" || error "Failed to download $skill_file"
-            chmod +x "$SKILLS_DIR/$skill_file"
-        done
-        for mod_file in "${CS_MOD_FILES[@]}"; do
-            _mod_path_real "$mod_file"
-            mkdir -p "$SKILLS_DIR/$(dirname "$mod_file")"
-            curl -fsSL "$REPO_URL/mods/$mod_file" -o "$SKILLS_DIR/$mod_file" || error "Failed to download $mod_file"
-        done
+    elif command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$REPO_URL/mods/$mod_file" -o "$SKILLS_DIR/$mod_file" || error "Failed to download $mod_file"
     elif command -v wget >/dev/null 2>&1; then
-        for skill in "${CS_SKILLS[@]}"; do
-            wget -q "$REPO_URL/skills/$skill/SKILL.md" -O "$SKILLS_DIR/$skill/SKILL.md" || error "Failed to download $skill skill"
-        done
-        for skill_file in "${CS_SKILL_FILES[@]}"; do
-            mkdir -p "$SKILLS_DIR/$(dirname "$skill_file")"
-            wget -q "$REPO_URL/skills/$skill_file" -O "$SKILLS_DIR/$skill_file" || error "Failed to download $skill_file"
-            chmod +x "$SKILLS_DIR/$skill_file"
-        done
-        for mod_file in "${CS_MOD_FILES[@]}"; do
-            _mod_path_real "$mod_file"
-            mkdir -p "$SKILLS_DIR/$(dirname "$mod_file")"
-            wget -q "$REPO_URL/mods/$mod_file" -O "$SKILLS_DIR/$mod_file" || error "Failed to download $mod_file"
-        done
+        wget -q "$REPO_URL/mods/$mod_file" -O "$SKILLS_DIR/$mod_file" || error "Failed to download $mod_file"
     fi
+done
+
 fi
 
+if _install_has_engine codex; then
+# Codex reads the same skills from its own home, so each engine registers one
+# payload natively. CODEX_HOME is where Codex itself looks (setup.sh points it
+# at the profile). Mods stay with Claude: they are Claude Code function hooks.
+CODEX_DIR="${CODEX_HOME:-$HOME/.codex}"
+CODEX_SKILLS_DIR="$CODEX_DIR/skills"
+installed "Codex skills" "$CODEX_SKILLS_DIR/"
+# Codex keeps its login in this directory; a first install creates it private.
+[ -d "$CODEX_DIR" ] || mkdir -m 700 -p "$CODEX_DIR"
+_deploy_skills "$CODEX_SKILLS_DIR"
+
+# One SessionStart hook: after /clear it rebinds the session to the new
+# thread and loads an armed rotation handoff. Codex skips a hook nobody has
+# trusted, so the registration writes its trust hash too.
+if command -v jq >/dev/null 2>&1; then
+    installed "Codex hook" "$CODEX_DIR/hooks.json"
+    _codex_hooks_register "$CODEX_DIR" "$(_codex_hook_command "$INSTALL_DIR/ags")" \
+        || warn "Could not register the Codex hook in $CODEX_DIR/hooks.json; rotation after /clear needs it"
+else
+    warn "jq not found - the Codex hook (rotation after /clear) was not registered."
+fi
 fi
 
 # Install shell completions

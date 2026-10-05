@@ -12,7 +12,7 @@ stage_checkout() {
     PROFILE="$(cd -P "$HOME" && pwd)/.local/share/agent-sessions/home"
     mkdir -p "$CHECKOUT/bin" "$CHECKOUT/tui" "$TEST_TMPDIR/tools"
     cp "$REPO/setup.sh" "$REPO/build.sh" "$REPO/install.sh.in" "$CHECKOUT/"
-    for payload in lib hooks commands skills mods completions scripts; do
+    for payload in lib hooks skills mods completions scripts; do
         cp -R "$REPO/$payload" "$CHECKOUT/"
     done
     for payload in ags-secrets ags-codex-thread ags-statusline ags-subagent-statusline; do
@@ -47,7 +47,8 @@ run_setup() {
 
 test_setup_builds_and_installs_both_engines_from_any_directory() {
     stage_checkout
-    run_setup || return 1
+    # The caller's own Codex home must not receive the profile's skills.
+    CODEX_HOME="$HOME/user-codex" run_setup || return 1
     assert_eq 'claude,codex' "$(cat "$PROFILE/.local/bin/.cs-install-engines")" || return 1
     assert_file_contains "$TEST_TMPDIR/cargo.log" 'build --release --locked --manifest-path' || return 1
     local tool
@@ -62,6 +63,10 @@ test_setup_builds_and_installs_both_engines_from_any_directory() {
     # The launcher points CODEX_HOME here, and Codex refuses one that does not exist.
     [ -d "$PROFILE/.codex" ] || { echo "  FAIL: no profile CODEX_HOME"; return 1; }
     assert_eq 700 "$(stat -f '%Lp' "$PROFILE/.codex" 2>/dev/null || stat -c '%a' "$PROFILE/.codex")" || return 1
+    assert_file_exists "$PROFILE/.codex/skills/finish/agents/openai.yaml" || return 1
+    assert_file_exists "$PROFILE/.claude/skills/finish/agents/openai.yaml" || return 1
+    assert_not_exists "$HOME/user-codex" "setup deploys into the profile's CODEX_HOME, not the caller's" || return 1
+    assert_not_exists "$HOME/.codex" || return 1
     assert_not_exists "$HOME/.claude" || return 1
     "$HOME/.local/bin/ags" -version >/dev/null || return 1
     # Test the saved path as a new shell would read it.

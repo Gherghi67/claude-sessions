@@ -85,6 +85,11 @@ main() {
             cmd_complete "${2:-}"
             return 0
             ;;
+        -codex-hook) # hidden: the command Codex runs from $CODEX_HOME/hooks.json, not typed by a user
+            shift
+            cmd_codex_hook "$@"
+            return $?
+            ;;
         -whoami)
             cmd_whoami
             return 0
@@ -92,6 +97,11 @@ main() {
         -who)
             cmd_who
             return 0
+            ;;
+        -engine)
+            shift
+            cmd_engine "$@"
+            return $?
             ;;
         -secrets)
             shift

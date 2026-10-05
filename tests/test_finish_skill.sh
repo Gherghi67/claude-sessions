@@ -53,7 +53,7 @@ test_finish_skill_teaches_the_ritual() {
     assert_file_contains "$SKILL" "temporary detached worktree" "gates run in the temp" || return 1
     assert_file_contains "$SKILL" "pr_state" "reads the PR state keys" || return 1
     assert_file_contains "$SKILL" "unknown" "the unknown PR state exists" || return 1
-    assert_file_contains "$SKILL" "Same AskUserQuestion as OPEN" "OPEN/unknown need explicit confirmation" || return 1
+    assert_file_contains "$SKILL" "Same question as OPEN" "OPEN/unknown need explicit confirmation" || return 1
     assert_file_contains "$SKILL" "ags <base> -retire-feature <task> <sha>" "retires only through the hidden entry" || return 1
     assert_file_contains "$SKILL" "retire: ready" "reads the report's retire key" || return 1
     assert_file_contains "$SKILL" "retire: not-landed" "the squash case exists" || return 1

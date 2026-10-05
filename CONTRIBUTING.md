@@ -20,8 +20,8 @@ then rebuild and commit the regenerated `bin/cs`:
 CI rebuilds and fails if the committed `bin/cs` is out of sync with `lib/`. Each
 fragment has a numeric prefix (`00`, `05`, …, `99`) that fixes its position; the
 `bin/cs` blob stays byte-identical whether you edit a fragment or the assembled
-file, so a build is transparent. Hooks live in `hooks/`, commands in `commands/`,
-and tests in `tests/`.
+file, so a build is transparent. Hooks live in `hooks/`, skills (the former
+slash commands included) in `skills/`, and tests in `tests/`.
 
 The upstream URL remains unchanged during the rebrand. `ags` and `ags-tui` are
 the primary user-facing executable names; `cs` and old companion names remain
@@ -132,17 +132,19 @@ masked; `run_all.sh` reports every failing suite.
 
 5. **Write tests** in `tests/` — create a test file or add to an existing one. Use `test_lib.sh` for setup/teardown.
 
-## Adding a Command
-
-1. **Create `commands/name.md`** with YAML frontmatter specifying `allowed-tools` (hyphen — Claude Code ignores the `allowed_tools` underscore form).
-
-2. **Add the filename to the `CS_COMMANDS` array** in `lib/01-manifests.sh`, then run `./build.sh`, which folds it into `bin/cs` and splices it into `install.sh`. Install (download + copy), `run_uninstall()`, and doctor all loop over the array, so no per-command variable or cleanup edit is needed. `tests/test_install.sh` fails if the array disagrees with the actual `commands/` files.
-
 ## Adding a Skill
 
-1. **Create `skills/name/SKILL.md`** with the skill's frontmatter (`name`, `description`) and instructions. Copy an existing skill (e.g., `skills/store-secret/`) as a template.
+cs ships no slash commands: a skill answers `/name` in Claude Code and is the
+one format Codex reads too. The four former commands (`checkpoint`, `summary`,
+`sweep`, `wrap`) are skills, and `RETIRED_COMMANDS` in `lib/01-manifests.sh`
+lists the command files the installer and uninstaller delete.
 
-2. **Add the directory name to the `CS_SKILLS` array** in `lib/01-manifests.sh`, then run `./build.sh` — install, `run_uninstall()`, and doctor all loop over it. `tests/test_install.sh` fails if the array disagrees with the `skills/` directory contents.
+1. **Create `skills/name/SKILL.md`** with the skill's frontmatter (`name`, `description`, and `allowed-tools` with the hyphen if it needs one — Claude Code ignores the `allowed_tools` underscore form) and instructions. Copy an existing skill (e.g., `skills/store-secret/`) as a template.
+   - Reach a helper the skill ships through its own directory (`scripts/x.sh` relative to the folder the SKILL.md was loaded from) or an `ags` verb, never a `~/.claude/...` path: under the ags profile that path is the stable cs install, and under Codex it is no install at all. List each helper in `CS_SKILL_FILES`. `tests/test_commands.sh` fails on a `~/.claude/` path in any SKILL.md.
+   - Before relying on an adapter feature (rotation, a spawned session's brief, mail delivery, the memory index at session start), check `ags -engine supports <capability>` and refuse cleanly when it fails.
+   - A skill only the user may start sets `disable-model-invocation: true`. Codex accepts that key and ignores it, so ship `agents/openai.yaml` beside the SKILL.md with `allow_implicit_invocation: false` under `policy:`, and list it in `CS_SKILL_FILES` (see `skills/finish/`). `tests/test_commands.sh` fails when the pair is incomplete.
+
+2. **Add the directory name to the `CS_SKILLS` array** in `lib/01-manifests.sh`, then run `./build.sh` — install, `run_uninstall()`, and doctor all loop over it. The installer copies the same files into each selected engine's skills directory: `~/.claude/skills/` for Claude, `$CODEX_HOME/skills/` (default `~/.codex/skills/`) for Codex. `tests/test_install.sh` fails if the array disagrees with the `skills/` directory contents.
 
 ## Code Style
 

@@ -81,7 +81,7 @@ test_hooks_doc_states_both_resolution_arms() {
 # live narratives" false too (one teammate file measured 801 KB): a resume reads
 # its own narrative in full and a teammate's only from the line the digest
 # names. No user-facing surface may say otherwise: the lib templates, the
-# hooks, the commands, README and docs.
+# hooks, the skills, README and docs.
 # Core/Claude migration fragments are exempt: migrate_narrative_resume_wording's grep/sed/awk
 # patterns must name the dead sentence verbatim to find and rewrite it in files
 # cs already wrote. That is a matcher, not a surface telling anyone to read
@@ -89,7 +89,7 @@ test_hooks_doc_states_both_resolution_arms() {
 test_no_surface_tells_a_resume_to_read_every_narrative() {
     local hits
     hits=$(grep -rniE "read all narrative|read all of them|reads all of them|everyone reads all|read the live narrative|reads the live files|read the live files|read all the session documentation" \
-        "$REPO/lib" "$REPO/hooks" "$REPO/commands" "$REPO/README.md" "$REPO/docs"/*.md 2>/dev/null \
+        "$REPO/lib" "$REPO/hooks" "$REPO/skills" "$REPO/README.md" "$REPO/docs"/*.md 2>/dev/null \
         | grep -vE '/lib/(45-migrate|46-claude-workspace)\.sh:' || true)
     if [ -n "$hits" ]; then
         echo "  FAIL: these surfaces still tell a resume to read every narrative:"

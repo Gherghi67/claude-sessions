@@ -103,7 +103,7 @@ while IFS= read -r f; do
            | . as $src
            | ["typed", "queued", "suggestion_accepted"] | index($src) | not) as $src_machine
         # ags hands claude a kick as its launch prompt, which Claude Code stamps
-        # "typed". Patterns mirror handoff_arg (lib/40-state.sh) and spawn_kick
+        # "typed". Patterns mirror handoff_arg (lib/42-claude-state.sh) and spawn_kick
         # (lib/75-launch.sh); test_cs_launch_kicks_dropped pins both wordings.
         | ($src_machine
            or ($t | test("^Continue from the pending rotation handoff: read \\.cs/handoffs/"))

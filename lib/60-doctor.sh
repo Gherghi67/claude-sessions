@@ -123,13 +123,12 @@ _doctor_check_hook_files_executable() {
 }
 
 # Compares deployable artifacts in the current directory's cs source checkout
-# (hooks/*.sh, commands/*.md, skills/*/SKILL.md) against their deployed
-# copies. A source edit only takes effect once install.sh deploys it, so
+# (hooks/*.sh, skills/*/SKILL.md and their support files, mods) against their
+# deployed copies, Codex's copies of the skills included. A source edit only takes effect once install.sh deploys it, so
 # silent drift between the two means the running install doesn't match what
 # the source says it does. Silent outside a checkout.
 _doctor_check_hook_drift() {
     local hooks_dir="$HOOKS_DEPLOY_DIR"
-    local commands_dir="${CS_COMMANDS_DIR:-$HOME/.claude/commands}"
     local skills_dir="${CS_SKILLS_DIR:-$HOME/.claude/skills}"
     [ -d "hooks" ] && [ -f "install.sh" ] && [ -f "bin/ags" ] || return 0
 
@@ -166,7 +165,7 @@ _doctor_check_hook_drift() {
             if [[ "$src" == */SKILL.md ]]; then
                 name=$(basename "$(dirname "$src")")
                 deployed="$deploy_root/$name/SKILL.md"
-            elif [[ "$src" == skills/*/scripts/* ]]; then
+            elif [[ "$src" == skills/* ]]; then
                 name="${src#skills/}"
                 deployed="$deploy_root/$name"
             elif [[ "$src" == mods/* ]]; then
@@ -193,12 +192,20 @@ _doctor_check_hook_drift() {
     }
 
     _drift_scan "Hook" "$hooks_dir" hooks/*.sh hooks/*.png
-    _drift_scan "Command" "$commands_dir" commands/*.md
-    _drift_scan "Skill" "$skills_dir" skills/*/SKILL.md skills/*/scripts/*.sh
+    local skill_sources=(skills/*/SKILL.md skills/*/scripts/*.sh skills/*/agents/*.yaml)
+    _drift_scan "Skill" "$skills_dir" "${skill_sources[@]}"
     _drift_scan "Mod" "$skills_dir" mods/*/.claude-plugin/plugin.json mods/*/hooks/*
 
+    # Codex gets the same skills in its own home. A machine where Codex never
+    # ran has no such home, and nothing there to compare.
+    local engines codex_dir="${CODEX_HOME:-$HOME/.codex}"
+    engines=$(cat "${CS_INSTALL_DIR:-$HOME/.local/bin}/.cs-install-engines" 2>/dev/null) || engines=claude,codex
+    if [[ ",$engines," == *,codex,* ]] && [ -d "$codex_dir" ]; then
+        _drift_scan "Codex skill" "$codex_dir/skills" "${skill_sources[@]}"
+    fi
+
     if [ "$clean" = "1" ]; then
-        _doctor_ok "Deploy drift: hooks, commands, skills, and mods match checkout source"
+        _doctor_ok "Deploy drift: hooks, skills, and mods match checkout source"
     fi
 }
 

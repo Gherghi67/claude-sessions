@@ -289,7 +289,7 @@ A run that overruns the hook's timeout leaves a trail that stops mid-run, which 
 
 ## memory-index-guard.sh (not a hook — run by `/sweep`)
 
-Ships in `hooks/` and deploys alongside the hooks as a library, never registered against an event. `/sweep` runs it from the session root to check its own rewrites of `.cs/memory/MEMORY.md`:
+Ships inside the sweep skill (`skills/sweep/scripts/`) and deploys with it, so it reaches every engine the skill does; earlier versions deployed it with the hooks, and the installer removes that copy (`RETIRED_HOOKS`). It is never registered against an event. `/sweep` runs it from the session root to check its own rewrites of `.cs/memory/MEMORY.md`:
 
 - `snapshot` copies `MEMORY.md` to `.cs/local/memory-index.snapshot`, before the sweep edits anything. Claude Code writes `MEMORY.md` with the first memory entry, so in a session that has none yet it records an empty snapshot; outside a session root (no `.cs/memory`) it exits 2.
 - `check` exits 1 and names each problem when a pointer in the snapshot is gone, when an entry in the four memory buckets (`user_`, `feedback_`, `project_`, `reference_`) has no pointer, or when the file is over the 24400-byte budget. A pointer is a line opening with `- [title](file)`; a link later on that line is supporting text. It always prints the size against the budget. With no snapshot, an unreadable one, or no `MEMORY.md` it exits 2, so a skipped snapshot never passes as a clean rewrite. The bucket check covers entries written after the snapshot and a second sweep that snapshotted an index the first had already damaged; the snapshot itself is one per session, so two concurrent sweeps share it.
@@ -457,7 +457,7 @@ a Claude Code that no longer loads mods behind the flag). Doctor reads the
 heartbeat rather than the directory because a machine's policy can load a mod
 and never run it. Doctor says nothing when the mod is not installed, or outside
 a session. The deploy-drift check compares the deployed files against `mods/`
-in the checkout the way it does hooks, commands and skills.
+in the checkout the way it does hooks and skills.
 
 Two facts about the plugin runtime shape the code. A module reads the
 environment through `$.env.get` with a literal name, which `claude plugin

@@ -273,20 +273,6 @@ test_doctor_drift_skipped_outside_checkout() {
     fi
 }
 
-test_doctor_warns_on_command_drift() {
-    local checkout="$TEST_TMPDIR/checkout" deployed_cmds="$TEST_TMPDIR/commands"
-    make_fake_checkout "$checkout" "$TEST_TMPDIR/deployed-hooks"
-    mkdir -p "$checkout/commands" "$deployed_cmds" "$TEST_TMPDIR/deployed-hooks"
-    echo 'source version' > "$checkout/commands/summary.md"
-    echo 'deployed version' > "$deployed_cmds/summary.md"
-
-    local output
-    output=$(cd "$checkout" && CS_HOOKS_DIR="$TEST_TMPDIR/deployed-hooks" \
-        CS_COMMANDS_DIR="$deployed_cmds" "$CS_BIN" -doctor 2>&1) || true
-    assert_output_contains "$output" "Command drift" \
-        "doctor should warn when a deployed command differs from checkout source" || return 1
-}
-
 test_doctor_warns_on_skill_script_drift() {
     local checkout="$TEST_TMPDIR/checkout" deployed_skills="$TEST_TMPDIR/skills"
     make_fake_checkout "$checkout" "$TEST_TMPDIR/deployed-hooks"
@@ -316,6 +302,41 @@ test_doctor_warns_on_skill_drift() {
         CS_SKILLS_DIR="$deployed_skills" "$CS_BIN" -doctor 2>&1) || true
     assert_output_contains "$output" "Skill drift" \
         "doctor should warn when a deployed skill differs from checkout source" || return 1
+}
+
+# Codex gets the same skill files in its own home, agents/openai.yaml
+# included, so an edit the installer has not copied there is drift too.
+test_doctor_warns_on_codex_skill_drift() {
+    local checkout="$TEST_TMPDIR/codexco" codex_home="$TEST_TMPDIR/codex-home" claude_skills="$TEST_TMPDIR/claude-skills"
+    make_fake_checkout "$checkout" "$TEST_TMPDIR/deployed-hooks"
+    mkdir -p "$checkout/skills/finish/agents" "$codex_home/skills/finish/agents" "$claude_skills/finish/agents"
+    echo 'skill' > "$checkout/skills/finish/SKILL.md"
+    echo 'policy: source' > "$checkout/skills/finish/agents/openai.yaml"
+    cp "$checkout/skills/finish/SKILL.md" "$codex_home/skills/finish/SKILL.md"
+    echo 'policy: deployed' > "$codex_home/skills/finish/agents/openai.yaml"
+    cp -R "$checkout/skills/finish/." "$claude_skills/finish/"
+
+    local output
+    output=$(cd "$checkout" && CS_HOOKS_DIR="$TEST_TMPDIR/deployed-hooks" CS_SKILLS_DIR="$claude_skills" \
+        CODEX_HOME="$codex_home" "$CS_BIN" -doctor 2>&1) || true
+    assert_output_contains "$output" "Codex skill drift: deployed copy differs from source: finish/agents/openai.yaml" \
+        "an undeployed edit to Codex's copy is drift" || return 1
+    assert_output_not_contains "$output" "Skill drift: deployed copy differs" \
+        "Claude's copy is in sync" || return 1
+
+    cp "$checkout/skills/finish/agents/openai.yaml" "$codex_home/skills/finish/agents/openai.yaml"
+    output=$(cd "$checkout" && CS_HOOKS_DIR="$TEST_TMPDIR/deployed-hooks" CS_SKILLS_DIR="$claude_skills" \
+        CODEX_HOME="$codex_home" "$CS_BIN" -doctor 2>&1) || true
+    assert_output_contains "$output" "Deploy drift" "the scan ran to its verdict" || return 1
+    assert_output_not_contains "$output" "Codex skill drift" "in sync: silent" || return 1
+
+    # A Codex-free install has no Codex copies to compare.
+    mkdir -p "$TEST_TMPDIR/bin"
+    printf 'claude\n' > "$TEST_TMPDIR/bin/.cs-install-engines"
+    rm "$codex_home/skills/finish/SKILL.md"
+    output=$(cd "$checkout" && CS_HOOKS_DIR="$TEST_TMPDIR/deployed-hooks" CS_SKILLS_DIR="$claude_skills" \
+        CODEX_HOME="$codex_home" CS_INSTALL_DIR="$TEST_TMPDIR/bin" "$CS_BIN" -doctor 2>&1) || true
+    assert_output_not_contains "$output" "Codex skill drift" "Codex is not installed here" || return 1
 }
 
 test_doctor_warns_on_version_mismatch() {
@@ -902,9 +923,9 @@ run_test test_doctor_warns_on_undeployed_hook
 run_test test_doctor_drift_silent_when_in_sync
 run_test test_doctor_warns_on_mod_drift
 run_test test_doctor_drift_skipped_outside_checkout
-run_test test_doctor_warns_on_command_drift
 run_test test_doctor_warns_on_skill_script_drift
 run_test test_doctor_warns_on_skill_drift
+run_test test_doctor_warns_on_codex_skill_drift
 run_test test_doctor_warns_on_version_mismatch
 run_test test_doctor_version_silent_without_stamp
 run_test test_doctor_runs_without_session

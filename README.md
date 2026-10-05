@@ -106,11 +106,12 @@ No git repo required. No project structure needed. Just a name for what you're w
 | Workspaces, adoption, worktrees, notes, memory, checkpoints, tags, archive, search | Yes | Uses core | Uses core |
 | Workspace preparation | Dispatches selected adapter | Native instructions and memory redirect | Startup context; preserves `AGENTS.md` and Claude configuration |
 | Exact native conversation binding | Separate binding per engine | Claude UUID | Codex thread ID |
-| Automatic recovery, rotation, queue/mail delivery, usage, native status UI | Shared storage; transport depends on adapter | Available | Unavailable |
+| Conversation rotation (`/rotate`, then `/clear` or `r` at launch) | Handoff store and marker | SessionStart hook, auto-start, forced rotation | SessionStart hook; `/clear` then a message |
+| Automatic recovery, queue/mail delivery, usage, native status UI | Shared storage; transport depends on adapter | Available | Unavailable |
 
 The feature descriptions above include Claude's native integrations. Codex
-currently supplies launch, exact resume, and startup context. Queue and mailbox
-files remain usable manually; automatic delivery is Claude-only.
+currently supplies launch, exact resume, startup context, and rotation. Queue
+and mailbox files remain usable manually; automatic delivery is Claude-only.
 
 ## Requirements
 
@@ -158,7 +159,9 @@ Within the experimental profile, the installer:
 
 - Adds `ags`, its companion commands, and the optional `ags-tui` picker to `~/.local/bin/`
 - Installs the agent-sessions [hooks](docs/hooks.md) to `~/.claude/hooks/cs/` for session tracking (including the `scope-prompt` auto-grounding hook on UserPromptSubmit)
-- Adds `/summary`, `/checkpoint`, `/sweep`, and `/wrap` commands, the `store-secret`, `prose-hygiene`, `rotate`, `finish`, `feature`, and `write-as-me` skills, and the `cs` and `cs-update` mods to `~/.claude/`
+- Adds the `summary`, `checkpoint`, `sweep`, `wrap`, `store-secret`, `prose-hygiene`, `rotate`, `finish`, `feature`, and `write-as-me` skills (each answers `/<name>`), and the `cs` and `cs-update` mods to `~/.claude/`; slash-command files an earlier install left under `~/.claude/commands/` for the first four are removed
+- Adds the same skills to Codex, under the profile's `.codex/skills/` (Codex's `CODEX_HOME`); `finish` stays out of Codex's automatic skill choice and runs only when asked
+- Registers one Codex SessionStart hook in the profile's `.codex/hooks.json` and trusts it in `.codex/config.toml`, so a `/clear` in Codex rebinds the session and picks up an armed rotation
 - Installs shell completions for bash and zsh
 - Configures hook entries in `~/.claude/settings.json`
 
@@ -547,6 +550,8 @@ network or cross-machine presence. A session that never sets a status shows its
 README objective instead.
 
 ## Slash Commands
+
+`/wrap`, `/sweep`, `/summary` and `/checkpoint` are skills, so Claude Code runs them by name and can start them itself (the wrap-up prompt does).
 
 - `/wrap` — The canonical end-of-session command: runs the `/sweep` memory pass, then the `/summary` narrative, then `ags -narrative rotate`
 - `/sweep` — Distill the session into durable auto-memory entries (strict bar) and sweep findings into the narrative; checks its `MEMORY.md` rewrites for removed links and the byte budget
