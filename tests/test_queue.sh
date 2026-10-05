@@ -132,6 +132,23 @@ test_queue_defer_writes_declined_epoch() {
     assert_file_exists "$CLAUDE_SESSION_META_DIR/local/queue.declined" "defer stamps declined" || return 1
 }
 
+# A leftover or foreign file at the fixed name <file>.tmp must not stand between
+# cs and the file it is writing: every write goes through a uniquely named temp
+# file. A directory at the fixed name fails any writer that still uses it.
+test_queue_start_ignores_a_stale_state_tmp() {
+    mkdir "$CLAUDE_SESSION_META_DIR/local/queue.state.tmp"
+    "$CS_BIN" -queue start >/dev/null 2>&1 || true
+    assert_eq "armed" "$(cat "$CLAUDE_SESSION_META_DIR/local/queue.state" 2>/dev/null)" \
+        "start arms past a stale queue.state.tmp" || return 1
+}
+
+test_queue_defer_ignores_a_stale_declined_tmp() {
+    mkdir "$CLAUDE_SESSION_META_DIR/local/queue.declined.tmp"
+    "$CS_BIN" -queue defer >/dev/null 2>&1 || true
+    assert_file_exists "$CLAUDE_SESSION_META_DIR/local/queue.declined" \
+        "defer stamps declined past a stale queue.declined.tmp" || return 1
+}
+
 test_queue_add_clears_declined() {
     "$CS_BIN" -queue defer >/dev/null 2>&1
     "$CS_BIN" -queue add "new" >/dev/null 2>&1
@@ -329,6 +346,8 @@ run_test test_queue_rm_rejects_an_index_past_the_end
 run_test test_queue_clear_empties_and_resets_state
 run_test test_queue_start_sets_armed
 run_test test_queue_defer_writes_declined_epoch
+run_test test_queue_start_ignores_a_stale_state_tmp
+run_test test_queue_defer_ignores_a_stale_declined_tmp
 run_test test_queue_add_clears_declined
 run_test test_queue_add_rejects_a_multiline_task
 run_test test_queue_requires_session
@@ -443,6 +462,29 @@ test_drain_disarms_when_the_pop_fails() {
     assert_output_not_contains "$out" "task two" "no task injected after a failed pop" || return 1
 }
 
+# The drain's own state writes hold the same promise as cs -queue's: a stale
+# queue.state.tmp does not stop armed -> draining -> idle, nor the disarm after
+# a failed pop.
+test_drain_advances_past_a_stale_state_tmp() {
+    qseed "only task"
+    printf 'armed\n' > "$(QDIR)/queue.state"
+    mkdir "$(QDIR)/queue.state.tmp"
+    drain >/dev/null || true
+    assert_eq "draining" "$(cat "$(QDIR)/queue.state" | tr -d '[:space:]')" "armed -> draining" || return 1
+    drain >/dev/null || true
+    assert_eq "idle" "$(cat "$(QDIR)/queue.state" | tr -d '[:space:]')" "an emptied queue returns to idle" || return 1
+}
+
+test_drain_disarms_after_a_failed_pop_past_a_stale_state_tmp() {
+    qseed "task one" "task two"
+    printf 'draining\n' > "$(QDIR)/queue.state"
+    mkdir "$(QDIR)/queue.state.tmp"
+    _deny_writes "$(QDIR)/queue" || return 77
+    drain >/dev/null || true
+    _allow_writes "$(QDIR)/queue"
+    assert_eq "idle" "$(cat "$(QDIR)/queue.state" | tr -d '[:space:]')" "failed pop disarms the drain" || return 1
+}
+
 test_drain_empties_and_returns_idle() {
     qseed "last task"
     printf 'draining\n' > "$(QDIR)/queue.state"
@@ -546,6 +588,8 @@ run_test test_drain_ignores_a_teammate_stop
 run_test test_drain_gate_ignores_a_teammate_stop
 run_test test_drain_disarms_when_the_pop_fails
 run_test test_drain_empties_and_returns_idle
+run_test test_drain_advances_past_a_stale_state_tmp
+run_test test_drain_disarms_after_a_failed_pop_past_a_stale_state_tmp
 run_test test_drain_declined_within_cooldown_falls_through
 run_test test_drain_ignores_subagents
 run_test test_drain_gate_mentions_high_context
