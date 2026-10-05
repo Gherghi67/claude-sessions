@@ -513,6 +513,22 @@ test_skips_a_worktree_only_a_parent_conversation_entered() {
     [ ! -e "$wt/.cs" ] || { echo "  FAIL: the worktree was given session records"; return 1; }
 }
 
+# One worktree's path can be the start of another's (`wt` and `wt2`). The
+# conversation belongs to the worktree whose whole path it names.
+test_a_worktree_does_not_claim_a_longer_named_siblings_conversation() {
+    local repo="$TEST_TMPDIR/repo"
+    _make_repo "$repo" wt wt2
+    _seed_relocated_conversation "$repo" "$repo/.claude/worktrees/wt2" "$UUID_A" "Work that happened in the second worktree"
+
+    local output
+    output=$(cd "$repo" && "$CS_BIN" -adopt --worktrees 2>&1) || { echo "  FAIL: adopt --worktrees should succeed: $output"; return 1; }
+
+    assert_eq "$UUID_A" "$(awk '/^claude_session_id:/ { print $2; exit }' "$repo/.claude/worktrees/wt2/.cs/local/state")" \
+        "wt2 binds its own conversation" || return 1
+    assert_output_contains "$output" "skip wt: no conversation" "wt has none and is skipped" || return 1
+    [ ! -e "$CS_SESSIONS_ROOT/repo.wt" ] || { echo "  FAIL: wt was adopted with its sibling's conversation"; return 1; }
+}
+
 run_test test_refuses_outside_a_git_repo
 run_test test_refuses_a_repo_without_claude_worktrees
 run_test test_adopts_a_worktree_with_a_conversation
@@ -520,6 +536,7 @@ run_test test_adopts_a_worktree_whose_transcript_moved_to_the_parent
 run_test test_adopts_a_relocated_conversation_when_the_repo_path_needs_json_escaping
 run_test test_binds_the_worktrees_own_conversation_over_a_parent_one_that_entered_it
 run_test test_skips_a_worktree_only_a_parent_conversation_entered
+run_test test_a_worktree_does_not_claim_a_longer_named_siblings_conversation
 run_test test_skips_a_worktree_without_a_conversation
 run_test test_binds_the_newest_of_two_conversations
 run_test test_rerun_adopts_nothing_twice_and_keeps_the_exclude_file
