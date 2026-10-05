@@ -346,7 +346,7 @@ migrate_claude_md_to_local() {
         else
             sed -n "${split_line},\$p" "$claude_md" > "$local_md"
         fi
-        cs_write_atomic "$claude_md" printf '%s\n' "$head_text"
+        cs_write_atomic "$claude_md" printf '%s\n' "$head_text" || error "could not rewrite $claude_md"
         warn "Moved cs-managed sections from CLAUDE.md to CLAUDE.local.md; your own content stays in CLAUDE.md"
     fi
     return 0

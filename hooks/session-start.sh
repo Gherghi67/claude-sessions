@@ -54,10 +54,12 @@ if ! command -v cs_handoff_dir >/dev/null 2>&1; then
     cs_handoff_dir() { return 1; }
 fi
 # Nor can the state file be rewritten under its lock, and an unlocked rewrite
-# could lose cs's own update, so the state is left as it is and said so.
+# could lose cs's own update, so the state is left as it is, said so, and
+# reported as not written (an outdated cs-shared.sh lacks the writer too).
 if ! command -v cs_local_state_set >/dev/null 2>&1; then
     cs_local_state_set() {
-        echo "session-start: cs-shared.sh is missing, so $2 was not recorded in $1" >&2
+        echo "session-start: cs-shared.sh is missing or outdated, so $2 was not recorded in $1" >&2
+        return 1
     }
 fi
 if ! command -v cs_resolve_session >/dev/null 2>&1; then
@@ -430,8 +432,8 @@ fi
 if [ "$IS_LEAD" = 1 ] && [[ "$SESSION_ID" =~ $UUID_RE ]]; then
     RECORDED_UUID=$(awk '/^claude_session_id:/ { print $2; exit }' "$STATE_FILE" 2>/dev/null || true)
     if [ "$RECORDED_UUID" != "$SESSION_ID" ]; then
-        local_state_set claude_session_id "$SESSION_ID"
-        echo "$(date '+%Y-%m-%d %H:%M:%S') - Rebound claude_session_id: ${RECORDED_UUID:-none} -> $SESSION_ID" >> "$SESSION_LOG"
+        local_state_set claude_session_id "$SESSION_ID" \
+            && echo "$(date '+%Y-%m-%d %H:%M:%S') - Rebound claude_session_id: ${RECORDED_UUID:-none} -> $SESSION_ID" >> "$SESSION_LOG"
         # Named literally: TIMELINE_FILE is not assigned until further down.
         _cs_terminate_jsonl "$META_DIR/timeline.jsonl" 2>/dev/null || true
         # Durable lineage: a UUID change the launch path did not pre-record.
@@ -496,7 +498,7 @@ _cs_terminate_jsonl "$TIMELINE_FILE" 2>/dev/null || true
 
 # Update last_resumed in local state on resume
 if [ "$SOURCE" = "resume" ]; then
-    local_state_set last_resumed "$(date '+%Y-%m-%d')"
+    local_state_set last_resumed "$(date '+%Y-%m-%d')" || true
 fi
 
 # A fresh session is attended by definition: drop any stale attention

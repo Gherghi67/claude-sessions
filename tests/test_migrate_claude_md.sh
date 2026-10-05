@@ -253,8 +253,8 @@ test_migration_rewrites_leave_tmp_siblings_alone_and_keep_modes() {
     assert_eq "640" "$(_file_mode "$dir/CLAUDE.local.md")" "CLAUDE.local.md keeps its mode" || return 1
 }
 
-# A CLAUDE.local.md that is a symlink keeps the TARGET's mode on rewrite: the
-# mode is read through the link, not off the link itself (which is 755).
+# A CLAUDE.local.md that is a symlink is rewritten THROUGH the link: the target
+# gets the new text and keeps its mode, and the link stays a link.
 test_migration_rewrite_through_a_symlink_keeps_the_targets_mode() {
     local dir
     dir=$(create_test_session "linked")
@@ -266,6 +266,8 @@ test_migration_rewrite_through_a_symlink_keeps_the_targets_mode() {
 
     assert_file_not_contains "$dir/CLAUDE.local.md" "read all narrative" "protocol wording rewritten" || return 1
     assert_eq "640" "$(_file_mode "$dir/CLAUDE.local.md")" "the rewritten file keeps the target's mode" || return 1
+    [ -L "$dir/CLAUDE.local.md" ] || { echo "  FAIL: the symlink was replaced by a regular file"; return 1; }
+    assert_file_not_contains "$dir/real-local.md" "read all narrative" "the rewrite went through the link into the target" || return 1
 }
 
 run_test test_migrate_preserves_user_claude_md

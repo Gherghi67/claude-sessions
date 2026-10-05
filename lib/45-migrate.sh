@@ -264,7 +264,7 @@ prune_commands_artifacts() {
             in_section { next }
             /^[0-9]+\. \*\*\.cs\/commands\.md\*\*/ { next }
             { print }
-        ' "$claude_md"
+        ' "$claude_md" || error "could not rewrite $claude_md"
         removed=1
     fi
 
@@ -466,7 +466,7 @@ migrate_narrative_resume_wording() {
                 print line1; print line2; print line3; print line4; next
             }
             { print }
-        ' "$f"
+        ' "$f" || error "could not rewrite $f"
     fi
 }
 
@@ -832,7 +832,7 @@ migrate_session() {
                     }
                     stripping && /^<!-- / { stripping = 0 }
                     !stripping { print }
-                ' "$claude_md_p9"
+                ' "$claude_md_p9" || error "could not rewrite $claude_md_p9"
                 warn "Retired auto-memory bucket guidance; replaced with cs:memory-note"
             # State 3: tombstone (sentinel without header) — preserve opt-out
             fi

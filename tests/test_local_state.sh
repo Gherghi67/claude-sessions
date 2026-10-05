@@ -480,6 +480,37 @@ test_state_write_fails_loudly_when_the_old_state_cannot_be_read() {
     [ ! -f "$TEST_TMPDIR/claude-args" ] || { echo "  FAIL: claude must not launch unrecorded"; return 1; }
 }
 
+# Two writers that alternate keys into one state file must end with every key
+# present: a lost update is the race the lock exists to close. The writers are
+# the shared library itself, so the test takes seconds, not launches.
+test_two_state_writers_lose_no_update() {
+    local state="$TEST_TMPDIR/state"
+    local lib="$SCRIPT_DIR/../hooks/cs-shared.sh"
+    bash -c 'source "$1"; i=1; while [ $i -le 40 ]; do cs_local_state_set "$2" "a$i" v || exit 1; i=$((i+1)); done' _ "$lib" "$state" &
+    local p1=$!
+    bash -c 'source "$1"; i=1; while [ $i -le 40 ]; do cs_local_state_set "$2" "b$i" v || exit 1; i=$((i+1)); done' _ "$lib" "$state" &
+    local p2=$!
+    wait "$p1" || { echo "  FAIL: writer a failed"; return 1; }
+    wait "$p2" || { echo "  FAIL: writer b failed"; return 1; }
+    assert_eq "80" "$(wc -l < "$state" | tr -d ' ')" "every key written by either writer is in the file" || return 1
+    assert_not_exists "$state.lock" "no lock left behind" || return 1
+}
+
+# Homebrew's gnubin puts GNU stat first on a Mac's PATH; the mode read must
+# work with either stat, so the dispatch is by behaviour, not by OSTYPE.
+test_atomic_write_keeps_the_mode_with_gnu_stat_on_a_mac() {
+    command -v gstat >/dev/null 2>&1 || { echo "  SKIP: no gstat on this machine"; return 77; }
+    local shim="$TEST_TMPDIR/gnubin"
+    mkdir -p "$shim"
+    printf '#!/bin/sh\nexec gstat "$@"\n' > "$shim/stat"; chmod +x "$shim/stat"
+    local f="$TEST_TMPDIR/f"
+    printf 'old\n' > "$f"; chmod 640 "$f"
+    PATH="$shim:$PATH" bash -c 'source "$1"; cs_write_atomic "$2" printf "new\n"' _ "$SCRIPT_DIR/../hooks/cs-shared.sh" "$f" \
+        || { echo "  FAIL: cs_write_atomic failed under GNU stat"; return 1; }
+    assert_eq "new" "$(cat "$f")" "the file was rewritten" || return 1
+    assert_eq "640" "$(_file_mode "$f")" "and kept its mode" || return 1
+}
+
 test_state_write_takes_over_a_dead_holders_lock() {
     local session_dir
     session_dir=$(create_test_session_with_git stale-lock)
@@ -744,4 +775,6 @@ run_test test_state_and_gitattributes_rewrites_leave_tmp_siblings_alone_and_keep
 run_test test_state_write_waits_for_a_live_lock_holder
 run_test test_state_write_takes_over_a_dead_holders_lock
 run_test test_state_write_fails_loudly_when_the_old_state_cannot_be_read
+run_test test_two_state_writers_lose_no_update
+run_test test_atomic_write_keeps_the_mode_with_gnu_stat_on_a_mac
 report_results
