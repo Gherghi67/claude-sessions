@@ -995,11 +995,11 @@ test_discarding_a_handoff_leaves_a_tmp_sibling_alone_and_keeps_the_mode() {
     _seed_handoff "$dir" "2026-07-16-test.md" "unconsumed"
     local f="$dir/.cs/handoffs/2026-07-16-test.md"
     printf 'USER-OWNED\n' > "$f.tmp"
-    chmod 640 "$f"
+    chmod 750 "$f"
     "$CS_BIN" rot-d-sib <<< "d" >/dev/null 2>&1 || true
     assert_file_contains "$f" "status: discarded" "d flips the handoff to discarded" || return 1
     assert_eq "USER-OWNED" "$(cat "$f.tmp" 2>/dev/null)" "the .tmp sibling is untouched" || return 1
-    assert_eq "640" "$(_file_mode "$f")" "the handoff keeps its mode" || return 1
+    assert_eq "750" "$(_file_mode "$f")" "the handoff keeps its mode" || return 1
 }
 
 test_discard_answer_dismisses_pending_handoff() {
@@ -1180,13 +1180,13 @@ test_consuming_a_handoff_leaves_a_tmp_sibling_alone_and_keeps_the_mode() {
     _seed_handoff "$CLAUDE_SESSION_DIR" "2026-07-16-test.md" "unconsumed"
     local f="$CLAUDE_SESSION_META_DIR/handoffs/2026-07-16-test.md"
     printf 'USER-OWNED\n' > "$f.tmp"
-    chmod 640 "$f"
+    chmod 750 "$f"
     printf '%s\n' "2026-07-16-test.md" > "$CLAUDE_SESSION_META_DIR/local/pending-handoff"
     printf 'claude_session_id: %s\n' "$UUID_B" > "$CLAUDE_SESSION_META_DIR/local/state"
     _start_hook "$UUID_B" >/dev/null || return 1
     assert_file_contains "$f" "consumed_by: $UUID_B" "consumer recorded" || return 1
     assert_eq "USER-OWNED" "$(cat "$f.tmp" 2>/dev/null)" "the .tmp sibling is untouched" || return 1
-    assert_eq "640" "$(_file_mode "$f")" "the handoff keeps its mode" || return 1
+    assert_eq "750" "$(_file_mode "$f")" "the handoff keeps its mode" || return 1
 }
 
 test_pending_handoff_is_consumed_and_injected() {

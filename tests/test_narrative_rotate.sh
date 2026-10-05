@@ -119,13 +119,13 @@ test_rotate_archives_oldest_sections_and_keeps_tail() {
 }
 
 # The live narrative is rewritten through a temp file; it keeps the mode it
-# had. 604 is a mode no umask produces for a new file.
+# had. 750 carries an execute bit, which no umask gives a newly written file.
 test_rotate_keeps_the_live_files_mode() {
     _make_narrative "$LIVE" 10 500
-    chmod 604 "$LIVE"
+    chmod 750 "$LIVE"
     "$CS_BIN" -narrative rotate > /dev/null 2>&1 || return 1
     assert_file_not_contains "$LIVE" "section 1$" "the rotation happened" || return 1
-    assert_eq "604" "$(_file_mode "$LIVE")" "the live narrative keeps its mode" || return 1
+    assert_eq "750" "$(_file_mode "$LIVE")" "the live narrative keeps its mode" || return 1
 }
 
 # A live narrative that is a symlink is rewritten through the link: the target

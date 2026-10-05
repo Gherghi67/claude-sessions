@@ -127,13 +127,13 @@ test_legacy_pointer_drop_leaves_a_tmp_sibling_alone_and_keeps_the_mode() {
     local index="$project_dir/.cs/memory/MEMORY.md"
     printf '%s\n' '- [Session narrative (lab notebook)](narrative.md): old' > "$index"
     printf 'USER-OWNED\n' > "$index.tmp"
-    chmod 640 "$index"
+    chmod 750 "$index"
 
     ( "$CS_BIN" s1sib <<< "" >/dev/null 2>&1 || true )
 
     assert_file_not_contains "$index" "(narrative.md)" "stale legacy index pointer removed" || return 1
     assert_eq "USER-OWNED" "$(cat "$index.tmp" 2>/dev/null)" "MEMORY.md.tmp is untouched" || return 1
-    assert_eq "640" "$(_file_mode "$index")" "MEMORY.md keeps its mode" || return 1
+    assert_eq "750" "$(_file_mode "$index")" "MEMORY.md keeps its mode" || return 1
 }
 
 # A memory folder that takes no new files cannot have its index rewritten. The

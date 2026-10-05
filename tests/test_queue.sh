@@ -485,20 +485,39 @@ test_drain_disarms_after_a_failed_pop_past_a_stale_state_tmp() {
     assert_eq "idle" "$(cat "$(QDIR)/queue.state" | tr -d '[:space:]')" "failed pop disarms the drain" || return 1
 }
 
-# A state write that fails ends the Stop hook cleanly and says why: no task is
-# handed out against a state that was never recorded, and the hook does not
-# die with a bare shell status.
+# A state write that fails ends the Stop hook cleanly and tells the user why,
+# in the message Claude Code shows them: no task is handed out against a state
+# that was never recorded, and the hook does not die with a bare shell status.
 test_drain_reports_a_state_it_cannot_write() {
     qseed "task one"
     printf 'armed\n' > "$(QDIR)/queue.state"
     _deny_writes "$(QDIR)" || return 77
-    local out rc=0 err="$TEST_TMPDIR/drain.err"
-    out=$(echo '{}' | CS_LEAD_PID=$$ CLAUDE_PID=$$ bash "$HOOKS_DIR/narrative-reminder.sh" 2>"$err") || rc=$?
+    local out rc=0
+    out=$(drain) || rc=$?
     _allow_writes "$(QDIR)"
     assert_eq "0" "$rc" "the hook exits cleanly" || return 1
-    assert_file_contains "$err" "could not write .*queue\.state" "the failure names the file" || return 1
-    assert_output_not_contains "$out" "task one" "no task is handed out" || return 1
+    assert_eq "approve" "$(jq -r '.decision' <<< "$out")" "the turn is allowed to end" || return 1
+    assert_eq "cs task queue: could not write $(QDIR)/queue.state" "$(jq -r '.systemMessage' <<< "$out")" \
+        "the user is told which file" || return 1
     assert_eq "armed" "$(cat "$(QDIR)/queue.state" | tr -d '[:space:]')" "the state is as it was" || return 1
+}
+
+# Back to idle is the one state an absent file also means. When idle cannot be
+# written, the drain removes the state file instead of leaving "draining"
+# behind, where the next Stop would mark a task done that was never handed
+# out. The state file is a link into a directory that takes no new files, so
+# the write fails while the link itself can still go.
+test_drain_falls_back_to_no_state_file_when_idle_cannot_be_written() {
+    qseed "last task"
+    mkdir -p "$TEST_TMPDIR/state-home"
+    printf 'draining\n' > "$TEST_TMPDIR/state-home/queue.state"
+    ln -s "$TEST_TMPDIR/state-home/queue.state" "$(QDIR)/queue.state"
+    _deny_writes "$TEST_TMPDIR/state-home" || return 77
+    local out; out=$(drain) || true
+    _allow_writes "$TEST_TMPDIR/state-home"
+    assert_output_contains "$out" "all tasks complete" "the drain still finishes" || return 1
+    [ ! -e "$(QDIR)/queue.state" ] && [ ! -L "$(QDIR)/queue.state" ] \
+        || { echo "  FAIL: the state file must be gone, which reads as idle"; return 1; }
 }
 
 test_drain_empties_and_returns_idle() {
@@ -605,6 +624,7 @@ run_test test_drain_gate_ignores_a_teammate_stop
 run_test test_drain_disarms_when_the_pop_fails
 run_test test_drain_empties_and_returns_idle
 run_test test_drain_reports_a_state_it_cannot_write
+run_test test_drain_falls_back_to_no_state_file_when_idle_cannot_be_written
 run_test test_drain_advances_past_a_stale_state_tmp
 run_test test_drain_disarms_after_a_failed_pop_past_a_stale_state_tmp
 run_test test_drain_declined_within_cooldown_falls_through

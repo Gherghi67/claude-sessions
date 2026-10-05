@@ -200,7 +200,7 @@ test_migration_readme_rewrites_leave_a_tmp_sibling_alone_and_keep_the_mode() {
     for d in "$a" "$b"; do
         (cd "$d" && git init -q && git add -A && git commit -q -m "init")
         printf 'USER-OWNED\n' > "$d/.cs/README.md.tmp"
-        chmod 640 "$d/.cs/README.md"
+        chmod 750 "$d/.cs/README.md"
     done
 
     "$CS_BIN" no-frontmatter-sib <<< "" >/dev/null 2>&1 || true
@@ -211,7 +211,7 @@ test_migration_readme_rewrites_leave_a_tmp_sibling_alone_and_keep_the_mode() {
     assert_file_not_contains "$b/.cs/README.md" "^claude_session_id:" "machine-local field moved out" || return 1
     for d in "$a" "$b"; do
         assert_eq "USER-OWNED" "$(cat "$d/.cs/README.md.tmp" 2>/dev/null)" "README.md.tmp is untouched in $(basename "$d")" || return 1
-        assert_eq "640" "$(_file_mode "$d/.cs/README.md")" "the README keeps its mode in $(basename "$d")" || return 1
+        assert_eq "750" "$(_file_mode "$d/.cs/README.md")" "the README keeps its mode in $(basename "$d")" || return 1
     done
 }
 
@@ -532,15 +532,6 @@ test_two_state_writers_lose_no_update() {
 
 # Homebrew's gnubin puts GNU stat first on a Mac's PATH; the mode read must
 # work with either stat, so the dispatch is by behaviour, not by OSTYPE.
-# A destination that is a directory is refused: nothing is written into it.
-test_atomic_write_refuses_a_directory_destination() {
-    local d="$TEST_TMPDIR/a-directory" rc=0
-    mkdir -p "$d"
-    bash -c 'source "$1"; cs_write_atomic "$2" printf "new\n"' _ "$SCRIPT_DIR/../hooks/cs-shared.sh" "$d" 2>/dev/null || rc=$?
-    [ "$rc" -ne 0 ] || { echo "  FAIL: writing onto a directory must fail"; return 1; }
-    assert_eq "" "$(ls -A "$d")" "nothing is left inside the directory" || return 1
-}
-
 test_atomic_write_keeps_the_mode_with_gnu_stat_on_a_mac() {
     command -v gstat >/dev/null 2>&1 || { echo "  SKIP: no gstat on this machine"; return 77; }
     local shim="$TEST_TMPDIR/gnubin"
@@ -552,6 +543,15 @@ test_atomic_write_keeps_the_mode_with_gnu_stat_on_a_mac() {
         || { echo "  FAIL: cs_write_atomic failed under GNU stat"; return 1; }
     assert_eq "new" "$(cat "$f")" "the file was rewritten" || return 1
     assert_eq "640" "$(_file_mode "$f")" "and kept its mode" || return 1
+}
+
+# A destination that is a directory is refused: nothing is written into it.
+test_atomic_write_refuses_a_directory_destination() {
+    local d="$TEST_TMPDIR/a-directory" rc=0
+    mkdir -p "$d"
+    bash -c 'source "$1"; cs_write_atomic "$2" printf "new\n"' _ "$SCRIPT_DIR/../hooks/cs-shared.sh" "$d" 2>/dev/null || rc=$?
+    [ "$rc" -ne 0 ] || { echo "  FAIL: writing onto a directory must fail"; return 1; }
+    assert_eq "" "$(ls -A "$d")" "nothing is left inside the directory" || return 1
 }
 
 test_state_write_takes_over_a_dead_holders_lock() {

@@ -82,11 +82,11 @@ test_tag_add_leaves_a_tmp_sibling_alone_and_keeps_the_mode() {
     _in_session "sib"
     local readme="$CS_SESSIONS_ROOT/sib/.cs/README.md"
     printf 'USER-OWNED\n' > "$readme.tmp"
-    chmod 640 "$readme"
+    chmod 750 "$readme"
     "$CS_BIN" -tag add api >/dev/null 2>&1 || { echo "  FAIL: add exited non-zero"; return 1; }
     assert_file_contains "$readme" "tags: \[api\]" "the tag landed" || return 1
     assert_eq "USER-OWNED" "$(cat "$readme.tmp" 2>/dev/null)" "README.md.tmp is untouched" || return 1
-    assert_eq "640" "$(_file_mode "$readme")" "the README keeps its mode" || return 1
+    assert_eq "750" "$(_file_mode "$readme")" "the README keeps its mode" || return 1
 }
 
 test_tag_validation() {
