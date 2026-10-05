@@ -47,6 +47,25 @@ _seed_conversation() {  # wt_dir, uuid, first_prompt
     printf '{"type":"user","message":{"role":"user","content":"%s"}}\n' "$3" > "$proj/$2.jsonl"
 }
 
+# The transcript Claude Code leaves for a worktree session once it has
+# exited: moved into the PARENT repo's project dir, first line a non-user
+# record, every user line stamped with the worktree as cwd, plus the
+# `worktree-state` record naming the worktree (2.1.289, measured on a real
+# `claude --worktree` run).
+_seed_relocated_conversation() {  # repo_dir, wt_dir, uuid, first_prompt
+    local proj wt_real
+    proj=$(_wt_project_dir "$1")
+    wt_real=$(cd "$2" && pwd -P)
+    mkdir -p "$proj"
+    {
+        printf '{"type":"last-prompt","leafUuid":"00000000-0000-4000-8000-000000000000","sessionId":"%s"}\n' "$3"
+        printf '{"type":"worktree-state","worktreeSession":{"originalCwd":"%s","worktreePath":"%s","worktreeName":"%s","sessionId":"%s"},"sessionId":"%s"}\n' \
+            "$(cd "$1" && pwd -P)" "$wt_real" "$(basename "$2")" "$3" "$3"
+        printf '{"type":"user","cwd":"%s","sessionId":"%s","entrypoint":"cli","message":{"role":"user","content":"%s"}}\n' "$wt_real" "$3" "$4"
+        printf '{"type":"relocated","sessionId":"%s","relocatedCwd":"%s"}\n' "$3" "$(cd "$1" && pwd -P)"
+    } > "$proj/$3.jsonl"
+}
+
 _readme_objective() {  # session_dir
     sed -n '/^## Objective/,/^## /{/^## Objective/d;/^## /d;/^$/d;p;}' "$1/.cs/README.md" | head -1
 }
@@ -96,6 +115,29 @@ test_adopts_a_worktree_with_a_conversation() {
     assert_eq "Rewrite the electron UI shell for the desktop app" "$(_readme_objective "$wt")" \
         "the Objective is the conversation's first prompt" || return 1
     assert_eq "$claude_md_before" "$(cat "$wt/CLAUDE.md")" "the tracked CLAUDE.md is untouched" || return 1
+    assert_eq "" "$(git -C "$wt" status --porcelain)" "the worktree's PR branch stays clean" || return 1
+}
+
+# Claude Code moves a worktree session's transcript into the parent repo's
+# project dir when the session exits, so a closed worktree has nothing under
+# its own project dir. The parent dir also holds the parent's own
+# conversations; the worktree's is the one whose worktree-state names it.
+test_adopts_a_worktree_whose_transcript_moved_to_the_parent() {
+    local repo="$TEST_TMPDIR/repo"
+    _make_repo "$repo" moved-wt
+    local wt="$repo/.claude/worktrees/moved-wt"
+    _seed_relocated_conversation "$repo" "$wt" "$UUID_A" "Port the sync engine to the worktree branch"
+    sleep 1
+    _seed_conversation "$repo" "$UUID_B" "The parent repo's own newer conversation"
+
+    local output
+    output=$(cd "$repo" && "$CS_BIN" -adopt --worktrees 2>&1) || { echo "  FAIL: adopt --worktrees should succeed: $output"; return 1; }
+
+    [ -L "$CS_SESSIONS_ROOT/repo.moved-wt" ] || { echo "  FAIL: no session link; output: $output"; return 1; }
+    assert_eq "$UUID_A" "$(awk '/^claude_session_id:/ { print $2; exit }' "$wt/.cs/local/state")" \
+        "the state binds the worktree's relocated conversation, not the parent's newer one" || return 1
+    assert_eq "Port the sync engine to the worktree branch" "$(_readme_objective "$wt")" \
+        "the Objective is read from the relocated transcript" || return 1
     assert_eq "" "$(git -C "$wt" status --porcelain)" "the worktree's PR branch stays clean" || return 1
 }
 
@@ -400,6 +442,7 @@ test_open_refuses_a_claude_local_symlink_to_a_tracked_file() {
 run_test test_refuses_outside_a_git_repo
 run_test test_refuses_a_repo_without_claude_worktrees
 run_test test_adopts_a_worktree_with_a_conversation
+run_test test_adopts_a_worktree_whose_transcript_moved_to_the_parent
 run_test test_skips_a_worktree_without_a_conversation
 run_test test_binds_the_newest_of_two_conversations
 run_test test_rerun_adopts_nothing_twice_and_keeps_the_exclude_file
