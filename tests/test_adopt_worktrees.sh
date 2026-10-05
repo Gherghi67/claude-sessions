@@ -55,14 +55,17 @@ _seed_conversation() {  # wt_dir, uuid, first_prompt
 _seed_relocated_conversation() {  # repo_dir, wt_dir, uuid, first_prompt
     local proj wt_real
     proj=$(_wt_project_dir "$1")
-    wt_real=$(cd "$2" && pwd -P)
+    # Paths go through the JSON string escaping Claude Code's writer applies.
+    local wt_real repo_real
+    wt_real=$(cd "$2" && pwd -P | sed 's/\\/\\\\/g; s/"/\\"/g')
+    repo_real=$(cd "$1" && pwd -P | sed 's/\\/\\\\/g; s/"/\\"/g')
     mkdir -p "$proj"
     {
         printf '{"type":"last-prompt","leafUuid":"00000000-0000-4000-8000-000000000000","sessionId":"%s"}\n' "$3"
         printf '{"type":"worktree-state","worktreeSession":{"originalCwd":"%s","worktreePath":"%s","worktreeName":"%s","sessionId":"%s"},"sessionId":"%s"}\n' \
-            "$(cd "$1" && pwd -P)" "$wt_real" "$(basename "$2")" "$3" "$3"
+            "$repo_real" "$wt_real" "$(basename "$2")" "$3" "$3"
         printf '{"type":"user","cwd":"%s","sessionId":"%s","entrypoint":"cli","message":{"role":"user","content":"%s"}}\n' "$wt_real" "$3" "$4"
-        printf '{"type":"relocated","sessionId":"%s","relocatedCwd":"%s"}\n' "$3" "$(cd "$1" && pwd -P)"
+        printf '{"type":"relocated","sessionId":"%s","relocatedCwd":"%s"}\n' "$3" "$repo_real"
     } > "$proj/$3.jsonl"
 }
 
@@ -139,6 +142,20 @@ test_adopts_a_worktree_whose_transcript_moved_to_the_parent() {
     assert_eq "Port the sync engine to the worktree branch" "$(_readme_objective "$wt")" \
         "the Objective is read from the relocated transcript" || return 1
     assert_eq "" "$(git -C "$wt" status --porcelain)" "the worktree's PR branch stays clean" || return 1
+}
+
+# A `"` in the repo's path is `\"` in the transcript's JSON; the match has to
+# compare like with like or such a repo's worktrees are never adopted. The
+# quote sits in a parent folder: the repo's own name becomes the session name.
+test_adopts_a_relocated_conversation_when_the_repo_path_needs_json_escaping() {
+    local repo="$TEST_TMPDIR/q\"uoted/repo"
+    _make_repo "$repo" quoted-wt
+    local wt="$repo/.claude/worktrees/quoted-wt"
+    _seed_relocated_conversation "$repo" "$wt" "$UUID_A" "Quote the path and still find the conversation"
+    local output
+    output=$(cd "$repo" && "$CS_BIN" -adopt --worktrees 2>&1) || { echo "  FAIL: adopt --worktrees should succeed: $output"; return 1; }
+    assert_eq "$UUID_A" "$(awk '/^claude_session_id:/ { print $2; exit }' "$wt/.cs/local/state" 2>/dev/null)" \
+        "the relocated conversation is found through the JSON-escaped path; output: $output" || return 1
 }
 
 test_skips_a_worktree_without_a_conversation() {
@@ -443,6 +460,7 @@ run_test test_refuses_outside_a_git_repo
 run_test test_refuses_a_repo_without_claude_worktrees
 run_test test_adopts_a_worktree_with_a_conversation
 run_test test_adopts_a_worktree_whose_transcript_moved_to_the_parent
+run_test test_adopts_a_relocated_conversation_when_the_repo_path_needs_json_escaping
 run_test test_skips_a_worktree_without_a_conversation
 run_test test_binds_the_newest_of_two_conversations
 run_test test_rerun_adopts_nothing_twice_and_keeps_the_exclude_file

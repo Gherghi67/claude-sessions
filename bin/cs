@@ -3061,6 +3061,9 @@ _discover_worktree_uuid_in() {  # parent_project_dir, wt_dir
     local proj="$1" wt_real
     [ -d "$proj" ] || return 0
     wt_real=$( (cd "$2" 2>/dev/null && pwd -P) || printf '%s' "$2" )
+    # The record is a JSON string, so a `\` or `"` in the path is escaped there;
+    # escape the same way before matching, or such a repo never matches.
+    wt_real=$(printf '%s' "$wt_real" | sed 's/\\/\\\\/g; s/"/\\"/g')
     local listing
     listing=$(ls -t "$proj"/*.jsonl 2>/dev/null) || true
     [ -n "$listing" ] || return 0
