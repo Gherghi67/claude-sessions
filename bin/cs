@@ -3070,17 +3070,25 @@ _alloc_random_color() {
 # stdout, or empty if absent or unreadable. Never errors. KEEP THE FORMAT IN
 # SYNC WITH bin/cs-statusline's _read_state_key (session name ink, context-pct
 # gating) and hooks/session-start.sh's local_state_set.
+# Shell builtins only: an open reads this file several times, and each read
+# would otherwise fork a process. The first line beginning "key:" wins; the
+# value is what follows the first colon, leading whitespace dropped and every
+# double quote removed. A last line without a newline still counts.
 _read_local_state() {
-    local state="$1" key="$2"
+    local state="$1" key="$2" line value
     [ -f "$state" ] || return 0
-    awk -v key="$key" '
-        index($0, key ":") == 1 {
-            sub(/^[^:]*:[[:space:]]*/, "")
-            gsub(/"/, "")
-            print
-            exit
-        }
-    ' "$state" 2>/dev/null || true
+    {
+        while IFS= read -r line || [ -n "$line" ]; do
+            case "$line" in
+                "$key:"*)
+                    value=${line#*:}
+                    value=${value#"${value%%[![:space:]]*}"}
+                    printf '%s\n' "${value//\"/}"
+                    break
+                    ;;
+            esac
+        done < "$state"
+    } 2>/dev/null || true
 }
 
 # Write 'key: value' into a machine-local state file, replacing any existing
