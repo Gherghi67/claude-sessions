@@ -26,6 +26,15 @@ EOF
     printf '%s\n' "$headings" | tail -1 | cut -d' ' -f1
 }
 
+# What the live narrative holds after a rotation: its header block from the
+# snapshot, then everything in the live file past the cut.
+_narrative_kept_text() {  # snap, live, head_end, cut
+    if [ "$3" -gt 0 ]; then
+        head -c "$3" "$1" || return 1
+    fi
+    tail -c +$(($4 + 1)) "$2"
+}
+
 # Archive the oldest sections of this actor's narrative when the file is over
 # CS_NARRATIVE_MAX_BYTES, leaving a tail of about CS_NARRATIVE_KEEP_BYTES.
 rotate_narrative() {
@@ -102,6 +111,9 @@ rotate_narrative() {
     local blob chunk chunk_tmp
     blob=$(git hash-object "$body" | cut -c1-8)
     chunk="$arch_dir/$through-$blob.md"
+    # The fixed temp name is safe here and needs no unique one: it carries the
+    # hash of the bytes it will hold, so two rotations that share it are
+    # writing the same file.
     chunk_tmp="$arch_dir/.$through-$blob.md.tmp"
     {
         printf '<!-- rotated from narrative.%s.md: %s sections through %s -->\n' "$actor" "$sections" "$through"
@@ -138,9 +150,8 @@ rotate_narrative() {
         [ "$created" -eq 1 ] && rm -f "$chunk"
         error "narrative.$actor.md changed during rotation; run ags -narrative rotate again"
     fi
-    local live_tmp="$meta_dir/memory/.narrative.$actor.md.tmp"
-    { [ "$head_end" -gt 0 ] && head -c "$head_end" "$snap"; tail -c +$((cut + 1)) "$live"; } > "$live_tmp"
-    mv "$live_tmp" "$live"
+    cs_write_atomic "$live" _narrative_kept_text "$snap" "$live" "$head_end" "$cut" \
+        || error "could not rewrite narrative.$actor.md"
     rm -f "$snap"
 
     local chunk_rel=".cs/${arch_root#"$meta_dir"/}/$actor/$(basename "$chunk")"

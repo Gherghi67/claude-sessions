@@ -35,7 +35,7 @@ _cs_claude_adapter_prepare_workspace() {  # session_dir, create|migrate_storage|
 }
 
 _claude_migrate_protocol_wording() {
-    local session_dir="$1" f tmp
+    local session_dir="$1" f
     f="$session_dir/CLAUDE.local.md"
     # cs has shipped two protocol-block wordings for the same sentence: the
     # current two-line form, and the July-2026 four-line form ("Note:
@@ -46,8 +46,7 @@ _claude_migrate_protocol_wording() {
     # from its neighbour with a trailing \r, so the gate itself does not need
     # \r-tolerance — only the awk's line-for-line comparisons do.
     if [ -f "$f" ] && grep -qE "read all narrative\.\*\.md on resume to restore your|^Note: narratives are per-actor \(narrative\.<actor>\.md\) so co-developers never|on resume read the live narrative\.\*\.md \(rotation keeps|lab notebooks \(yours \+ teammates'\)" "$f"; then
-        tmp="$f.tmp"
-        awk '
+        cs_write_atomic "$f" awk '
             function strip(s) { sub(/\r$/, "", s); return s }
             function protocol_para() {
                 print "Append only to your own; on resume read your own in full, and a teammate narrative only"
@@ -91,7 +90,7 @@ _claude_migrate_protocol_wording() {
                 print line1; print line2; print line3; print line4; next
             }
             { print }
-        ' "$f" > "$tmp" && mv "$tmp" "$f"
+        ' "$f" || error "could not rewrite $f"
     fi
 }
 
@@ -113,14 +112,13 @@ prune_commands_artifacts() {
 
     local claude_md="$session_dir/CLAUDE.md"
     if [ -f "$claude_md" ] && grep -qE '@\.cs/commands\.md|^## Discovered Commands|^[0-9]+\. \*\*\.cs/commands\.md\*\*' "$claude_md"; then
-        local tmp="$claude_md.tmp"
-        awk '
+        cs_write_atomic "$claude_md" awk '
             /^## Discovered Commands[[:space:]]*$/ { in_section = 1; next }
             in_section && /^## / { in_section = 0 }
             in_section { next }
             /^[0-9]+\. \*\*\.cs\/commands\.md\*\*/ { next }
             { print }
-        ' "$claude_md" > "$tmp" && mv "$tmp" "$claude_md"
+        ' "$claude_md" || error "could not rewrite $claude_md"
         removed=1
     fi
 
@@ -192,8 +190,7 @@ _claude_migrate_workspace() {
                 # State 2: legacy rules block — strip + insert note in place.
                 # NEW_BLOCK passed via env (not -v) so awk doesn't re-process
                 # C-style escapes in the markdown content.
-                local tmp="$claude_md_p9.tmp"
-                NEW_BLOCK=$(_emit_memory_note_block) awk '
+                NEW_BLOCK=$(_emit_memory_note_block) cs_write_atomic "$claude_md_p9" awk '
                     /<!-- cs:memory-rules -->/ {
                         print ENVIRON["NEW_BLOCK"]
                         stripping = 1
@@ -201,7 +198,7 @@ _claude_migrate_workspace() {
                     }
                     stripping && /^<!-- / { stripping = 0 }
                     !stripping { print }
-                ' "$claude_md_p9" > "$tmp" && mv "$tmp" "$claude_md_p9"
+                ' "$claude_md_p9" || error "could not rewrite $claude_md_p9"
                 warn "Retired auto-memory bucket guidance; replaced with cs:memory-note"
             # State 3: tombstone (sentinel without header) — preserve opt-out
             fi

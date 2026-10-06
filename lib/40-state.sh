@@ -58,21 +58,15 @@ _read_local_state() {
 
 # Write 'key: value' into a machine-local state file, replacing any existing
 # line for that key. Creates .cs/local/ and the file on first write. Atomic
-# (tmp+mv), idempotent. A write that fails (permissions, a full disk) names the
-# file and returns non-zero; the locking wrappers below then end ags: the launch
-# has already told the user what it was about to start, and a silent miss
-# leaves the next open resuming nothing.
+# and serialised against the SessionStart hook's writer (cs_local_state_set),
+# idempotent. A write that fails (permissions, a full disk) names the file and
+# returns non-zero; the locking wrappers below then end ags: the launch has
+# already told the user what it was about to start, and a silent miss leaves
+# the next open resuming nothing.
 _cs_set_local_state_unlocked() {
-    local state="$1" key="$2" value="$3" tmp
+    local state="$1" key="$2" value="$3"
     mkdir -p "$(dirname "$state")" 2>/dev/null || { _cs_state_write_failed "$(dirname "$state")" create; return 1; }
-    tmp=$(mktemp "$state.XXXXXX" 2>/dev/null) || { _cs_state_write_failed "$state"; return 1; }
-    {
-        {
-            if [ -f "$state" ]; then
-                awk -v key="$key" 'index($0, key ":") != 1' "$state"
-            fi && printf '%s: %s\n' "$key" "$value"
-        } > "$tmp" && mv "$tmp" "$state"
-    } 2>/dev/null || { rm -f "$tmp" 2>/dev/null; _cs_state_write_failed "$state"; return 1; }
+    cs_local_state_set "$state" "$key" "$value" 2>/dev/null || { _cs_state_write_failed "$state"; return 1; }
 }
 
 # Name the file a machine-local state write could not create or replace, as
@@ -109,14 +103,10 @@ _set_local_state_if_absent() {
 }
 
 # Remove a key's line from a machine-local state file. A missing file or key is
-# a no-op. Atomic (tmp+mv), serialized like _set_local_state, and loud on the
-# same failures.
+# a no-op. Atomic and locked like _set_local_state, and loud on the same
+# failures.
 _cs_unset_local_state_unlocked() {
-    local state="$1" key="$2" tmp
-    [ -f "$state" ] || return 0
-    tmp=$(mktemp "$state.XXXXXX" 2>/dev/null) || { _cs_state_write_failed "$state"; return 1; }
-    { awk -v key="$key" 'index($0, key ":") != 1' "$state" > "$tmp" && mv "$tmp" "$state"; } 2>/dev/null \
-        || { rm -f "$tmp" 2>/dev/null; _cs_state_write_failed "$state"; return 1; }
+    cs_local_state_unset "$1" "$2" 2>/dev/null || { _cs_state_write_failed "$1"; return 1; }
 }
 
 _unset_local_state() {
@@ -164,21 +154,18 @@ _transcript_first_prompt() {  # transcript_file
 
 # Replace the Objective placeholder (a whole line wrapped in [...] under
 # `## Objective`) with text, leaving every other line alone. A hand-written
-# objective has no placeholder and is never touched. tmp+mv keeps the write
-# atomic; ENVIRON sidesteps awk -v escape processing of arbitrary prompt text.
+# objective has no placeholder and is never touched. The README is replaced
+# whole and keeps its mode; ENVIRON sidesteps awk -v escape processing of
+# arbitrary prompt text. A README that cannot be rewritten keeps its
+# placeholder.
 _seed_readme_objective() {  # readme, text
-    local readme="$1" text="$2" tmp
+    local readme="$1" text="$2"
     [ -f "$readme" ] && [ -n "$text" ] || return 0
-    tmp=$(mktemp "${TMPDIR:-/tmp}/cs-objective.XXXXXX") || return 0
-    if OBJ="$text" awk '
+    OBJ="$text" cs_write_atomic "$readme" awk '
             /^## / { in_obj = ($0 ~ /^## Objective/) }
             in_obj && /^\[.*\]$/ { print ENVIRON["OBJ"]; next }
             { print }
-        ' "$readme" > "$tmp"; then
-        mv "$tmp" "$readme" || rm -f "$tmp"
-    else
-        rm -f "$tmp"
-    fi
+        ' "$readme" || return 0
 }
 
 # Terminate a JSONL file whose last line lost its newline to an interrupted

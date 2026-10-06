@@ -49,12 +49,13 @@ TEST_TMPDIR=""
 # fallback: GNU's `-f` is --file-system, which prints a block of text to stdout
 # and only THEN errors on the bogus `%Lp` operand — so `$(A || B)` captures that
 # leaked text concatenated with B's output. Select the implementation up front;
-# only GNU stat carries --version.
+# only GNU stat carries --version. Reads through a symlink (-L), so a linked
+# file reports its target's mode, not the link's own 755.
 _file_mode() {
     if stat --version >/dev/null 2>&1; then
-        stat -c "%a" "$1"
+        stat -L -c "%a" "$1"
     else
-        stat -f "%Lp" "$1"
+        stat -L -f "%Lp" "$1"
     fi
 }
 

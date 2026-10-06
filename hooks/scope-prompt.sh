@@ -84,6 +84,12 @@ if ! command -v cs_resolve_session >/dev/null 2>&1; then
         [ -n "${CLAUDE_SESSION_NAME:-}" ] && [ -n "${CLAUDE_SESSION_DIR:-}" ]
     }
 fi
+# Nor is a file replaced whole without the library's writer: the digest cursor
+# stays, so a digest repeats, and the Objective placeholder waits for a later
+# prompt.
+if ! command -v cs_write_atomic >/dev/null 2>&1; then
+    cs_write_atomic() { return 1; }
+fi
 # Only run inside a cs session. No input yet at this point (it is read further
 # down), so resolution relies on the env or CLAUDE_PROJECT_DIR.
 cs_resolve_session "" || exit 0
@@ -126,7 +132,10 @@ _trace_open() {  # meta_local_dir
     _TRACE_T0=$_MS
     # Bound the file without buying a size check on every prompt: one run in 64
     # trims it, often enough that it cannot run away and rare enough that the
-    # fork stays out of the common path.
+    # fork stays out of the common path. The fixed temp name stays: two trims
+    # meeting on it can at worst tear a trace whose every line stands alone,
+    # and a unique name would add a fork to a path timed in milliseconds. Not
+    # a defect to fix.
     if [ $(( $$ % 64 )) -eq 0 ] && [ -f "$_TRACE" ]; then
         { tail -n 2000 "$_TRACE" > "$_TRACE.tmp"; } 2>/dev/null \
             && mv "$_TRACE.tmp" "$_TRACE" 2>/dev/null || true
@@ -312,8 +321,7 @@ _build_digest() {  # meta_local_dir
 # can at worst repeat a digest, which is the harmless direction to fail in.
 _commit_digest() {  # meta_local_dir
     [ -n "${DIGEST_PENDING:-}" ] || return 0
-    { printf '%s\n' "$DIGEST_PENDING" > "$1/notifications.seen.tmp"; } 2>/dev/null \
-        && mv "$1/notifications.seen.tmp" "$1/notifications.seen" 2>/dev/null || true
+    cs_write_atomic "$1/notifications.seen" printf '%s\n' "$DIGEST_PENDING" 2>/dev/null || true
     DIGEST_PENDING=""
 }
 
@@ -482,17 +490,13 @@ if [ "${CS_OBJECTIVE_CAPTURE_DISABLE:-}" != "1" ] \
         [ "${#_obj}" -gt 100 ] && _obj="${_obj:0:100}…"
         # ENVIRON sidesteps awk -v escape processing of arbitrary prompt text;
         # only the Objective-section placeholder line is replaced, all others
-        # pass through verbatim; tmp+mv keeps the write atomic.
-        _obj_tmp=$(mktemp 2>/dev/null) || _obj_tmp=""
-        if [ -n "$_obj_tmp" ] && { OBJ="$_obj" awk '
+        # pass through verbatim; the README is replaced whole and keeps its
+        # mode.
+        OBJ="$_obj" cs_write_atomic "$_obj_readme" awk '
                 /^## / { in_obj = ($0 ~ /^## Objective/) }
                 in_obj && /^\[.*\]$/ { print ENVIRON["OBJ"]; next }
                 { print }
-            ' "$_obj_readme" > "$_obj_tmp"; } 2>/dev/null; then
-            mv "$_obj_tmp" "$_obj_readme" 2>/dev/null || rm -f "$_obj_tmp" 2>/dev/null
-        else
-            [ -n "$_obj_tmp" ] && rm -f "$_obj_tmp" 2>/dev/null
-        fi
+            ' "$_obj_readme" 2>/dev/null || true
     fi
 fi
 _trace objective

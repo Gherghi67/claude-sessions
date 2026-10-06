@@ -50,13 +50,15 @@ _assert_readme_clean() {
 
 test_new_session_records_state_in_local_not_readme() {
     local output
-    output=$("$CS_BIN" state-session <<< "" 2>&1) || true
+    output=$(umask 022; "$CS_BIN" state-session <<< "" 2>&1) || true
 
     local session_dir="$CS_SESSIONS_ROOT/state-session"
     local state="$session_dir/.cs/local/state"
 
     assert_file_exists "$state" \
         ".cs/local/state should exist after first launch" || return 1
+    # A new file takes the umask's mode, not the 0600 mktemp gives its temp.
+    assert_eq "644" "$(_file_mode "$state")" "a new state file has the umask's mode" || return 1
 
     local uuid color
     uuid=$(_extract_state_value "$state" claude_session_id)
@@ -156,27 +158,61 @@ EOF
 # Phase 6 reframes a README that has no frontmatter. Writing it in place means
 # the redirect truncates the user's file before anything is written back; a
 # write that does not complete leaves it empty. Through a temp file, a failed
-# write leaves the original untouched — which is what this asserts, by making
-# the temp path unwritable (a directory) so the write cannot succeed.
+# write leaves the original untouched — which is what this asserts. The README
+# is a link into a directory that takes no new files, so the temp file cannot
+# be created beside the real file while a write in place still could land.
 test_migration_readme_survives_a_failed_frontmatter_write() {
     local session_dir="$CS_SESSIONS_ROOT/no-frontmatter"
-    mkdir -p "$session_dir/.cs"/{local,memory}
-    local readme="$session_dir/.cs/README.md"
-    printf '# Session: no-frontmatter\n\n## Objective\n\nkeep me\n' > "$readme"
+    mkdir -p "$session_dir/.cs"/{local,memory} "$TEST_TMPDIR/readme-home"
+    local readme="$session_dir/.cs/README.md" real="$TEST_TMPDIR/readme-home/README.md"
+    printf '# Session: no-frontmatter\n\n## Objective\n\nkeep me\n' > "$real"
+    ln -s "$real" "$readme"
     echo "# Session narrative" > "$session_dir/.cs/memory/narrative.md"
     echo "# Session" > "$session_dir/CLAUDE.md"
     (cd "$session_dir" && git init -q && git add -A && git commit -q -m "init")
-    mkdir -p "$readme.tmp"   # the write cannot land here
+    _deny_writes "$TEST_TMPDIR/readme-home" || return 77
 
     "$CS_BIN" no-frontmatter <<< "" >/dev/null 2>&1 || true
+    _allow_writes "$TEST_TMPDIR/readme-home"
 
-    assert_file_contains "$readme" "^## Objective" "the user's README must survive" || return 1
-    assert_file_contains "$readme" "^keep me" "including its body" || return 1
-    if [ "$(head -1 "$readme")" = "---" ]; then
+    assert_file_contains "$real" "^## Objective" "the user's README must survive" || return 1
+    assert_file_contains "$real" "^keep me" "including its body" || return 1
+    if [ "$(head -1 "$real")" = "---" ]; then
         echo "  FAIL: rewrote the README in place despite the write failing"
         return 1
     fi
-    rmdir "$readme.tmp" 2>/dev/null || true
+    [ -L "$readme" ] || { echo "  FAIL: the README link was replaced by a file"; return 1; }
+}
+
+# Both README rewrites of the migration go through a uniquely named temp file:
+# a sibling the user named README.md.tmp is left alone and the README keeps
+# its mode. One session reaches the frontmatter reframe, the other the move of
+# machine-local fields.
+test_migration_readme_rewrites_leave_a_tmp_sibling_alone_and_keep_the_mode() {
+    local a="$CS_SESSIONS_ROOT/no-frontmatter-sib" b="$CS_SESSIONS_ROOT/legacy-frontmatter-sib" d
+    for d in "$a" "$b"; do
+        mkdir -p "$d/.cs"/{local,memory}
+        echo "# Session narrative" > "$d/.cs/memory/narrative.md"
+        echo "# Session" > "$d/CLAUDE.md"
+    done
+    printf '# Session: no-frontmatter-sib\n\n## Objective\n\nkeep me\n' > "$a/.cs/README.md"
+    printf -- '---\nstatus: active\ncreated: 2026-01-01\nclaude_session_id: abcd1234-5678-4abc-9def-fedcba987654\ntags: []\naliases: ["legacy-frontmatter-sib"]\n---\n# Session: legacy-frontmatter-sib\n' > "$b/.cs/README.md"
+    for d in "$a" "$b"; do
+        (cd "$d" && git init -q && git add -A && git commit -q -m "init")
+        printf 'USER-OWNED\n' > "$d/.cs/README.md.tmp"
+        chmod 750 "$d/.cs/README.md"
+    done
+
+    "$CS_BIN" no-frontmatter-sib <<< "" >/dev/null 2>&1 || true
+    "$CS_BIN" legacy-frontmatter-sib <<< "" >/dev/null 2>&1 || true
+
+    assert_eq "---" "$(head -1 "$a/.cs/README.md")" "frontmatter added" || return 1
+    assert_file_contains "$a/.cs/README.md" "^keep me" "the body is kept" || return 1
+    assert_file_not_contains "$b/.cs/README.md" "^claude_session_id:" "machine-local field moved out" || return 1
+    for d in "$a" "$b"; do
+        assert_eq "USER-OWNED" "$(cat "$d/.cs/README.md.tmp" 2>/dev/null)" "README.md.tmp is untouched in $(basename "$d")" || return 1
+        assert_eq "750" "$(_file_mode "$d/.cs/README.md")" "the README keeps its mode in $(basename "$d")" || return 1
+    done
 }
 
 test_migration_moves_fields_from_readme_to_local_state() {
@@ -404,6 +440,151 @@ test_launch_stops_loudly_when_state_cannot_be_written() {
 }
 
 # ============================================================================
+# Cycle 2b: state and .gitattributes rewrites use a unique temp name, keep the
+# destination's mode, and serialise on a lock
+# ============================================================================
+
+# Both writers (ags's _set_local_state and the SessionStart hook's) rewrite the
+# state file through a temp file in .cs/local. The name must be unique and the
+# file must keep its mode; the .gitattributes strip in the log migration gets
+# the same treatment.
+test_state_and_gitattributes_rewrites_leave_tmp_siblings_alone_and_keep_modes() {
+    local session_dir="$CS_SESSIONS_ROOT/tmpsib"
+    mkdir -p "$session_dir/.cs"/{logs,memory}
+    printf '# Session: tmpsib\n' > "$session_dir/.cs/README.md"
+    echo "# Session narrative" > "$session_dir/.cs/memory/narrative.md"
+    echo "# Session" > "$session_dir/CLAUDE.md"
+    printf 'Claude Code Session Log\n' > "$session_dir/.cs/logs/session.log"
+    printf '.cs/logs/session.log merge=union\n.cs/timeline.jsonl merge=union\n' > "$session_dir/.gitattributes"
+    (cd "$session_dir" && git init -q && git add -A && git commit -q -m "init")
+    # Untracked: a tracked .cs/local is refused, and the siblings stand for files
+    # the user keeps beside ags's.
+    printf 'USER-OWNED-GA\n' > "$session_dir/.gitattributes.tmp"
+    chmod 640 "$session_dir/.gitattributes"
+    local state="$session_dir/.cs/local/state"
+    mkdir -p "$session_dir/.cs/local"
+    printf 'session_name: tmpsib\n' > "$state"
+    printf 'USER-OWNED-STATE\n' > "$state.tmp"
+    chmod 640 "$state"
+
+    "$CS_BIN" tmpsib <<< "" >/dev/null 2>&1 || true
+
+    assert_file_not_contains "$session_dir/.gitattributes" "logs/session.log merge=union" "the union rule was stripped" || return 1
+    assert_eq "USER-OWNED-GA" "$(cat "$session_dir/.gitattributes.tmp")" ".gitattributes.tmp is untouched" || return 1
+    assert_eq "640" "$(_file_mode "$session_dir/.gitattributes")" ".gitattributes keeps its mode" || return 1
+    # ags stages the conversation id until SessionStart acknowledges it; the
+    # engine it records after the run is its write to this file.
+    assert_file_contains "$state" "^engine: claude" "the launch wrote the state file" || return 1
+    assert_eq "USER-OWNED-STATE" "$(cat "$state.tmp")" "state.tmp is untouched" || return 1
+    assert_eq "640" "$(_file_mode "$state")" "state keeps its mode" || return 1
+}
+
+# A state rewrite is a read-modify-write, so two writers (ags at launch and the
+# SessionStart hook) can lose an update unless they take turns. The lock is a
+# directory beside the file, .cs/local/state.lock, holding the holder's pid; a
+# live holder is waited for, up to five seconds, then the write goes ahead.
+test_state_write_waits_for_a_live_lock_holder() {
+    local session_dir
+    session_dir=$(create_test_session_with_git locked-state)
+    local state="$session_dir/.cs/local/state"
+    mkdir -p "$state.lock"
+    echo "$$" > "$state.lock/pid"
+    _argv_claude_stub
+
+    local start=$SECONDS
+    "$CS_BIN" locked-state <<< "" >/dev/null 2>&1 || true
+    local took=$((SECONDS - start))
+    rm -f "$state.lock/pid"; rmdir "$state.lock" 2>/dev/null
+
+    # ags records the engine after the run (the conversation id waits for
+    # SessionStart), so that line is the write that waited.
+    assert_file_contains "$state" "^engine: claude" "the write went ahead once the wait ran out" || return 1
+    [ "$took" -ge 4 ] || { echo "  FAIL: the writer must wait for a live holder (took ${took}s)"; return 1; }
+}
+
+# The state rewrite renders the old file through awk. When that read fails the
+# write must fail loudly and leave the file as it was; a renderer that swallows
+# the failure would replace the user's state with the one new line.
+test_state_write_fails_loudly_when_the_old_state_cannot_be_read() {
+    [ "$(id -u)" -ne 0 ] || { echo "  SKIP: root reads a mode-000 file"; return 77; }
+    local session_dir
+    session_dir=$(create_test_session_with_git unreadable-state)
+    local state="$session_dir/.cs/local/state"
+    mkdir -p "$session_dir/.cs/local"
+    printf 'session_name: unreadable-state\ncs_mode: keep-me\n' > "$state"
+    chmod 000 "$state"
+    _argv_claude_stub
+
+    local output rc=0
+    output=$("$CS_BIN" unreadable-state <<< "" 2>&1) || rc=$?
+    chmod 644 "$state"
+
+    [ "$rc" -ne 0 ] || { echo "  FAIL: a failed state read must end the launch"; return 1; }
+    assert_output_contains "$output" "Error: could not write $state" "the failure names the file" || return 1
+    assert_file_contains "$state" "^cs_mode: keep-me" "the old state survives" || return 1
+    [ ! -f "$TEST_TMPDIR/claude-args" ] || { echo "  FAIL: claude must not launch unrecorded"; return 1; }
+}
+
+# Two writers that alternate keys into one state file must end with every key
+# present: a lost update is the race the lock exists to close. The writers are
+# the shared library itself, so the test takes seconds, not launches.
+test_two_state_writers_lose_no_update() {
+    local state="$TEST_TMPDIR/state"
+    local lib="$SCRIPT_DIR/../hooks/cs-shared.sh"
+    bash -c 'source "$1"; i=1; while [ $i -le 40 ]; do cs_local_state_set "$2" "a$i" v || exit 1; i=$((i+1)); done' _ "$lib" "$state" &
+    local p1=$!
+    bash -c 'source "$1"; i=1; while [ $i -le 40 ]; do cs_local_state_set "$2" "b$i" v || exit 1; i=$((i+1)); done' _ "$lib" "$state" &
+    local p2=$!
+    wait "$p1" || { echo "  FAIL: writer a failed"; return 1; }
+    wait "$p2" || { echo "  FAIL: writer b failed"; return 1; }
+    assert_eq "80" "$(wc -l < "$state" | tr -d ' ')" "every key written by either writer is in the file" || return 1
+    assert_not_exists "$state.lock" "no lock left behind" || return 1
+}
+
+# Homebrew's gnubin puts GNU stat first on a Mac's PATH; the mode read must
+# work with either stat, so the dispatch is by behaviour, not by OSTYPE.
+test_atomic_write_keeps_the_mode_with_gnu_stat_on_a_mac() {
+    command -v gstat >/dev/null 2>&1 || { echo "  SKIP: no gstat on this machine"; return 77; }
+    local shim="$TEST_TMPDIR/gnubin"
+    mkdir -p "$shim"
+    printf '#!/bin/sh\nexec gstat "$@"\n' > "$shim/stat"; chmod +x "$shim/stat"
+    local f="$TEST_TMPDIR/f"
+    printf 'old\n' > "$f"; chmod 640 "$f"
+    PATH="$shim:$PATH" bash -c 'source "$1"; cs_write_atomic "$2" printf "new\n"' _ "$SCRIPT_DIR/../hooks/cs-shared.sh" "$f" \
+        || { echo "  FAIL: cs_write_atomic failed under GNU stat"; return 1; }
+    assert_eq "new" "$(cat "$f")" "the file was rewritten" || return 1
+    assert_eq "640" "$(_file_mode "$f")" "and kept its mode" || return 1
+}
+
+# A destination that is a directory is refused: nothing is written into it.
+test_atomic_write_refuses_a_directory_destination() {
+    local d="$TEST_TMPDIR/a-directory" rc=0
+    mkdir -p "$d"
+    bash -c 'source "$1"; cs_write_atomic "$2" printf "new\n"' _ "$SCRIPT_DIR/../hooks/cs-shared.sh" "$d" 2>/dev/null || rc=$?
+    [ "$rc" -ne 0 ] || { echo "  FAIL: writing onto a directory must fail"; return 1; }
+    assert_eq "" "$(ls -A "$d")" "nothing is left inside the directory" || return 1
+}
+
+test_state_write_takes_over_a_dead_holders_lock() {
+    local session_dir
+    session_dir=$(create_test_session_with_git stale-lock)
+    local state="$session_dir/.cs/local/state"
+    local dead
+    dead=$(sh -c 'echo $$')
+    mkdir -p "$state.lock"
+    echo "$dead" > "$state.lock/pid"
+    _argv_claude_stub
+
+    "$CS_BIN" stale-lock <<< "" >/dev/null 2>&1 || true
+
+    assert_file_contains "$state" "^engine: claude" "the write went through" || return 1
+    # A waited-out deadline leaves the dead lock in place; a takeover removes it
+    # and the writer then releases its own, so the directory's absence is the
+    # takeover, with no clock involved.
+    assert_not_exists "$state.lock" "the dead lock was taken over and released" || return 1
+}
+
+# ============================================================================
 # Cycle 3b: migration relocates the session log to machine-local .cs/local/
 # ============================================================================
 
@@ -628,6 +809,7 @@ run_test test_new_session_records_state_in_local_not_readme
 run_test test_resume_leaves_readme_untouched
 run_test test_migration_leaves_a_body_line_that_looks_like_a_field
 run_test test_migration_readme_survives_a_failed_frontmatter_write
+run_test test_migration_readme_rewrites_leave_a_tmp_sibling_alone_and_keep_the_mode
 run_test test_migration_moves_fields_from_readme_to_local_state
 run_test test_clone_with_a_readme_id_that_is_not_a_uuid_starts_fresh
 run_test test_migration_never_records_a_readme_id_that_is_not_a_uuid
@@ -644,4 +826,11 @@ run_test test_migration_moves_session_log_into_private
 run_test test_clone_with_a_readme_color_that_is_not_a_color_gets_a_fresh_one
 run_test test_launch_ignores_a_recorded_color_that_is_not_a_color
 run_test test_launch_stops_loudly_when_state_cannot_be_written
+run_test test_state_and_gitattributes_rewrites_leave_tmp_siblings_alone_and_keep_modes
+run_test test_state_write_waits_for_a_live_lock_holder
+run_test test_state_write_takes_over_a_dead_holders_lock
+run_test test_state_write_fails_loudly_when_the_old_state_cannot_be_read
+run_test test_two_state_writers_lose_no_update
+run_test test_atomic_write_keeps_the_mode_with_gnu_stat_on_a_mac
+run_test test_atomic_write_refuses_a_directory_destination
 report_results

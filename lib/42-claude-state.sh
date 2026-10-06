@@ -120,6 +120,49 @@ _discover_session_uuid_in() {
     return 0
 }
 
+# The conversation of a Claude Code worktree (`claude --worktree`) once it has
+# exited. While it runs, its transcript sits under the worktree's own project
+# dir like any other; at exit Claude Code relocates the file into the PARENT
+# repo's project dir (2.1.289), beside the parent's own conversations, and the
+# worktree's dir is left empty. The moved file keeps a `worktree-state` record
+# naming the worktree path, which is what tells it apart from the parent's
+# conversations: the newest file in that dir is whatever was last opened on
+# the parent, not this worktree. A parent conversation that stepped into the
+# worktree with the EnterWorktree tool gains the same record, so the record
+# alone does not make a file the worktree's: its first prompt must also be
+# stamped with the worktree as cwd, which is where a `claude --worktree`
+# session starts and where a parent conversation never does. Newest-first, the
+# first non-bystander file that passes both is the worktree's conversation.
+# Empty when none does.
+_discover_worktree_uuid_in() {  # parent_project_dir, wt_dir
+    local proj="$1" wt_real
+    [ -d "$proj" ] || return 0
+    wt_real=$( (cd "$2" 2>/dev/null && pwd -P) || printf '%s' "$2" )
+    # The record is a JSON string, so a `\` or `"` in the path is escaped there;
+    # escape the same way before matching, or such a repo never matches.
+    wt_real=$(printf '%s' "$wt_real" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    local listing
+    listing=$(ls -t "$proj"/*.jsonl 2>/dev/null) || true
+    [ -n "$listing" ] || return 0
+    local f first
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        # The closing quote pins the whole path: a worktree named `wt` must not
+        # claim `wt2`'s conversation.
+        grep -m1 -F "\"worktreePath\":\"$wt_real\"" "$f" >/dev/null 2>&1 || continue
+        first=$(grep -m1 '"type":"user"' "$f" 2>/dev/null) || continue
+        case "$first" in
+            *"\"cwd\":\"$wt_real\""*) ;;
+            *) continue ;;
+        esac
+        if ! _is_bystander_transcript "$f"; then
+            basename "$f" .jsonl
+            return 0
+        fi
+    done <<< "$listing"
+    return 0
+}
+
 # Stage a replacement UUID and launch it under the core controller.
 # SessionStart promotes the candidate only after verifying this run and lead.
 # Failure preserves the prior binding and the pending transition for inspection.

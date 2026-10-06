@@ -106,8 +106,7 @@ _rotation_armed_handoff() {  # session_dir
 # "status: unconsumed" line flips (the frontmatter's); a body quoting the
 # contract line flush-left stays intact. A consumed handoff names its consumer.
 _handoff_set_status() {  # handoff_file, status, [consumed_by]
-    local file="$1"
-    { awk -v status="$2" -v by="${3:-}" '
+    cs_write_atomic "$1" awk -v status="$2" -v by="${3:-}" '
         !flipped && $0 == "status: unconsumed" {
             print "status: " status
             if (by != "") print "consumed_by: " by
@@ -115,9 +114,7 @@ _handoff_set_status() {  # handoff_file, status, [consumed_by]
             next
         }
         { print }
-    ' "$file" > "$file.tmp"; } 2>/dev/null \
-        && mv "$file.tmp" "$file" 2>/dev/null \
-        || { rm -f "$file.tmp" 2>/dev/null; return 1; }
+    ' "$1" 2>/dev/null
 }
 
 # The last context usage stamped in this session, 0-100, or nothing.

@@ -78,6 +78,12 @@ fi
 if ! command -v cs_private_dir >/dev/null 2>&1; then
     cs_private_dir() { return 1; }
 fi
+# Nor can the queue state be replaced whole without the library's writer; the
+# drain then tells the user which state it could not write and hands out
+# nothing.
+if ! command -v cs_write_atomic >/dev/null 2>&1; then
+    cs_write_atomic() { return 1; }
+fi
 if ! command -v _cs_terminate_jsonl >/dev/null 2>&1; then
     _cs_terminate_jsonl() {
         [ -s "$1" ] || return 0
@@ -456,6 +462,21 @@ LOCAL="$META_DIR/local"
 QUEUE="$QDIR/queue"
 QSTATE_FILE="$QDIR/queue.state"
 
+# Record the queue state. An absent state file reads as idle, so when idle
+# cannot be written the file is removed instead: "draining" left behind would
+# have the next Stop mark a task done that was never handed out. Any other
+# state that cannot be recorded ends this Stop with nothing handed out and a
+# message Claude Code shows the user.
+_qstate_write() {  # state word
+    cs_write_atomic "$QSTATE_FILE" printf '%s\n' "$1" && return 0
+    if [ "$1" = idle ] && rm -f "$QSTATE_FILE" 2>/dev/null \
+        && [ ! -e "$QSTATE_FILE" ] && [ ! -L "$QSTATE_FILE" ]; then
+        return 0
+    fi
+    jq -nc --arg m "ags task queue: could not write $QSTATE_FILE" '{decision:"approve", systemMessage:$m}'
+    exit 0
+}
+
 # Lexically first task file (the glob is sorted); rc 1 when none.
 _qfirst() {  # queue dir
     local f
@@ -562,7 +583,7 @@ if [ "$QLEN" -gt 0 ] && _mail_is_lead; then
         TASK=""
         _first=$(_qfirst "$QUEUE") || _first=""
         [ -n "$_first" ] && TASK=$(cat "$_first" 2>/dev/null || true)
-        printf 'draining\n' > "$QSTATE_FILE.tmp" && mv "$QSTATE_FILE.tmp" "$QSTATE_FILE"
+        _qstate_write draining
         rm -f "$QDIR/failures"
         _inbox_append --arg ts "$(date +%s)" --arg q "$QLEN" \
             '{ts: ($ts|tonumber), event: "drain_started", queued: ($q|tonumber)}'
@@ -589,7 +610,7 @@ $SCOPE"
                 '{ts: ($ts|tonumber), event: "task_done", task: $task}'
             NEWLEN=$(_qlen "$QUEUE")
             if [ "$NEWLEN" -le 0 ]; then
-                printf 'idle\n' > "$QSTATE_FILE.tmp" && mv "$QSTATE_FILE.tmp" "$QSTATE_FILE"
+                _qstate_write idle
                 DONE_COUNT=$(_qdone_len "$QDIR/queue.done")
                 _inbox_append --arg ts "$(date +%s)" --arg d "$DONE_COUNT" \
                     '{ts: ($ts|tonumber), event: "drain_finished", done: ($d|tonumber)}'
@@ -604,7 +625,7 @@ $SCOPE"
             if TRIP=$(_breaker_check); then
                 set -- $TRIP
                 REASON_KIND="$1"; READING="$2"; LIMIT="$3"
-                printf 'idle\n' > "$QSTATE_FILE.tmp" && mv "$QSTATE_FILE.tmp" "$QSTATE_FILE"
+                _qstate_write idle
                 _inbox_append --arg ts "$(date +%s)" --arg r "$REASON_KIND" \
                     --arg v "$READING" --arg l "$LIMIT" --arg n "$NEWLEN" \
                     '{ts: ($ts|tonumber), event: "breaker_tripped", reason: $r, reading: ($v|tonumber), limit: ($l|tonumber), remaining: ($n|tonumber)}'
@@ -629,7 +650,7 @@ $SCOPE"
             exit 0
         else
             # pop failed: disarm rather than re-inject the same task (fail-safe)
-            printf 'idle\n' > "$QSTATE_FILE.tmp" && mv "$QSTATE_FILE.tmp" "$QSTATE_FILE"
+            _qstate_write idle
         fi
     fi
 

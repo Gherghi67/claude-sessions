@@ -5,7 +5,7 @@ _queue_set_state() {  # atomic single-word write; "" removes the file
     local qdir="$1" val="$2"
     mkdir -p "$qdir"
     if [ -z "$val" ]; then rm -f "$qdir/queue.state"; return 0; fi
-    printf '%s\n' "$val" > "$qdir/queue.state.tmp" && mv "$qdir/queue.state.tmp" "$qdir/queue.state"
+    cs_write_atomic "$qdir/queue.state" printf '%s\n' "$val"
 }
 
 # Convert a pre-directory queue (a single line-per-task FILE at the queue
@@ -215,8 +215,7 @@ run_queue() {
         rm)    shift; _queue_rm "$qdir" "${1:-}";;
         clear) _queue_clear "$qdir";;
         start) _queue_set_state "$qdir" armed;;
-        defer) mkdir -p "$qdir"; printf '%s\n' "$(date +%s)" > "$qdir/queue.declined.tmp" \
-                   && mv "$qdir/queue.declined.tmp" "$qdir/queue.declined"
+        defer) mkdir -p "$qdir"; cs_write_atomic "$qdir/queue.declined" printf '%s\n' "$(date +%s)"
                _terminate_jsonl "$qdir/notifications.jsonl"
                { jq -nc --arg ts "$(date +%s)" '{ts: ($ts|tonumber), event: "gate_declined"}' \
                    >> "$qdir/notifications.jsonl"; } 2>/dev/null || true;;

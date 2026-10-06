@@ -47,6 +47,46 @@ _seed_conversation() {  # wt_dir, uuid, first_prompt
     printf '{"type":"user","message":{"role":"user","content":"%s"}}\n' "$3" > "$proj/$2.jsonl"
 }
 
+# The transcript Claude Code leaves for a worktree session once it has
+# exited: moved into the PARENT repo's project dir, first line a non-user
+# record, every user line stamped with the worktree as cwd, plus the
+# `worktree-state` record naming the worktree (2.1.289, measured on a real
+# `claude --worktree` run).
+_seed_relocated_conversation() {  # repo_dir, wt_dir, uuid, first_prompt
+    local proj wt_real
+    proj=$(_wt_project_dir "$1")
+    # Paths go through the JSON string escaping Claude Code's writer applies.
+    local wt_real repo_real
+    wt_real=$(cd "$2" && pwd -P | sed 's/\\/\\\\/g; s/"/\\"/g')
+    repo_real=$(cd "$1" && pwd -P | sed 's/\\/\\\\/g; s/"/\\"/g')
+    mkdir -p "$proj"
+    {
+        printf '{"type":"last-prompt","leafUuid":"00000000-0000-4000-8000-000000000000","sessionId":"%s"}\n' "$3"
+        printf '{"type":"worktree-state","worktreeSession":{"originalCwd":"%s","worktreePath":"%s","worktreeName":"%s","sessionId":"%s"},"sessionId":"%s"}\n' \
+            "$repo_real" "$wt_real" "$(basename "$2")" "$3" "$3"
+        printf '{"type":"user","cwd":"%s","sessionId":"%s","entrypoint":"cli","message":{"role":"user","content":"%s"}}\n' "$wt_real" "$3" "$4"
+        printf '{"type":"relocated","sessionId":"%s","relocatedCwd":"%s"}\n' "$3" "$repo_real"
+    } > "$proj/$3.jsonl"
+}
+
+# A conversation that began on the parent repo and stepped into a worktree with
+# the EnterWorktree tool: the file is the parent's own, its first prompt is
+# stamped with the parent as cwd, and the `worktree-state` record it gained
+# names the worktree all the same.
+_seed_entered_conversation() {  # repo_dir, wt_dir, uuid, first_prompt
+    local proj wt_real repo_real
+    proj=$(_wt_project_dir "$1")
+    wt_real=$(cd "$2" && pwd -P | sed 's/\\/\\\\/g; s/"/\\"/g')
+    repo_real=$(cd "$1" && pwd -P | sed 's/\\/\\\\/g; s/"/\\"/g')
+    mkdir -p "$proj"
+    {
+        printf '{"type":"user","cwd":"%s","sessionId":"%s","entrypoint":"cli","message":{"role":"user","content":"%s"}}\n' "$repo_real" "$3" "$4"
+        printf '{"type":"worktree-state","worktreeSession":{"originalCwd":"%s","worktreePath":"%s","worktreeName":"%s","sessionId":"%s","enteredExisting":true},"sessionId":"%s"}\n' \
+            "$repo_real" "$wt_real" "$(basename "$2")" "$3" "$3"
+        printf '{"type":"user","cwd":"%s","sessionId":"%s","entrypoint":"cli","message":{"role":"user","content":"carry on inside the worktree"}}\n' "$wt_real" "$3"
+    } > "$proj/$3.jsonl"
+}
+
 _readme_objective() {  # session_dir
     sed -n '/^## Objective/,/^## /{/^## Objective/d;/^## /d;/^$/d;p;}' "$1/.cs/README.md" | head -1
 }
@@ -97,6 +137,43 @@ test_adopts_a_worktree_with_a_conversation() {
         "the Objective is the conversation's first prompt" || return 1
     assert_eq "$claude_md_before" "$(cat "$wt/CLAUDE.md")" "the tracked CLAUDE.md is untouched" || return 1
     assert_eq "" "$(git -C "$wt" status --porcelain)" "the worktree's PR branch stays clean" || return 1
+}
+
+# Claude Code moves a worktree session's transcript into the parent repo's
+# project dir when the session exits, so a closed worktree has nothing under
+# its own project dir. The parent dir also holds the parent's own
+# conversations; the worktree's is the one whose worktree-state names it.
+test_adopts_a_worktree_whose_transcript_moved_to_the_parent() {
+    local repo="$TEST_TMPDIR/repo"
+    _make_repo "$repo" moved-wt
+    local wt="$repo/.claude/worktrees/moved-wt"
+    _seed_relocated_conversation "$repo" "$wt" "$UUID_A" "Port the sync engine to the worktree branch"
+    sleep 1
+    _seed_conversation "$repo" "$UUID_B" "The parent repo's own newer conversation"
+
+    local output
+    output=$(cd "$repo" && "$CS_BIN" -adopt --worktrees 2>&1) || { echo "  FAIL: adopt --worktrees should succeed: $output"; return 1; }
+
+    [ -L "$CS_SESSIONS_ROOT/repo.moved-wt" ] || { echo "  FAIL: no session link; output: $output"; return 1; }
+    assert_eq "$UUID_A" "$(awk '/^claude_session_id:/ { print $2; exit }' "$wt/.cs/local/state")" \
+        "the state binds the worktree's relocated conversation, not the parent's newer one" || return 1
+    assert_eq "Port the sync engine to the worktree branch" "$(_readme_objective "$wt")" \
+        "the Objective is read from the relocated transcript" || return 1
+    assert_eq "" "$(git -C "$wt" status --porcelain)" "the worktree's PR branch stays clean" || return 1
+}
+
+# A `"` in the repo's path is `\"` in the transcript's JSON; the match has to
+# compare like with like or such a repo's worktrees are never adopted. The
+# quote sits in a parent folder: the repo's own name becomes the session name.
+test_adopts_a_relocated_conversation_when_the_repo_path_needs_json_escaping() {
+    local repo="$TEST_TMPDIR/q\"uoted/repo"
+    _make_repo "$repo" quoted-wt
+    local wt="$repo/.claude/worktrees/quoted-wt"
+    _seed_relocated_conversation "$repo" "$wt" "$UUID_A" "Quote the path and still find the conversation"
+    local output
+    output=$(cd "$repo" && "$CS_BIN" -adopt --worktrees 2>&1) || { echo "  FAIL: adopt --worktrees should succeed: $output"; return 1; }
+    assert_eq "$UUID_A" "$(awk '/^claude_session_id:/ { print $2; exit }' "$wt/.cs/local/state" 2>/dev/null)" \
+        "the relocated conversation is found through the JSON-escaped path; output: $output" || return 1
 }
 
 test_skips_a_worktree_without_a_conversation() {
@@ -332,14 +409,16 @@ test_a_worktree_that_tracks_a_file_cs_must_own_is_skipped() {
     assert_not_exists "$wt/.cs" "nothing is written into it" || return 1
     assert_not_exists "$CS_SESSIONS_ROOT/repo.tracked" "no session is registered" || return 1
     assert_output_contains "$output" "skip tracked: CLAUDE.local.md is tracked" "the skip names the tracked file" || return 1
-    # ags writes through a fixed .tmp sibling before the mv, so a tracked one is
-    # a tracked file ags would clobber too.
+    # A tracked <file>.tmp sibling is the user's own file: ags's temp names are
+    # unique, so it is neither a reason to skip nor touched by the adoption.
     git -C "$wt" rm -q --cached CLAUDE.local.md && rm "$wt/CLAUDE.local.md"
     mkdir -p "$wt/.claude" && printf '{}\n' > "$wt/.claude/settings.local.json.tmp"
     git -C "$wt" add .claude/settings.local.json.tmp && git -C "$wt" commit -q -m "track a tmp sibling"
     output=$(cd "$repo" && "$CS_BIN" -adopt --worktrees 2>&1) || true
-    assert_not_exists "$wt/.cs" "nothing is written into it either" || return 1
-    assert_output_contains "$output" "skip tracked: .claude/settings.local.json.tmp is tracked" "the skip names the tracked tmp sibling" || return 1
+    assert_exists "$wt/.cs" "the worktree is adopted" || return 1
+    assert_output_not_contains "$output" "skip tracked" "a tracked tmp sibling is no reason to skip" || return 1
+    assert_eq "{}" "$(cat "$wt/.claude/settings.local.json.tmp")" "the tracked tmp sibling is untouched" || return 1
+    assert_eq "" "$(git -C "$wt" status --porcelain -- .claude/settings.local.json.tmp)" "and stays clean" || return 1
 }
 
 test_open_refuses_once_the_branch_tracks_a_file_cs_rewrites() {
@@ -397,9 +476,67 @@ test_open_refuses_a_claude_local_symlink_to_a_tracked_file() {
     assert_eq "tracked prose" "$(cat "$wt/README.md")" "the tracked target is untouched" || return 1
 }
 
+# A parent conversation that entered the worktree carries the same
+# worktree-state record as the worktree's own conversation. It began on the
+# parent, so it stays the parent's: the worktree binds the conversation that
+# was started in it, even when the parent's is the newer file.
+test_binds_the_worktrees_own_conversation_over_a_parent_one_that_entered_it() {
+    local repo="$TEST_TMPDIR/repo"
+    _make_repo "$repo" entered-wt
+    local wt="$repo/.claude/worktrees/entered-wt"
+    _seed_relocated_conversation "$repo" "$wt" "$UUID_A" "Port the sync engine to the worktree branch"
+    sleep 1
+    _seed_entered_conversation "$repo" "$wt" "$UUID_B" "Review the parent repo and step into the worktree"
+
+    local output
+    output=$(cd "$repo" && "$CS_BIN" -adopt --worktrees 2>&1) || { echo "  FAIL: adopt --worktrees should succeed: $output"; return 1; }
+
+    assert_eq "$UUID_A" "$(awk '/^claude_session_id:/ { print $2; exit }' "$wt/.cs/local/state")" \
+        "the state binds the conversation started in the worktree, not the parent's that entered it" || return 1
+    assert_eq "Port the sync engine to the worktree branch" "$(_readme_objective "$wt")" \
+        "the Objective is the worktree conversation's first prompt" || return 1
+}
+
+# A worktree nobody ever started a conversation in has none to bind, even when
+# a parent conversation entered it: that conversation is the parent's.
+test_skips_a_worktree_only_a_parent_conversation_entered() {
+    local repo="$TEST_TMPDIR/repo"
+    _make_repo "$repo" visited-wt
+    local wt="$repo/.claude/worktrees/visited-wt"
+    _seed_entered_conversation "$repo" "$wt" "$UUID_B" "Review the parent repo and step into the worktree"
+
+    local output
+    output=$(cd "$repo" && "$CS_BIN" -adopt --worktrees 2>&1) || { echo "  FAIL: adopt --worktrees should succeed: $output"; return 1; }
+
+    assert_output_contains "$output" "skip visited-wt: no conversation" "the skip names the worktree and the reason" || return 1
+    [ ! -e "$CS_SESSIONS_ROOT/repo.visited-wt" ] || { echo "  FAIL: a session link was made for a worktree with no conversation of its own"; return 1; }
+    [ ! -e "$wt/.cs" ] || { echo "  FAIL: the worktree was given session records"; return 1; }
+}
+
+# One worktree's path can be the start of another's (`wt` and `wt2`). The
+# conversation belongs to the worktree whose whole path it names.
+test_a_worktree_does_not_claim_a_longer_named_siblings_conversation() {
+    local repo="$TEST_TMPDIR/repo"
+    _make_repo "$repo" wt wt2
+    _seed_relocated_conversation "$repo" "$repo/.claude/worktrees/wt2" "$UUID_A" "Work that happened in the second worktree"
+
+    local output
+    output=$(cd "$repo" && "$CS_BIN" -adopt --worktrees 2>&1) || { echo "  FAIL: adopt --worktrees should succeed: $output"; return 1; }
+
+    assert_eq "$UUID_A" "$(awk '/^claude_session_id:/ { print $2; exit }' "$repo/.claude/worktrees/wt2/.cs/local/state")" \
+        "wt2 binds its own conversation" || return 1
+    assert_output_contains "$output" "skip wt: no conversation" "wt has none and is skipped" || return 1
+    [ ! -e "$CS_SESSIONS_ROOT/repo.wt" ] || { echo "  FAIL: wt was adopted with its sibling's conversation"; return 1; }
+}
+
 run_test test_refuses_outside_a_git_repo
 run_test test_refuses_a_repo_without_claude_worktrees
 run_test test_adopts_a_worktree_with_a_conversation
+run_test test_adopts_a_worktree_whose_transcript_moved_to_the_parent
+run_test test_adopts_a_relocated_conversation_when_the_repo_path_needs_json_escaping
+run_test test_binds_the_worktrees_own_conversation_over_a_parent_one_that_entered_it
+run_test test_skips_a_worktree_only_a_parent_conversation_entered
+run_test test_a_worktree_does_not_claim_a_longer_named_siblings_conversation
 run_test test_skips_a_worktree_without_a_conversation
 run_test test_binds_the_newest_of_two_conversations
 run_test test_rerun_adopts_nothing_twice_and_keeps_the_exclude_file

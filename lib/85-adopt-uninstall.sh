@@ -327,7 +327,7 @@ adopt_worktrees() {  # [--dry-run]
         fi
     done
 
-    local wt_dir wt_name session_name proj uuid adopted=0 wt_top wt_common state tracked
+    local wt_dir wt_name session_name proj parent_proj uuid adopted=0 wt_top wt_common state tracked
     for wt_dir in "$wt_root"/*/; do
         wt_dir="${wt_dir%/}"
         [ -d "$wt_dir" ] || continue
@@ -366,11 +366,20 @@ adopt_worktrees() {  # [--dry-run]
                 continue
             fi
         fi
+        # A running worktree session writes under the worktree's own project
+        # dir; one that has exited was moved into the parent repo's. Look in
+        # both, and keep proj naming the dir the transcript was found in: the
+        # Objective is read from it below.
         proj=$(_claude_project_dir "$wt_dir")
         uuid=$(_discover_session_uuid_in "$proj")
         if [ -z "$uuid" ]; then
-            echo -e "${DIM}skip $wt_name: no conversation under $proj${NC}"
-            continue
+            parent_proj=$(_claude_project_dir "$repo")
+            uuid=$(_discover_worktree_uuid_in "$parent_proj" "$wt_dir")
+            if [ -z "$uuid" ]; then
+                echo -e "${DIM}skip $wt_name: no conversation under $proj, none relocated into $parent_proj${NC}"
+                continue
+            fi
+            proj="$parent_proj"
         fi
         # The open refuses the same conflict; skipping here keeps a worktree
         # from being registered as a session that can never open.

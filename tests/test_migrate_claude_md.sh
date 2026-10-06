@@ -226,7 +226,53 @@ test_worktree_ignored_mode_excludes_local_md_via_clone_exclude() {
     fi
 }
 
+# Every CLAUDE.md / CLAUDE.local.md rewrite goes through a temp file in the
+# same directory. Its name must be unique, so a sibling the user named
+# <file>.tmp is never clobbered, and the rewritten file keeps its mode. The
+# fixture reaches all four rewrites: the Discovered Commands strip and the
+# head split on CLAUDE.md, the protocol-wording rewrite and the memory-rules
+# retirement on CLAUDE.local.md.
+test_migration_rewrites_leave_tmp_siblings_alone_and_keep_modes() {
+    local dir
+    dir=$(create_test_session "tmpsib")
+    printf '# User Head\n\n## Discovered Commands\n\n- make test\n\n<!-- cs:session-protocol -->\nold protocol .cs/\n' > "$dir/CLAUDE.md"
+    printf '<!-- cs:session-protocol -->\n# Session Documentation Protocol\n\nAppend only to your own; read all narrative.*.md on resume to restore your\nworking narrative and see teammates'"'"' in-progress findings.\n\n<!-- cs:memory-rules -->\n## Auto-memory bucket guidance\nold rules\n\n<!-- cs:wrap-cues -->\n' > "$dir/CLAUDE.local.md"
+    printf 'USER-OWNED-MD\n' > "$dir/CLAUDE.md.tmp"
+    printf 'USER-OWNED-LOCAL\n' > "$dir/CLAUDE.local.md.tmp"
+    chmod 640 "$dir/CLAUDE.md" "$dir/CLAUDE.local.md"
+
+    "$CS_BIN" "tmpsib" < /dev/null > /dev/null 2>&1 || true
+
+    assert_file_not_contains "$dir/CLAUDE.md" "Discovered Commands" "commands section stripped" || return 1
+    assert_file_not_contains "$dir/CLAUDE.md" "cs:session-protocol" "head split happened" || return 1
+    assert_file_not_contains "$dir/CLAUDE.local.md" "read all narrative" "protocol wording rewritten" || return 1
+    assert_file_not_contains "$dir/CLAUDE.local.md" "Auto-memory bucket guidance" "memory rules retired" || return 1
+    assert_eq "USER-OWNED-MD" "$(cat "$dir/CLAUDE.md.tmp")" "CLAUDE.md.tmp is untouched" || return 1
+    assert_eq "USER-OWNED-LOCAL" "$(cat "$dir/CLAUDE.local.md.tmp")" "CLAUDE.local.md.tmp is untouched" || return 1
+    assert_eq "640" "$(_file_mode "$dir/CLAUDE.md")" "CLAUDE.md keeps its mode" || return 1
+    assert_eq "640" "$(_file_mode "$dir/CLAUDE.local.md")" "CLAUDE.local.md keeps its mode" || return 1
+}
+
+# A CLAUDE.local.md that is a symlink is rewritten THROUGH the link: the target
+# gets the new text and keeps its mode, and the link stays a link.
+test_migration_rewrite_through_a_symlink_keeps_the_targets_mode() {
+    local dir
+    dir=$(create_test_session "linked")
+    printf '<!-- cs:session-protocol -->\n# Session Documentation Protocol\n\nAppend only to your own; read all narrative.*.md on resume to restore your\nworking narrative and see teammates'"'"' in-progress findings.\n\n<!-- cs:memory-note -->\nnote\n<!-- cs:wrap-cues -->\n' > "$dir/real-local.md"
+    chmod 640 "$dir/real-local.md"
+    ln -s real-local.md "$dir/CLAUDE.local.md"
+
+    "$CS_BIN" "linked" < /dev/null > /dev/null 2>&1 || true
+
+    assert_file_not_contains "$dir/CLAUDE.local.md" "read all narrative" "protocol wording rewritten" || return 1
+    assert_eq "640" "$(_file_mode "$dir/CLAUDE.local.md")" "the rewritten file keeps the target's mode" || return 1
+    [ -L "$dir/CLAUDE.local.md" ] || { echo "  FAIL: the symlink was replaced by a regular file"; return 1; }
+    assert_file_not_contains "$dir/real-local.md" "read all narrative" "the rewrite went through the link into the target" || return 1
+}
+
 run_test test_migrate_preserves_user_claude_md
+run_test test_migration_rewrites_leave_tmp_siblings_alone_and_keep_modes
+run_test test_migration_rewrite_through_a_symlink_keeps_the_targets_mode
 run_test test_migrate_claude_md_idempotent
 run_test test_create_path_writes_local_md
 run_test test_pure_cs_claude_md_moves_wholesale
@@ -333,6 +379,29 @@ test_migrate_rewrites_read_all_wording_cs_wrote() {
     assert_file_contains "$dir/CLAUDE.local.md" "<!-- cs:memory-note -->" "the following block is untouched" || return 1
 }
 
+# The two wording rewrites under .cs/memory go through a uniquely named temp
+# file too: <file>.tmp siblings are left alone and both files keep their mode.
+test_migrate_memory_wording_rewrites_leave_tmp_siblings_alone_and_keep_modes() {
+    local dir
+    dir=$(create_test_session "wordysib")
+    printf -- '---\nname: session-narrative-alice\ndescription: Session lab-notebook and work-in-progress narrative for alice. Looser bar than durable memory. Read all narrative.*.md on resume.\ntype: narrative\n---\n# Session narrative (alice)\n' \
+        > "$dir/.cs/memory/narrative.alice.md"
+    printf -- '- [Session narrative — alice (lab notebook)](narrative.alice.md): looser-bar work-in-progress; read all narrative.*.md on resume\n' \
+        > "$dir/.cs/memory/MEMORY.md"
+    printf 'USER-OWNED-NARRATIVE\n' > "$dir/.cs/memory/narrative.alice.md.tmp"
+    printf 'USER-OWNED-INDEX\n' > "$dir/.cs/memory/MEMORY.md.tmp"
+    chmod 750 "$dir/.cs/memory/narrative.alice.md" "$dir/.cs/memory/MEMORY.md"
+
+    CS_ACTOR=alice "$CS_BIN" "wordysib" < /dev/null > /dev/null 2>&1 || true
+
+    assert_file_not_contains "$dir/.cs/memory/narrative.alice.md" "Read all narrative" "description rewritten" || return 1
+    assert_file_not_contains "$dir/.cs/memory/MEMORY.md" "read all narrative" "index pointer rewritten" || return 1
+    assert_eq "USER-OWNED-NARRATIVE" "$(cat "$dir/.cs/memory/narrative.alice.md.tmp" 2>/dev/null)" "narrative .tmp sibling untouched" || return 1
+    assert_eq "USER-OWNED-INDEX" "$(cat "$dir/.cs/memory/MEMORY.md.tmp" 2>/dev/null)" "MEMORY.md.tmp untouched" || return 1
+    assert_eq "750" "$(_file_mode "$dir/.cs/memory/narrative.alice.md")" "the narrative keeps its mode" || return 1
+    assert_eq "750" "$(_file_mode "$dir/.cs/memory/MEMORY.md")" "MEMORY.md keeps its mode" || return 1
+}
+
 test_migrate_read_all_rewrite_is_idempotent() {
     local dir
     dir=$(create_test_session "wordy2")
@@ -425,6 +494,7 @@ test_migrated_protocol_matches_the_template() {
 }
 
 run_test test_migrate_rewrites_read_all_wording_cs_wrote
+run_test test_migrate_memory_wording_rewrites_leave_tmp_siblings_alone_and_keep_modes
 run_test test_migrated_protocol_matches_the_template
 run_test test_migrate_leaves_a_current_protocol_block_alone
 run_test test_migrate_rewrites_read_the_live_wording_cs_wrote
