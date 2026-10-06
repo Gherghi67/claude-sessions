@@ -165,6 +165,65 @@ test_migration_that_warns_leaves_no_stamp() {
         "positive control: the same session stamps once the rewrite succeeds" || return 1
 }
 
+# Empty, garbage, a first line alone, and a second line cut off before its
+# newline: none is a stamp, so each open runs the full migration, restamps,
+# and says nothing about it.
+test_unusable_stamp_reruns_the_migration_quietly() {
+    local dir="$CS_SESSIONS_ROOT/torn" version out rc content
+    version=$("$CS_BIN" -version)
+    version=${version#cs }
+    _stamped_session torn || return 1
+    for content in "" "garbage" "$(printf '%s\talice\t0\n' "$version")" \
+        "$(printf '%s\talice\t0\n.gitignore\tCLAUDE.loc' "$version")"; do
+        printf '%s' "$content" > "$dir/.cs/local/migrated"
+        _drop_line "$dir/.gitignore" ".obsidian/"
+        _age_session "$dir"
+        rc=0
+        out=$(_open torn) || rc=$?
+        assert_eq "0" "$rc" "an open with stamp '$content' succeeds: $out" || return 1
+        assert_output_not_contains "$out" "Error" "stamp '$content' raises no error" || return 1
+        assert_output_not_contains "$out" "line [0-9][0-9]*: " "stamp '$content' trips no shell error" || return 1
+        assert_file_contains "$dir/.gitignore" '^\.obsidian/$' \
+            "stamp '$content' runs the full migration" || return 1
+        assert_eq "$(printf '%s\talice\t0' "$version")" "$(sed -n 1p "$dir/.cs/local/migrated")" \
+            "stamp '$content' is replaced by a whole one" || return 1
+    done
+}
+
+test_committed_stamp_is_refused() {
+    local dir="$CS_SESSIONS_ROOT/tracked" out rc=0
+    _stamped_session tracked || return 1
+    (cd "$dir" && git add -f .cs/local/migrated && git commit -q -m "track the stamp") \
+        || { echo "  FAIL: could not commit the stamp"; return 1; }
+    out=$(_open tracked) || rc=$?
+    assert_eq "1" "$rc" "an open with a committed stamp is refused" || return 1
+    assert_output_contains "$out" ".cs/local/ is tracked in git" \
+        "the refusal names the tracked .cs/local" || return 1
+    assert_output_not_contains "$out" "--resume" "the refused open launches nothing" || return 1
+}
+
+# Claude Code rewrites MEMORY.md itself, so a newer index alone re-runs only
+# the narrative check: the dropped pointer comes back, while a backdated
+# .gitignore edit (the full migration's job) stays as it was.
+test_memory_index_edit_reruns_only_the_narrative_check() {
+    local dir="$CS_SESSIONS_ROOT/indexed" tmp
+    _stamped_session indexed || return 1
+    tmp=$(mktemp "${TMPDIR:-/tmp}/index.XXXXXX")
+    grep -vF '(narrative.alice.md)' "$dir/.cs/memory/MEMORY.md" > "$tmp" || true
+    cat "$tmp" > "$dir/.cs/memory/MEMORY.md"
+    rm -f "$tmp"
+    assert_file_not_contains "$dir/.cs/memory/MEMORY.md" '(narrative\.alice\.md)' \
+        "precondition: the pointer is gone" || return 1
+    _drop_line "$dir/.gitignore" ".obsidian/"
+    _age_session "$dir"
+    touch -t 202601010000 "$dir/.cs/memory/MEMORY.md"
+    _open indexed > /dev/null || { echo "  FAIL: the reopen failed"; return 1; }
+    assert_file_contains "$dir/.cs/memory/MEMORY.md" '(narrative\.alice\.md)' \
+        "a newer MEMORY.md gets its narrative pointer back" || return 1
+    assert_file_not_contains "$dir/.gitignore" '^\.obsidian/$' \
+        "a newer MEMORY.md alone runs no other phase" || return 1
+}
+
 run_test test_fresh_stamp_skips_the_one_time_phases
 run_test test_gitignore_edited_after_the_stamp_is_repaired
 run_test test_deleted_claude_local_md_is_regenerated
@@ -172,5 +231,8 @@ run_test test_stamp_from_another_version_reruns_the_migration
 run_test test_another_actor_reruns_the_migration
 run_test test_session_encrypted_after_the_stamp_gains_the_protocol
 run_test test_migration_that_warns_leaves_no_stamp
+run_test test_unusable_stamp_reruns_the_migration_quietly
+run_test test_committed_stamp_is_refused
+run_test test_memory_index_edit_reruns_only_the_narrative_check
 
 report_results

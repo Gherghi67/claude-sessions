@@ -4,7 +4,7 @@
 setup_merge_attributes() {
     local dir="$1"
     git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || return 0
-    git -C "$dir" config merge.ours.driver true 2>/dev/null || true
+    git -C "$dir" config merge.ours.driver true 2>/dev/null || _CS_MIGRATE_CLEAN=0
     local ga="$dir/.gitattributes"
     if ! grep -q 'MEMORY\.md merge=ours' "$ga" 2>/dev/null; then
         printf '.cs/memory/MEMORY.md merge=ours\n' >> "$ga"
@@ -406,12 +406,12 @@ migrate_narrative_resume_wording() {  # session_dir, [actor_slug]
         # sentence appears once, so a typo cannot migrate half the population
         # to a wording no later gate matches.
         cs_write_atomic "$f" sed -E '1,8{/^description: /s/Read (all narrative\.\*\.md on resume\.|the live narrative\.\*\.md on resume; older sections are archived under \.cs\/narrative-archive\/\.)/Its owner reads it in full on resume; anyone else reads only the lines the resume digest names. Older sections are archived under .cs\/narrative-archive\/./;}' "$f" \
-            || warn "could not rewrite $f; its description keeps the old wording"
+            || { warn "could not rewrite $f; its description keeps the old wording"; _CS_MIGRATE_CLEAN=0; }
     fi
     f="$mem/MEMORY.md"
     if [ -f "$f" ] && grep -qE 'read (all|the live) narrative\.\*\.md on resume' "$f"; then
         cs_write_atomic "$f" sed -E 's/read (all narrative\.\*\.md on resume|the live narrative\.\*\.md on resume, older sections under \.cs\/narrative-archive\/)/its owner reads it in full on resume, anyone else only the lines the resume digest names; older sections under .cs\/narrative-archive\//' "$f" \
-            || warn "could not rewrite $f; its narrative pointer keeps the old wording"
+            || { warn "could not rewrite $f; its narrative pointer keeps the old wording"; _CS_MIGRATE_CLEAN=0; }
     fi
     f="$session_dir/CLAUDE.local.md"
     # cs has shipped two protocol-block wordings for the same sentence: the
@@ -549,6 +549,8 @@ _migrate_session_documents() {  # session_dir, tracked_tree_is_ours, actor_slug
         if cs_write_atomic "$readme" printf -- '---\nstatus: active\ncreated: %s\ntags: []\naliases: ["%s"]\n---\n%s\n' \
             "$created_date" "$session_name" "$existing_content" 2>/dev/null; then
             warn "Added frontmatter to .cs/README.md"
+        else
+            _CS_MIGRATE_CLEAN=0
         fi
     fi
 
@@ -612,6 +614,7 @@ _migrate_session_documents() {  # session_dir, tracked_tree_is_ours, actor_slug
             warn "Moved machine-local fields from .cs/README.md to .cs/local/state"
         else
             warn "could not rewrite $readme; its machine-local fields stay in it"
+            _CS_MIGRATE_CLEAN=0
         fi
     fi
 }
@@ -728,7 +731,7 @@ CS_MIGRATION_PROBES=".gitignore .gitattributes CLAUDE.local.md CLAUDE.md .cs/REA
 # .cs/local/migrated. Prints "fresh" when it can skip every one-time phase,
 # or "stale: <reason>" when it must run them all.
 _migration_stamp_state() {  # session_dir, actor_raw
-    local stamp="$1/.cs/local/migrated" line1="" line2="" rest p
+    local stamp="$1/.cs/local/migrated" line1="" line2="" rest p encrypted=0
     if [ ! -f "$stamp" ]; then
         echo "stale: no stamp"
         return 0
@@ -745,6 +748,13 @@ _migration_stamp_state() {  # session_dir, actor_raw
         "$VERSION"$'\t'"$2"$'\t'*) ;;
         *) echo "stale: written for another actor"; return 0 ;;
     esac
+    if [ -d "$1/.cs/private" ]; then
+        encrypted=1
+    fi
+    if [ "$line1" != "$VERSION"$'\t'"$2"$'\t'"$encrypted" ]; then
+        echo "stale: the stamp records another encryption state"
+        return 0
+    fi
     rest="$line2"
     while [ -n "$rest" ]; do
         p=${rest%%$'\t'*}
@@ -817,7 +827,8 @@ migrate_session() {
     # do, so a reopen skips them ("none"); the refusals above and the phases
     # that only test for a leftover's existence run on every open. The stamp
     # sits after cs_assert_local_untracked on purpose: a stamp committed into
-    # git is refused before anything trusts it.
+    # git is refused before anything trusts it. A phase that carries on past a
+    # failed write clears _CS_MIGRATE_CLEAN, so the next open retries it.
     local actor_raw actor_slug="" repair=all
     actor_raw=$(cs_actor_raw "$session_dir" "$session_dir/.cs")
     case "$(_migration_stamp_state "$session_dir" "$actor_raw")" in
