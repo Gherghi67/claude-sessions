@@ -8,6 +8,7 @@ All notable changes to cs are documented here. Release notes are also available 
 
 ### Added
 - The walk-away queue can run each task in a subagent or as a workflow. The Stop hook's offer and `/queue`'s now also ask how the tasks run: in this conversation, in subagents, or as workflows. `cs -queue start subagents` and `cs -queue start workflow` record the choice, and every handed task then says to run it that way and to check the result before marking it done. Picking workflows counts as your go-ahead for Claude Code's Workflow tool. The choice lasts until the run finishes or the next `cs -queue start`, and `cs -queue clear` drops it.
+- `/finish` shows its progress. A toast says `cs: finishing <task>` when it starts, and another gives the outcome: `cs: landed <task> <sha> -> <base sha>`, `cs: /finish <task> refused: <reason>` or `cs: retired <task>`. While the project's gate runs, the band above the prompt reads `finishing <task> · gate <elapsed>`, even mid-turn. cs writes each step to `finish-progress.json` in `.cs/local` (`.cs/private` in an encrypted session) with its own process id, so a cs that a signal ended leaves no band behind. A write that fails costs one warning and never changes the landing. An integrate run from a shell, outside `/finish`, toasts nothing.
 
 ### Changed
 - `/queue <task>` confirms the add in a toast under the prompt, `cs: queued: <task>` (cut at 60 characters). The command's own line lands in the transcript, and a running turn scrolls it out of view.
