@@ -50,14 +50,17 @@ SETTINGS
 # The narrative is the looser-bar lab notebook, held as a native memory topic
 # file so it inherits lazy-load and /memory tooling. Idempotent: creates the
 # stub on first run and re-adds the index pointer if a memory write dropped it.
-ensure_narrative_file() {
+# A caller that has already resolved the actor's slug passes it.
+ensure_narrative_file() {  # session_dir, [actor_slug]
     local session_dir="$1"
     local mem_dir="$session_dir/.cs/memory"
     local index="$mem_dir/MEMORY.md"
     mkdir -p "$mem_dir"
 
-    local actor
-    actor=$(cs_actor_slug "$session_dir")
+    local actor="${2:-}"
+    if [ -z "$actor" ]; then
+        actor=$(cs_actor_slug "$session_dir")
+    fi
     local narrative="$mem_dir/narrative.$actor.md"
 
     # One-time migration: a pre-per-actor narrative.md becomes this actor's file.

@@ -2709,14 +2709,17 @@ SETTINGS
 # The narrative is the looser-bar lab notebook, held as a native memory topic
 # file so it inherits lazy-load and /memory tooling. Idempotent: creates the
 # stub on first run and re-adds the index pointer if a memory write dropped it.
-ensure_narrative_file() {
+# A caller that has already resolved the actor's slug passes it.
+ensure_narrative_file() {  # session_dir, [actor_slug]
     local session_dir="$1"
     local mem_dir="$session_dir/.cs/memory"
     local index="$mem_dir/MEMORY.md"
     mkdir -p "$mem_dir"
 
-    local actor
-    actor=$(cs_actor_slug "$session_dir")
+    local actor="${2:-}"
+    if [ -z "$actor" ]; then
+        actor=$(cs_actor_slug "$session_dir")
+    fi
     local narrative="$mem_dir/narrative.$actor.md"
 
     # One-time migration: a pre-per-actor narrative.md becomes this actor's file.
@@ -3830,13 +3833,16 @@ needs_cs_migration() {
 # CLAUDE.local.md. Only the exact sentences cs emitted are
 # touched — a narrative body or a user's own prose never is. Temp+mv rather than
 # sed -i (BSD/GNU disagree on -i). Idempotent: nothing matches on the second run.
-migrate_narrative_resume_wording() {
-    local session_dir="$1"
+migrate_narrative_resume_wording() {  # session_dir, [actor_slug]
+    local session_dir="$1" actor="${2:-}"
     local mem="$session_dir/.cs/memory" f
+    if [ -z "$actor" ]; then
+        actor=$(cs_actor_slug "$session_dir")
+    fi
     # Only the actor's own narrative: a teammate's file is theirs to migrate on
     # their own resume, and a committed edit to its head would show up in their
     # teammates' digests as growth that is not a tail.
-    f="$mem/narrative.$(cs_actor_slug "$session_dir").md"
+    f="$mem/narrative.$actor.md"
     # Keyed to the description line specifically (not just "somewhere in the
     # first 8 lines"): a cs-written narrative has exactly 7 header lines, so
     # a body line beginning on line 8 sits inside a bare line-range window
@@ -3914,147 +3920,15 @@ migrate_narrative_resume_wording() {
     fi
 }
 
-# Migrate existing session to latest format
-migrate_session() {
-    local session_dir="$1"
-
-    # Sessions created before cs set a mode are still world-readable on disk,
-    # and git does not record directory modes, so a fresh clone recreates .cs
-    # under the cloner's umask however it was set on the other machine.
-    _harden_session_meta "$session_dir"
-    # The root only when cs owns it. An adopted session's real directory is the
-    # user's project, living wherever they keep it — re-permissioning that on
-    # every launch would change their directory behind their back. Testing the
-    # PARENT rather than the name: by the time migrate runs, the path has been
-    # resolved through the symlink, so the adopted session no longer looks like
-    # a link and its basename is the project's, not the session's.
-    if _session_root_is_cs_owned "$session_dir"; then
-        chmod 700 "$session_dir" 2>/dev/null || true
-    fi
-
-    # Per-actor local state must never be committed; refuse if it has been.
-    cs_assert_local_untracked "$session_dir"
-    if [ "$(_read_local_state "$session_dir/.cs/local/state" git_bookkeeping)" = "exclude" ]; then
-        local conflict
-        conflict=$(_exclude_session_tracked_conflict "$session_dir")
-        if [ -n "$conflict" ]; then
-            case "$conflict" in
-                *symlink) error "$conflict in $session_dir, and cs writes through it at every open. Replace it with a real file or directory, or cs -rm the session." ;;
-                *) error "$conflict is tracked on the branch in $session_dir, and cs would rewrite it at every open. Stop tracking it, or cs -rm the session." ;;
-            esac
-        fi
-    fi
-
-    # Backfill the merge attributes on existing sessions, and the .cs/local/
-    # ignore rule on older sessions whose .gitignore predates it, so per-actor
-    # local state never gets committed (which would otherwise trip
-    # cs_assert_local_untracked and block the next resume). An adopted Claude
-    # Code worktree keeps cs's files out of git through the repo's common
-    # exclude instead (git_bookkeeping: exclude): nothing of cs's is committed
-    # there for attributes to govern, and an in-tree .gitignore or
-    # .gitattributes would be the one thing dirtying its PR branch.
-    # The same sessions keep their tracked CLAUDE.md as the branch has it: the
-    # two CLAUDE.md migrations further down are skipped for them too.
-    local tracked_tree_is_ours=1
-    if [ "$(_read_local_state "$session_dir/.cs/local/state" git_bookkeeping)" = "exclude" ]; then
-        tracked_tree_is_ours=0
-    fi
-    if [ "$tracked_tree_is_ours" = 1 ]; then
-        setup_merge_attributes "$session_dir"
-        ensure_cs_gitignore_entries "$session_dir"
-    fi
-
-    # Phase 1: Structural migration (flat layout -> .cs/ directory)
-    if needs_cs_migration "$session_dir"; then
-        mkdir -p "$session_dir/.cs"
-
-        # Move directories
-        migrate_if_exists "$session_dir/logs" "$session_dir/.cs/logs"
-        migrate_if_exists "$session_dir/archives" "$session_dir/.cs/archives"
-        migrate_if_exists "$session_dir/age-recipients" "$session_dir/.cs/age-recipients"
-
-        # Move metadata files
-        migrate_if_exists "$session_dir/README.md" "$session_dir/.cs/README.md"
-        migrate_if_exists "$session_dir/discoveries.md" "$session_dir/.cs/discoveries.md"
-        migrate_if_exists "$session_dir/summary.md" "$session_dir/.cs/summary.md"
-        migrate_if_exists "$session_dir/secrets.enc" "$session_dir/.cs/secrets.enc"
-        migrate_if_exists "$session_dir/secrets.age" "$session_dir/.cs/secrets.age"
-
-        # Update .gitignore for new structure
-        create_session_gitignore "$session_dir"
-
-        echo ""
-        echo -e "${ORANGE}Migrated session to .cs/ directory structure${NC}"
-        echo -e "${DIM}Session metadata moved to .cs/ - your workspace root is now clean for project files.${NC}"
-        echo ""
-
-        # Commit the migration if git is initialized
-        if [ -d "$session_dir/.git" ]; then
-            (
-                cd "$session_dir" || exit 0
-                git add -A 2>/dev/null || true
-                if ! git diff --cached --quiet 2>/dev/null; then
-                    git commit -q -m "Migrate session structure to .cs/ metadata directory" 2>/dev/null || true
-                fi
-            )
-        fi
-    fi
-
-    # Phase 2: Ensure .cs/ subdirectories exist (handles partial migrations and edge cases)
-    mkdir -p "$session_dir/.cs/local"
-
-    # Phase 2a: Convert a legacy line-per-message mail inbox to the maildir,
-    # and a legacy line-per-task queue file to the queue directory.
-    migrate_mailbox "$session_dir"
-    _queue_convert_legacy "$session_dir/.cs/local"
-
-    # Phase 2b: Relocate the session log to machine-local state. The audit trail
-    # (bash commands, lifecycle events, autosave notes) is per-checkout, not
-    # shared — keeping it git-synced with merge=union interleaved every machine's
-    # commands into the one shared repo. Move it under .cs/local/ (gitignored) so
-    # it stays with the machine that produced it; the shared structured record
-    # lives in timeline.jsonl. The tracked deletion is left for the next normal
-    # commit, as with the README-frontmatter move below. One-time, idempotent:
-    # once the old file is gone the block is a no-op. During the upgrade window a
-    # peer still on the old cs may keep appending to the tracked log, so a
-    # one-time modify/delete conflict on this low-stakes file is possible — take
-    # either side.
-    # An encrypted session's log belongs behind .cs/private; open has already
-    # refused a locked vault, so cs_private_dir resolves here.
-    if [ -f "$session_dir/.cs/logs/session.log" ]; then
-        local log_dir
-        log_dir=$(cs_private_dir "$session_dir/.cs") \
-            || error "Cannot move .cs/logs/session.log: .cs/private $(cs_private_state "$session_dir/.cs"), and cs cannot write there."
-        cat "$session_dir/.cs/logs/session.log" >> "$log_dir/session.log"
-        rm -f "$session_dir/.cs/logs/session.log"
-        rmdir "$session_dir/.cs/logs" 2>/dev/null || true
-        # Drop the obsolete union rule for the relocated log. awk, not grep -v:
-        # grep exits 1 when that was the only line, and an empty file is the
-        # right result there.
-        local ga="$session_dir/.gitattributes"
-        if [ "$tracked_tree_is_ours" = 1 ] && [ -f "$ga" ] && grep -q 'logs/session\.log merge=union' "$ga"; then
-            cs_write_atomic "$ga" awk '!/logs\/session\.log merge=union/' "$ga" 2>/dev/null || true
-        fi
-        warn "Moved .cs/logs/session.log to ${log_dir#"$session_dir"/}/session.log"
-    fi
-
-    # Remove inert sync/remote metadata left by older versions (the sync
-    # subsystem was removed; nothing reads these files anymore)
-    rm -f "$session_dir/.cs/sync.conf" "$session_dir/.cs/remote.conf"
-
-    # Phase 4: Ensure auto memory and plans are configured
-    if [ ! -d "$session_dir/.cs/memory" ] || [ ! -d "$session_dir/.cs/plans" ] || [ ! -f "$session_dir/.claude/settings.local.json" ]; then
-        setup_auto_memory "$session_dir"
-    fi
-
-    # Phase 4b: Fold a legacy discoveries.md into the narrative topic file, then
-    # ensure the narrative file + index pointer exist (idempotent on every resume).
-    migrate_discoveries_to_narrative "$session_dir"
-    ensure_narrative_file "$session_dir"
+# Phases 13, 5, 7, 6 and 12: the cs-managed text in the narrative, CLAUDE.md,
+# CLAUDE.local.md and .cs/README.md. Each phase is a no-op once its file is
+# current.
+_migrate_session_documents() {  # session_dir, tracked_tree_is_ours, actor_slug
+    local session_dir="$1" tracked_tree_is_ours="$2" actor_slug="$3"
 
     # Phase 13: the resume protocol reads live narratives only; rewrite the
     # read-all sentences cs wrote into files that predate rotation.
-    migrate_narrative_resume_wording "$session_dir"
+    migrate_narrative_resume_wording "$session_dir" "$actor_slug"
 
     # Phase 5: move cs-managed sections out of CLAUDE.md, then ensure the
     # protocol is present in CLAUDE.local.md (machine-local, gitignored). A
@@ -4189,42 +4063,11 @@ migrate_session() {
             warn "could not rewrite $readme; its machine-local fields stay in it"
         fi
     fi
+}
 
-    # Phase 8: Bind claude_session_id in local state to a real claude
-    # transcript on disk so `claude --resume <uuid>` resolves to an actual
-    # conversation. A recorded UUID with no matching transcript file is an
-    # orphan — the cs hooks/doctor cross-checks will warn about it on every
-    # launch, and `--resume` will fail. Steady state ("recorded UUID present,
-    # transcript exists") is the fast path; cold paths run discovery.
-    {
-        local _existing _proj _bind_uuid=""
-        _existing=$(_read_local_state "$_state" claude_session_id)
-        _proj=$(_claude_project_dir "$session_dir")
-
-        if [ -n "$_existing" ] && [ -f "$_proj/$_existing.jsonl" ]; then
-            : # already bound — skip discovery entirely
-        else
-            local _discovered
-            _discovered=$(_discover_session_uuid_in "$_proj")
-            # No transcripts: a recorded UUID is left alone (claude hasn't
-            # written the jsonl yet, eg. the session was just created with
-            # --session-id but hasn't talked to the user), and so is an empty
-            # slot. Only a transcript on disk names a conversation; an empty
-            # slot is the launch's to fill when it starts the first one.
-            if [ -n "$_discovered" ]; then
-                _bind_uuid="$_discovered"
-            fi
-        fi
-
-        if [ -n "$_bind_uuid" ]; then
-            _set_local_state "$_state" claude_session_id "$_bind_uuid"
-            if [ -z "$_existing" ]; then
-                warn "Bound claude_session_id in .cs/local/state to $_bind_uuid"
-            else
-                warn "Repaired orphan claude_session_id (was $_existing)"
-            fi
-        fi
-    }
+# Phases 9, 10 and 14: the cs sections of CLAUDE.local.md.
+_ensure_claude_local_sections() {  # session_dir
+    local session_dir="$1"
 
     # Phase 9: Manage the cs:memory-note section in CLAUDE.md. Four states:
     #
@@ -4324,6 +4167,244 @@ EOF
         { echo; _emit_encrypted_protocol_block; } >> "$claude_md_p9"
         warn "Added the encrypted-session protocol to CLAUDE.local.md"
     fi
+}
+
+# The session files a completed migration vouches for. Changed after the stamp
+# (newer than it), any of them sends the next open through the full migration.
+CS_MIGRATION_PROBES=".gitignore .gitattributes CLAUDE.local.md CLAUDE.md .cs/README.md"
+
+# How far an open can trust the last completed migration, from the stamp
+# .cs/local/migrated. Prints "fresh" when it can skip every one-time phase,
+# or "stale: <reason>" when it must run them all.
+_migration_stamp_state() {  # session_dir, actor_raw
+    local stamp="$1/.cs/local/migrated"
+    if [ ! -f "$stamp" ]; then
+        echo "stale: no stamp"
+        return 0
+    fi
+    echo "fresh"
+}
+
+# Record a completed migration in .cs/local/migrated. Line 1: the cs version,
+# the raw actor and whether the session is encrypted (1) or not (0), tab
+# separated. Line 2: the probe files that exist now, tab separated, so a later
+# open can tell one was deleted.
+_write_migration_stamp() {  # session_dir, actor_raw, actor_slug
+    local dir="$1" encrypted=0 listed="" p
+    if [ -d "$dir/.cs/private" ]; then
+        encrypted=1
+    fi
+    for p in $CS_MIGRATION_PROBES .cs/memory/MEMORY.md ".cs/memory/narrative.$3.md" .claude/settings.local.json; do
+        if [ -e "$dir/$p" ]; then
+            listed="$listed${listed:+$'\t'}$p"
+        fi
+    done
+    cs_write_atomic "$dir/.cs/local/migrated" printf '%s\t%s\t%s\n%s\n' "$VERSION" "$2" "$encrypted" "$listed"
+}
+
+# Migrate existing session to latest format
+migrate_session() {
+    local session_dir="$1"
+
+    # Sessions created before cs set a mode are still world-readable on disk,
+    # and git does not record directory modes, so a fresh clone recreates .cs
+    # under the cloner's umask however it was set on the other machine.
+    _harden_session_meta "$session_dir"
+    # The root only when cs owns it. An adopted session's real directory is the
+    # user's project, living wherever they keep it — re-permissioning that on
+    # every launch would change their directory behind their back. Testing the
+    # PARENT rather than the name: by the time migrate runs, the path has been
+    # resolved through the symlink, so the adopted session no longer looks like
+    # a link and its basename is the project's, not the session's.
+    if _session_root_is_cs_owned "$session_dir"; then
+        chmod 700 "$session_dir" 2>/dev/null || true
+    fi
+
+    # Per-actor local state must never be committed; refuse if it has been.
+    cs_assert_local_untracked "$session_dir"
+    if [ "$(_read_local_state "$session_dir/.cs/local/state" git_bookkeeping)" = "exclude" ]; then
+        local conflict
+        conflict=$(_exclude_session_tracked_conflict "$session_dir")
+        if [ -n "$conflict" ]; then
+            case "$conflict" in
+                *symlink) error "$conflict in $session_dir, and cs writes through it at every open. Replace it with a real file or directory, or cs -rm the session." ;;
+                *) error "$conflict is tracked on the branch in $session_dir, and cs would rewrite it at every open. Stop tracking it, or cs -rm the session." ;;
+            esac
+        fi
+    fi
+
+    # A migration that completes without a warning stamps .cs/local/migrated.
+    # While the stamp is fresh the one-time phases below have nothing left to
+    # do, so a reopen skips them ("none"); the refusals above and the phases
+    # that only test for a leftover's existence run on every open. The stamp
+    # sits after cs_assert_local_untracked on purpose: a stamp committed into
+    # git is refused before anything trusts it.
+    local actor_raw actor_slug="" repair=all
+    actor_raw=$(cs_actor_raw "$session_dir" "$session_dir/.cs")
+    case "$(_migration_stamp_state "$session_dir" "$actor_raw")" in
+        fresh) repair=none ;;
+    esac
+    _CS_MIGRATE_CLEAN=1
+
+    # Backfill the merge attributes on existing sessions, and the .cs/local/
+    # ignore rule on older sessions whose .gitignore predates it, so per-actor
+    # local state never gets committed (which would otherwise trip
+    # cs_assert_local_untracked and block the next resume). An adopted Claude
+    # Code worktree keeps cs's files out of git through the repo's common
+    # exclude instead (git_bookkeeping: exclude): nothing of cs's is committed
+    # there for attributes to govern, and an in-tree .gitignore or
+    # .gitattributes would be the one thing dirtying its PR branch.
+    # The same sessions keep their tracked CLAUDE.md as the branch has it: the
+    # two CLAUDE.md migrations further down are skipped for them too.
+    local tracked_tree_is_ours=1
+    if [ "$(_read_local_state "$session_dir/.cs/local/state" git_bookkeeping)" = "exclude" ]; then
+        tracked_tree_is_ours=0
+    fi
+    if [ "$tracked_tree_is_ours" = 1 ] && [ "$repair" = all ]; then
+        setup_merge_attributes "$session_dir"
+        ensure_cs_gitignore_entries "$session_dir"
+    fi
+
+    # Phase 1: Structural migration (flat layout -> .cs/ directory)
+    if needs_cs_migration "$session_dir"; then
+        mkdir -p "$session_dir/.cs"
+
+        # Move directories
+        migrate_if_exists "$session_dir/logs" "$session_dir/.cs/logs"
+        migrate_if_exists "$session_dir/archives" "$session_dir/.cs/archives"
+        migrate_if_exists "$session_dir/age-recipients" "$session_dir/.cs/age-recipients"
+
+        # Move metadata files
+        migrate_if_exists "$session_dir/README.md" "$session_dir/.cs/README.md"
+        migrate_if_exists "$session_dir/discoveries.md" "$session_dir/.cs/discoveries.md"
+        migrate_if_exists "$session_dir/summary.md" "$session_dir/.cs/summary.md"
+        migrate_if_exists "$session_dir/secrets.enc" "$session_dir/.cs/secrets.enc"
+        migrate_if_exists "$session_dir/secrets.age" "$session_dir/.cs/secrets.age"
+
+        # Update .gitignore for new structure
+        create_session_gitignore "$session_dir"
+
+        echo ""
+        echo -e "${ORANGE}Migrated session to .cs/ directory structure${NC}"
+        echo -e "${DIM}Session metadata moved to .cs/ - your workspace root is now clean for project files.${NC}"
+        echo ""
+
+        # Commit the migration if git is initialized
+        if [ -d "$session_dir/.git" ]; then
+            (
+                cd "$session_dir" || exit 0
+                git add -A 2>/dev/null || true
+                if ! git diff --cached --quiet 2>/dev/null; then
+                    git commit -q -m "Migrate session structure to .cs/ metadata directory" 2>/dev/null || true
+                fi
+            )
+        fi
+    fi
+
+    # Phase 2: Ensure .cs/ subdirectories exist (handles partial migrations and edge cases)
+    if [ ! -d "$session_dir/.cs/local" ]; then
+        mkdir -p "$session_dir/.cs/local"
+    fi
+
+    # Phase 2a: Convert a legacy line-per-message mail inbox to the maildir,
+    # and a legacy line-per-task queue file to the queue directory.
+    migrate_mailbox "$session_dir"
+    _queue_convert_legacy "$session_dir/.cs/local"
+
+    # Phase 2b: Relocate the session log to machine-local state. The audit trail
+    # (bash commands, lifecycle events, autosave notes) is per-checkout, not
+    # shared — keeping it git-synced with merge=union interleaved every machine's
+    # commands into the one shared repo. Move it under .cs/local/ (gitignored) so
+    # it stays with the machine that produced it; the shared structured record
+    # lives in timeline.jsonl. The tracked deletion is left for the next normal
+    # commit, as with the README-frontmatter move below. One-time, idempotent:
+    # once the old file is gone the block is a no-op. During the upgrade window a
+    # peer still on the old cs may keep appending to the tracked log, so a
+    # one-time modify/delete conflict on this low-stakes file is possible — take
+    # either side.
+    # An encrypted session's log belongs behind .cs/private; open has already
+    # refused a locked vault, so cs_private_dir resolves here.
+    if [ -f "$session_dir/.cs/logs/session.log" ]; then
+        local log_dir
+        log_dir=$(cs_private_dir "$session_dir/.cs") \
+            || error "Cannot move .cs/logs/session.log: .cs/private $(cs_private_state "$session_dir/.cs"), and cs cannot write there."
+        cat "$session_dir/.cs/logs/session.log" >> "$log_dir/session.log"
+        rm -f "$session_dir/.cs/logs/session.log"
+        rmdir "$session_dir/.cs/logs" 2>/dev/null || true
+        # Drop the obsolete union rule for the relocated log. awk, not grep -v:
+        # grep exits 1 when that was the only line, and an empty file is the
+        # right result there.
+        local ga="$session_dir/.gitattributes"
+        if [ "$tracked_tree_is_ours" = 1 ] && [ -f "$ga" ] && grep -q 'logs/session\.log merge=union' "$ga"; then
+            cs_write_atomic "$ga" awk '!/logs\/session\.log merge=union/' "$ga" 2>/dev/null || true
+        fi
+        warn "Moved .cs/logs/session.log to ${log_dir#"$session_dir"/}/session.log"
+    fi
+
+    # Remove inert sync/remote metadata left by older versions (the sync
+    # subsystem was removed; nothing reads these files anymore)
+    if [ "$repair" = all ]; then
+        rm -f "$session_dir/.cs/sync.conf" "$session_dir/.cs/remote.conf"
+    fi
+
+    # Phase 4: Ensure auto memory and plans are configured
+    if [ ! -d "$session_dir/.cs/memory" ] || [ ! -d "$session_dir/.cs/plans" ] || [ ! -f "$session_dir/.claude/settings.local.json" ]; then
+        setup_auto_memory "$session_dir"
+    fi
+
+    # Phase 4b: Fold a legacy discoveries.md into the narrative topic file, then
+    # ensure the narrative file + index pointer exist (idempotent; skipped while
+    # the migration stamp is fresh).
+    migrate_discoveries_to_narrative "$session_dir"
+    if [ "$repair" != none ]; then
+        actor_slug=$(_slugify "$actor_raw")
+        ensure_narrative_file "$session_dir" "$actor_slug"
+    fi
+
+    if [ "$repair" = all ]; then
+        _migrate_session_documents "$session_dir" "$tracked_tree_is_ours" "$actor_slug"
+    fi
+
+    local _state="$session_dir/.cs/local/state"
+    # Phase 8: Bind claude_session_id in local state to a real claude
+    # transcript on disk so `claude --resume <uuid>` resolves to an actual
+    # conversation. A recorded UUID with no matching transcript file is an
+    # orphan — the cs hooks/doctor cross-checks will warn about it on every
+    # launch, and `--resume` will fail. Steady state ("recorded UUID present,
+    # transcript exists") is the fast path; cold paths run discovery.
+    {
+        local _existing _proj _bind_uuid=""
+        _existing=$(_read_local_state "$_state" claude_session_id)
+        _proj=$(_claude_project_dir "$session_dir")
+
+        if [ -n "$_existing" ] && [ -f "$_proj/$_existing.jsonl" ]; then
+            : # already bound — skip discovery entirely
+        else
+            local _discovered
+            _discovered=$(_discover_session_uuid_in "$_proj")
+            # No transcripts: a recorded UUID is left alone (claude hasn't
+            # written the jsonl yet, eg. the session was just created with
+            # --session-id but hasn't talked to the user), and so is an empty
+            # slot. Only a transcript on disk names a conversation; an empty
+            # slot is the launch's to fill when it starts the first one.
+            if [ -n "$_discovered" ]; then
+                _bind_uuid="$_discovered"
+            fi
+        fi
+
+        if [ -n "$_bind_uuid" ]; then
+            _set_local_state "$_state" claude_session_id "$_bind_uuid"
+            if [ -z "$_existing" ]; then
+                warn "Bound claude_session_id in .cs/local/state to $_bind_uuid"
+            else
+                warn "Repaired orphan claude_session_id (was $_existing)"
+            fi
+        fi
+    }
+
+    if [ "$repair" = all ]; then
+        _ensure_claude_local_sections "$session_dir"
+    fi
 
     # Phase 11: Backfill claude_session_color in local state when absent.
     # Picks one of the 8 colors claude's /color command accepts. Idempotent —
@@ -4334,6 +4415,10 @@ EOF
         _new_color=$(_alloc_random_color)
         _set_local_state "$_state" claude_session_color "$_new_color"
         warn "Backfilled claude_session_color in .cs/local/state ($_new_color)"
+    fi
+
+    if [ "$repair" != none ] && [ "$_CS_MIGRATE_CLEAN" = 1 ]; then
+        _write_migration_stamp "$session_dir" "$actor_raw" "$actor_slug"
     fi
 }
 
