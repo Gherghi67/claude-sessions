@@ -79,7 +79,11 @@ keys on the display name rather than on position. Its `percent` is already 0–1
 uses, so it is converted at read time.
 
 The bearer is Claude Code's own OAuth token. On macOS that comes from the
-Keychain (`security find-generic-password -s "Claude Code-credentials"`); on
+Keychain (`security find-generic-password -s "Claude Code-credentials"`, or
+`Claude Code-credentials-<first 8 hex of sha256(dir)>` when the session runs on
+its own `CLAUDE_CONFIG_DIR`, the item Claude Code itself keeps that login in;
+`CLAUDE_SECURESTORAGE_CONFIG_DIR` names the dir instead when set, and empty
+means the plain item); on
 Linux and WSL2, where there is no Keychain, Claude Code keeps the same document
 in plaintext at `<config_home>/.credentials.json` and ags reads that instead. cs
 **reads** that

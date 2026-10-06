@@ -2550,7 +2550,36 @@ CURL
     assert_file_exists "$TEST_TMPDIR/curl.ran" "the 429 path was reached, not a credential failure" || return 1
 }
 
+# Claude Code keeps one login per config dir: "Claude Code-credentials" plus
+# "-<sha256(dir)[0:8]>" once CLAUDE_CONFIG_DIR is set, with
+# CLAUDE_SECURESTORAGE_CONFIG_DIR naming the dir when set (empty: no suffix).
+# Asking for the bare item from the ags profile read the other install's login.
+# $1 is the item the refresher must ask for; the caller sets the environment.
+_refresh_asks_for() {
+    rm -rf "$CS_USAGE_DIR" "$TEST_TMPDIR/security-argv"
+    PATH="$USAGE_BINDIR:$PATH" CS_STATUSLINE_NOW=1787816000 bash "$SL" --refresh-usage
+    assert_file_contains "$TEST_TMPDIR/security-argv" " -s $1 -w" \
+        "the refresher must read the login stored as '$1'" || return 1
+}
+
+test_refresh_reads_the_login_of_its_config_dir() {
+    make_usage_shims 200 "$USAGE_BODY"
+    use_scratch_usage_env
+    cat > "$USAGE_BINDIR/security" <<SEC
+#!/bin/bash
+printf '%s\n' "\$*" > "$TEST_TMPDIR/security-argv"
+printf '%s\n' '{"claudeAiOauth":{"accessToken":"test-token-not-real"}}'
+SEC
+    local own
+    own=$(printf '%s' "$CLAUDE_CONFIG_DIR" | shasum -a 256 | cut -c1-8)
+    _refresh_asks_for "Claude Code-credentials-$own" || return 1
+    CLAUDE_SECURESTORAGE_CONFIG_DIR="/Users/someone/profile/.claude" \
+        _refresh_asks_for "Claude Code-credentials-6dc5d78e" || return 1
+    CLAUDE_SECURESTORAGE_CONFIG_DIR="" _refresh_asks_for "Claude Code-credentials" || return 1
+}
+
 run_test test_refresh_writes_fable_window
+run_test test_refresh_reads_the_login_of_its_config_dir
 run_test test_refresh_keeps_token_off_argv
 run_test test_refresh_429_backs_off_and_keeps_last_good
 run_test test_refresh_no_fable_bucket_clears

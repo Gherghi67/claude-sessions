@@ -1276,6 +1276,26 @@ EOF
     rm -f "$tmp" 2>/dev/null
 }
 
+# The Keychain item Claude Code keeps this session's login in. Claude Code
+# (read from 2.1.291) suffixes "Claude Code-credentials" with the first eight
+# hex digits of sha256(config dir) whenever CLAUDE_CONFIG_DIR is set;
+# CLAUDE_SECURESTORAGE_CONFIG_DIR, when set at all, names that dir instead, and
+# empty drops the suffix. Without this, a session on its own config dir (the
+# ags profile, an encrypted session) read the default install's login. Fails
+# when the hash cannot be taken rather than fall back to that default item.
+_claude_credentials_service() {
+    local dir="${CLAUDE_CONFIG_DIR:-}" hash
+    [ -z "${CLAUDE_SECURESTORAGE_CONFIG_DIR+set}" ] || dir="$CLAUDE_SECURESTORAGE_CONFIG_DIR"
+    if [ -z "$dir" ]; then
+        printf '%s\n' "Claude Code-credentials"
+        return 0
+    fi
+    hash=$(printf '%s' "$dir" | shasum -a 256 2>/dev/null) || return 1
+    hash="${hash%% *}"
+    [ "${#hash}" -eq 64 ] || return 1
+    printf '%s\n' "Claude Code-credentials-${hash:0:8}"
+}
+
 # Fetch the Fable weekly window and rewrite the cache. Detached from the render
 # and serialised machine-wide by a mkdir lock, so concurrent sessions cannot
 # stampede the endpoint. Every exit path stamps next_poll_at, including the
@@ -1371,8 +1391,8 @@ _refresh_usage() {
     # cannot intercept a credential read. CS_SECURITY_BIN overrides it for the
     # test suite; that is not a weakening, because anyone who can set the
     # environment of this process can already redirect its `curl` and `jq`.
-    local creds="" token="" sec="${CS_SECURITY_BIN:-/usr/bin/security}"
-    if [ -x "$sec" ]; then
+    local creds="" token="" sec="${CS_SECURITY_BIN:-/usr/bin/security}" service
+    if [ -x "$sec" ] && service=$(_claude_credentials_service); then
         # A locked login keychain can put `security` behind a SecurityAgent
         # prompt that never gets answered on a headless or ssh host, and this
         # process holds the machine-wide refresh lock while it waits.
@@ -1383,7 +1403,7 @@ _refresh_usage() {
         # bound would be missing exactly where it is needed. /usr/bin/perl is on
         # every macOS and its alarm() needs no coreutils.
         creds=$(_bounded_capture 5 "$sec" find-generic-password \
-            -a "${USER:-$(id -un 2>/dev/null)}" -s "Claude Code-credentials" -w 2>/dev/null) || creds=""
+            -a "${USER:-$(id -un 2>/dev/null)}" -s "$service" -w 2>/dev/null) || creds=""
     fi
     if [ -z "$creds" ]; then
         # Linux and WSL2 have no Keychain; Claude Code keeps the same document

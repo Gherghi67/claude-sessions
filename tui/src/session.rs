@@ -80,10 +80,20 @@ pub fn lock_marker() -> &'static str {
     let config = std::env::var("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|_| std::env::var("HOME").map(|h| PathBuf::from(h).join(".config")));
-    let answer = config
-        .ok()
-        .and_then(|dir| fs::read_to_string(dir.join("cs/statusline-caps")).ok());
+    let answer = cs_dir_or(std::env::var("CS_CONFIG_DIR").ok(), config.ok().map(|dir| dir.join("cs")))
+        .and_then(|dir| fs::read_to_string(dir.join("statusline-caps")).ok());
     lock_marker_for(env.as_deref(), answer.as_deref())
+}
+
+/// cs's directory for one kind of file: the CS_* override when it is set and
+/// not empty, as lib/00-header.sh reads it, else `default`. ags exports
+/// CS_CONFIG_DIR and CS_CACHE_DIR to the picker, and the ags profile points
+/// them away from the stable install's ~/.config/cs and ~/.cache/cs.
+fn cs_dir_or(overridden: Option<String>, default: Option<PathBuf>) -> Option<PathBuf> {
+    match overridden {
+        Some(dir) if !dir.is_empty() => Some(PathBuf::from(dir)),
+        _ => default,
+    }
 }
 
 fn lock_marker_for(env: Option<&str>, caps_file: Option<&str>) -> &'static str {
@@ -153,11 +163,11 @@ pub(crate) fn home_dir() -> Option<String> {
 }
 
 /// The pending-update notice for this process: cs exports CS_VERSION at
-/// launch and its own update check maintains ~/.cache/cs.
+/// launch and its own update check maintains CS_CACHE_DIR (~/.cache/cs).
 pub fn update_notice() -> Option<UpdateNotice> {
     let installed = std::env::var("CS_VERSION").ok()?;
-    let home = home_dir()?;
-    update_notice_in(&PathBuf::from(home).join(".cache").join("cs"), &installed)
+    let home = home_dir().map(|h| PathBuf::from(h).join(".cache").join("cs"));
+    update_notice_in(&cs_dir_or(std::env::var("CS_CACHE_DIR").ok(), home)?, &installed)
 }
 
 pub struct SessionPreview {
@@ -2552,6 +2562,20 @@ mod tests {
         assert!(counts.is_empty());
         #[cfg(target_os = "macos")]
         let _ = counts; // content depends on the login keychain; only assert no panic
+    }
+
+    // The ags profile keeps its caps answer and update cache under its own
+    // home; read from ~/.config/cs and ~/.cache/cs, the picker showed the
+    // stable install's.
+    #[test]
+    fn a_cs_dir_override_wins_over_the_default() {
+        let default = Some(PathBuf::from("/home/u/.cache/cs"));
+        assert_eq!(
+            cs_dir_or(Some("/profile/.cache/cs".to_string()), default.clone()),
+            Some(PathBuf::from("/profile/.cache/cs"))
+        );
+        assert_eq!(cs_dir_or(Some(String::new()), default.clone()), default, "empty reads as unset, as in bash");
+        assert_eq!(cs_dir_or(None, default.clone()), default);
     }
 
     // The ags profile runs the encrypted backend, and the keychain beside it
