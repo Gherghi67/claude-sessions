@@ -120,10 +120,24 @@ test_another_actor_reruns_the_migration() {
         "a stamp written for alice runs the full migration for bob, which writes his narrative" || return 1
 }
 
+test_session_encrypted_after_the_stamp_gains_the_protocol() {
+    local dir="$CS_SESSIONS_ROOT/vaulted"
+    _stamped_session vaulted || return 1
+    assert_file_not_contains "$dir/CLAUDE.local.md" 'cs:encrypted-protocol' \
+        "precondition: the plain session has no encrypted protocol" || return 1
+    mkdir -p "$TEST_TMPDIR/vault/private"
+    ln -s "$TEST_TMPDIR/vault/private" "$dir/.cs/private"
+    _age_session "$dir"
+    _open vaulted > /dev/null || { echo "  FAIL: the reopen failed"; return 1; }
+    assert_file_contains "$dir/CLAUDE.local.md" '<!-- cs:encrypted-protocol -->' \
+        "a session encrypted after the stamp gains the encrypted protocol" || return 1
+}
+
 run_test test_fresh_stamp_skips_the_one_time_phases
 run_test test_gitignore_edited_after_the_stamp_is_repaired
 run_test test_deleted_claude_local_md_is_regenerated
 run_test test_stamp_from_another_version_reruns_the_migration
 run_test test_another_actor_reruns_the_migration
+run_test test_session_encrypted_after_the_stamp_gains_the_protocol
 
 report_results

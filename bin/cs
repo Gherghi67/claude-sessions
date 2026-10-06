@@ -4190,6 +4190,10 @@ _migration_stamp_state() {  # session_dir, actor_raw
         "$VERSION"$'\t'*) ;;
         *) echo "stale: written by cs ${line1%%$'\t'*}, not $VERSION"; return 0 ;;
     esac
+    case "$line1" in
+        "$VERSION"$'\t'"$2"$'\t'*) ;;
+        *) echo "stale: written for another actor"; return 0 ;;
+    esac
     rest="$line2"
     while [ -n "$rest" ]; do
         p=${rest%%$'\t'*}
