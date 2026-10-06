@@ -113,7 +113,7 @@ test_doctor_reports_iterm2_surface() {
 _tab_launch_env() {  # control_mode
     local inst="$TEST_TMPDIR/inst"
     mkdir -p "$inst/versions" "$inst/bin"
-    printf '#!/usr/bin/env bash\necho "argv0=$0"\nenv\n' > "$inst/versions/9.9.9"
+    printf '#!/usr/bin/env bash\necho "argv0=$0"\necho "args=$*"\nenv\n' > "$inst/versions/9.9.9"
     chmod +x "$inst/versions/9.9.9"
     ln -sf ../versions/9.9.9 "$inst/bin/claude"
     cat > "$inst/bin/tmux" << 'TMUX_EOF'
@@ -253,13 +253,41 @@ test_unlinkable_claude_still_launches() {
     assert_eq "iTerm.app" "$(_launched "$out" TERM_PROGRAM)" "the loader does not need the link" || return 1
 }
 
-test_user_chosen_claude_binary_is_run_as_given() {
+# Only a file sitting directly in a versions directory and named by a dotted
+# version number is the native installer's; a binary elsewhere, or one that
+# merely has a versions directory in its path, runs as given.
+test_non_native_claude_binaries_are_run_as_given() {
     _tab_launch_env 1
-    export CLAUDE_CODE_BIN="$TEST_TMPDIR/inst/versions/9.9.9"
-    local out
-    out=$("$CS_BIN" ownbin <<< "" 2>&1) || true
-    assert_eq "$TEST_TMPDIR/inst/versions/9.9.9" "$(_launched "$out" argv0)" \
-        "a CLAUDE_CODE_BIN the user set is never swapped for the link" || return 1
+    local inst="$TEST_TMPDIR/inst" out bin
+    for bin in "$inst/own/claude" "$inst/versions/3.12.1/bin/claude" "$inst/versions/1x.2y.3z"; do
+        mkdir -p "$(dirname "$bin")"
+        cp "$inst/versions/9.9.9" "$bin"
+        export CLAUDE_CODE_BIN="$bin --flag"
+        out=$("$CS_BIN" "own$RANDOM" <<< "" 2>&1) || true
+        assert_eq "$bin" "$(_launched "$out" argv0)" "$bin must run as given" || return 1
+        assert_eq "--flag" "$(_launched "$out" args | cut -d' ' -f1)" "its flags are kept" || return 1
+    done
+}
+
+# A CLAUDE_CODE_BIN that names the native install and carries flags runs the
+# link with the flags, split the way every launch site splits the value.
+test_native_claude_with_flags_runs_the_link_with_its_flags() {
+    _tab_launch_env 1
+    local out argv0
+    export CLAUDE_CODE_BIN="$TEST_TMPDIR/inst/bin/claude --permission-mode plan"
+    out=$("$CS_BIN" flagged <<< "" 2>&1) || true
+    argv0=$(_launched "$out" argv0)
+    assert_eq "claude" "$(basename "$argv0")" "the flagged native claude runs under the name claude" || return 1
+    [ "$argv0" -ef "$TEST_TMPDIR/inst/versions/9.9.9" ] || {
+        echo "  FAIL: launched $argv0 is not the installed version file"; return 1; }
+    [ ! -L "$argv0" ] || { echo "  FAIL: $argv0 is a symlink, its process name stays the version"; return 1; }
+    assert_eq "--permission-mode plan --name flagged --session-id" \
+        "$(_launched "$out" args | cut -d' ' -f1-5)" "the flags stay in front, in order" || return 1
+    export CLAUDE_CODE_BIN="$TEST_TMPDIR/inst/bin/claude	--permission-mode	plan"
+    out=$("$CS_BIN" tabbed <<< "" 2>&1) || true
+    assert_eq "claude" "$(basename "$(_launched "$out" argv0)")" "a tab separates the path from the flags too" || return 1
+    assert_eq "--permission-mode plan --name tabbed" \
+        "$(_launched "$out" args | cut -d' ' -f1-4)" "flags after a tab are kept" || return 1
 }
 
 # An npm install resolves claude to a cli.js that loads files beside it; run
@@ -279,6 +307,7 @@ test_npm_shaped_claude_is_not_linked() {
 
 run_test test_launch_under_iterm_cc_shows_loader_and_icon
 run_test test_npm_shaped_claude_is_not_linked
+run_test test_native_claude_with_flags_runs_the_link_with_its_flags
 run_test test_plain_tmux_keeps_tmux_name_unless_term_is_tmux
 run_test test_outside_iterm_launch_is_untouched
 run_test test_iterm_integrations_off_leaves_launch_untouched
@@ -286,7 +315,7 @@ run_test test_link_follows_a_claude_update
 run_test test_each_version_has_its_own_link
 run_test test_home_with_a_space_runs_claude_as_found
 run_test test_unlinkable_claude_still_launches
-run_test test_user_chosen_claude_binary_is_run_as_given
+run_test test_non_native_claude_binaries_are_run_as_given
 run_test test_stop_hook_bounces_dock_in_iterm
 run_test test_no_bounce_outside_iterm
 run_test test_no_bounce_when_disabled
