@@ -381,6 +381,29 @@ test_check_falls_back_when_fetch_fails() {
     assert_output_contains "$out" "releases" "fallback names the releases page" || return 1
 }
 
+# A launch asks GitHub for the latest version at most once an hour: a fresh
+# cache answers it whether or not it names a newer version. A stale cache asks
+# again (the positive control that the stub sees the probe at all).
+_launch_with_cache() {  # cache-epoch -> prints the curl calls the launch made
+    local stub="$TEST_TMPDIR/stub-bin"
+    mkdir -p "$stub" "$TEST_TMPDIR/home/.cache/cs"
+    printf '#!/bin/sh\necho "$*" >> "%s/curl-calls"\nexit 22\n' "$TEST_TMPDIR" > "$stub/curl"
+    chmod +x "$stub/curl"
+    : > "$TEST_TMPDIR/curl-calls"
+    printf '%s 2000.1.1\n' "$1" > "$TEST_TMPDIR/home/.cache/cs/update-check"
+    HOME="$TEST_TMPDIR/home" PATH="$stub:$PATH" CS_NO_UPDATE_CHECK='' \
+        "$CS_BIN" "cache-session-$1" < /dev/null > /dev/null 2>&1 || true
+    cat "$TEST_TMPDIR/curl-calls"
+}
+
+test_launch_with_a_fresh_cache_and_no_update_skips_the_network() {
+    assert_eq "" "$(_launch_with_cache "$(date +%s)")" "a fresh cache saying no update asks nothing" || return 1
+}
+
+test_launch_with_a_stale_cache_asks_again() {
+    assert_output_contains "$(_launch_with_cache 1000)" "/latest" "a stale cache asks for the latest version" || return 1
+}
+
 test_launch_banner_shows_notes_card() {
     export HOME="$TEST_TMPDIR/home"
     mkdir -p "$HOME/.cache/cs"
@@ -602,6 +625,8 @@ run_test test_render_flushes_headers_for_bullet_first_sections
 run_test test_render_width_floor_survives_tiny_terminals
 run_test test_check_shows_rendered_span
 run_test test_check_falls_back_when_fetch_fails
+run_test test_launch_with_a_fresh_cache_and_no_update_skips_the_network
+run_test test_launch_with_a_stale_cache_asks_again
 run_test test_launch_banner_shows_notes_card
 run_test test_launch_banner_quiet_on_empty_notes_cache
 run_test test_launch_banner_card_yields_to_the_mod
