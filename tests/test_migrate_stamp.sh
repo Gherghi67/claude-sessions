@@ -25,7 +25,7 @@ _stamped_session() {  # name
 _age_session() {  # dir
     local dir="$1" p
     for p in .gitignore .gitattributes CLAUDE.local.md CLAUDE.md .cs/README.md \
-        .cs/memory/MEMORY.md .claude/settings.local.json; do
+        .git/config .cs/memory/MEMORY.md .claude/settings.local.json; do
         if [ -e "$dir/$p" ]; then
             touch -t 202401010000 "$dir/$p"
         fi
@@ -87,6 +87,21 @@ test_deleted_claude_local_md_is_regenerated() {
     _open deleted > /dev/null || { echo "  FAIL: the reopen failed"; return 1; }
     assert_file_contains "$dir/CLAUDE.local.md" '<!-- cs:session-protocol -->' \
         "a CLAUDE.local.md deleted after the stamp is written again" || return 1
+}
+
+# The doctor's advice for a missing merge.ours.driver is to launch once, and
+# setup_merge_attributes writes it into .git/config: a .git/config changed
+# after the stamp sends the open through the migration.
+test_merge_driver_removed_after_the_stamp_is_restored() {
+    local dir="$CS_SESSIONS_ROOT/driver"
+    _stamped_session driver || return 1
+    git -C "$dir" config --unset merge.ours.driver \
+        || { echo "  FAIL: the fixture has no merge driver to remove"; return 1; }
+    _age_session "$dir"
+    touch -t 202601010000 "$dir/.git/config"
+    _open driver > /dev/null || { echo "  FAIL: the reopen failed"; return 1; }
+    assert_eq "true" "$(git -C "$dir" config --get merge.ours.driver)" \
+        "a merge driver removed after the stamp is set again" || return 1
 }
 
 # Replace line 1 of a session's stamp, keeping line 2 (the probe list).
@@ -242,6 +257,7 @@ test_stamp_that_cannot_be_written_does_not_stop_the_open() {
 run_test test_fresh_stamp_skips_the_one_time_phases
 run_test test_gitignore_edited_after_the_stamp_is_repaired
 run_test test_deleted_claude_local_md_is_regenerated
+run_test test_merge_driver_removed_after_the_stamp_is_restored
 run_test test_stamp_from_another_version_reruns_the_migration
 run_test test_another_actor_reruns_the_migration
 run_test test_session_encrypted_after_the_stamp_gains_the_protocol
