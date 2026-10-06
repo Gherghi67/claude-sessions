@@ -129,9 +129,17 @@ _strip_hook_registration() {
 # still hold these values, and cs -doctor reports them.
 CS_OPTION_KEYS='{"alt+1":"command:rotate","alt+2":"command:wrap"}'
 
-# Claude Code reads its keybindings from its config dir.
+# Claude Code reads its keybindings from its config dir. Inside an encrypted
+# session that dir is the session's .cs/claude-config, which no other session
+# reads; it links the shell's keybindings.json instead, so cs's keys belong in
+# the shell's config dir, which launch records in
+# CLAUDE_SECURESTORAGE_CONFIG_DIR (empty for ~/.claude).
 _cs_keybindings_file() {
-    printf '%s\n' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/keybindings.json"
+    local dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+    case "$dir" in
+        */.cs/claude-config) dir="${CLAUDE_SECURESTORAGE_CONFIG_DIR:-$HOME/.claude}" ;;
+    esac
+    printf '%s\n' "$dir/keybindings.json"
 }
 
 # This machine's answer to the installer's question, yes or no; absent until

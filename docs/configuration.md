@@ -252,7 +252,9 @@ export CS_PLATFORM_OVERRIDE="linux"   # macos, wsl, or linux
 
 The installer offers, once per machine, to bind two keys in Claude Code's
 `keybindings.json` (in `$CLAUDE_CONFIG_DIR` when you set it, otherwise
-`~/.claude/keybindings.json`):
+`~/.claude/keybindings.json`). Run inside an encrypted session, where
+`CLAUDE_CONFIG_DIR` is the session's `.cs/claude-config`, cs writes the shell's
+file instead, the one that session links:
 
 ```json
 {"bindings": [{"context": "Global", "bindings": {"alt+1": "command:rotate", "alt+2": "command:wrap"}}]}
