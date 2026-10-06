@@ -522,8 +522,10 @@ test_adopt_seeds_the_objective_from_the_newest_conversations_first_prompt() {
         "the first substantive prompt becomes the Objective" || return 1
 }
 
-# Seeding the Objective rewrites the README adopt has just created; the file
-# keeps the mode it was created with, here the one umask 022 gives.
+# Seeding the Objective rewrites the README adopt has just created. One adopt
+# creates and seeds it under one umask, so the mode it was created with is the
+# umask's (644 here); the check catches a seed that narrows it to a temp file's
+# 0600. Keeping a mode the umask would not give is test_local_state's to pin.
 test_adopt_objective_seed_keeps_the_readmes_mode() {
     local project_dir="$TEST_TMPDIR/mode-project"
     mkdir -p "$project_dir"

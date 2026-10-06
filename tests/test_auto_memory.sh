@@ -943,14 +943,14 @@ test_settings_merge_leaves_a_tmp_sibling_alone_and_keeps_the_mode() {
     local settings="$CS_SESSIONS_ROOT/test-session/.claude/settings.local.json"
     assert_exists "$settings" "settings.local.json should exist" || return 1
     printf 'USER-OWNED\n' > "$settings.tmp"
-    chmod 640 "$settings"
+    chmod 750 "$settings"
     # Phase 4 re-runs the merge only when memory, plans or settings is missing.
     rm -rf "$CS_SESSIONS_ROOT/test-session/.cs/plans"
 
     "$CS_BIN" test-session <<< "" 2>&1 || true
 
     assert_eq "USER-OWNED" "$(cat "$settings.tmp")" "the user's .tmp sibling is untouched" || return 1
-    assert_eq "640" "$(_file_mode "$settings")" "the rewritten file keeps its mode" || return 1
+    assert_eq "750" "$(_file_mode "$settings")" "the rewritten file keeps its mode" || return 1
     assert_file_contains "$settings" "autoMemoryDirectory" "the merge still happened" || return 1
 }
 

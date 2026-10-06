@@ -2854,17 +2854,22 @@ test_session_start_says_what_to_run_when_the_shared_library_is_missing() {
     mkdir -p "$partial"
     cp "$HOOKS_DIR"/*.sh "$partial/"
     rm "$partial/cs-shared.sh"
-    local out
+    local out err="$TEST_TMPDIR/partial-hook.err" state="$CLAUDE_SESSION_META_DIR/local/state"
+    mkdir -p "$CLAUDE_SESSION_META_DIR/local"
+    printf 'claude_session_id: 99999999-8888-4777-8666-555555555555\n' > "$state"
+    # As the launched claude, so the hook reaches the rebind.
     out=$(echo "{\"session_id\":\"11111111-2222-4333-8444-555555555555\",\"cwd\":\"$CLAUDE_SESSION_DIR\",\"source\":\"startup\"}" \
-        | bash "$partial/session-start.sh" 2>/dev/null)
+        | CS_LEAD_PID=$$ CLAUDE_PID=$$ bash "$partial/session-start.sh" 2>"$err")
     assert_output_contains "$out" "Current actor: unknown" \
         "no actor is guessed without the shared rules" || return 1
     assert_output_not_contains "$out" "john-doe-example-com" \
         "the hook must not resolve the actor from its own copy of the rules" || return 1
     assert_output_contains "$out" "cs-shared.sh" "names the missing library" || return 1
     assert_output_contains "$out" "install.sh" "names what redeploys it" || return 1
-    assert_file_not_contains "$CLAUDE_SESSION_META_DIR/local/session.log" "Rebound claude_session_id" \
-        "no rebind is logged when the state writer was missing" || return 1
+    assert_eq "claude_session_id: 99999999-8888-4777-8666-555555555555" "$(cat "$state")" \
+        "the state is left as it was without the locked writer" || return 1
+    assert_file_contains "$err" "cs-shared.sh is missing or outdated, so claude_session_id was not recorded" \
+        "the hook says the binding was not recorded" || return 1
 }
 
 run_test test_session_start_actor_honours_pinned_identity

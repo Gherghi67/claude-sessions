@@ -1930,13 +1930,13 @@ test_enable_and_disable_rewrite_settings_in_place() {
     local real="$TEST_TMPDIR/dotfiles/settings.json" step
     mkdir -p "$CS_CLAUDE_DIR" "$TEST_TMPDIR/dotfiles"
     echo '{"model":"opus"}' > "$real"
-    chmod 640 "$real"
+    chmod 750 "$real"
     ln -s "$real" "$CS_CLAUDE_DIR/settings.json"
     for step in enable disable; do
         bash "$CS_BIN" -statusline "$step" >/dev/null 2>&1 || { echo "  FAIL: cs -statusline $step failed"; return 1; }
         [ -L "$CS_CLAUDE_DIR/settings.json" ] \
             || { echo "  FAIL: $step replaced the symlinked settings.json with a plain file"; return 1; }
-        assert_eq "640" "$(_file_mode "$real")" "$step keeps settings.json's mode" || return 1
+        assert_eq "750" "$(_file_mode "$real")" "$step keeps settings.json's mode" || return 1
         assert_eq "opus" "$(jq -r '.model' "$real")" "$step keeps the other settings" || return 1
     done
     assert_eq "null" "$(jq -r '.statusLine' "$real")" "disable removed the registration enable wrote" || return 1
