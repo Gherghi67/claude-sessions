@@ -3743,7 +3743,7 @@ _refuse_worktree_of_encrypted_base() {  # base_name, base_dir
 # keeps behind .cs/private. The open refuses a plaintext copy of any of them,
 # and cs -encrypt moves each into the vault.
 CS_PRIVATE_LOCAL_FILES="session.log scope-prompt.trace memory-index.snapshot mail
-    queue queue.tmp queue.state queue.done queue.declined queue.migrating
+    queue queue.tmp queue.state queue.mode queue.done queue.declined queue.migrating
     notifications.jsonl notifications.seen failures rewrite.trace pending-handoff
     finish-progress.json"
 

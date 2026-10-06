@@ -100,7 +100,7 @@ in `.cs/private/` instead.
 | `vault-detach.pid` | The `hdiutil detach` that waiter started, so a reopen can stop an unmount in flight. |
 | `queue/` | The walk-away task queue (`cs -queue`): one file per task, staged in `queue.tmp/` and renamed into place so the drain never reads a torn entry. The drain pops the lexically first file by moving it aside — atomic against a second drain. |
 | `queue.state` | Drain state machine for the queue: `idle`, `armed`, or `draining`. |
-| `queue.mode` | How a started run hands over its tasks: `subagents` or `workflow`; absent runs them in the conversation. Written by `cs -queue start`, removed when the run finishes or the queue is cleared. |
+| `queue.mode` | How a started run hands over its tasks: `subagents` or `workflow`; absent runs them in the conversation. Written by `cs -queue start`, removed when the run finishes or the queue is cleared. A run the failures breaker stops keeps it until the next `cs -queue start`. |
 | `queue.done` | Log of completed queued tasks, appended as each is drained. |
 | `queue.declined` | Cooldown stamp after declining the queue-drain prompt. |
 | `notifications.jsonl` | Per-machine queue inbox — drain lifecycle events (`drain_started`, `task_done`, `breaker_tripped`, `drain_finished`) and the `gate_declined` event `cs -queue defer` writes, read by `cs -queue log` and the surface-once digest. |
