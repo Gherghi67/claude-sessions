@@ -4465,8 +4465,10 @@ migrate_session() {
         warn "Backfilled claude_session_color in .cs/local/state ($_new_color)"
     fi
 
+    # A stamp that cannot be written costs only speed: without it the next
+    # open runs every phase again, which is what it did before the stamp.
     if [ "$repair" != none ] && [ "$_CS_MIGRATE_CLEAN" = 1 ]; then
-        _write_migration_stamp "$session_dir" "$actor_raw" "$actor_slug"
+        _write_migration_stamp "$session_dir" "$actor_raw" "$actor_slug" 2>/dev/null || true
     fi
 }
 
@@ -7236,6 +7238,26 @@ _doctor_check_merge_driver() {
     fi
 }
 
+# The stamp an open trusts to skip the one-time migration phases, judged by
+# the same probe the open runs (_migration_stamp_state). Read-only. A feature
+# worktree never runs the migration, so it has no stamp to report.
+_doctor_check_migration_stamp() {
+    local dir="${CLAUDE_SESSION_DIR:-}" state
+    [ -n "$dir" ] || return 0
+    if [ -n "$(_read_local_state "$dir/.cs/local/state" cs_base)" ]; then
+        return 0
+    fi
+    state=$(_migration_stamp_state "$dir" "$(cs_actor_raw "$dir" "$dir/.cs")")
+    case "$state" in
+        fresh)
+            _doctor_ok "Migration stamp: current for cs $VERSION; opens skip the one-time migration checks. To force them: rm .cs/local/migrated" ;;
+        narrative)
+            _doctor_ok "Migration stamp: current but for MEMORY.md; the next open re-checks the narrative pointer and restamps. To force every check: rm .cs/local/migrated" ;;
+        *)
+            _doctor_ok "Migration stamp: stale (${state#stale: }); the next open runs the full migration and restamps. Reset by hand: rm .cs/local/migrated" ;;
+    esac
+}
+
 # `cs <base> -integrate-feature` takes <git-dir>/cs/integrate.lock for the
 # length of a landing, and the autosave hook skips its snapshot while it
 # exists. A lock left behind by a killed integrate silences this checkout's
@@ -7366,6 +7388,7 @@ run_doctor() {
     if [ -n "${CLAUDE_SESSION_META_DIR:-}" ] && [ -d "${CLAUDE_SESSION_META_DIR:-}" ]; then
         _doctor_check_shadow_ref
         _doctor_check_merge_driver
+        _doctor_check_migration_stamp
         _doctor_check_integrate_lock
         _doctor_check_worktrees
         _doctor_check_auto_memory

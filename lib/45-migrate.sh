@@ -1016,8 +1016,10 @@ migrate_session() {
         warn "Backfilled claude_session_color in .cs/local/state ($_new_color)"
     fi
 
+    # A stamp that cannot be written costs only speed: without it the next
+    # open runs every phase again, which is what it did before the stamp.
     if [ "$repair" != none ] && [ "$_CS_MIGRATE_CLEAN" = 1 ]; then
-        _write_migration_stamp "$session_dir" "$actor_raw" "$actor_slug"
+        _write_migration_stamp "$session_dir" "$actor_raw" "$actor_slug" 2>/dev/null || true
     fi
 }
 
