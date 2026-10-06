@@ -20,8 +20,8 @@ folds `lib/02-shared.sh` into `bin/cs` and writes it verbatim, under a shebang, 
 never registered against an event. It carries the actor rules (`cs_actor_raw`,
 `cs_actor_slug`, `_slugify`), the narrative budget (`CS_NARRATIVE_MAX_DEFAULT`,
 `CS_NARRATIVE_KEEP_DEFAULT`, `_narrative_budget`), the atomic file rewrite
-(`cs_write_atomic`: a uniquely named temp file in the destination's directory, the
-destination's mode kept, renamed into place only when the command succeeded) and the
+(`cs_write_atomic`: a uniquely named `.cs-tmp.` temp file in the destination's directory,
+which a session's `.gitignore` ignores, the destination's mode kept, renamed into place only when the command succeeded) and the
 machine-local state writers (`cs_local_state_set`, `cs_local_state_unset`), which take a
 lock beside `.cs/local/state` so cs and session-start.sh take turns, and the mkdir lock they and the window title share (`_cs_mkdir_lock`,
 `_cs_mkdir_unlock`). A writer that has waited 5 seconds on a live holder writes anyway. Edit the `lib/` file and rebuild; CI's

@@ -264,7 +264,9 @@ _cs_file_mode() {  # path
 
 # Replace a file with a command's stdout, atomically: the output goes to a
 # uniquely named temp file in the same directory, which is renamed over the
-# destination only once the command has succeeded. A symlinked destination is
+# destination only once the command has succeeded. The temp file's name starts
+# with .cs-tmp., the prefix a session's .gitignore names, so one left by a
+# killed writer never reaches an autosave snapshot. A symlinked destination is
 # followed to its target, so a shared or linked file is rewritten in place and
 # the link survives. The destination keeps the
 # permission bits it had, and a new file gets the umask's; the temp file takes
@@ -290,7 +292,7 @@ cs_write_atomic() {  # dest, command [args...]
             exit 1
         fi
         dir=$(dirname "$dest")
-        tmp=$(mktemp "$dir/.$(basename "$dest").XXXXXX") || exit 1
+        tmp=$(mktemp "$dir/.cs-tmp.$(basename "$dest").XXXXXX") || exit 1
         trap 'rm -f "$tmp"' EXIT
         "$@" > "$tmp" || exit $?
         if [ -f "$dest" ]; then
