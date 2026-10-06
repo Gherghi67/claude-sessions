@@ -1730,6 +1730,31 @@ test_option_keys_write_through_a_symlink() {
     assert_eq "600" "$(_file_mode "$target")" "the target keeps its mode" || return 1
 }
 
+# 11. Inside an encrypted session CLAUDE_CONFIG_DIR is the session's
+# .cs/claude-config, which every other session cannot see. The keys go to the
+# shell's config dir that cs recorded in CLAUDE_SECURESTORAGE_CONFIG_DIR:
+# empty selects ~/.claude, a path selects that dir.
+test_option_keys_skip_an_encrypted_sessions_config_dir() {
+    _need_expect || return 77
+    local home="$TEST_TMPDIR/home-ok-enc" sess="$TEST_TMPDIR/enc-sess/.cs/claude-config"
+    local cfg="$TEST_TMPDIR/claude-cfg-enc"
+    mkdir -p "$home" "$sess" "$cfg"
+    _install_answering_option_keys ok-enc "$home" y \
+        "CLAUDE_CONFIG_DIR=$sess" "CLAUDE_SECURESTORAGE_CONFIG_DIR=" \
+        || { echo "  FAIL: install.sh exited non-zero"; return 1; }
+    assert_eq "{\"bindings\":[$_OK_CS_BLOCK]}" "$(jq -c . "$home/.claude/keybindings.json" 2>&1)" \
+        "an empty recorded dir writes ~/.claude/keybindings.json" || return 1
+    assert_file_not_exists "$sess/keybindings.json" "nothing is written in the session's config dir" || return 1
+
+    rm -f "$home/.config/cs/option-keys"
+    _install_answering_option_keys ok-enc2 "$home" y \
+        "CLAUDE_CONFIG_DIR=$sess" "CLAUDE_SECURESTORAGE_CONFIG_DIR=$cfg" \
+        || { echo "  FAIL: install.sh exited non-zero"; return 1; }
+    assert_eq "{\"bindings\":[$_OK_CS_BLOCK]}" "$(jq -c . "$cfg/keybindings.json" 2>&1)" \
+        "a recorded dir takes the keys" || return 1
+    assert_file_not_exists "$sess/keybindings.json" "still nothing in the session's config dir" || return 1
+}
+
 run_test test_install_survives_an_unwritable_declined_marker_dir
 run_test test_install_previews_the_status_line_before_asking
 run_test test_declining_says_permanence_on_its_own_line
@@ -1769,4 +1794,5 @@ run_test test_option_keys_reinstall_after_yes_is_idempotent
 run_test test_option_keys_uninstall_removes_only_cs_values
 run_test test_option_keys_follow_claude_config_dir
 run_test test_option_keys_write_through_a_symlink
+run_test test_option_keys_skip_an_encrypted_sessions_config_dir
 report_results
