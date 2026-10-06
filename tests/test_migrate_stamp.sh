@@ -89,8 +89,31 @@ test_deleted_claude_local_md_is_regenerated() {
         "a CLAUDE.local.md deleted after the stamp is written again" || return 1
 }
 
+# Replace line 1 of a session's stamp, keeping line 2 (the probe list).
+_rewrite_stamp_line1() {  # dir, line1
+    local stamp="$1/.cs/local/migrated" line2
+    line2=$(sed -n 2p "$stamp")
+    printf '%s\n%s\n' "$2" "$line2" > "$stamp"
+}
+
+test_stamp_from_another_version_reruns_the_migration() {
+    local dir="$CS_SESSIONS_ROOT/upgraded" version
+    version=$("$CS_BIN" -version)
+    version=${version#cs }
+    _stamped_session upgraded || return 1
+    _rewrite_stamp_line1 "$dir" "$(printf '2000.1.1\talice\t0')"
+    _drop_line "$dir/.gitignore" ".obsidian/"
+    _age_session "$dir"
+    _open upgraded > /dev/null || { echo "  FAIL: the reopen failed"; return 1; }
+    assert_file_contains "$dir/.gitignore" '^\.obsidian/$' \
+        "a stamp from another cs version runs the full migration" || return 1
+    assert_eq "$(printf '%s\talice\t0' "$version")" "$(sed -n 1p "$dir/.cs/local/migrated")" \
+        "the migration restamps with this cs version" || return 1
+}
+
 run_test test_fresh_stamp_skips_the_one_time_phases
 run_test test_gitignore_edited_after_the_stamp_is_repaired
 run_test test_deleted_claude_local_md_is_regenerated
+run_test test_stamp_from_another_version_reruns_the_migration
 
 report_results
