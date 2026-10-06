@@ -125,12 +125,44 @@ test_session_encrypted_after_the_stamp_gains_the_protocol() {
     _stamped_session vaulted || return 1
     assert_file_not_contains "$dir/CLAUDE.local.md" 'cs:encrypted-protocol' \
         "precondition: the plain session has no encrypted protocol" || return 1
+    # What cs -encrypt does to a plain session: link .cs/private into the
+    # vault and move the launch's plaintext log behind it, which the open
+    # otherwise refuses.
     mkdir -p "$TEST_TMPDIR/vault/private"
     ln -s "$TEST_TMPDIR/vault/private" "$dir/.cs/private"
+    if [ -e "$dir/.cs/local/session.log" ]; then
+        mv "$dir/.cs/local/session.log" "$TEST_TMPDIR/vault/private/session.log"
+    fi
     _age_session "$dir"
     _open vaulted > /dev/null || { echo "  FAIL: the reopen failed"; return 1; }
     assert_file_contains "$dir/CLAUDE.local.md" '<!-- cs:encrypted-protocol -->' \
         "a session encrypted after the stamp gains the encrypted protocol" || return 1
+}
+
+# Phase 13 rewrites an old narrative pointer in MEMORY.md through a temp file
+# beside it; with .cs/memory read-only that rewrite fails and warns, and the
+# open carries on. The positive control reopens with the directory writable
+# and gets its stamp, so the stamp's absence is the warning's doing.
+test_migration_that_warns_leaves_no_stamp() {
+    local dir="$CS_SESSIONS_ROOT/warned" out rc=0
+    _stamped_session warned || return 1
+    printf -- '- [Notes](narrative.alice.md): read all narrative.*.md on resume\n' >> "$dir/.cs/memory/MEMORY.md"
+    rm "$dir/.cs/local/migrated"
+    _deny_writes "$dir/.cs/memory" || rc=$?
+    if [ "$rc" = 2 ]; then
+        return 77
+    fi
+    out=$(_open warned) || rc=$?
+    _allow_writes "$dir/.cs/memory"
+    assert_eq "0" "$rc" "an open that warns still launches: $out" || return 1
+    assert_output_contains "$out" "could not rewrite $dir/.cs/memory/MEMORY.md" \
+        "the open took the warn-and-continue branch" || return 1
+    assert_file_not_exists "$dir/.cs/local/migrated" \
+        "a migration that warned writes no stamp" || return 1
+
+    _open warned > /dev/null || { echo "  FAIL: the writable reopen failed"; return 1; }
+    assert_file_exists "$dir/.cs/local/migrated" \
+        "positive control: the same session stamps once the rewrite succeeds" || return 1
 }
 
 run_test test_fresh_stamp_skips_the_one_time_phases
@@ -139,5 +171,6 @@ run_test test_deleted_claude_local_md_is_regenerated
 run_test test_stamp_from_another_version_reruns_the_migration
 run_test test_another_actor_reruns_the_migration
 run_test test_session_encrypted_after_the_stamp_gains_the_protocol
+run_test test_migration_that_warns_leaves_no_stamp
 
 report_results
