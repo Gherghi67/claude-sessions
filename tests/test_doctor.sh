@@ -689,6 +689,16 @@ test_doctor_rotate_wrap_keys_row_names_the_state() {
     assert_output_contains "$output" "WARN.*Rotate/wrap keys: conflict on ctrl+x w (ctrl+x is bound to chat:externalEditor in $kb)" \
         "a user binding on the bare prefix: conflict" || return 1
 
+    printf '%s\n' '{"bindings":[{"context":"Chat","bindings":{"ctrl+x":""}}]}' > "$kb"
+    output=$(_ok_doctor)
+    assert_output_contains "$output" "WARN.*Rotate/wrap keys: conflict on ctrl+x r (ctrl+x is bound to \"\" in $kb)" \
+        "an empty action on the prefix is named as JSON" || return 1
+
+    printf '%s\n' '{"bindings":[{"context":"Global","bindings":{"ctrl+x r":"command:rotate","ctrl+x w":"command:wrap","alt+1":"command:rotate","alt+2":"command:wrap"}}]}' > "$kb"
+    output=$(_ok_doctor)
+    assert_output_contains "$output" "WARN.*Rotate/wrap keys: alt+1, alt+2 still hold cs's earlier bindings in $kb (run cs -update to remove them)" \
+        "chords bound beside cs's alt keys: the alt keys are named" || return 1
+
     printf '%s\n' '{"bindings":[{"context":"Global","bindings":{"alt+1":"command:rotate","alt+2":"command:wrap"}}]}' > "$kb"
     output=$(_ok_doctor)
     assert_output_contains "$output" "WARN.*Rotate/wrap keys: ctrl+x r not bound (run cs -update to bind it)" \

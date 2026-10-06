@@ -1813,6 +1813,64 @@ test_rotate_wrap_keys_never_shadow_a_users_ctrl_x() {
     done
 }
 
+# Runs the installer with a recorded yes and no terminal over a given
+# keybindings.json; the transcript lands in $TEST_TMPDIR/<label>.out.
+_install_with_recorded_yes() {  # label, home, keybindings-json
+    mkdir -p "$2/.claude" "$2/.config/cs"
+    printf 'yes\n' > "$2/.config/cs/option-keys"
+    printf '%s\n' "$3" > "$2/.claude/keybindings.json"
+    env -u CLAUDE_CONFIG_DIR -u XDG_CONFIG_HOME HOME="$2" bash "$INSTALL_SH" \
+        < /dev/null > "$TEST_TMPDIR/$1.out" 2>&1
+}
+
+# 15. Chords already bound beside cs's alt+1 / alt+2: the install only takes
+# the alt keys back, and says so.
+test_rotate_wrap_keys_take_back_option_keys_beside_bound_chords() {
+    local home="$TEST_TMPDIR/home-ok-left" kb
+    kb="$home/.claude/keybindings.json"
+    _install_with_recorded_yes ok-left "$home" '{"bindings":[{"context":"Global","bindings":{"ctrl+x r":"command:rotate","ctrl+x w":"command:wrap","alt+1":"command:rotate","alt+2":"command:wrap"}}]}' \
+        || { echo "  FAIL: install.sh exited non-zero"; return 1; }
+    assert_eq '{"bindings":[{"context":"Global","bindings":{"ctrl+x r":"command:rotate","ctrl+x w":"command:wrap"}}]}' \
+        "$(jq -c . "$kb" 2>&1)" "only the chords are left" || return 1
+    grep -qxF "   · Rotate/wrap keys: removed cs's alt+1, alt+2 from $kb" "$TEST_TMPDIR/ok-left.out" \
+        || { echo "  FAIL: the removal line is missing or reworded"; return 1; }
+}
+
+# 16. One chord taken by the user: the free chord is bound and cs's alt+1 /
+# alt+2 stay, so /rotate keeps a key.
+test_rotate_wrap_keys_one_conflict_keeps_option_keys() {
+    local home="$TEST_TMPDIR/home-ok-half" kb
+    kb="$home/.claude/keybindings.json"
+    _install_with_recorded_yes ok-half "$home" '{"bindings":[{"context":"Chat","bindings":{"ctrl+x r":"chat:submit"}},{"context":"Global","bindings":{"alt+1":"command:rotate","alt+2":"command:wrap"}}]}' \
+        || { echo "  FAIL: install.sh exited non-zero"; return 1; }
+    assert_eq '{"bindings":[{"context":"Chat","bindings":{"ctrl+x r":"chat:submit"}},{"context":"Global","bindings":{"alt+1":"command:rotate","alt+2":"command:wrap","ctrl+x w":"command:wrap"}}]}' \
+        "$(jq -c . "$kb" 2>&1)" "ctrl+x w is added and the alt keys stay" || return 1
+}
+
+# 17. Keys are read the way Claude Code reads them: case, the control /
+# option / opt spellings and spacing do not matter, and a null on ctrl+x
+# binds nothing, so it is no conflict.
+test_rotate_wrap_keys_read_keys_as_claude_code_does() {
+    local home="$TEST_TMPDIR/home-ok-spell1" kb
+    kb="$home/.claude/keybindings.json"
+    _install_with_recorded_yes ok-spell1 "$home" '{"bindings":[{"context":"Chat","bindings":{"Control+X":"chat:externalEditor"}}]}' \
+        || { echo "  FAIL: install.sh exited non-zero (Control+X)"; return 1; }
+    assert_eq '{"bindings":[{"context":"Chat","bindings":{"Control+X":"chat:externalEditor"}}]}' \
+        "$(jq -c . "$kb" 2>&1)" "a bare Control+X is a conflict" || return 1
+
+    home="$TEST_TMPDIR/home-ok-spell2"; kb="$home/.claude/keybindings.json"
+    _install_with_recorded_yes ok-spell2 "$home" '{"bindings":[{"context":"Global","bindings":{"Option+1":"command:rotate","OPT+2":"command:wrap","Ctrl+X  R":"command:rotate"}}]}' \
+        || { echo "  FAIL: install.sh exited non-zero (Option+1)"; return 1; }
+    assert_eq '{"bindings":[{"context":"Global","bindings":{"Ctrl+X  R":"command:rotate","ctrl+x w":"command:wrap"}}]}' \
+        "$(jq -c . "$kb" 2>&1)" "Option+1 / OPT+2 are taken back and Ctrl+X  R counts as bound" || return 1
+
+    home="$TEST_TMPDIR/home-ok-spell3"; kb="$home/.claude/keybindings.json"
+    _install_with_recorded_yes ok-spell3 "$home" '{"bindings":[{"context":"Global","bindings":{"ctrl+x":null}}]}' \
+        || { echo "  FAIL: install.sh exited non-zero (null)"; return 1; }
+    assert_eq '{"bindings":[{"context":"Global","bindings":{"ctrl+x":null,"ctrl+x r":"command:rotate","ctrl+x w":"command:wrap"}}]}' \
+        "$(jq -c . "$kb" 2>&1)" "a null ctrl+x leaves both chords free" || return 1
+}
+
 run_test test_install_survives_an_unwritable_declined_marker_dir
 run_test test_install_previews_the_status_line_before_asking
 run_test test_declining_says_permanence_on_its_own_line
@@ -1856,4 +1914,7 @@ run_test test_rotate_wrap_keys_skip_an_encrypted_sessions_config_dir
 run_test test_rotate_wrap_keys_replace_cs_option_keys
 run_test test_rotate_wrap_keys_migration_keeps_a_users_alt_key
 run_test test_rotate_wrap_keys_never_shadow_a_users_ctrl_x
+run_test test_rotate_wrap_keys_take_back_option_keys_beside_bound_chords
+run_test test_rotate_wrap_keys_one_conflict_keeps_option_keys
+run_test test_rotate_wrap_keys_read_keys_as_claude_code_does
 report_results
