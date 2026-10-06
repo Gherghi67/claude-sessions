@@ -259,7 +259,7 @@ test_unlinkable_claude_still_launches() {
 test_non_native_claude_binaries_are_run_as_given() {
     _tab_launch_env 1
     local inst="$TEST_TMPDIR/inst" out bin
-    for bin in "$inst/own/claude" "$inst/versions/3.12.1/bin/claude" "$inst/versions/1x.2y.3z"; do
+    for bin in "$inst/own/claude" "$inst/versions/3.12.1/bin/claude" "$inst/versions/1x.2y.3z" "$inst/releases/1.2.3"; do
         mkdir -p "$(dirname "$bin")"
         cp "$inst/versions/9.9.9" "$bin"
         export CLAUDE_CODE_BIN="$bin --flag"
