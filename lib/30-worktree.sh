@@ -662,7 +662,7 @@ integrate_feature_worktree() {  # base_name task sha [--from-remote [--ci-green]
 
 # The mutation half of integrate_feature_worktree, entered with the mutex
 # held and the cleanup trap armed: merge base HEAD + <sha> in a temporary
-# detached worktree under <common>/cs/finish/, run the gate argv there, then
+# detached worktree under $TMPDIR, run the gate argv there, then
 # fast-forward the base onto the result. The fast-forward is the atomic
 # "base has not moved" check; a red gate or a conflict leaves base exactly
 # as it was. No hook of the project fires inside the temp (core.hooksPath
@@ -674,17 +674,22 @@ _integrate_in_temp() {  # base_dir wt_dir task sha common from_remote ci_green g
 
     local B
     B=$(git -C "$base_dir" rev-parse HEAD)
-    local tmp="$common/cs/finish/$task.$$"
-    mkdir -p "$common/cs/finish"
+    # Outside any .git directory: tools refuse to serve or read files under
+    # one (Vite's server.fs.deny holds **/.git/**, so a vitest browser run in
+    # the temp never connects and the gate goes red for where it ran). An
+    # empty directory, which git worktree add fills.
+    local tmp
+    tmp=$(mktemp -d "${TMPDIR:-/tmp}/cs-finish-$task.XXXXXX") \
+        || error "Could not create a temporary directory for the integrate under ${TMPDIR:-/tmp}"
+    # Armed as soon as the directory exists, before the add: an add that fails
+    # half-way leaves a directory and a registration behind, and only a
+    # _INTEGRATE_TMP the cleanup can see gets them removed. The cleanup
+    # removes a directory that never became a worktree and prunes either way.
+    _INTEGRATE_TMP="$tmp"
     # /dev/null is not a directory on BSD, so hooks are silenced with a real
     # empty one.
     local no_hooks
     no_hooks=$(mktemp -d "${TMPDIR:-/tmp}/cs-nohooks.XXXXXX")
-    # Armed before the add, not after: an add that fails half-way leaves a
-    # directory and a registration behind, and only a _INTEGRATE_TMP the
-    # cleanup can see gets them removed. The cleanup tolerates a path that
-    # was never created and prunes either way.
-    _INTEGRATE_TMP="$tmp"
     if ! git -C "$base_dir" -c core.hooksPath="$no_hooks" worktree add --detach "$tmp" "$B" >/dev/null 2>&1; then
         rmdir "$no_hooks"
         error "git worktree add failed for $tmp"
