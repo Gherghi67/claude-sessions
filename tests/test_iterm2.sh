@@ -113,7 +113,7 @@ test_doctor_reports_iterm2_surface() {
 _tab_launch_env() {  # control_mode
     local inst="$TEST_TMPDIR/inst"
     mkdir -p "$inst/versions" "$inst/bin"
-    printf '#!/usr/bin/env bash\necho "argv0=$0"\nenv\n' > "$inst/versions/9.9.9"
+    printf '#!/usr/bin/env bash\necho "argv0=$0"\necho "args=$*"\nenv\n' > "$inst/versions/9.9.9"
     chmod +x "$inst/versions/9.9.9"
     ln -sf ../versions/9.9.9 "$inst/bin/claude"
     cat > "$inst/bin/tmux" << 'TMUX_EOF'
@@ -130,7 +130,7 @@ TMUX_EOF
     export TMUX="/tmp/fake-tmux-socket,1,0"
     export TERM=xterm-256color TERM_PROGRAM=tmux TERM_PROGRAM_VERSION=3.7c
     export LC_TERMINAL=iTerm2 LC_TERMINAL_VERSION=3.7.1
-    unset CLAUDE_CODE_BIN CS_NO_ITERM2
+    unset CLAUDE_CODE_BIN CS_NO_ITERM2 CLAUDE_CONFIG_DIR
 }
 
 # The value of NAME in the stub's printed environment, or the argv0 line.
@@ -253,13 +253,143 @@ test_unlinkable_claude_still_launches() {
     assert_eq "iTerm.app" "$(_launched "$out" TERM_PROGRAM)" "the loader does not need the link" || return 1
 }
 
-test_user_chosen_claude_binary_is_run_as_given() {
+# Only a file sitting directly in a versions directory and named by a dotted
+# version number is the native installer's; a binary elsewhere, or one that
+# merely has a versions directory in its path, runs as given.
+test_non_native_claude_binaries_are_run_as_given() {
     _tab_launch_env 1
-    export CLAUDE_CODE_BIN="$TEST_TMPDIR/inst/versions/9.9.9"
-    local out
-    out=$("$CS_BIN" ownbin <<< "" 2>&1) || true
-    assert_eq "$TEST_TMPDIR/inst/versions/9.9.9" "$(_launched "$out" argv0)" \
-        "a CLAUDE_CODE_BIN the user set is never swapped for the link" || return 1
+    local inst="$TEST_TMPDIR/inst" out bin
+    for bin in "$inst/own/claude" "$inst/versions/3.12.1/bin/claude" "$inst/versions/1x.2y.3z" "$inst/releases/1.2.3" "$inst/versions/1.2" "$inst/versions/1..2.3" "$inst/versions/.1.2.3" "$inst/versions/1.2.3."; do
+        mkdir -p "$(dirname "$bin")"
+        cp "$inst/versions/9.9.9" "$bin"
+        export CLAUDE_CODE_BIN="$bin --flag"
+        out=$("$CS_BIN" "own$RANDOM" <<< "" 2>&1) || true
+        assert_eq "$bin" "$(_launched "$out" argv0)" "$bin must run as given" || return 1
+        assert_eq "--flag" "$(_launched "$out" args | cut -d' ' -f1)" "its flags are kept" || return 1
+    done
+}
+
+# A CLAUDE_CODE_BIN that names the native install and carries flags runs the
+# link with the flags, split the way every launch site splits the value.
+test_native_claude_with_flags_runs_the_link_with_its_flags() {
+    _tab_launch_env 1
+    local out argv0
+    export CLAUDE_CODE_BIN="$TEST_TMPDIR/inst/bin/claude --permission-mode plan"
+    out=$("$CS_BIN" flagged <<< "" 2>&1) || true
+    argv0=$(_launched "$out" argv0)
+    assert_eq "claude" "$(basename "$argv0")" "the flagged native claude runs under the name claude" || return 1
+    [ "$argv0" -ef "$TEST_TMPDIR/inst/versions/9.9.9" ] || {
+        echo "  FAIL: launched $argv0 is not the installed version file"; return 1; }
+    [ ! -L "$argv0" ] || { echo "  FAIL: $argv0 is a symlink, its process name stays the version"; return 1; }
+    assert_eq "--permission-mode plan --name flagged --session-id" \
+        "$(_launched "$out" args | cut -d' ' -f1-5)" "the flags stay in front, in order" || return 1
+    export CLAUDE_CODE_BIN="  $TEST_TMPDIR/inst/bin/claude	--permission-mode	plan"
+    out=$("$CS_BIN" tabbed <<< "" 2>&1) || true
+    assert_eq "claude" "$(basename "$(_launched "$out" argv0)")" "leading spaces and a tab around the path are split like the launch splits them" || return 1
+    assert_eq "--permission-mode plan --name tabbed" \
+        "$(_launched "$out" args | cut -d' ' -f1-4)" "flags after a tab are kept" || return 1
+    export CLAUDE_CODE_BIN="claude --add-dir claude"
+    out=$("$CS_BIN" repeated <<< "" 2>&1) || true
+    assert_eq "--add-dir claude --name repeated" \
+        "$(_launched "$out" args | cut -d' ' -f1-4)" "a flag that repeats the command word is kept" || return 1
+    ln -sf ../versions/9.9.9 "$TEST_TMPDIR/inst/bin/c[l]aude"
+    export CLAUDE_CODE_BIN="$TEST_TMPDIR/inst/bin/c[l]aude --flag"
+    out=$("$CS_BIN" bracketed <<< "" 2>&1) || true
+    assert_eq "claude" "$(basename "$(_launched "$out" argv0)")" "a path with glob characters is linked, not expanded" || return 1
+    assert_eq "--flag --name bracketed" \
+        "$(_launched "$out" args | cut -d' ' -f1-3)" "the path with glob characters is not repeated as an argument" || return 1
+}
+
+# tmux names a pane after the leader of its foreground process group. A
+# resume that ran claude as cs's child left cs's bash leading it, so the tab
+# showed bash; when the resume is sure to land, cs runs claude in its place.
+# A stub whose argv, parent and launch prompt the tests read.
+_resume_session() {  # name -> prints the recorded conversation id
+    local inst="$TEST_TMPDIR/inst"
+    printf '#!/usr/bin/env bash\necho "argv0=$0"\necho "args=$*"\necho "parent=$(ps -o args= -p $PPID)"\n' \
+        > "$inst/versions/9.9.9"
+    "$CS_BIN" "$1" <<< "" > /dev/null 2>&1 || true
+    awk '/^claude_session_id:/ { print $2; exit }' "$CS_SESSIONS_ROOT/$1/.cs/local/state"
+}
+
+_transcript() {  # name, uuid -> prints the transcript path cs reads
+    local proj
+    proj="$CS_TRANSCRIPTS_DIR/$(_encode_cwd_for_claude_test "$CS_SESSIONS_ROOT/$1")"
+    mkdir -p "$proj"
+    printf '%s\n' "$proj/$2.jsonl"
+}
+
+_user_record() {
+    printf '{"type":"user","message":{"role":"user","content":"hi"}}\n'
+}
+
+test_resume_of_a_real_conversation_runs_claude_in_place_of_cs() {
+    _tab_launch_env 1
+    local uuid out argv0
+    uuid=$(_resume_session resumer)
+    [ -n "$uuid" ] || { echo "  FAIL: the first launch recorded no conversation"; return 1; }
+    _user_record > "$(_transcript resumer "$uuid")"
+    out=$("$CS_BIN" resumer <<< "" 2>&1) || true
+    assert_output_contains "$(_launched "$out" args)" "--resume $uuid" "the second open resumes" || return 1
+    assert_output_not_contains "$(_launched "$out" parent)" "resumer" \
+        "claude must replace cs, not run as its child" || return 1
+    assert_output_contains "$(_launched "$out" args)" "/color" "the launch prompt reaches the resumed claude" || return 1
+    mkdir -p "$CS_SESSIONS_ROOT/.spawn"
+    : > "$CS_SESSIONS_ROOT/.spawn/resumer.seed"
+    echo "brief" > "$CS_SESSIONS_ROOT/.spawn/resumer.brief.md"
+    out=$("$CS_BIN" resumer <<< "" 2>&1) || true
+    assert_output_not_contains "$(_launched "$out" parent)" "resumer" "a spawned resume replaces cs too" || return 1
+    assert_output_contains "$(_launched "$out" args)" "Your brief is .cs/brief.md" \
+        "a spawn kick, not the colour, reaches the resumed claude" || return 1
+    argv0=$(_launched "$out" argv0)
+    assert_eq "claude" "$(basename "$argv0")" "the resumed claude runs under the name claude" || return 1
+    [ ! -L "$argv0" ] || { echo "  FAIL: $argv0 is a symlink"; return 1; }
+}
+
+# cs stays claude's parent whenever the resume might not land, so a quick
+# failure can still start a fresh conversation, and whenever cs has cleanup to
+# do after claude: an encrypted session's vault waits on cs to detach it.
+test_resume_that_might_not_land_keeps_cs_as_the_parent() {
+    _tab_launch_env 1
+    local uuid out
+    uuid=$(_resume_session unsure)
+    out=$("$CS_BIN" unsure <<< "" 2>&1) || true
+    assert_output_contains "$(_launched "$out" parent)" "unsure" "no transcript: cs stays the parent" || return 1
+    echo '{"type":"launched"}' > "$(_transcript unsure "$uuid")"
+    out=$("$CS_BIN" unsure <<< "" 2>&1) || true
+    assert_output_contains "$(_launched "$out" parent)" "unsure" "a transcript with no message: cs stays the parent" || return 1
+    printf '%s\n' '{"type":"progress","data":{"message":{"type":"user","message":{"content":"hi"}}}}' \
+        >> "$(_transcript unsure "$uuid")"
+    out=$("$CS_BIN" unsure <<< "" 2>&1) || true
+    assert_output_contains "$(_launched "$out" parent)" "unsure" \
+        "a user message nested in another record: cs stays the parent" || return 1
+    printf '%s\n' '{"type":"user","message":{"role":"user","content":"h' >> "$(_transcript unsure "$uuid")"
+    out=$("$CS_BIN" unsure <<< "" 2>&1) || true
+    assert_output_contains "$(_launched "$out" parent)" "unsure" "a torn user record: cs stays the parent" || return 1
+    _user_record >> "$(_transcript unsure "$uuid")"
+    out=$(CLAUDE_CONFIG_DIR="" "$CS_BIN" unsure <<< "" 2>&1) || true
+    assert_output_contains "$(_launched "$out" parent)" "unsure" \
+        "an empty CLAUDE_CONFIG_DIR: cs stays the parent" || return 1
+    out=$(CLAUDE_CONFIG_DIR="$TEST_TMPDIR/other-config" "$CS_BIN" unsure <<< "" 2>&1) || true
+    assert_output_contains "$(_launched "$out" parent)" "unsure" \
+        "claude reading another config dir: cs stays the parent" || return 1
+    : > "$CS_SESSIONS_ROOT/unsure/.cs/local/vault"
+    out=$("$CS_BIN" unsure <<< "" 2>&1) || true
+    assert_output_contains "$(_launched "$out" parent)" "unsure" "an encrypted session: cs stays the parent" || return 1
+}
+
+# A CLAUDE_CODE_BIN with no command word cannot launch anything; the error
+# names the value rather than a missing dependency.
+test_claude_bin_without_a_command_is_refused_by_name() {
+    local out rc=0
+    out=$(CLAUDE_CODE_BIN="--permission-mode plan" "$CS_BIN" nocommand <<< "" 2>&1) || rc=$?
+    assert_eq "1" "$rc" "a flag-first CLAUDE_CODE_BIN fails" || return 1
+    assert_output_contains "$out" "CLAUDE_CODE_BIN must start with a command: '--permission-mode plan'" \
+        "the error names the value" || return 1
+    rc=0
+    out=$(CLAUDE_CODE_BIN="   " "$CS_BIN" blankcommand <<< "" 2>&1) || rc=$?
+    assert_eq "1" "$rc" "a blank CLAUDE_CODE_BIN fails" || return 1
+    assert_output_contains "$out" "CLAUDE_CODE_BIN must start with a command: '   '" "the blank value is named" || return 1
 }
 
 # An npm install resolves claude to a cli.js that loads files beside it; run
@@ -279,6 +409,10 @@ test_npm_shaped_claude_is_not_linked() {
 
 run_test test_launch_under_iterm_cc_shows_loader_and_icon
 run_test test_npm_shaped_claude_is_not_linked
+run_test test_claude_bin_without_a_command_is_refused_by_name
+run_test test_resume_of_a_real_conversation_runs_claude_in_place_of_cs
+run_test test_resume_that_might_not_land_keeps_cs_as_the_parent
+run_test test_native_claude_with_flags_runs_the_link_with_its_flags
 run_test test_plain_tmux_keeps_tmux_name_unless_term_is_tmux
 run_test test_outside_iterm_launch_is_untouched
 run_test test_iterm_integrations_off_leaves_launch_untouched
@@ -286,7 +420,7 @@ run_test test_link_follows_a_claude_update
 run_test test_each_version_has_its_own_link
 run_test test_home_with_a_space_runs_claude_as_found
 run_test test_unlinkable_claude_still_launches
-run_test test_user_chosen_claude_binary_is_run_as_given
+run_test test_non_native_claude_binaries_are_run_as_given
 run_test test_stop_hook_bounces_dock_in_iterm
 run_test test_no_bounce_outside_iterm
 run_test test_no_bounce_when_disabled
