@@ -111,9 +111,19 @@ test_stamp_from_another_version_reruns_the_migration() {
         "the migration restamps with this cs version" || return 1
 }
 
+test_another_actor_reruns_the_migration() {
+    local dir="$CS_SESSIONS_ROOT/shared"
+    _stamped_session shared || return 1
+    _age_session "$dir"
+    _open shared bob > /dev/null || { echo "  FAIL: bob's reopen failed"; return 1; }
+    assert_file_exists "$dir/.cs/memory/narrative.bob.md" \
+        "a stamp written for alice runs the full migration for bob, which writes his narrative" || return 1
+}
+
 run_test test_fresh_stamp_skips_the_one_time_phases
 run_test test_gitignore_edited_after_the_stamp_is_repaired
 run_test test_deleted_claude_local_md_is_regenerated
 run_test test_stamp_from_another_version_reruns_the_migration
+run_test test_another_actor_reruns_the_migration
 
 report_results

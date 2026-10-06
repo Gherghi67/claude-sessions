@@ -4186,6 +4186,10 @@ _migration_stamp_state() {  # session_dir, actor_raw
         echo "stale: the stamp is unreadable or incomplete"
         return 0
     fi
+    case "$line1" in
+        "$VERSION"$'\t'*) ;;
+        *) echo "stale: written by cs ${line1%%$'\t'*}, not $VERSION"; return 0 ;;
+    esac
     rest="$line2"
     while [ -n "$rest" ]; do
         p=${rest%%$'\t'*}
