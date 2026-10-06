@@ -1,11 +1,11 @@
 ---
 name: finish
-description: Land a finished feature in its base and retire its worktree - capture the feature commit, merge base+feature in a temporary worktree, run the repo's gates there, fast-forward the base, report GitHub PR state, then remove the worktree and branch once the feature conversation is closed. Invoke when the user asks to finish, land, integrate or retire a feature or worktree.
+description: Land a finished feature in its base and retire its worktree - capture the feature commit, merge base+feature in a temporary worktree (running the repo's gates there only when asked with --gate), fast-forward the base, report GitHub PR state, then remove the worktree and branch once the feature conversation is closed. Invoke when the user asks to finish, land, integrate or retire a feature or worktree.
 disable-model-invocation: true
 ---
 
-Finishing is a ritual, not a git command: capture, gates on the merged
-result, land, report, retire. This skill integrates work that is already
+Finishing is a ritual, not a git command: capture, merge, land, report,
+retire. This skill integrates work that is already
 reviewed to the user's standard; it is the mechanical closer, not a review.
 The landing never touches the feature worktree. Retirement (fuse its session
 records into the base, remove the worktree, delete the branch) runs in the
@@ -36,13 +36,24 @@ workspace and read its `key: value` lines.
 4. **`role: base`, `cs_session: no`, non-default `base_branch`** — an
    ordinary checkout on a feature branch, not a cs session. Follow **Plain
    branch** below; it is the one place this skill runs gates in a live tree
-   and deletes a branch, both scoped to that ordinary checkout.
+   (with `--gate`) and deletes a branch, both scoped to that ordinary checkout.
 5. Otherwise (default branch, nothing named) say there is nothing to finish
    and stop.
 
+## Gates are opt-in
+
+`/finish` runs no tests unless the invocation asks for them:
+`/finish <task> --gate`, or the user asks in words to run the tests or gates.
+Read `--gate` off the arguments before anything else and never pass it to
+`finish.sh`. Without it, the gate command words are `-- true` (cs's own
+spelling of no gate) in both the local and the PR path, `--ci-green` is never
+added, and the report says `gate: none (/finish <task> --gate runs the tests)`.
+With it, discover the gates below and pass them instead. The same rule holds
+in **Plain branch**.
+
 ## Discover the gates
 
-Project instructions govern absolutely. Read the project's instruction
+Only with `--gate`. Project instructions govern absolutely. Read the project's instruction
 files — CLAUDE.md and anything it imports, CONTRIBUTING.md, the README's
 development section — for build steps, test commands and generated
 artifacts. A repo that generates a file from source fragments needs its
@@ -81,9 +92,9 @@ what creates them and fold it into the gate: `-- sh -c 'npm ci && npm test'`.
      before any local integrate. Never treat a gh failure as no PR.
    - `skipped` — origin is not GitHub; say so, local path.
 3. **Local path.** Run, from the base session:
-   `cs <base> -integrate-feature <task> <sha> -- <gate command words>`.
-   cs merges base HEAD and `<sha>` in a temporary detached worktree, runs
-   the gate there, and fast-forwards the base onto the result; a red gate,
+   `cs <base> -integrate-feature <task> <sha> -- <gate command words>`
+   (`-- true` without `--gate`). cs merges base HEAD and `<sha>` in a
+   temporary detached worktree, runs the gate there, and fast-forwards the base onto the result; a red gate,
    a conflict, or a base that moved leaves the base untouched and the
    message names the next command. The skill never runs `git merge` against
    a cs worktree and never runs gates in a live tree. Two outcomes:
@@ -91,7 +102,8 @@ what creates them and fold it into the gate: `-- sh -c 'npm ci && npm test'`.
 4. **PR path.** `git fetch origin`. Confirm `base_branch` equals
    `pr_base_ref`; if not, stop and say which branch to check out. Then
    `cs <base> -integrate-feature <task> <pr_merge_commit> --from-remote -- <gate command words>`.
-   Add `--ci-green` after `--from-remote` only when `prepare` reported
+   Without `--gate` the gate words are `-- true` and nothing below about
+   `--ci-green` applies. With it, add `--ci-green` after `--from-remote` only when `prepare` reported
    `pr_checks: success`; with `failure`, `pending`, `none` (no checks ran,
    or every one of them was skipped), `unknown` (its `pr_checks_reason`
    says why) or no line, leave it off and say in the
@@ -162,10 +174,12 @@ what creates them and fold it into the gate: `-- sh -c 'npm ci && npm test'`.
 
 An ordinary checkout on a non-default branch, not a cs worktree. A clean
 tree is required (`git status --porcelain` empty; offer to commit, stop if
-declined). Preflight gates on the branch; `git checkout <target>`, then
-`git merge --no-ff <branch>` with a message summarising the feature; run
-gates again on the merged result; delete the merged branch with
-`git branch -d` only when the post-merge gates are green. Ask when the
+declined). With `--gate`, preflight gates on the branch first. Then
+`git checkout <target>` and `git merge --no-ff <branch>` with a message
+summarising the feature; with `--gate`, run gates again on the merged result
+and delete the merged branch with `git branch -d` only when the post-merge
+gates are green; without it, delete the merged branch with `git branch -d`
+right after the merge. Ask when the
 target is ambiguous.
 
 ## When a gate fails
@@ -178,7 +192,8 @@ lands in the feature session, or the user makes it directly; once it
 lands, re-run `/finish` from the top and the new capture picks it up. In
 **Plain branch**, this checkout already holds the branch, so find the root
 cause per the project's debugging rules and fix forward here before
-re-running gates. Never bypass, skip, or weaken a gate.
+re-running gates. Once the user asked for a gate, never bypass, skip, or
+weaken it.
 
 ## Never
 
@@ -187,8 +202,8 @@ re-running gates. Never bypass, skip, or weaken a gate.
   no `git branch -d` and never `git branch -D` on a cs branch. Removal
   happens only inside `cs <base> -retire-feature`, which refuses over an
   open conversation, dirt, or a branch the base lacks. (**Plain branch** on
-  an ordinary checkout may `git branch -d` a merged branch after green
-  gates.)
+  an ordinary checkout may `git branch -d` a merged branch after the merge,
+  and after green gates when `--gate` was given.)
 - Never merge over dirt or copy `.env`/untracked inputs into the temp.
 - Never mutate a live foreign base: the entry refuses; do not work around it.
 - Never treat a gh failure as no PR.
