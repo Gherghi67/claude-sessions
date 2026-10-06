@@ -264,7 +264,9 @@ _cs_file_mode() {  # path
 
 # Replace a file with a command's stdout, atomically: the output goes to a
 # uniquely named temp file in the same directory, which is renamed over the
-# destination only once the command has succeeded. A symlinked destination is
+# destination only once the command has succeeded. The temp file's name starts
+# with .cs-tmp., the prefix a session's .gitignore names, so one left by a
+# killed writer never reaches an autosave snapshot. A symlinked destination is
 # followed to its target, so a shared or linked file is rewritten in place and
 # the link survives. The destination keeps the
 # permission bits it had, and a new file gets the umask's; the temp file takes
@@ -290,7 +292,7 @@ cs_write_atomic() {  # dest, command [args...]
             exit 1
         fi
         dir=$(dirname "$dest")
-        tmp=$(mktemp "$dir/.$(basename "$dest").XXXXXX") || exit 1
+        tmp=$(mktemp "$dir/.cs-tmp.$(basename "$dest").XXXXXX") || exit 1
         trap 'rm -f "$tmp"' EXIT
         "$@" > "$tmp" || exit $?
         if [ -f "$dest" ]; then
@@ -305,7 +307,7 @@ cs_write_atomic() {  # dest, command [args...]
 # The machine-local state file (.cs/local/state) is rewritten whole from its
 # old contents, by cs and by the SessionStart hook, so two writers can lose an
 # update unless they take turns: the lock is _cs_mkdir_lock on a directory
-# beside the file. Prints the lock directory when it holds it, nothing when it
+# beside the file. The vault holder list takes turns through it too. Prints the lock directory when it holds it, nothing when it
 # does not.
 _cs_local_state_lock() {  # state
     _cs_mkdir_lock "$1.lock" || return 0
@@ -343,6 +345,28 @@ cs_local_state_unset() {  # state, key
     local lock rc=0
     lock=$(_cs_local_state_lock "$1")
     cs_write_atomic "$1" _cs_local_state_render "$1" "$2" || rc=$?
+    _cs_mkdir_unlock "$lock"
+    return "$rc"
+}
+
+# .cs/local/vault-holders lists the pids whose life keeps an encrypted
+# session's vault mounted, one per line. An add appends; a drop rewrites the
+# list without one pid. Both take the lock beside the file, so a drop never
+# renames its copy over a line another opener added meanwhile.
+cs_vault_holder_add() {  # holders, pid
+    local lock rc=0
+    lock=$(_cs_local_state_lock "$1")
+    { printf '%s\n' "$2" >> "$1"; } 2>/dev/null || rc=$?
+    _cs_mkdir_unlock "$lock"
+    return "$rc"
+}
+
+# A missing list is a no-op. Other lines stay as they are.
+cs_vault_holder_drop() {  # holders, pid
+    [ -f "$1" ] || return 0
+    local lock rc=0
+    lock=$(_cs_local_state_lock "$1")
+    cs_write_atomic "$1" awk -v pid="$2" '$0 != pid' "$1" || rc=$?
     _cs_mkdir_unlock "$lock"
     return "$rc"
 }

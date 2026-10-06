@@ -136,7 +136,7 @@ _refuse_worktree_of_encrypted_base() {  # base_name, base_dir
 # keeps behind .cs/private. The open refuses a plaintext copy of any of them,
 # and cs -encrypt moves each into the vault.
 CS_PRIVATE_LOCAL_FILES="session.log scope-prompt.trace memory-index.snapshot mail
-    queue queue.tmp queue.state queue.done queue.declined queue.migrating
+    queue queue.tmp queue.state queue.mode queue.done queue.declined queue.migrating
     notifications.jsonl notifications.seen failures rewrite.trace pending-handoff
     finish-progress.json"
 
@@ -838,7 +838,7 @@ migrate_session() {
         fi
     fi
 
-    # A migration that completes without a warning stamps .cs/local/migrated.
+    # A migration whose writes all succeeded stamps .cs/local/migrated.
     # While the stamp is fresh the one-time phases below have nothing left to
     # do, so a reopen skips them ("none"); when MEMORY.md alone changed it runs
     # only the narrative check and restamps ("narrative"). The refusals above

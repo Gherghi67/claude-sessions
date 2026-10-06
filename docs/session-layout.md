@@ -82,7 +82,7 @@ in `.cs/private/` instead.
 | `session.log` | Human-readable audit trail — bash commands, session lifecycle, autosave notes, UUID rebinds. Per-checkout by nature; the shared structured record is `timeline.jsonl`. |
 | `state` | Session state bound to this checkout: `claude_session_id` (the conversation UUID to resume), `claude_session_color` (the `/color` palette entry), `last_resumed` (last resume date), `session_name` for adopted sessions only (their name lives in the sessions-root symlink, which a hook resolving the directory has no way to read; an ordinary session takes its name from its directory), and, for feature worktrees, `task_branch`, `cs_base` and `cs_mode` (`tracked` when the base repo tracks `.cs/`, `ignored` when it does not; it decides how the worktree's records reach the base when the feature is integrated and retired). Each machine binds its own conversation, so this must not sync. Writers take turns on a `state.lock` directory beside it. `claude_session_id` is one slot, written only by the conversation `cs` launched — see [hooks.md](hooks.md) for how a teammate or walked-in claude is kept out of it. |
 | `identity` | Overrides the actor name for shared memory/narrative attribution (precedence: `$CS_ACTOR` > `local/identity` > git `user.email` > git `user.name`). |
-| `migrated` | The migration stamp, written when an open's migration finishes without a warning. Line 1: the cs version, the actor and `1` or `0` for an encrypted session, tab separated. Line 2: the files it checked that existed then. See [Migration](#migration). |
+| `migrated` | The migration stamp, written when every write an open's migration made succeeded. Line 1: the cs version, the actor and `1` or `0` for an encrypted session, tab separated. Line 2: the files it checked that existed then. See [Migration](#migration). |
 | `attention` | Status-line attention marker — raised by the `Stop` hook when Claude finishes, cleared on the next prompt. |
 | `presence` | This session's advertised status (`cs -status`): a single line read by `cs -live`. Falls back to the README objective when unset. |
 | `pending-handoff` | Basename of the `.cs/handoffs/` file to rotate into — armed by the `rotate` skill (for `/clear`) or by the `r` answer at the resume prompt. Consumed and cleared by the next SessionStart whose source is `startup` or `clear`; left armed on any other source; disarmed by any other resume-prompt answer. |
@@ -95,12 +95,12 @@ in `.cs/private/` instead.
 | `disabled` | Opts the directory out of cs's hooks entirely. Present, the hooks decline as if it were not a session, whichever front end opened it. Before hooks resolved a session from the directory, a `claude` started outside `cs` in a session folder was inert; this restores that on request instead of by accident. |
 | `pre-open` | An executable `cs <name>` runs before it opens an existing session, from the session directory on your terminal, so it can prompt (mounting the encrypted volume that `.cs/memory` and `.cs/plans` link into, for example). A non-zero exit aborts the open, and `cs` refuses a file that is not executable rather than skipping it. It lives here because this directory is never committed, so a cloned session cannot make `cs` run code. A session copied by a file sync (rsync, iCloud, Dropbox) carries it along, and `cs` runs it. Afterwards, if `.cs/memory` or `.cs/plans` is still a symlink to something missing, `cs` refuses to open the session and names the link, instead of creating plaintext directories in their place. |
 | `vault` | The path of the container `cs -encrypt` built, written only by `cs -encrypt`. The SessionEnd hook unmounts the vault only when this file exists. |
-| `vault-holders` | Process ids of every `cs` run that mounted or joined this session's vault. The volume unmounts only when none of them and no session lock is alive. |
+| `vault-holders` | Process ids of every `cs` run that mounted or joined this session's vault. The volume unmounts only when none of them and no session lock is alive. A `cs` that adds or drops its line takes turns with the others through `vault-holders.lock`. |
 | `vault-waiter.pid` | The background waiter the SessionEnd hook leaves to unmount the vault once the lead conversation's Claude Code exits. An open that finds the vault mounted with nothing alive behind it stops this waiter first. |
 | `vault-detach.pid` | The `hdiutil detach` that waiter started, so a reopen can stop an unmount in flight. |
 | `queue/` | The walk-away task queue (`cs -queue`): one file per task, staged in `queue.tmp/` and renamed into place so the drain never reads a torn entry. The drain pops the lexically first file by moving it aside — atomic against a second drain. |
 | `queue.state` | Drain state machine for the queue: `idle`, `armed`, or `draining`. |
-| `queue.mode` | How a started run hands over its tasks: `subagents` or `workflow`; absent runs them in the conversation. Written by `cs -queue start`, removed when the run finishes or the queue is cleared. |
+| `queue.mode` | How a started run hands over its tasks: `subagents` or `workflow`; absent runs them in the conversation. Written by `cs -queue start`, removed when the run finishes or the queue is cleared. A run the failures breaker stops keeps it until the next `cs -queue start`. |
 | `queue.done` | Log of completed queued tasks, appended as each is drained. |
 | `queue.declined` | Cooldown stamp after declining the queue-drain prompt. |
 | `notifications.jsonl` | Per-machine queue inbox — drain lifecycle events (`drain_started`, `task_done`, `breaker_tripped`, `drain_finished`) and the `gate_declined` event `cs -queue defer` writes, read by `cs -queue log` and the surface-once digest. |
@@ -286,7 +286,7 @@ command-tracker files are pruned, and machine-local fields are moved out of
 shared files into `.cs/local/`. Migration is idempotent — a modern session is
 left untouched.
 
-A migration that finishes without a warning writes `.cs/local/migrated`, and
+A migration whose writes all succeed writes `.cs/local/migrated`, and
 the next open skips the one-time phases while that stamp still holds: same cs
 version, same actor, same encrypted state, every file it listed still there,
 and none of `.gitignore`, `.gitattributes`, `CLAUDE.local.md`, `CLAUDE.md` or
@@ -295,7 +295,7 @@ checkout cs commits into (cs reads the value: git rewrites `.git/config` on
 every `git config` write). When only `.cs/memory/MEMORY.md` changed,
 the open re-checks the narrative pointer and nothing else. The refusals (a
 tracked `.cs/local/`, an unmounted vault), the transcript binding and the checks
-for leftovers from old layouts run on every open. `cs -doctor` reports the
+that only look for a leftover from an old layout run on every open. `cs -doctor` reports the
 stamp; `rm .cs/local/migrated` forces a full migration on the next open, for
 an edit the stamp cannot see (a file restored with its old modification time,
 or saved within the same second as the stamp).

@@ -464,7 +464,9 @@ _cs_file_mode() {  # path
 
 # Replace a file with a command's stdout, atomically: the output goes to a
 # uniquely named temp file in the same directory, which is renamed over the
-# destination only once the command has succeeded. A symlinked destination is
+# destination only once the command has succeeded. The temp file's name starts
+# with .cs-tmp., the prefix a session's .gitignore names, so one left by a
+# killed writer never reaches an autosave snapshot. A symlinked destination is
 # followed to its target, so a shared or linked file is rewritten in place and
 # the link survives. The destination keeps the
 # permission bits it had, and a new file gets the umask's; the temp file takes
@@ -490,7 +492,7 @@ cs_write_atomic() {  # dest, command [args...]
             exit 1
         fi
         dir=$(dirname "$dest")
-        tmp=$(mktemp "$dir/.$(basename "$dest").XXXXXX") || exit 1
+        tmp=$(mktemp "$dir/.cs-tmp.$(basename "$dest").XXXXXX") || exit 1
         trap 'rm -f "$tmp"' EXIT
         "$@" > "$tmp" || exit $?
         if [ -f "$dest" ]; then
@@ -505,7 +507,7 @@ cs_write_atomic() {  # dest, command [args...]
 # The machine-local state file (.cs/local/state) is rewritten whole from its
 # old contents, by cs and by the SessionStart hook, so two writers can lose an
 # update unless they take turns: the lock is _cs_mkdir_lock on a directory
-# beside the file. Prints the lock directory when it holds it, nothing when it
+# beside the file. The vault holder list takes turns through it too. Prints the lock directory when it holds it, nothing when it
 # does not.
 _cs_local_state_lock() {  # state
     _cs_mkdir_lock "$1.lock" || return 0
@@ -543,6 +545,28 @@ cs_local_state_unset() {  # state, key
     local lock rc=0
     lock=$(_cs_local_state_lock "$1")
     cs_write_atomic "$1" _cs_local_state_render "$1" "$2" || rc=$?
+    _cs_mkdir_unlock "$lock"
+    return "$rc"
+}
+
+# .cs/local/vault-holders lists the pids whose life keeps an encrypted
+# session's vault mounted, one per line. An add appends; a drop rewrites the
+# list without one pid. Both take the lock beside the file, so a drop never
+# renames its copy over a line another opener added meanwhile.
+cs_vault_holder_add() {  # holders, pid
+    local lock rc=0
+    lock=$(_cs_local_state_lock "$1")
+    { printf '%s\n' "$2" >> "$1"; } 2>/dev/null || rc=$?
+    _cs_mkdir_unlock "$lock"
+    return "$rc"
+}
+
+# A missing list is a no-op. Other lines stay as they are.
+cs_vault_holder_drop() {  # holders, pid
+    [ -f "$1" ] || return 0
+    local lock rc=0
+    lock=$(_cs_local_state_lock "$1")
+    cs_write_atomic "$1" awk -v pid="$2" '$0 != pid' "$1" || rc=$?
     _cs_mkdir_unlock "$lock"
     return "$rc"
 }
@@ -3719,7 +3743,7 @@ _refuse_worktree_of_encrypted_base() {  # base_name, base_dir
 # keeps behind .cs/private. The open refuses a plaintext copy of any of them,
 # and cs -encrypt moves each into the vault.
 CS_PRIVATE_LOCAL_FILES="session.log scope-prompt.trace memory-index.snapshot mail
-    queue queue.tmp queue.state queue.done queue.declined queue.migrating
+    queue queue.tmp queue.state queue.mode queue.done queue.declined queue.migrating
     notifications.jsonl notifications.seen failures rewrite.trace pending-handoff
     finish-progress.json"
 
@@ -4421,7 +4445,7 @@ migrate_session() {
         fi
     fi
 
-    # A migration that completes without a warning stamps .cs/local/migrated.
+    # A migration whose writes all succeeded stamps .cs/local/migrated.
     # While the stamp is fresh the one-time phases below have nothing left to
     # do, so a reopen skips them ("none"); when MEMORY.md alone changed it runs
     # only the narrative check and restamps ("narrative"). The refusals above
@@ -7755,7 +7779,7 @@ _arm_vault_detach() {  # session_dir
     local meta="$1/.cs"
     [ -f "$meta/local/vault" ] || return 0
     _vault_mountpoint_if_mounted "$meta" >/dev/null || return 0
-    echo "$$" >> "$meta/local/vault-holders"
+    cs_vault_holder_add "$meta/local/vault-holders" "$$"
     CS_OPENED_VAULT_META="$meta"
     trap _detach_opened_vault EXIT
 }
@@ -7763,13 +7787,10 @@ _arm_vault_detach() {  # session_dir
 # A cs that execs something other than claude stops holding the vault: its
 # pid lives on in a process that never opens it. Other lines stay as they are.
 _vault_leave() {
-    local meta="$CS_OPENED_VAULT_META" tmp
+    local meta="$CS_OPENED_VAULT_META"
     [ -n "$meta" ] || return 0
     CS_OPENED_VAULT_META=""
-    [ -f "$meta/local/vault-holders" ] || return 0
-    tmp="$meta/local/vault-holders.$$"
-    grep -vx "$$" "$meta/local/vault-holders" > "$tmp" || true
-    mv -f "$tmp" "$meta/local/vault-holders"
+    cs_vault_holder_drop "$meta/local/vault-holders" "$$"
 }
 
 # The holder list is read, never rewritten, here: dead pids and this one are
@@ -8482,14 +8503,7 @@ _strip_statusline_registration() {
     local settings_file="$1"
     [ -f "$settings_file" ] || return 1
     jq -e '.statusLine.command // "" | endswith("/cs-statusline")' "$settings_file" >/dev/null 2>&1 || return 1
-    local _tmp
-    _tmp=$(mktemp)
-    if { jq 'del(.statusLine)' "$settings_file" > "$_tmp"; } 2>/dev/null; then
-        mv "$_tmp" "$settings_file"
-        return 0
-    fi
-    rm -f "$_tmp"
-    return 2
+    cs_write_atomic "$settings_file" jq 'del(.statusLine)' "$settings_file" 2>/dev/null || return 2
 }
 
 # endswith("/cs-subagent-statusline") never matches "/cs-statusline", so this
@@ -8500,14 +8514,7 @@ _strip_subagent_statusline_registration() {
     [ -f "$settings_file" ] || return 1
     jq -e '.subagentStatusLine.command // "" | endswith("/cs-subagent-statusline")' \
         "$settings_file" >/dev/null 2>&1 || return 1
-    local _tmp
-    _tmp=$(mktemp)
-    if { jq 'del(.subagentStatusLine)' "$settings_file" > "$_tmp"; } 2>/dev/null; then
-        mv "$_tmp" "$settings_file"
-        return 0
-    fi
-    rm -f "$_tmp"
-    return 2
+    cs_write_atomic "$settings_file" jq 'del(.subagentStatusLine)' "$settings_file" 2>/dev/null || return 2
 }
 
 # The installer remembers a declined status-line prompt here so `cs -update`
@@ -8564,23 +8571,19 @@ run_statusline_cmd() {
             [ -x "$subbin" ] || warn "cs-subagent-statusline binary not found at $subbin (run install.sh first)"
             mkdir -p "$(dirname "$settings")"
             [ -f "$settings" ] || echo '{}' > "$settings"
-            local _tmp
-            _tmp=$(mktemp)
             # refreshInterval 60 repaints an idle bar once a minute, which keeps
             # the context-pct heartbeat fresh for a conversation with no lock.
             # Each tick on Claude Code 2.1.286 lists every process with
             # `ps -A`; at 1 s a dozen sessions together hit the process limit.
-            if { jq --arg cmd "$bin" --arg subcmd "$subbin" \
+            if cs_write_atomic "$settings" jq --arg cmd "$bin" --arg subcmd "$subbin" \
                 '.statusLine = {type: "command", command: $cmd, refreshInterval: 60}
                  | .subagentStatusLine = {type: "command", command: $subcmd}' \
-                "$settings" > "$_tmp"; } 2>/dev/null; then
-                mv "$_tmp" "$settings"
+                "$settings" 2>/dev/null; then
                 rm -f "$declined"
                 info "Registered cs-statusline as the Claude Code status line"
                 info "Registered cs-subagent-statusline for the agent panel rows"
                 info "Claude Code reads both at startup: restart it to see them."
             else
-                rm -f "$_tmp"
                 error "Could not update $settings"
             fi
             ;;
@@ -9833,6 +9836,7 @@ create_session_gitignore() {
 *.lock
 *.tmp
 *.bak
+.cs-tmp.*
 
 # Per-actor local state (never shared)
 .cs/local/
@@ -9886,6 +9890,7 @@ ensure_cs_gitignore_entries() {
 .claude/settings.local.json
 CLAUDE.local.md
 .obsidian/
+.cs-tmp.*
 ENTRIES
     )
     local line

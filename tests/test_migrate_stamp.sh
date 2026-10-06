@@ -182,8 +182,8 @@ test_session_encrypted_after_the_stamp_gains_the_protocol() {
 # Phase 13 rewrites an old narrative pointer in MEMORY.md through a temp file
 # beside it; with .cs/memory read-only that rewrite fails and warns, and the
 # open carries on. The positive control reopens with the directory writable
-# and gets its stamp, so the stamp's absence is the warning's doing.
-test_migration_that_warns_leaves_no_stamp() {
+# and gets its stamp, so the stamp's absence is the failed write's doing.
+test_migration_with_a_failed_write_leaves_no_stamp() {
     local dir="$CS_SESSIONS_ROOT/warned" out rc=0
     _stamped_session warned || return 1
     printf -- '- [Notes](narrative.alice.md): read all narrative.*.md on resume\n' >> "$dir/.cs/memory/MEMORY.md"
@@ -198,7 +198,7 @@ test_migration_that_warns_leaves_no_stamp() {
     assert_output_contains "$out" "could not rewrite $dir/.cs/memory/MEMORY.md" \
         "the open took the warn-and-continue branch" || return 1
     assert_file_not_exists "$dir/.cs/local/migrated" \
-        "a migration that warned writes no stamp" || return 1
+        "a migration with a failed write writes no stamp" || return 1
 
     _open warned > /dev/null || { echo "  FAIL: the writable reopen failed"; return 1; }
     assert_file_exists "$dir/.cs/local/migrated" \
@@ -287,7 +287,7 @@ run_test test_excluded_bookkeeping_without_a_driver_stays_fresh
 run_test test_stamp_from_another_version_reruns_the_migration
 run_test test_another_actor_reruns_the_migration
 run_test test_session_encrypted_after_the_stamp_gains_the_protocol
-run_test test_migration_that_warns_leaves_no_stamp
+run_test test_migration_with_a_failed_write_leaves_no_stamp
 run_test test_unusable_stamp_reruns_the_migration_quietly
 run_test test_committed_stamp_is_refused
 run_test test_memory_index_edit_reruns_only_the_narrative_check

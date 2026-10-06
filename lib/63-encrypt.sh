@@ -150,7 +150,7 @@ _arm_vault_detach() {  # session_dir
     local meta="$1/.cs"
     [ -f "$meta/local/vault" ] || return 0
     _vault_mountpoint_if_mounted "$meta" >/dev/null || return 0
-    echo "$$" >> "$meta/local/vault-holders"
+    cs_vault_holder_add "$meta/local/vault-holders" "$$"
     CS_OPENED_VAULT_META="$meta"
     trap _detach_opened_vault EXIT
 }
@@ -158,13 +158,10 @@ _arm_vault_detach() {  # session_dir
 # A cs that execs something other than claude stops holding the vault: its
 # pid lives on in a process that never opens it. Other lines stay as they are.
 _vault_leave() {
-    local meta="$CS_OPENED_VAULT_META" tmp
+    local meta="$CS_OPENED_VAULT_META"
     [ -n "$meta" ] || return 0
     CS_OPENED_VAULT_META=""
-    [ -f "$meta/local/vault-holders" ] || return 0
-    tmp="$meta/local/vault-holders.$$"
-    grep -vx "$$" "$meta/local/vault-holders" > "$tmp" || true
-    mv -f "$tmp" "$meta/local/vault-holders"
+    cs_vault_holder_drop "$meta/local/vault-holders" "$$"
 }
 
 # The holder list is read, never rewritten, here: dead pids and this one are

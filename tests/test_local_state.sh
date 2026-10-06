@@ -453,21 +453,21 @@ test_state_and_gitattributes_rewrites_leave_tmp_siblings_alone_and_keep_modes() 
     # Untracked: a tracked .cs/local is refused, and the siblings stand for files
     # the user keeps beside cs's.
     printf 'USER-OWNED-GA\n' > "$session_dir/.gitattributes.tmp"
-    chmod 640 "$session_dir/.gitattributes"
+    chmod 750 "$session_dir/.gitattributes"
     local state="$session_dir/.cs/local/state"
     mkdir -p "$session_dir/.cs/local"
     printf 'session_name: tmpsib\n' > "$state"
     printf 'USER-OWNED-STATE\n' > "$state.tmp"
-    chmod 640 "$state"
+    chmod 750 "$state"
 
     "$CS_BIN" tmpsib <<< "" >/dev/null 2>&1 || true
 
     assert_file_not_contains "$session_dir/.gitattributes" "logs/session.log merge=union" "the union rule was stripped" || return 1
     assert_eq "USER-OWNED-GA" "$(cat "$session_dir/.gitattributes.tmp")" ".gitattributes.tmp is untouched" || return 1
-    assert_eq "640" "$(_file_mode "$session_dir/.gitattributes")" ".gitattributes keeps its mode" || return 1
+    assert_eq "750" "$(_file_mode "$session_dir/.gitattributes")" ".gitattributes keeps its mode" || return 1
     assert_file_contains "$state" "^claude_session_id:" "the launch recorded its conversation" || return 1
     assert_eq "USER-OWNED-STATE" "$(cat "$state.tmp")" "state.tmp is untouched" || return 1
-    assert_eq "640" "$(_file_mode "$state")" "state keeps its mode" || return 1
+    assert_eq "750" "$(_file_mode "$state")" "state keeps its mode" || return 1
 }
 
 # A state rewrite is a read-modify-write, so two writers (cs at launch and the
@@ -475,19 +475,19 @@ test_state_and_gitattributes_rewrites_leave_tmp_siblings_alone_and_keep_modes() 
 # directory beside the file, .cs/local/state.lock, holding the holder's pid; a
 # live holder is waited for, up to five seconds, then the write goes ahead.
 test_state_write_waits_for_a_live_lock_holder() {
-    local session_dir
-    session_dir=$(create_test_session_with_git locked-state)
-    local state="$session_dir/.cs/local/state"
-    mkdir -p "$state.lock"
+    local state="$TEST_TMPDIR/state" lib="$SCRIPT_DIR/../hooks/cs-shared.sh" start took
+    printf 'session_name: locked-state\n' > "$state"
+    mkdir "$state.lock"
     echo "$$" > "$state.lock/pid"
-    _argv_claude_stub
 
-    local start=$SECONDS
-    "$CS_BIN" locked-state <<< "" >/dev/null 2>&1 || true
-    local took=$((SECONDS - start))
+    start=$SECONDS
+    bash -c 'source "$1"; cs_local_state_set "$2" claude_session_id abc' _ "$lib" "$state" \
+        || { echo "  FAIL: the write failed"; return 1; }
+    took=$((SECONDS - start))
     rm -f "$state.lock/pid"; rmdir "$state.lock" 2>/dev/null
 
-    assert_file_contains "$state" "^claude_session_id:" "the write went ahead once the wait ran out" || return 1
+    assert_file_contains "$state" "^claude_session_id: abc$" "the write went ahead once the wait ran out" || return 1
+    assert_file_contains "$state" "^session_name: locked-state$" "and kept the other keys" || return 1
     [ "$took" -ge 4 ] || { echo "  FAIL: the writer must wait for a live holder (took ${took}s)"; return 1; }
 }
 
@@ -530,6 +530,31 @@ test_two_state_writers_lose_no_update() {
     assert_not_exists "$state.lock" "no lock left behind" || return 1
 }
 
+# Dropping a vault holder rewrites the list while an opener may be adding to
+# it. The two take turns, so the opener's line is never lost.
+test_vault_holder_drop_keeps_a_concurrent_add() {
+    local holders="$TEST_TMPDIR/vault-holders" lib="$SCRIPT_DIR/../hooks/cs-shared.sh"
+    local shim="$TEST_TMPDIR/slow-mv" added="$TEST_TMPDIR/added" real_mv i=0
+    real_mv=$(command -v mv)
+    mkdir -p "$shim"
+    printf '111\n222\n' > "$holders"
+    # The drop's rename waits half a second, and an opener adds 333 meanwhile.
+    cat > "$shim/mv" <<EOF
+#!/bin/sh
+bash -c 'source "\$1"; cs_vault_holder_add "\$2" 333; : > "\$3"' _ "$lib" "$holders" "$added" &
+sleep 0.5
+exec "$real_mv" "\$@"
+EOF
+    chmod +x "$shim/mv"
+    PATH="$shim:$PATH" bash -c 'source "$1"; cs_vault_holder_drop "$2" 111' _ "$lib" "$holders" \
+        || { echo "  FAIL: the drop failed"; return 1; }
+    while [ ! -e "$added" ] && [ "$i" -lt 80 ]; do sleep 0.1; i=$((i + 1)); done
+    [ -e "$added" ] || { echo "  FAIL: the opener's add never finished"; return 1; }
+    assert_eq "222
+333" "$(cat "$holders")" "the drop removed 111 and the opener's 333 survived" || return 1
+    assert_not_exists "$holders.lock" "no lock left behind" || return 1
+}
+
 # Homebrew's gnubin puts GNU stat first on a Mac's PATH; the mode read must
 # work with either stat, so the dispatch is by behaviour, not by OSTYPE.
 test_atomic_write_keeps_the_mode_with_gnu_stat_on_a_mac() {
@@ -538,11 +563,11 @@ test_atomic_write_keeps_the_mode_with_gnu_stat_on_a_mac() {
     mkdir -p "$shim"
     printf '#!/bin/sh\nexec gstat "$@"\n' > "$shim/stat"; chmod +x "$shim/stat"
     local f="$TEST_TMPDIR/f"
-    printf 'old\n' > "$f"; chmod 640 "$f"
+    printf 'old\n' > "$f"; chmod 750 "$f"
     PATH="$shim:$PATH" bash -c 'source "$1"; cs_write_atomic "$2" printf "new\n"' _ "$SCRIPT_DIR/../hooks/cs-shared.sh" "$f" \
         || { echo "  FAIL: cs_write_atomic failed under GNU stat"; return 1; }
     assert_eq "new" "$(cat "$f")" "the file was rewritten" || return 1
-    assert_eq "640" "$(_file_mode "$f")" "and kept its mode" || return 1
+    assert_eq "750" "$(_file_mode "$f")" "and kept its mode" || return 1
 }
 
 # A destination that is a directory is refused: nothing is written into it.
@@ -820,6 +845,7 @@ run_test test_state_write_waits_for_a_live_lock_holder
 run_test test_state_write_takes_over_a_dead_holders_lock
 run_test test_state_write_fails_loudly_when_the_old_state_cannot_be_read
 run_test test_two_state_writers_lose_no_update
+run_test test_vault_holder_drop_keeps_a_concurrent_add
 run_test test_atomic_write_keeps_the_mode_with_gnu_stat_on_a_mac
 run_test test_atomic_write_refuses_a_directory_destination
 report_results

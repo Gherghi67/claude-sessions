@@ -8,6 +8,7 @@ create_session_gitignore() {
 *.lock
 *.tmp
 *.bak
+.cs-tmp.*
 
 # Per-actor local state (never shared)
 .cs/local/
@@ -61,6 +62,7 @@ ensure_cs_gitignore_entries() {
 .claude/settings.local.json
 CLAUDE.local.md
 .obsidian/
+.cs-tmp.*
 ENTRIES
     )
     local line

@@ -239,7 +239,7 @@ test_migration_rewrites_leave_tmp_siblings_alone_and_keep_modes() {
     printf '<!-- cs:session-protocol -->\n# Session Documentation Protocol\n\nAppend only to your own; read all narrative.*.md on resume to restore your\nworking narrative and see teammates'"'"' in-progress findings.\n\n<!-- cs:memory-rules -->\n## Auto-memory bucket guidance\nold rules\n\n<!-- cs:wrap-cues -->\n' > "$dir/CLAUDE.local.md"
     printf 'USER-OWNED-MD\n' > "$dir/CLAUDE.md.tmp"
     printf 'USER-OWNED-LOCAL\n' > "$dir/CLAUDE.local.md.tmp"
-    chmod 640 "$dir/CLAUDE.md" "$dir/CLAUDE.local.md"
+    chmod 750 "$dir/CLAUDE.md" "$dir/CLAUDE.local.md"
 
     "$CS_BIN" "tmpsib" < /dev/null > /dev/null 2>&1 || true
 
@@ -249,8 +249,8 @@ test_migration_rewrites_leave_tmp_siblings_alone_and_keep_modes() {
     assert_file_not_contains "$dir/CLAUDE.local.md" "Auto-memory bucket guidance" "memory rules retired" || return 1
     assert_eq "USER-OWNED-MD" "$(cat "$dir/CLAUDE.md.tmp")" "CLAUDE.md.tmp is untouched" || return 1
     assert_eq "USER-OWNED-LOCAL" "$(cat "$dir/CLAUDE.local.md.tmp")" "CLAUDE.local.md.tmp is untouched" || return 1
-    assert_eq "640" "$(_file_mode "$dir/CLAUDE.md")" "CLAUDE.md keeps its mode" || return 1
-    assert_eq "640" "$(_file_mode "$dir/CLAUDE.local.md")" "CLAUDE.local.md keeps its mode" || return 1
+    assert_eq "750" "$(_file_mode "$dir/CLAUDE.md")" "CLAUDE.md keeps its mode" || return 1
+    assert_eq "750" "$(_file_mode "$dir/CLAUDE.local.md")" "CLAUDE.local.md keeps its mode" || return 1
 }
 
 # A CLAUDE.local.md that is a symlink is rewritten THROUGH the link: the target
@@ -259,13 +259,13 @@ test_migration_rewrite_through_a_symlink_keeps_the_targets_mode() {
     local dir
     dir=$(create_test_session "linked")
     printf '<!-- cs:session-protocol -->\n# Session Documentation Protocol\n\nAppend only to your own; read all narrative.*.md on resume to restore your\nworking narrative and see teammates'"'"' in-progress findings.\n\n<!-- cs:memory-note -->\nnote\n<!-- cs:wrap-cues -->\n' > "$dir/real-local.md"
-    chmod 640 "$dir/real-local.md"
+    chmod 750 "$dir/real-local.md"
     ln -s real-local.md "$dir/CLAUDE.local.md"
 
     "$CS_BIN" "linked" < /dev/null > /dev/null 2>&1 || true
 
     assert_file_not_contains "$dir/CLAUDE.local.md" "read all narrative" "protocol wording rewritten" || return 1
-    assert_eq "640" "$(_file_mode "$dir/CLAUDE.local.md")" "the rewritten file keeps the target's mode" || return 1
+    assert_eq "750" "$(_file_mode "$dir/CLAUDE.local.md")" "the rewritten file keeps the target's mode" || return 1
     [ -L "$dir/CLAUDE.local.md" ] || { echo "  FAIL: the symlink was replaced by a regular file"; return 1; }
     assert_file_not_contains "$dir/real-local.md" "read all narrative" "the rewrite went through the link into the target" || return 1
 }
