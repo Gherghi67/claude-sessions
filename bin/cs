@@ -4177,11 +4177,17 @@ CS_MIGRATION_PROBES=".gitignore .gitattributes CLAUDE.local.md CLAUDE.md .cs/REA
 # .cs/local/migrated. Prints "fresh" when it can skip every one-time phase,
 # or "stale: <reason>" when it must run them all.
 _migration_stamp_state() {  # session_dir, actor_raw
-    local stamp="$1/.cs/local/migrated"
+    local stamp="$1/.cs/local/migrated" p
     if [ ! -f "$stamp" ]; then
         echo "stale: no stamp"
         return 0
     fi
+    for p in $CS_MIGRATION_PROBES; do
+        if [ "$1/$p" -nt "$stamp" ]; then
+            echo "stale: $p changed after the stamp"
+            return 0
+        fi
+    done
     echo "fresh"
 }
 

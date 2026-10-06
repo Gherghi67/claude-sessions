@@ -79,7 +79,18 @@ test_gitignore_edited_after_the_stamp_is_repaired() {
         "a .gitignore newer than the stamp is repaired" || return 1
 }
 
+test_deleted_claude_local_md_is_regenerated() {
+    local dir="$CS_SESSIONS_ROOT/deleted"
+    _stamped_session deleted || return 1
+    rm "$dir/CLAUDE.local.md"
+    _age_session "$dir"
+    _open deleted > /dev/null || { echo "  FAIL: the reopen failed"; return 1; }
+    assert_file_contains "$dir/CLAUDE.local.md" '<!-- cs:session-protocol -->' \
+        "a CLAUDE.local.md deleted after the stamp is written again" || return 1
+}
+
 run_test test_fresh_stamp_skips_the_one_time_phases
 run_test test_gitignore_edited_after_the_stamp_is_repaired
+run_test test_deleted_claude_local_md_is_regenerated
 
 report_results
