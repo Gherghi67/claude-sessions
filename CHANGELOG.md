@@ -4,7 +4,7 @@ All notable changes to cs are documented here. Release notes are also available 
 
 <!-- New entries group changes under Keep-a-Changelog headings (Added / Changed / Removed / Fixes / Docs), or Features / Performance where those fit the release. -->
 
-## Unreleased
+## 2026.10.6
 
 ### Added
 - The walk-away queue can run each task in a subagent or as a workflow. When the Stop hook or `/queue` offers to start the queue, it also asks how the tasks run: in this conversation, in subagents, or as workflows. `cs -queue start subagents` and `cs -queue start workflow` record the choice, and each task handed out then says to run it that way and to check the result before marking it done. Picking workflows is your go-ahead for Claude Code's Workflow tool. The choice lasts until the run finishes or the next `cs -queue start`, and `cs -queue clear` drops it. In an encrypted session the choice lives in the vault, and `cs -encrypt` moves it there.
