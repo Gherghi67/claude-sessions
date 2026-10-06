@@ -9252,7 +9252,16 @@ EOF
     fi
 
     if [ -n "$resume_id" ]; then
-        # Try continuing previous conversation
+        # tmux names a pane after the leader of its foreground process group,
+        # and iTerm2 takes the tab's icon from that name, so claude replaces
+        # cs when its transcript is on disk. exec keeps the pid: the session
+        # lock and the vault's holder list name claude, as on a fresh launch.
+        if [ -f "$(_claude_project_dir "$session_dir")/$resume_id.jsonl" ]; then
+            # shellcheck disable=SC2086
+            exec $CLAUDE_CODE_BIN --name "$session_name" --resume "$resume_id" ${launch_prompt:+"$launch_prompt"}
+        fi
+        # Without a transcript where cs looks, claude decides whether the
+        # conversation resumes; cs stays to start a fresh one if it cannot.
         SECONDS=0
         local rc=0
         # shellcheck disable=SC2086
