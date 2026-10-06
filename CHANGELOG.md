@@ -4,6 +4,11 @@ All notable changes to cs are documented here. Release notes are also available 
 
 <!-- New entries group changes under Keep-a-Changelog headings (Added / Changed / Removed / Fixes / Docs), or Features / Performance where those fit the release. -->
 
+## Unreleased
+
+### Fixes
+- The Claude icon from 2026.10.5 only showed on a brand-new launch with the default `CLAUDE_CODE_BIN`. On a resume cs ran `claude` as its own child, so tmux named the pane after cs's bash. A resume now runs `claude` in place of cs when cs finds the conversation's transcript on disk. Without it, `claude` still runs as a child, and a quick failure still starts a fresh conversation. A `CLAUDE_CODE_BIN` you set, like a path with `--permission-mode` after it, never got the link, and on macOS tmux names the pane after the file a symlink points to, which is the version number. cs now links the first word of `CLAUDE_CODE_BIN` when it resolves to a file directly in the native installer's `versions` directory, named by a version number, and keeps the words after it. Any other binary runs as given. The dependency check splits `CLAUDE_CODE_BIN` on tabs as well as spaces, the same way the launch does.
+
 ## 2026.10.5
 
 ### Added
