@@ -41,6 +41,7 @@ spawn env HOME=$fake_home bash $INSTALL_SH
 expect {
     -re {status line.*\[y/N\]} { send "n\r"; exp_continue }
     -re {status line.*\[Y/n\]} { send "n\r"; exp_continue }
+    -re {Option\+1.*\[y/n\]} { send "n"; exp_continue }
     eof
 }
 catch wait result
@@ -77,6 +78,7 @@ log_file -noappend $out
 spawn env HOME=$fake_home bash $INSTALL_SH
 expect {
     -re {status line.*\[y/N\]} { send "n\r"; exp_continue }
+    -re {Option\+1.*\[y/n\]} { send "n"; exp_continue }
     eof
 }
 EXPECT
@@ -114,6 +116,7 @@ spawn env HOME=$fake_home bash $INSTALL_SH
 expect {
     -re {status line.*\[Y/n\]} { send "n\r"; exp_continue }
     -re {Complete|complete} { exp_continue }
+    -re {Option\+1.*\[y/n\]} { send "n"; exp_continue }
     eof
 }
 EXPECT
@@ -201,6 +204,7 @@ set timeout 120
 spawn env HOME=$fake_home bash $INSTALL_SH
 expect {
     -re {status line.*\[y/N\]} { send "$ans\r"; exp_continue }
+    -re {Option\+1.*\[y/n\]} { send "n"; exp_continue }
     -re {Complete|complete} { exp_continue }
     eof
 }
@@ -1513,6 +1517,219 @@ test_rewake_labels_do_not_claim_the_wake_is_mail() {
     esac
 }
 
+# ============================================================================
+# Option keys: the installer offers, once per machine, to bind Option+1 to
+# /rotate and Option+2 to /wrap in Claude Code's keybindings.json.
+# ============================================================================
+
+# cs's block, as `jq -c` prints it.
+_OK_CS_BLOCK='{"context":"Global","bindings":{"alt+1":"command:rotate","alt+2":"command:wrap"}}'
+
+_need_expect() {
+    command -v expect >/dev/null 2>&1 && return 0
+    echo "    SKIP (expect not installed; the question needs a tty)"
+    return 77
+}
+
+# Run install.sh on a pty, declining the status line so the option-keys
+# question is the only one that decides what reaches keybindings.json, and
+# answering that question with the given key. Extra VAR=value arguments go to
+# the installer's environment. The transcript lands in $TEST_TMPDIR/<label>.out;
+# returns the installer's exit status.
+_install_answering_option_keys() {  # label, home, answer, [VAR=value...]
+    local label="$1" home="$2" ans="$3"; shift 3
+    local exp="$TEST_TMPDIR/$label.exp"
+    cat > "$exp" <<EXPECT
+set timeout 120
+log_file -noappend $TEST_TMPDIR/$label.out
+spawn env -u CLAUDE_CONFIG_DIR -u XDG_CONFIG_HOME HOME=$home $* bash $INSTALL_SH
+expect {
+    -re {status line.*\[Y/n\]} { send "n"; exp_continue }
+    -re {Option\+1.*\[y/n\]} { send "$ans"; exp_continue }
+    eof
+}
+catch wait result
+exit [lindex \$result 3]
+EXPECT
+    expect -f "$exp" >/dev/null 2>&1
+}
+
+# 1. No keybindings.json: a yes creates it holding exactly cs's block, and the
+# answer is recorded for the next install.
+test_option_keys_yes_creates_the_file_with_only_cs_block() {
+    _need_expect || return 77
+    local home="$TEST_TMPDIR/home-ok-create"
+    mkdir -p "$home"
+    _install_answering_option_keys ok-create "$home" y \
+        || { echo "  FAIL: install.sh exited non-zero"; return 1; }
+    assert_eq "{\"bindings\":[$_OK_CS_BLOCK]}" "$(jq -c . "$home/.claude/keybindings.json" 2>&1)" \
+        "a new keybindings.json holds exactly cs's block" || return 1
+    assert_eq "yes" "$(cat "$home/.config/cs/option-keys" 2>&1)" "the yes is recorded" || return 1
+}
+
+# 2. An existing Global block takes the two keys beside the user's own; every
+# other block and key is kept, and no second Global block appears.
+test_option_keys_merge_into_the_existing_global_block() {
+    _need_expect || return 77
+    local home="$TEST_TMPDIR/home-ok-merge"
+    mkdir -p "$home/.claude"
+    printf '%s\n' '{"$schema":"https://example.com/kb.json","bindings":[{"context":"Chat","bindings":{"ctrl+e":"chat:externalEditor"}},{"context":"Global","bindings":{"ctrl+t":"app:toggleTodos"}}]}' \
+        > "$home/.claude/keybindings.json"
+    _install_answering_option_keys ok-merge "$home" y \
+        || { echo "  FAIL: install.sh exited non-zero"; return 1; }
+    assert_eq '{"$schema":"https://example.com/kb.json","bindings":[{"context":"Chat","bindings":{"ctrl+e":"chat:externalEditor"}},{"context":"Global","bindings":{"ctrl+t":"app:toggleTodos","alt+1":"command:rotate","alt+2":"command:wrap"}}]}' \
+        "$(jq -c . "$home/.claude/keybindings.json" 2>&1)" \
+        "the keys join the user's Global block and nothing else changes" || return 1
+}
+
+# 3. A key the user already binds, in any context, is never overwritten: it is
+# left as it is and named in a warning, and the other key is still added.
+test_option_keys_never_overwrite_a_user_binding() {
+    _need_expect || return 77
+    local home="$TEST_TMPDIR/home-ok-conflict"
+    mkdir -p "$home/.claude"
+    printf '%s\n' '{"bindings":[{"context":"Chat","bindings":{"alt+1":"chat:submit"}}]}' \
+        > "$home/.claude/keybindings.json"
+    _install_answering_option_keys ok-conflict "$home" y \
+        || { echo "  FAIL: install.sh exited non-zero"; return 1; }
+    assert_eq '{"bindings":[{"context":"Chat","bindings":{"alt+1":"chat:submit"}},{"context":"Global","bindings":{"alt+2":"command:wrap"}}]}' \
+        "$(jq -c . "$home/.claude/keybindings.json" 2>&1)" \
+        "alt+1 keeps the user's action and alt+2 is added" || return 1
+    grep -q 'alt+1.*chat:submit' "$TEST_TMPDIR/ok-conflict.out" \
+        || { echo "  FAIL: no warning naming alt+1 and its current action"; return 1; }
+}
+
+# 4. A file cs cannot read as {"bindings":[...]} is refused and left byte for
+# byte as it was, with no temp file beside it, and the message names it.
+test_option_keys_refuse_an_unparseable_file() {
+    _need_expect || return 77
+    local body i=0
+    for body in '{"bindings": [' '{"bindings":{"alt+3":"command:x"}}'; do
+        i=$((i + 1))
+        local home="$TEST_TMPDIR/home-ok-bad$i" kb
+        kb="$home/.claude/keybindings.json"
+        mkdir -p "$home/.claude"
+        printf '%s\n' "$body" > "$kb"
+        cp "$kb" "$TEST_TMPDIR/bad$i.orig"
+        _install_answering_option_keys "ok-bad$i" "$home" y \
+            || { echo "  FAIL: install.sh exited non-zero on case $i"; return 1; }
+        cmp -s "$TEST_TMPDIR/bad$i.orig" "$kb" \
+            || { echo "  FAIL: case $i: the file was changed"; return 1; }
+        grep -qF "$kb" "$TEST_TMPDIR/ok-bad$i.out" \
+            || { echo "  FAIL: case $i: the refusal does not name $kb"; return 1; }
+        assert_eq "keybindings.json" "$(ls -A "$home/.claude" | grep keybindings)" \
+            "case $i: no temp file is left beside it" || return 1
+    done
+}
+
+# 5. A no leaves the file alone and is remembered: the next install, on a
+# terminal too, does not ask again.
+test_option_keys_decline_is_remembered() {
+    _need_expect || return 77
+    local home="$TEST_TMPDIR/home-ok-no" kb
+    kb="$home/.claude/keybindings.json"
+    mkdir -p "$home/.claude"
+    printf '%s\n' '{"bindings":[{"context":"Global","bindings":{"ctrl+t":"app:toggleTodos"}}]}' > "$kb"
+    cp "$kb" "$TEST_TMPDIR/no.orig"
+    _install_answering_option_keys ok-no1 "$home" n \
+        || { echo "  FAIL: install.sh exited non-zero"; return 1; }
+    cmp -s "$TEST_TMPDIR/no.orig" "$kb" || { echo "  FAIL: a no changed the file"; return 1; }
+    assert_eq "no" "$(cat "$home/.config/cs/option-keys" 2>&1)" "the no is recorded" || return 1
+    grep -q 'Option+1.*\[y/n\]' "$TEST_TMPDIR/ok-no1.out" \
+        || { echo "  FAIL: the first install never asked"; return 1; }
+    _install_answering_option_keys ok-no2 "$home" y \
+        || { echo "  FAIL: the second install exited non-zero"; return 1; }
+    if grep -q 'Option+1.*\[y/n\]' "$TEST_TMPDIR/ok-no2.out"; then
+        echo "  FAIL: the second install asked again"; return 1
+    fi
+    cmp -s "$TEST_TMPDIR/no.orig" "$kb" || { echo "  FAIL: the second install changed the file"; return 1; }
+}
+
+# 6. With no terminal there is no one to ask: nothing is written, nothing is
+# recorded, and one line says how to be asked.
+test_option_keys_non_interactive_writes_nothing_and_says_how() {
+    local home="$TEST_TMPDIR/home-ok-pipe"
+    mkdir -p "$home"
+    env -u CLAUDE_CONFIG_DIR -u XDG_CONFIG_HOME HOME="$home" bash "$INSTALL_SH" \
+        < /dev/null > "$TEST_TMPDIR/ok-pipe.out" 2>&1 \
+        || { echo "  FAIL: install.sh exited non-zero"; return 1; }
+    assert_file_not_exists "$home/.claude/keybindings.json" "no keybindings.json without a terminal" || return 1
+    assert_file_not_exists "$home/.config/cs/option-keys" "no answer recorded without a terminal" || return 1
+    assert_eq "1" "$(grep -c 'Option+1' "$TEST_TMPDIR/ok-pipe.out")" "exactly one line mentions Option+1" || return 1
+    grep -qF 'Option keys: not bound. To bind Option+1 to /rotate and Option+2 to /wrap, run cs -update in a terminal.' \
+        "$TEST_TMPDIR/ok-pipe.out" || { echo "  FAIL: the hint line is missing or reworded"; return 1; }
+}
+
+# 7. Installing again after a yes, with or without a terminal, changes nothing.
+test_option_keys_reinstall_after_yes_is_idempotent() {
+    _need_expect || return 77
+    local home="$TEST_TMPDIR/home-ok-again" kb
+    kb="$home/.claude/keybindings.json"
+    mkdir -p "$home/.claude"
+    printf '%s\n' '{"bindings":[{"context":"Global","bindings":{"ctrl+t":"app:toggleTodos"}}]}' > "$kb"
+    _install_answering_option_keys ok-again1 "$home" y \
+        || { echo "  FAIL: install.sh exited non-zero"; return 1; }
+    cp "$kb" "$TEST_TMPDIR/again.after1"
+    _install_answering_option_keys ok-again2 "$home" y \
+        || { echo "  FAIL: the second install exited non-zero"; return 1; }
+    env -u CLAUDE_CONFIG_DIR -u XDG_CONFIG_HOME HOME="$home" bash "$INSTALL_SH" < /dev/null > /dev/null 2>&1 \
+        || { echo "  FAIL: the third install exited non-zero"; return 1; }
+    cmp -s "$TEST_TMPDIR/again.after1" "$kb" || { echo "  FAIL: a re-install changed the file"; return 1; }
+    assert_eq '{"bindings":[{"context":"Global","bindings":{"ctrl+t":"app:toggleTodos","alt+1":"command:rotate","alt+2":"command:wrap"}}]}' \
+        "$(jq -c . "$kb" 2>&1)" "one Global block, each key once" || return 1
+}
+
+# 8. Uninstall takes back only keys that still hold cs's values, keeps every
+# user binding (an unbinding null included), and deletes a file it leaves
+# holding nothing.
+test_option_keys_uninstall_removes_only_cs_values() {
+    local home="$TEST_TMPDIR/home-ok-un" kb
+    kb="$home/.claude/keybindings.json"
+    mkdir -p "$home/.claude" "$home/.config/cs"
+    printf 'yes\n' > "$home/.config/cs/option-keys"
+    printf '%s\n' '{"bindings":[{"context":"Chat","bindings":{"ctrl+e":"chat:externalEditor"}},{"context":"Global","bindings":{"ctrl+t":"app:toggleTodos","ctrl+x":null,"alt+1":"command:rotate","alt+2":"command:other"}}]}' > "$kb"
+    printf 'y\n' | env -u CLAUDE_CONFIG_DIR -u XDG_CONFIG_HOME HOME="$home" "$CS_BIN" -uninstall > /dev/null 2>&1 \
+        || { echo "  FAIL: cs -uninstall exited non-zero"; return 1; }
+    assert_eq '{"bindings":[{"context":"Chat","bindings":{"ctrl+e":"chat:externalEditor"}},{"context":"Global","bindings":{"ctrl+t":"app:toggleTodos","ctrl+x":null,"alt+2":"command:other"}}]}' \
+        "$(jq -c . "$kb" 2>&1)" "only alt+1, which held cs's value, is removed" || return 1
+
+    local home2="$TEST_TMPDIR/home-ok-un2"
+    mkdir -p "$home2/.claude"
+    printf '%s\n' "{\"bindings\":[$_OK_CS_BLOCK]}" > "$home2/.claude/keybindings.json"
+    printf 'y\n' | env -u CLAUDE_CONFIG_DIR -u XDG_CONFIG_HOME HOME="$home2" "$CS_BIN" -uninstall > /dev/null 2>&1 \
+        || { echo "  FAIL: cs -uninstall exited non-zero"; return 1; }
+    assert_file_not_exists "$home2/.claude/keybindings.json" "a file left with no bindings is deleted" || return 1
+}
+
+# 9. CLAUDE_CONFIG_DIR moves Claude Code's config, keybindings.json included.
+test_option_keys_follow_claude_config_dir() {
+    _need_expect || return 77
+    local home="$TEST_TMPDIR/home-ok-cfg" cfg="$TEST_TMPDIR/claude-cfg"
+    mkdir -p "$home" "$cfg"
+    _install_answering_option_keys ok-cfg "$home" y "CLAUDE_CONFIG_DIR=$cfg" \
+        || { echo "  FAIL: install.sh exited non-zero"; return 1; }
+    assert_eq "{\"bindings\":[$_OK_CS_BLOCK]}" "$(jq -c . "$cfg/keybindings.json" 2>&1)" \
+        "the file is written in CLAUDE_CONFIG_DIR" || return 1
+    assert_file_not_exists "$home/.claude/keybindings.json" "nothing is written under ~/.claude" || return 1
+}
+
+# 10. A symlinked keybindings.json (a dotfiles manager's) is written through:
+# the link stays a link, and its target takes the keys and keeps its mode.
+test_option_keys_write_through_a_symlink() {
+    _need_expect || return 77
+    local home="$TEST_TMPDIR/home-ok-link" target="$TEST_TMPDIR/dotfiles/keybindings.json"
+    mkdir -p "$home/.claude" "$(dirname "$target")"
+    printf '%s\n' '{"bindings":[{"context":"Global","bindings":{"ctrl+t":"app:toggleTodos"}}]}' > "$target"
+    chmod 600 "$target"
+    ln -s "$target" "$home/.claude/keybindings.json"
+    _install_answering_option_keys ok-link "$home" y \
+        || { echo "  FAIL: install.sh exited non-zero"; return 1; }
+    [ -L "$home/.claude/keybindings.json" ] || { echo "  FAIL: the link was replaced by a file"; return 1; }
+    assert_eq '{"bindings":[{"context":"Global","bindings":{"ctrl+t":"app:toggleTodos","alt+1":"command:rotate","alt+2":"command:wrap"}}]}' \
+        "$(jq -c . "$target" 2>&1)" "the link's target takes the keys" || return 1
+    assert_eq "600" "$(_file_mode "$target")" "the target keeps its mode" || return 1
+}
+
 run_test test_install_survives_an_unwritable_declined_marker_dir
 run_test test_install_previews_the_status_line_before_asking
 run_test test_declining_says_permanence_on_its_own_line
@@ -1542,4 +1759,14 @@ run_test test_statusline_disable_sets_and_enable_clears_declined_marker
 run_test test_uninstall_removes_declined_marker
 run_test test_install_removes_the_retired_hint_mod
 run_test test_install_removes_the_mod_under_its_old_name
+run_test test_option_keys_yes_creates_the_file_with_only_cs_block
+run_test test_option_keys_merge_into_the_existing_global_block
+run_test test_option_keys_never_overwrite_a_user_binding
+run_test test_option_keys_refuse_an_unparseable_file
+run_test test_option_keys_decline_is_remembered
+run_test test_option_keys_non_interactive_writes_nothing_and_says_how
+run_test test_option_keys_reinstall_after_yes_is_idempotent
+run_test test_option_keys_uninstall_removes_only_cs_values
+run_test test_option_keys_follow_claude_config_dir
+run_test test_option_keys_write_through_a_symlink
 report_results
