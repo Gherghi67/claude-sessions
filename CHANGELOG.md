@@ -6,6 +6,9 @@ All notable changes to cs are documented here. Release notes are also available 
 
 ## Unreleased
 
+### Added
+- The walk-away queue can run each task in a subagent or as a workflow. The Stop hook's offer and `/queue`'s now also ask how the tasks run: in this conversation, in subagents, or as workflows. `cs -queue start subagents` and `cs -queue start workflow` record the choice, and every handed task then says to run it that way and to check the result before marking it done. Picking workflows counts as your go-ahead for Claude Code's Workflow tool. The choice lasts until the run finishes or the next `cs -queue start`, and `cs -queue clear` drops it.
+
 ### Fixes
 - The Claude icon from 2026.10.5 only showed on a brand-new launch with the default `CLAUDE_CODE_BIN`. On a resume cs ran `claude` as its own child, so tmux named the pane after cs's bash. A resume now runs `claude` in place of cs when the transcript cs reads holds a message, `CLAUDE_CONFIG_DIR` isn't set, and the session isn't encrypted. Otherwise `claude` still runs as a child, a quick failure still starts a fresh conversation, and an encrypted session's vault still detaches after it. A resumed session that runs in place no longer resets the tab colour when it ends, the same as a fresh launch. A `CLAUDE_CODE_BIN` you set, like a path with `--permission-mode` after it, never got the link, and on macOS tmux names the pane after the file a symlink points to, which is the version number. cs now links the first word of `CLAUDE_CODE_BIN` when it resolves to a file directly in the native installer's `versions` directory, named by a version number, and keeps the words after it. Any other binary runs as given. The dependency check splits `CLAUDE_CODE_BIN` on tabs as well as spaces, the same way the launch does, and cs refuses a value that doesn't start with a command, naming it.
 

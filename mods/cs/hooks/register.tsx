@@ -147,6 +147,13 @@ export const WRAP_YES = 'Yes, wrap up'
 // a turn ends, so an idle session needs one turn to reach that first stop.
 export const QUEUE_START = 'Start'
 export const QUEUE_COMPACT = 'Compact'
+// Asked after Start or Compact: how the tasks run, as the word cs -queue start
+// takes for each (none runs them in this conversation).
+export const QUEUE_MODE_QUESTION = 'How should the queued tasks run?'
+export const QUEUE_HERE = 'In this conversation'
+export const QUEUE_SUBAGENTS = 'In subagents'
+export const QUEUE_WORKFLOWS = 'As workflows'
+const QUEUE_MODE_WORDS: Record<string, string[]> = { [QUEUE_HERE]: [], [QUEUE_SUBAGENTS]: ['subagents'], [QUEUE_WORKFLOWS]: ['workflow'] }
 export const QUEUE_KICK = 'The cs walk-away queue is started. Reply with one short line saying so, then stop: the cs Stop hook hands you each queued task in turn.'
 
 // The countdown: seconds left, its ticker, and what the band last saw. Module
@@ -657,13 +664,32 @@ async function queueRunning($: EngineInterface): Promise<boolean> {
 // when the question is. Start arms the queue; Not yet defers it the way the
 // Stop hook's own offer does, so that offer does not ask again straight away.
 // Compact compacts the conversation first, then starts as Start does; a
-// compaction that does not happen leaves the queue unarmed.
+// compaction that does not happen leaves the queue unarmed. Start and Compact
+// then ask how the tasks run, before any compaction, so a dismissed second
+// question starts and compacts nothing.
 async function offerToStart($: EngineInterface, bin: string, count: number) {
   let answer: string
   try {
     answer = await $.ui.ask(`Start the ${count} queued ${count === 1 ? 'task' : 'tasks'} now?`, { header: 'Queue', options: [QUEUE_START, 'Not yet', QUEUE_COMPACT] })
   } catch {
     return // dismissed, or a `-p` run with nobody to ask
+  }
+  const starting = answer === QUEUE_START || answer === QUEUE_COMPACT
+  let mode: string[] = []
+  if (starting) {
+    let how: string
+    try {
+      how = await $.ui.ask(QUEUE_MODE_QUESTION, { header: 'Queue', options: [QUEUE_HERE, QUEUE_SUBAGENTS, QUEUE_WORKFLOWS] })
+    } catch {
+      return
+    }
+    const words = QUEUE_MODE_WORDS[how]
+    if (words === undefined) {
+      // Free text typed under "Other" names no mode cs knows.
+      $.ui.toast(`cs: '${how}' is not a way to run the queue; it is not started`)
+      return
+    }
+    mode = words
   }
   if (answer === QUEUE_COMPACT) {
     let reason: string | undefined
@@ -678,10 +704,10 @@ async function offerToStart($: EngineInterface, bin: string, count: number) {
       return
     }
   }
-  const verb = answer === QUEUE_START || answer === QUEUE_COMPACT ? 'start' : 'defer'
+  const verb = starting ? 'start' : 'defer'
   let result: { exitCode: number; stdout: string; stderr: string }
   try {
-    result = await $.process.run([bin, '-queue', verb])
+    result = await $.process.run([bin, '-queue', verb, ...mode])
   } catch (err) {
     $.ui.toast(`cs: cs -queue ${verb} did not run: ${String(err instanceof Error ? err.message : err)}`)
     return

@@ -345,7 +345,10 @@ cs -queue log                         # Walk-away run journal (tasks done, break
 
 When you finish a turn with tasks queued, the Stop hook asks once (via
 `AskUserQuestion`) whether to work through them — showing the current
-context % and, at 60% or above, offering to compact first. Choosing "Start"
+context % and, at 60% or above, offering to compact first — and how: in
+this conversation, each task in a subagent, or each task as a workflow
+(choosing workflows is your go-ahead for Claude Code's Workflow tool).
+Choosing "Start"
 drains every task in order (FIFO, top to bottom) at each stop boundary with
 no further prompts until the queue is empty; "Not yet" waits and re-asks
 after about 10 minutes, or as soon as the queue changes. There's no
@@ -354,9 +357,11 @@ own auto-compact. As it drains, cs instructs Claude to mirror the queue
 into the native task list so progress stays visible, and hands each task
 over with its scope: do what the task asks, leave a pre-existing bug or
 unmentioned behavior as a follow-up in the narrative, and state the reading
-taken of an ambiguous task. (The gate itself
-runs `cs -queue start` / `cs -queue defer` on your behalf — you don't
-need to run those directly.)
+taken of an ambiguous task. In subagent or workflow mode each handed task
+also says to run it that way and to check the result before marking it
+done. (The gate itself runs `cs -queue start` (with `subagents` or
+`workflow`) / `cs -queue defer` on your behalf — you don't need to run
+those directly.)
 
 Inside a cs session, `/queue <task>` does the same as `cs -queue add` without
 leaving Claude Code, and runs at once even while Claude is mid-turn; `/queue`

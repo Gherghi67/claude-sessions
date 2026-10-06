@@ -1229,6 +1229,18 @@ test('a dismissed mode question starts nothing', async () => {
   expect(submitted).toEqual([])
 })
 
+// Free text typed under "Other" names no mode cs knows, so nothing starts.
+test('an answer that is no mode starts nothing and says so', async () => {
+  envVars.CS_BIN = '/opt/cs/bin/cs'
+  runResult = LISTED
+  answer = QUEUE_START
+  modeAnswer = 'in parallel please'
+  await queue('')
+  await settle()
+  expect(runs.map(x => x.argv[2])).toEqual(['list'])
+  expect(toasts).toEqual(["cs: 'in parallel please' is not a way to run the queue; it is not started"])
+})
+
 test('Compact asks the mode before compacting, then starts in it', async () => {
   envVars.CS_BIN = '/opt/cs/bin/cs'
   runResult = LISTED

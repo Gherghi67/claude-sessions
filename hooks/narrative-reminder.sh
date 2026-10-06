@@ -573,6 +573,19 @@ if [ "$QLEN" -gt 0 ] && _mail_is_lead; then
     # A walk-away run has nobody watching, so the handed task is the only
     # scope guidance the agent gets: it says what the task asks for and
     # nothing about what it does not.
+    # How the person chose to run the tasks (cs -queue start subagents|workflow).
+    # Each handed task carries it; no mode file runs them in the conversation.
+    QMODE=$(cat "$QDIR/queue.mode" 2>/dev/null | tr -d '[:space:]' || true)
+    case "$QMODE" in
+        subagents) RUN_MODE="Run mode, chosen by the user for this run: hand this task to a subagent with the Agent tool. Give it the task text and the scope paragraph below verbatim, and tell it its final message is the deliverable. Check what it reports against the repository yourself before you mark the task completed.
+
+" ;;
+        workflow) RUN_MODE="Run mode, chosen by the user for this run, which is your opt-in to the Workflow tool: run this task as a workflow with the Workflow tool. Load the workflow-authoring skill, write a script for this task, run it, and check its result against the repository yourself before you mark the task completed.
+
+" ;;
+        *) RUN_MODE="" ;;
+    esac
+
     SCOPE="Scope: implement every behavior the task asks for, completely, and nothing beyond it. A pre-existing bug, a performance concern or behavior the task does not mention stays untouched unless the task cannot work without it; report it as a follow-up in your narrative, which outlives this run's compactions. Where the task is ambiguous, implement the reading its wording and the surrounding code most directly support, state that assumption in the narrative as well, and do not build for the other readings."
 
     if [ "$QSTATE" = "armed" ]; then
@@ -587,7 +600,7 @@ if [ "$QLEN" -gt 0 ] && _mail_is_lead; then
 
 First task: $TASK
 
-$SCOPE"
+$RUN_MODE$SCOPE"
         jq -nc --arg r "$REASON" '{decision:"block", reason:$r}'
         exit 0
     fi
@@ -607,6 +620,7 @@ $SCOPE"
             NEWLEN=$(_qlen "$QUEUE")
             if [ "$NEWLEN" -le 0 ]; then
                 _qstate_write idle
+                rm -f "$QDIR/queue.mode"
                 DONE_COUNT=$(_qdone_len "$QDIR/queue.done")
                 _inbox_append --arg ts "$(date +%s)" --arg d "$DONE_COUNT" \
                     '{ts: ($ts|tonumber), event: "drain_finished", done: ($d|tonumber)}'
@@ -641,7 +655,7 @@ $SCOPE"
 
 Task: $NEXT
 
-$SCOPE"
+$RUN_MODE$SCOPE"
             jq -nc --arg r "$REASON" '{decision:"block", reason:$r}'
             exit 0
         else
@@ -671,7 +685,7 @@ $SCOPE"
                 *) CTX_LINE=" Context is at ${CTX}%."
                    [ "$CTX" -ge 60 ] && COMPACT=" Context is heavy: offer a third option 'Compact first'. If chosen, run no queue command and tell the user to run /compact; you will be asked again afterward." ;;
             esac
-            REASON="cs task queue: $QLEN task(s) are queued for a walk-away run.$CTX_LINE$COMPACT Use AskUserQuestion to ask whether to work through them now (options: Start / Not yet). On Start, run: cs -queue start (then stop; I will hand you each task). On Not yet, run: cs -queue defer."
+            REASON="cs task queue: $QLEN task(s) are queued for a walk-away run.$CTX_LINE$COMPACT Use AskUserQuestion to ask, in one call, whether to work through them now (options: Start / Not yet) and how to run them (options: In this conversation / In subagents / As workflows). On Start, run: cs -queue start, or cs -queue start subagents, or cs -queue start workflow, by the second answer (then stop; I will hand you each task). On Not yet, run: cs -queue defer."
             jq -nc --arg r "$REASON" '{decision:"block", reason:$r}'
             exit 0
         fi
