@@ -524,7 +524,7 @@ _doctor_check_statusline() {
 # earlier cs's Option+1 / Option+2, and a file Claude Code cannot read either
 # are warnings.
 _doctor_check_rotate_wrap_keys() {
-    local file answer_file answer status state key action prefix bound=0 total=0
+    local file answer_file answer status state key action prefix retired bound=0 total=0
     file="$(_cs_keybindings_file)"
     answer_file="$(_cs_rotate_wrap_keys_answer_file)"
     if ! command -v jq >/dev/null 2>&1; then
@@ -546,7 +546,12 @@ _doctor_check_rotate_wrap_keys() {
         if [ "$state" = bound ]; then bound=$((bound + 1)); fi
     done <<< "$status"
     if [ "$total" -gt 0 ] && [ "$bound" = "$total" ]; then
-        _doctor_ok "Rotate/wrap keys: bound (Ctrl+X R runs /rotate, Ctrl+X W runs /wrap)"
+        retired=$(_cs_keybindings_held "$CS_RETIRED_OPTION_KEYS" < "$file") || retired=""
+        if [ -n "$retired" ]; then
+            _doctor_warn "Rotate/wrap keys: $retired still hold cs's earlier bindings in $file (run cs -update to remove them)"
+        else
+            _doctor_ok "Rotate/wrap keys: bound (Ctrl+X R runs /rotate, Ctrl+X W runs /wrap)"
+        fi
         return
     fi
     answer=$(cat "$answer_file" 2>/dev/null) || answer=""

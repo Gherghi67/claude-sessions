@@ -164,9 +164,26 @@ CS_ROTATE_WRAP_KEYS='{"ctrl+x r":"command:rotate","ctrl+x w":"command:wrap"}'
 # shellcheck disable=SC2034  # read by install.sh's _bind_rotate_wrap_keys and by cs -uninstall
 CS_RETIRED_OPTION_KEYS='{"alt+1":"command:rotate","alt+2":"command:wrap"}'
 
-# The jq definition shared by the filters below: whether a to_entries pair
-# from a context block is one of the bindings in $cs, key and value both.
-_CS_KEYBINDING_OURS='def ours: . as $e | $cs | has($e.key) and .[$e.key] == $e.value;'
+# The jq definitions shared by the filters below. keynorm spells a key the
+# way Claude Code reads it (its key parser, 2.1.291): case ignored, control
+# is ctrl, opt and option are alt, command, super and win are cmd, esc,
+# return and del are escape, enter and delete, modifiers in any order, and
+# a chord's keys split on any run of spaces. cs's own keys are already in
+# that form. ours: whether a to_entries pair from a context block is one of
+# the bindings in $cs, key and value both.
+_CS_KEYBINDING_DEFS='
+    def keynorm:
+        ["alt", "cmd", "ctrl", "meta", "shift"] as $mods
+        | [splits("\\s+") | select(length > 0) | ascii_downcase | split("+")
+            | map({"control": "ctrl", "opt": "alt", "option": "alt", "command": "cmd",
+                   "super": "cmd", "win": "cmd", "esc": "escape", "return": "enter",
+                   "del": "delete"}[.] // .)
+            | ([.[] | select(. as $p | any($mods[]; . == $p))] | unique)
+              + [.[] | select(. as $p | any($mods[]; . == $p) | not)]
+            | join("+")]
+        | join(" ");
+    def ours: . as $e | ($e.key | keynorm) as $k | $cs | has($k) and .[$k] == $e.value;
+'
 
 # Claude Code reads its keybindings from its config dir. Inside an encrypted
 # session that dir is the session's .cs/claude-config, which no other session
@@ -206,13 +223,14 @@ _cs_keybindings_shape_ok() {  # file
 # "conflict<TAB>key<TAB>action" when something else does. A chord also
 # conflicts when its first key is bound on its own to an action, which
 # Claude Code would stop reaching once it waits for the chord's second key:
-# "conflict<TAB>key<TAB>action<TAB>prefix". An action that is not a string
-# (a null that unbinds the key) prints as JSON; a null on the prefix is no
-# conflict, as it binds nothing.
+# "conflict<TAB>key<TAB>action<TAB>prefix". Keys compare as keynorm spells
+# them. An action that is not a non-empty string (a null that unbinds the
+# key, an empty "") prints as JSON, so no field is ever empty; a null on the
+# prefix is no conflict, as it binds nothing.
 _cs_rotate_wrap_keys_status() {
-    jq -r --argjson cs "$CS_ROTATE_WRAP_KEYS" '
-        def show: if type == "string" then . else tojson end;
-        [.bindings[] | (.bindings // {}) | to_entries[]] as $all
+    jq -r --argjson cs "$CS_ROTATE_WRAP_KEYS" "$_CS_KEYBINDING_DEFS"'
+        def show: if type == "string" and length > 0 then . else tojson end;
+        [.bindings[] | (.bindings // {}) | to_entries[] | .key |= keynorm] as $all
         | $cs | to_entries[] | . as $c
         | [$all[] | select(.key == $c.key) | .value] as $vals
         | ($c.key | split(" ") | if length > 1 then .[0] else null end) as $prefix
@@ -226,9 +244,10 @@ _cs_rotate_wrap_keys_status() {
 }
 
 # Prints, comma-separated, the keys of a keybindings document on stdin that
-# hold one of the bindings in the JSON object $1; empty when none does.
+# hold one of the bindings in the JSON object $1, spelled as the file spells
+# them; empty when none does.
 _cs_keybindings_held() {  # bindings-json
-    jq -r --argjson cs "$1" "$_CS_KEYBINDING_OURS"'
+    jq -r --argjson cs "$1" "$_CS_KEYBINDING_DEFS"'
         [.bindings[] | (.bindings // {}) | to_entries[] | select(ours) | .key] | unique | join(", ")'
 }
 
@@ -236,7 +255,7 @@ _cs_keybindings_held() {  # bindings-json
 # JSON object $1 (key and value both; a key bound to anything else stays). A
 # Global block left empty goes; another context keeps its block.
 _cs_keybindings_strip() {  # bindings-json
-    jq -c --argjson cs "$1" "$_CS_KEYBINDING_OURS"'
+    jq -c --argjson cs "$1" "$_CS_KEYBINDING_DEFS"'
         .bindings |= map(
             if any((.bindings // {}) | to_entries[]; ours) then
                 .bindings |= with_entries(select(ours | not))
@@ -7324,7 +7343,7 @@ _doctor_check_statusline() {
 # earlier cs's Option+1 / Option+2, and a file Claude Code cannot read either
 # are warnings.
 _doctor_check_rotate_wrap_keys() {
-    local file answer_file answer status state key action prefix bound=0 total=0
+    local file answer_file answer status state key action prefix retired bound=0 total=0
     file="$(_cs_keybindings_file)"
     answer_file="$(_cs_rotate_wrap_keys_answer_file)"
     if ! command -v jq >/dev/null 2>&1; then
@@ -7346,7 +7365,12 @@ _doctor_check_rotate_wrap_keys() {
         if [ "$state" = bound ]; then bound=$((bound + 1)); fi
     done <<< "$status"
     if [ "$total" -gt 0 ] && [ "$bound" = "$total" ]; then
-        _doctor_ok "Rotate/wrap keys: bound (Ctrl+X R runs /rotate, Ctrl+X W runs /wrap)"
+        retired=$(_cs_keybindings_held "$CS_RETIRED_OPTION_KEYS" < "$file") || retired=""
+        if [ -n "$retired" ]; then
+            _doctor_warn "Rotate/wrap keys: $retired still hold cs's earlier bindings in $file (run cs -update to remove them)"
+        else
+            _doctor_ok "Rotate/wrap keys: bound (Ctrl+X R runs /rotate, Ctrl+X W runs /wrap)"
+        fi
         return
     fi
     answer=$(cat "$answer_file" 2>/dev/null) || answer=""

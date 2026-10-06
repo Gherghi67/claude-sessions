@@ -291,10 +291,13 @@ key within 3 seconds. The chords need no terminal setting.
   that leaves empty, deletes the file when it holds nothing else (a symlinked
   file keeps its link and gets `{"bindings": []}` written through it), and
   removes the recorded answer.
-- `cs -doctor` reports one row: bound, declined, not asked, a conflict on
+- `cs -doctor` reports the state: bound, declined, not asked, a conflict on
   `ctrl+x r` or `ctrl+x w` (or on a bare `ctrl+x`), a key not bound yet (as on
-  a machine that still has the Option keys, until its next `cs -update`), or an
-  unparseable file.
+  a machine that still has the Option keys, until its next `cs -update`), cs's
+  `alt+1` or `alt+2` still there beside the chords, or an unparseable file.
+- cs reads keys the way Claude Code does: `Ctrl+X`, `control+x` and
+  `ctrl+x  r` with two spaces are the same keys as `ctrl+x` and `ctrl+x r`,
+  and `Option+1` is `alt+1`.
 
 ## In-session switches
 
