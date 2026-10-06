@@ -1079,7 +1079,7 @@ test_integrate_lands_a_no_ff_merge_and_keeps_everything() {
     # linked worktree with `+`, so the listing never equals the bare name.
     git -C "$base_dir" rev-parse -q --verify refs/heads/cs/fix-auth >/dev/null 2>&1 \
         || { echo "  FAIL: the branch must remain"; return 1; }
-    assert_output_not_contains "$(git -C "$base_dir" worktree list)" "cs/finish" "no temp worktree left registered" || return 1
+    assert_output_not_contains "$(git -C "$base_dir" worktree list)" "cs-finish-" "no temp worktree left registered" || return 1
     assert_not_exists "$base_dir/.git/cs/integrate.lock" "mutex released" || return 1
     assert_file_contains "$base_dir/.cs/timeline.jsonl" '"event":"feature-integrated"' "timeline records the integrate" || return 1
     assert_file_contains "$base_dir/.cs/timeline.jsonl" "\"sha\":\"$sha\"" "event carries the sha" || return 1
@@ -1145,13 +1145,13 @@ test_integrate_red_gate_leaves_base_untouched() {
     # "leave HEAD unchanged", so location is part of what this proves.
     output=$("$CS_BIN" myproj -integrate-feature fix-auth "$sha" -- sh -c 'pwd > "$0/where"; echo GATE-SAYS-NO; exit 3' "$TEST_TMPDIR" 2>&1) || status=$?
     assert_eq "1" "$status" "a red gate refuses" || return 1
-    assert_output_contains "$(cat "$TEST_TMPDIR/where" 2>/dev/null)" "/.git/cs/finish/fix-auth." "the red gate ran in the temp" || return 1
+    assert_output_contains "$(cat "$TEST_TMPDIR/where" 2>/dev/null)" "/cs-finish-fix-auth." "the red gate ran in the temp" || return 1
     assert_output_contains "$output" "GATE-SAYS-NO" "the gate output is shown" || return 1
     assert_output_contains "$output" "Gate failed" "names the cause" || return 1
     assert_output_contains "$output" "clean checkout" "and says the gate ran without gitignored files" || return 1
     assert_eq "$head" "$(git -C "$base_dir" rev-parse HEAD)" "base HEAD unchanged" || return 1
     assert_file_not_exists "$base_dir/feature.txt" "base tree unchanged" || return 1
-    assert_output_not_contains "$(git -C "$base_dir" worktree list)" "cs/finish" "temp worktree removed" || return 1
+    assert_output_not_contains "$(git -C "$base_dir" worktree list)" "cs-finish-" "temp worktree removed" || return 1
     assert_not_exists "$base_dir/.git/cs/integrate.lock" "mutex released on failure" || return 1
 }
 
@@ -1172,7 +1172,7 @@ test_integrate_refuses_untracked_collision_before_the_gate() {
     assert_file_not_exists "$TEST_TMPDIR/marker" "the gate never ran" || return 1
     assert_eq "$head" "$(git -C "$base_dir" rev-parse HEAD)" "base HEAD unchanged" || return 1
     assert_eq "stale" "$(cat "$base_dir/feature.txt")" "the untracked file survives with its content" || return 1
-    assert_output_not_contains "$(git -C "$base_dir" worktree list)" "cs/finish" "temp worktree removed" || return 1
+    assert_output_not_contains "$(git -C "$base_dir" worktree list)" "cs-finish-" "temp worktree removed" || return 1
     assert_not_exists "$base_dir/.git/cs/integrate.lock" "mutex released" || return 1
 }
 
@@ -1186,7 +1186,10 @@ test_integrate_gates_run_in_the_temp_not_the_live_trees() {
     assert_eq "0" "$status" "gate saw the merged tree: $output" || return 1
     local where
     where=$(cat "$TEST_TMPDIR/where")
-    assert_output_contains "$where" "/.git/cs/finish/fix-auth." "gate ran in the temp worktree" || return 1
+    assert_output_contains "$where" "/cs-finish-fix-auth." "gate ran in the temp worktree" || return 1
+    # Tools refuse paths under a .git directory (Vite's server.fs.deny has
+    # **/.git/**), so a gate run there fails for reasons of its location.
+    assert_output_not_contains "$where" "/.git/" "the temp worktree is outside any .git directory" || return 1
     assert_output_not_contains "$where" "$wt" "gate did not run in the feature worktree" || return 1
     [ "$where" != "$base_dir" ] || { echo "  FAIL: gate ran in the live base"; return 1; }
 }
@@ -1201,7 +1204,7 @@ test_integrate_refuses_when_base_moved_during_gates() {
     assert_output_contains "$output" "moved during the gates" "names the cause" || return 1
     assert_eq "moved" "$(git -C "$base_dir" log -1 --format=%s)" "base keeps only its own new commit" || return 1
     assert_file_not_exists "$base_dir/feature.txt" "nothing landed" || return 1
-    assert_output_not_contains "$(git -C "$base_dir" worktree list)" "cs/finish" "temp worktree removed" || return 1
+    assert_output_not_contains "$(git -C "$base_dir" worktree list)" "cs-finish-" "temp worktree removed" || return 1
     assert_not_exists "$base_dir/.git/cs/integrate.lock" "mutex released" || return 1
 }
 
@@ -1263,7 +1266,7 @@ test_integrate_terminated_mid_gate_leaves_no_lock_or_temp() {
     [ "$status" != 0 ] || { echo "  FAIL: a terminated integrate must not exit 0"; return 1; }
     assert_file_exists "$TEST_TMPDIR/gate-ran" "the gate ran with the mutex held" || return 1
     assert_not_exists "$base_dir/.git/cs/integrate.lock" "mutex released on TERM" || return 1
-    assert_output_not_contains "$(git -C "$base_dir" worktree list)" "cs/finish" "temp worktree removed on TERM" || return 1
+    assert_output_not_contains "$(git -C "$base_dir" worktree list)" "cs-finish-" "temp worktree removed on TERM" || return 1
     assert_file_not_exists "$base_dir/feature.txt" "nothing landed" || return 1
 }
 
@@ -1288,7 +1291,7 @@ test_integrate_conflict_names_the_path_and_leaves_no_merge_head() {
         "the advice names the base's real branch and the worktree to run it in" || return 1
     assert_file_not_exists "$base_dir/.git/MERGE_HEAD" "no MERGE_HEAD in the base" || return 1
     assert_eq "$head" "$(git -C "$base_dir" rev-parse HEAD)" "base HEAD unchanged" || return 1
-    assert_output_not_contains "$(git -C "$base_dir" worktree list)" "cs/finish" "temp worktree removed" || return 1
+    assert_output_not_contains "$(git -C "$base_dir" worktree list)" "cs-finish-" "temp worktree removed" || return 1
 }
 
 test_integrate_ignored_mode_fuses_nothing() {
@@ -1386,7 +1389,7 @@ test_integrate_refuses_a_gate_that_writes_into_the_temp() {
     assert_eq "$head" "$(git -C "$base_dir" rev-parse HEAD)" "base HEAD unchanged" || return 1
     assert_file_not_exists "$base_dir/feature.txt" "nothing landed" || return 1
     assert_output_not_contains "$output" "integrated fix-auth" "no summary line" || return 1
-    assert_output_not_contains "$(git -C "$base_dir" worktree list)" "cs/finish" "temp worktree removed" || return 1
+    assert_output_not_contains "$(git -C "$base_dir" worktree list)" "cs-finish-" "temp worktree removed" || return 1
     assert_not_exists "$base_dir/.git/cs/integrate.lock" "mutex released" || return 1
 }
 
