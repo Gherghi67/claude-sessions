@@ -292,26 +292,62 @@ test_native_claude_with_flags_runs_the_link_with_its_flags() {
 
 # tmux names a pane after the leader of its foreground process group. A
 # resume that ran claude as cs's child left cs's bash leading it, so the tab
-# showed bash; with the conversation's transcript on disk, cs runs claude in
-# its place.
-test_resume_with_a_transcript_runs_claude_in_place_of_cs() {
-    _tab_launch_env 1
-    local inst="$TEST_TMPDIR/inst" dir uuid proj out argv0
+# showed bash; when the resume is sure to land, cs runs claude in its place.
+# A stub whose argv, parent and launch prompt the tests read.
+_resume_session() {  # name -> prints the recorded conversation id
+    local inst="$TEST_TMPDIR/inst"
     printf '#!/usr/bin/env bash\necho "argv0=$0"\necho "args=$*"\necho "parent=$(ps -o args= -p $PPID)"\n' \
         > "$inst/versions/9.9.9"
-    "$CS_BIN" resumer <<< "" > /dev/null 2>&1 || true
-    dir="$CS_SESSIONS_ROOT/resumer"
-    uuid=$(awk '/^claude_session_id:/ { print $2; exit }' "$dir/.cs/local/state")
+    "$CS_BIN" "$1" <<< "" > /dev/null 2>&1 || true
+    awk '/^claude_session_id:/ { print $2; exit }' "$CS_SESSIONS_ROOT/$1/.cs/local/state"
+}
+
+_transcript() {  # name, uuid -> prints the transcript path cs reads
+    local proj
+    proj="$CS_TRANSCRIPTS_DIR/$(_encode_cwd_for_claude_test "$CS_SESSIONS_ROOT/$1")"
+    mkdir -p "$proj"
+    printf '%s\n' "$proj/$2.jsonl"
+}
+
+_user_record() {
+    printf '{"type":"user","message":{"role":"user","content":"hi"}}\n'
+}
+
+test_resume_of_a_real_conversation_runs_claude_in_place_of_cs() {
+    _tab_launch_env 1
+    local uuid out argv0
+    uuid=$(_resume_session resumer)
     [ -n "$uuid" ] || { echo "  FAIL: the first launch recorded no conversation"; return 1; }
-    proj="$CS_TRANSCRIPTS_DIR/$(_encode_cwd_for_claude_test "$dir")"
-    mkdir -p "$proj" && echo '{}' > "$proj/$uuid.jsonl"
+    _user_record > "$(_transcript resumer "$uuid")"
     out=$("$CS_BIN" resumer <<< "" 2>&1) || true
     assert_output_contains "$(_launched "$out" args)" "--resume $uuid" "the second open resumes" || return 1
     assert_output_not_contains "$(_launched "$out" parent)" "resumer" \
         "claude must replace cs, not run as its child" || return 1
+    assert_output_contains "$(_launched "$out" args)" "/color" "the launch prompt reaches the resumed claude" || return 1
     argv0=$(_launched "$out" argv0)
     assert_eq "claude" "$(basename "$argv0")" "the resumed claude runs under the name claude" || return 1
     [ ! -L "$argv0" ] || { echo "  FAIL: $argv0 is a symlink"; return 1; }
+}
+
+# cs stays claude's parent whenever the resume might not land, so a quick
+# failure can still start a fresh conversation, and whenever cs has cleanup to
+# do after claude: an encrypted session's vault waits on cs to detach it.
+test_resume_that_might_not_land_keeps_cs_as_the_parent() {
+    _tab_launch_env 1
+    local uuid out
+    uuid=$(_resume_session unsure)
+    out=$("$CS_BIN" unsure <<< "" 2>&1) || true
+    assert_output_contains "$(_launched "$out" parent)" "unsure" "no transcript: cs stays the parent" || return 1
+    echo '{"type":"launched"}' > "$(_transcript unsure "$uuid")"
+    out=$("$CS_BIN" unsure <<< "" 2>&1) || true
+    assert_output_contains "$(_launched "$out" parent)" "unsure" "a transcript with no message: cs stays the parent" || return 1
+    _user_record >> "$(_transcript unsure "$uuid")"
+    out=$(CLAUDE_CONFIG_DIR="$TEST_TMPDIR/other-config" "$CS_BIN" unsure <<< "" 2>&1) || true
+    assert_output_contains "$(_launched "$out" parent)" "unsure" \
+        "claude reading another config dir: cs stays the parent" || return 1
+    : > "$CS_SESSIONS_ROOT/unsure/.cs/local/vault"
+    out=$("$CS_BIN" unsure <<< "" 2>&1) || true
+    assert_output_contains "$(_launched "$out" parent)" "unsure" "an encrypted session: cs stays the parent" || return 1
 }
 
 # An npm install resolves claude to a cli.js that loads files beside it; run
@@ -331,7 +367,8 @@ test_npm_shaped_claude_is_not_linked() {
 
 run_test test_launch_under_iterm_cc_shows_loader_and_icon
 run_test test_npm_shaped_claude_is_not_linked
-run_test test_resume_with_a_transcript_runs_claude_in_place_of_cs
+run_test test_resume_of_a_real_conversation_runs_claude_in_place_of_cs
+run_test test_resume_that_might_not_land_keeps_cs_as_the_parent
 run_test test_native_claude_with_flags_runs_the_link_with_its_flags
 run_test test_plain_tmux_keeps_tmux_name_unless_term_is_tmux
 run_test test_outside_iterm_launch_is_untouched

@@ -804,14 +804,14 @@ EOF
     if [ -n "$resume_id" ]; then
         # tmux names a pane after the leader of its foreground process group,
         # and iTerm2 takes the tab's icon from that name, so claude replaces
-        # cs when its transcript is on disk. exec keeps the pid: the session
-        # lock and the vault's holder list name claude, as on a fresh launch.
-        if [ -f "$(_claude_project_dir "$session_dir")/$resume_id.jsonl" ]; then
+        # cs when the resume is sure to land. exec keeps the pid: the session
+        # lock names claude, as on a fresh launch.
+        if _resume_lands_in_place "$session_dir" "$resume_id"; then
             # shellcheck disable=SC2086
             exec $CLAUDE_CODE_BIN --name "$session_name" --resume "$resume_id" ${launch_prompt:+"$launch_prompt"}
         fi
-        # Without a transcript where cs looks, claude decides whether the
-        # conversation resumes; cs stays to start a fresh one if it cannot.
+        # Otherwise claude decides whether the conversation resumes, and cs
+        # stays to start a fresh one if it cannot and to detach a vault.
         SECONDS=0
         local rc=0
         # shellcheck disable=SC2086
@@ -848,6 +848,18 @@ EOF
             exec $CLAUDE_CODE_BIN --name "$session_name" ${launch_prompt:+"$launch_prompt"}
         fi
     fi
+}
+
+# A resume may run in place of cs when it is sure to land and cs has nothing
+# to do after it: claude reads its transcripts from where cs looks (no
+# CLAUDE_CONFIG_DIR of the user's), the transcript holds a message, and no
+# vault waits on cs to detach it when claude ends without its hooks.
+_resume_lands_in_place() {  # session_dir, conversation id
+    local file
+    [ -f "$1/.cs/local/vault" ] && return 1
+    [ -z "${CLAUDE_CONFIG_DIR:-}" ] || return 1
+    file="$(_claude_project_dir "$1")/$2.jsonl"
+    [ -f "$file" ] && grep -q -m1 '"type":"user"' "$file"
 }
 
 # Follow a chain of symlinks to the file at its end, portably (BSD readlink
@@ -899,11 +911,10 @@ _iterm_tab_through_tmux() {
         esac
     fi
 
-    local word trimmed rest found real link version
+    local word rest found real link version
     word=$(_claude_bin_word)
     [ -n "$word" ] || return 0
-    trimmed="${CLAUDE_CODE_BIN#"${CLAUDE_CODE_BIN%%[![:space:]]*}"}"
-    rest="${trimmed#"$word"}"
+    rest="${CLAUDE_CODE_BIN#*"$word"}"
     found=$(command -v "$word" 2>/dev/null) || return 0
     real=$(_resolve_symlink_file "$found")
     # Only the native installer's versions/<version> file is self-contained;
