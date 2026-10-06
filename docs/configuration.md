@@ -21,10 +21,11 @@ export CS_SESSIONS_ROOT="/path/to/sessions"
 export CS_CONFIG_DIR="$HOME/.config/cs"
 export CS_CACHE_DIR="$HOME/.cache/cs"
 
-# Where ags -encrypt makes new containers, under vaults/ (default:
-# ~/.local/share/cs, whatever XDG_DATA_HOME says). The profile launcher sets it
-# to the profile's own, so a session the stable install also has never shares
-# its container. An encrypted session opens the container it recorded, so
+# Where ags -encrypt makes new containers, under vaults/, and where a launch
+# under tmux in iTerm2 keeps its hard links named claude, under claude/
+# (default: ~/.local/share/cs, whatever XDG_DATA_HOME says). The profile
+# launcher sets it to the profile's own, so a session the stable install also
+# has never shares its container, and neither install prunes the other's links. An encrypted session opens the container it recorded, so
 # changing this later moves no existing vault. ags -encrypt refuses a relative
 # path: every open attaches the container from the session directory.
 export CS_DATA_DIR="$HOME/.local/share/cs"
@@ -251,7 +252,9 @@ export CS_NO_ROTATION_WAKE="1"
 # Disable the iTerm2 attention bounce (the dock bounce a finished turn starts,
 # and the attention marker the status line reads). The tab tint is NOT gated by
 # this: set_tab_title emits the iTerm2 escapes unconditionally at launch, and
-# the colour resets when the session exits.
+# the colour resets when the session exits. Under tmux it also starts claude
+# as found on PATH and with tmux's TERM_PROGRAM, so the tab gets no progress
+# line and no Claude icon.
 export CS_NO_ITERM2="1"
 
 # Leave the Task tools to Claude Code's model default. An ags launch exports

@@ -618,6 +618,13 @@ run_uninstall() {
         info "Removed $update_cache_dir"
     fi
 
+    # The launch's hard links named claude, one whole binary per version.
+    local claude_links_dir="${CS_DATA_DIR:-$HOME/.local/share/cs}/claude"
+    if [ -d "$claude_links_dir" ]; then
+        rm -rf "$claude_links_dir"
+        info "Removed $claude_links_dir"
+    fi
+
     if [[ ",$install_engines," == *,claude,* ]]; then
     # Clean up settings.json (remove cs hooks, preserve others)
     if [ -f "$settings_file" ] && command -v jq >/dev/null 2>&1; then

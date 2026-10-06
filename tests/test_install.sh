@@ -634,6 +634,20 @@ test_install_deploys_the_rotate_mod_and_uninstall_removes_it() {
         || { echo "  FAIL: uninstall left ~/.claude/skills/cs behind"; return 1; }
 }
 
+# A launch under tmux in iTerm2 hard-links claude into
+# ~/.local/share/cs/claude/<version>/; each link holds a whole claude binary,
+# so uninstall removes the directory and leaves the rest of ~/.local/share/cs.
+test_uninstall_removes_the_claude_links() {
+    local fake_home="$TEST_TMPDIR/links-home"
+    mkdir -p "$fake_home/.claude" "$fake_home/.local/share/cs/claude/9.9.9" "$fake_home/.local/share/cs/vaults"
+    : > "$fake_home/.local/share/cs/claude/9.9.9/claude"
+    printf 'y\n' | HOME="$fake_home" "$CS_BIN" -uninstall > /dev/null 2>&1 || { echo "  FAIL: ags -uninstall exited non-zero"; return 1; }
+    [ ! -e "$fake_home/.local/share/cs/claude" ] \
+        || { echo "  FAIL: uninstall left ~/.local/share/cs/claude behind"; return 1; }
+    [ -d "$fake_home/.local/share/cs/vaults" ] \
+        || { echo "  FAIL: uninstall removed the vaults directory"; return 1; }
+}
+
 # rm -rf recurses into a mount, so deleting the session data while a volume is
 # mounted inside it would delete what the volume holds. The answers are:
 # continue (y), keep keychain secrets (n), delete session data (y). The
@@ -1702,6 +1716,7 @@ run_test test_install_leaves_an_unreadable_codex_hooks_file_alone
 run_test test_uninstall_removes_only_cs_skills_from_codex
 run_test test_mod_files_manifest_matches_the_repo
 run_test test_install_deploys_the_rotate_mod_and_uninstall_removes_it
+run_test test_uninstall_removes_the_claude_links
 run_test test_uninstall_keeps_session_data_while_a_volume_is_mounted_inside
 run_test test_uninstall_keeps_session_data_when_the_mount_table_cannot_be_read
 run_test test_uninstall_deletes_session_data_with_no_volume_mounted_inside

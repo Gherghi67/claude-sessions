@@ -4,6 +4,11 @@ All notable changes to cs are documented here. Release notes are also available 
 
 <!-- New entries group changes under Keep-a-Changelog headings (Added / Changed / Removed / Fixes / Docs), or Features / Performance where those fit the release. -->
 
+## 2026.10.5
+
+### Added
+- A cs session in tmux under iTerm2 now gets the same tab as a claude that iTerm2 runs directly. The tab shows Claude Code's progress line along the top while a turn runs, and the Claude icon next to the title. Claude Code only sends the progress escape when `TERM_PROGRAM` is iTerm2 3.6.6 or later, and tmux sets it to `tmux`, so cs starts `claude` with `TERM_PROGRAM=iTerm.app` and the version from `LC_TERMINAL_VERSION`. It does this under iTerm2's tmux integration (`tmux -CC`), or in plain tmux when `TERM` starts with `screen` or `tmux`. With any other `TERM`, Claude Code would take the pair for `tmux -CC`. Claude Code also sends its notifications through iTerm2 once it has that name. Under `tmux -CC` Claude Code now knows it's in iTerm2's tmux integration and uses its classic renderer there unless `CLAUDE_CODE_NO_FLICKER=1` or `/tui fullscreen` says otherwise. iTerm2 picks the icon from the process name, and under tmux that name is the file name of the executable. For the native installer that file name is the version number. cs runs `claude` through a hard link named `claude` in `~/.local/share/cs/claude/<version>/`, one per version, and drops a link once Claude Code removes that version. A `HOME` with a space in it gets no link. `cs -uninstall` removes `~/.local/share/cs/claude/`. cs only links the native installer's `versions/<version>` file, since an npm install's `cli.js` needs the files next to it. `CS_NO_ITERM2=1` turns off both. A `CLAUDE_CODE_BIN` you set runs as is, and if cs can't make the link, `claude` starts the old way.
+
 ## 2026.10.4
 
 ### Fixes
