@@ -130,7 +130,7 @@ TMUX_EOF
     export TMUX="/tmp/fake-tmux-socket,1,0"
     export TERM=xterm-256color TERM_PROGRAM=tmux TERM_PROGRAM_VERSION=3.7c
     export LC_TERMINAL=iTerm2 LC_TERMINAL_VERSION=3.7.1
-    unset CLAUDE_CODE_BIN CS_NO_ITERM2
+    unset CLAUDE_CODE_BIN CS_NO_ITERM2 CLAUDE_CONFIG_DIR
 }
 
 # The value of NAME in the stub's printed environment, or the argv0 line.
@@ -259,7 +259,7 @@ test_unlinkable_claude_still_launches() {
 test_non_native_claude_binaries_are_run_as_given() {
     _tab_launch_env 1
     local inst="$TEST_TMPDIR/inst" out bin
-    for bin in "$inst/own/claude" "$inst/versions/3.12.1/bin/claude" "$inst/versions/1x.2y.3z" "$inst/releases/1.2.3" "$inst/versions/1.2" "$inst/versions/1..2.3"; do
+    for bin in "$inst/own/claude" "$inst/versions/3.12.1/bin/claude" "$inst/versions/1x.2y.3z" "$inst/releases/1.2.3" "$inst/versions/1.2" "$inst/versions/1..2.3" "$inst/versions/.1.2.3" "$inst/versions/1.2.3."; do
         mkdir -p "$(dirname "$bin")"
         cp "$inst/versions/9.9.9" "$bin"
         export CLAUDE_CODE_BIN="$bin --flag"
@@ -288,6 +288,16 @@ test_native_claude_with_flags_runs_the_link_with_its_flags() {
     assert_eq "claude" "$(basename "$(_launched "$out" argv0)")" "leading spaces and a tab around the path are split like the launch splits them" || return 1
     assert_eq "--permission-mode plan --name tabbed" \
         "$(_launched "$out" args | cut -d' ' -f1-4)" "flags after a tab are kept" || return 1
+    export CLAUDE_CODE_BIN="claude --add-dir claude"
+    out=$("$CS_BIN" repeated <<< "" 2>&1) || true
+    assert_eq "--add-dir claude --name repeated" \
+        "$(_launched "$out" args | cut -d' ' -f1-4)" "a flag that repeats the command word is kept" || return 1
+    ln -sf ../versions/9.9.9 "$TEST_TMPDIR/inst/bin/c[l]aude"
+    export CLAUDE_CODE_BIN="$TEST_TMPDIR/inst/bin/c[l]aude --flag"
+    out=$("$CS_BIN" bracketed <<< "" 2>&1) || true
+    assert_eq "claude" "$(basename "$(_launched "$out" argv0)")" "a path with glob characters is linked, not expanded" || return 1
+    assert_eq "--flag --name bracketed" \
+        "$(_launched "$out" args | cut -d' ' -f1-3)" "the path with glob characters is not repeated as an argument" || return 1
 }
 
 # tmux names a pane after the leader of its foreground process group. A
@@ -324,6 +334,13 @@ test_resume_of_a_real_conversation_runs_claude_in_place_of_cs() {
     assert_output_not_contains "$(_launched "$out" parent)" "resumer" \
         "claude must replace cs, not run as its child" || return 1
     assert_output_contains "$(_launched "$out" args)" "/color" "the launch prompt reaches the resumed claude" || return 1
+    mkdir -p "$CS_SESSIONS_ROOT/.spawn"
+    : > "$CS_SESSIONS_ROOT/.spawn/resumer.seed"
+    echo "brief" > "$CS_SESSIONS_ROOT/.spawn/resumer.brief.md"
+    out=$("$CS_BIN" resumer <<< "" 2>&1) || true
+    assert_output_not_contains "$(_launched "$out" parent)" "resumer" "a spawned resume replaces cs too" || return 1
+    assert_output_contains "$(_launched "$out" args)" "Your brief is .cs/brief.md" \
+        "a spawn kick, not the colour, reaches the resumed claude" || return 1
     argv0=$(_launched "$out" argv0)
     assert_eq "claude" "$(basename "$argv0")" "the resumed claude runs under the name claude" || return 1
     [ ! -L "$argv0" ] || { echo "  FAIL: $argv0 is a symlink"; return 1; }
@@ -341,7 +358,18 @@ test_resume_that_might_not_land_keeps_cs_as_the_parent() {
     echo '{"type":"launched"}' > "$(_transcript unsure "$uuid")"
     out=$("$CS_BIN" unsure <<< "" 2>&1) || true
     assert_output_contains "$(_launched "$out" parent)" "unsure" "a transcript with no message: cs stays the parent" || return 1
+    printf '%s\n' '{"type":"progress","data":{"message":{"type":"user","message":{"content":"hi"}}}}' \
+        >> "$(_transcript unsure "$uuid")"
+    out=$("$CS_BIN" unsure <<< "" 2>&1) || true
+    assert_output_contains "$(_launched "$out" parent)" "unsure" \
+        "a user message nested in another record: cs stays the parent" || return 1
+    printf '%s\n' '{"type":"user","message":{"role":"user","content":"h' >> "$(_transcript unsure "$uuid")"
+    out=$("$CS_BIN" unsure <<< "" 2>&1) || true
+    assert_output_contains "$(_launched "$out" parent)" "unsure" "a torn user record: cs stays the parent" || return 1
     _user_record >> "$(_transcript unsure "$uuid")"
+    out=$(CLAUDE_CONFIG_DIR="" "$CS_BIN" unsure <<< "" 2>&1) || true
+    assert_output_contains "$(_launched "$out" parent)" "unsure" \
+        "an empty CLAUDE_CONFIG_DIR: cs stays the parent" || return 1
     out=$(CLAUDE_CONFIG_DIR="$TEST_TMPDIR/other-config" "$CS_BIN" unsure <<< "" 2>&1) || true
     assert_output_contains "$(_launched "$out" parent)" "unsure" \
         "claude reading another config dir: cs stays the parent" || return 1
