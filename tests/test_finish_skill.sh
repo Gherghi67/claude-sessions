@@ -65,6 +65,12 @@ test_finish_skill_teaches_the_ritual() {
     assert_file_contains "$SKILL" "NOT part of this integrate" "dirt is reported" || return 1
 }
 
+test_finish_skill_runs_no_gate_unless_asked() {
+    assert_file_contains "$SKILL" "runs no tests unless" "landing without tests is the default" || return 1
+    assert_file_contains "$SKILL" "/finish <task> [-][-]gate" "the gate is one flag away" || return 1
+    assert_file_contains "$SKILL" "[-]- true" "no gate is passed as cs's own -- true" || return 1
+}
+
 test_finish_skill_keeps_the_plain_branch_context() {
     assert_file_contains "$SKILL" "git merge --no-ff" "ordinary feature branches still merge --no-ff" || return 1
     assert_file_contains "$SKILL" "gates again on the merged result" "gates run again after a plain-branch merge" || return 1
@@ -89,6 +95,7 @@ run_test test_finish_skill_exists_with_frontmatter
 run_test test_finish_skill_is_user_invoked_only
 run_test test_finish_registered_and_merge_retired_in_both_manifests
 run_test test_finish_skill_teaches_the_ritual
+run_test test_finish_skill_runs_no_gate_unless_asked
 run_test test_finish_skill_keeps_the_plain_branch_context
 run_test test_finish_skill_never_list
 run_test test_finish_kick_arms_the_new_skill
