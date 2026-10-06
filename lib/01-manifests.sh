@@ -136,12 +136,13 @@ CS_ROTATE_WRAP_KEYS='{"ctrl+x r":"command:rotate","ctrl+x w":"command:wrap"}'
 # shellcheck disable=SC2034  # read by install.sh's _bind_rotate_wrap_keys and by cs -uninstall
 CS_RETIRED_OPTION_KEYS='{"alt+1":"command:rotate","alt+2":"command:wrap"}'
 
-# The jq definitions shared by the filters below. keynorm spells a key the
-# way Claude Code reads it (its key parser, 2.1.291): case ignored, control
-# is ctrl, opt and option are alt, command, super and win are cmd, esc,
-# return and del are escape, enter and delete, modifiers in any order, and
-# a chord's keys split on any run of spaces. cs's own keys are already in
-# that form. ours: whether a to_entries pair from a context block is one of
+# The jq definitions shared by the filters below. keynorm follows Claude
+# Code's key parser (2.1.291) as far as the keys cs compares need: case
+# ignored, control is ctrl, opt and option are alt, command, super and win
+# are cmd, esc, return and del are escape, enter and delete, modifiers in
+# any order, and a chord's keys split on any run of spaces. It keeps meta
+# apart from alt and leaves space and arrow glyphs as typed, which no cs key
+# uses. cs's own keys are already in that form. ours: whether a to_entries pair from a context block is one of
 # the bindings in $cs, key and value both.
 _CS_KEYBINDING_DEFS='
     def keynorm:
