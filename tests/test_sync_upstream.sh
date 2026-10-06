@@ -239,7 +239,83 @@ test_start_puts_the_worktree_outside_an_enclosing_repository() {
     assert_not_exists "$TEST_TMPDIR/outer/fork-sync-v1.1"
 }
 
+# Tag one more upstream release that writes one file: $1 tag, $2 path, $3 text.
+release() {
+    printf '%s\n' "$3" > "$UP/$2"
+    (cd "$UP" && git add -A && git commit -q -m "$1" && git tag "$1")
+}
+
+run_sync() {  # command [args...]: output in sync.log, exit status kept
+    (cd "$FORK" && python3 "$SYNC" "$@") > "$TEST_TMPDIR/sync.log" 2>&1
+}
+
+test_status_lists_missing_releases_and_dry_runs_the_next() {
+    make_fixture || return 1
+    release v3 NOTES.md notes || return 1
+    local status=0
+    run_sync status || status=$?
+    assert_eq 1 "$status" "status exits 1 while a release is missing" || { cat "$TEST_TMPDIR/sync.log"; return 1; }
+    assert_file_contains "$TEST_TMPDIR/sync.log" 'contains v1\. 2 release(s)' || return 1
+    local v2 v3
+    v2=$(grep -n '^  v2 ' "$TEST_TMPDIR/sync.log" | cut -d: -f1)
+    v3=$(grep -n '^  v3 ' "$TEST_TMPDIR/sync.log" | cut -d: -f1)
+    [ -n "$v2" ] && [ -n "$v3" ] && [ "$v2" -lt "$v3" ] \
+        || { cat "$TEST_TMPDIR/sync.log"; echo "  FAIL: releases not listed oldest first"; return 1; }
+    # The dry run names what the next merge leaves for a person.
+    assert_file_contains "$TEST_TMPDIR/sync.log" 'Merging v2 next would leave 1 file(s)' || return 1
+    assert_file_contains "$TEST_TMPDIR/sync.log" '^  README.md$' || return 1
+    # And it is only a dry run: no worktree, no branch, the checkout untouched.
+    assert_not_exists "$TEST_TMPDIR/fork-sync-v2" || return 1
+    assert_eq "" "$(git -C "$FORK" branch --list 'sync/*')" || return 1
+    assert_eq "" "$(git -C "$FORK" status --porcelain)"
+}
+
+test_status_exits_0_when_up_to_date() {
+    make_upstream && make_fork || return 1
+    run_sync status || { cat "$TEST_TMPDIR/sync.log"; return 1; }
+    assert_file_contains "$TEST_TMPDIR/sync.log" 'Up to date: this branch contains v1'
+}
+
+test_catch_up_lands_clean_releases_and_stops_at_the_first_conflict() {
+    make_upstream && make_fork || return 1
+    release v1.1 NOTES.md notes || return 1
+    release v1.2 README.md 'cs is a session manager for Claude Code.' || return 1
+    release v1.3 CHANGES.md changes || return 1
+    local status=0
+    run_sync catch-up --skip-tests || status=$?
+    assert_eq 1 "$status" "catch-up stops at the release that needs a person" \
+        || { cat "$TEST_TMPDIR/sync.log"; return 1; }
+    # v1.1 merged cleanly: landed on the fork's branch, its worktree and branch gone.
+    assert_eq rebrand "$(git -C "$FORK" rev-parse --abbrev-ref HEAD)" || return 1
+    git -C "$FORK" merge-base --is-ancestor 'v1.1^{commit}' rebrand || { echo "  FAIL: v1.1 not landed"; return 1; }
+    assert_eq notes "$(cat "$FORK/NOTES.md")" || return 1
+    assert_not_exists "$TEST_TMPDIR/fork-sync-v1.1" || return 1
+    assert_eq "" "$(git -C "$FORK" branch --list sync/v1.1)" || return 1
+    # v1.2 waits in its worktree; v1.3 is not started.
+    WT="$TEST_TMPDIR/fork-sync-v1.2"
+    assert_file_contains "$WT/README.md" '^<<<<<<< ours' || return 1
+    assert_file_contains "$TEST_TMPDIR/sync.log" 'Still to merge after it: v1.3' || return 1
+    assert_not_exists "$TEST_TMPDIR/fork-sync-v1.3" || return 1
+    # Run again before it is resolved: it points at the waiting worktree.
+    status=0
+    run_sync catch-up --skip-tests || status=$?
+    assert_eq 1 "$status" || return 1
+    assert_file_contains "$TEST_TMPDIR/sync.log" 'waits in .*/fork-sync-v1\.2\.' || return 1
+    # Resolved and committed there, the next run lands it and finishes the rest.
+    resolve_readme
+    sync_continue || { cat "$TEST_TMPDIR/continue.log"; return 1; }
+    run_sync catch-up --skip-tests || { cat "$TEST_TMPDIR/sync.log"; return 1; }
+    assert_file_contains "$TEST_TMPDIR/sync.log" 'Landed v1.2 on rebrand' || return 1
+    assert_file_contains "$TEST_TMPDIR/sync.log" 'Up to date' || return 1
+    git -C "$FORK" merge-base --is-ancestor 'v1.3^{commit}' rebrand || { echo "  FAIL: v1.3 not landed"; return 1; }
+    assert_eq "" "$(git -C "$FORK" branch --list 'sync/*')" || return 1
+    assert_eq "" "$(git -C "$FORK" status --porcelain)"
+}
+
 run_test test_start_translates_upstream_into_the_forks_dialect
+run_test test_status_lists_missing_releases_and_dry_runs_the_next
+run_test test_status_exits_0_when_up_to_date
+run_test test_catch_up_lands_clean_releases_and_stops_at_the_first_conflict
 run_test test_start_puts_the_worktree_outside_an_enclosing_repository
 run_test test_continue_commits_a_merge_the_fork_can_fast_forward_to
 run_test test_continue_refuses_a_function_defined_in_two_fragments

@@ -17,11 +17,14 @@ edit: the fork's line wins, or it conflicts if upstream changed it too. It is
 never renamed silently. The renames are only a preference: a file they leave
 with more conflicts than a plain merge is merged plainly.
 
+    scripts/sync-upstream.py status          # which releases are missing, what the next one conflicts in
+    scripts/sync-upstream.py catch-up        # merge them one by one, landing each
     scripts/sync-upstream.py start [--to v2026.10.3]
     scripts/sync-upstream.py continue        # in the sync worktree, once resolved
 
 Nothing is pushed. The merge commit lands on a sync/<tag> branch; bring it
-into the branch you started from with `git merge --ff-only sync/<tag>`.
+into the branch you started from with `git merge --ff-only sync/<tag>`, or let
+catch-up do that.
 """
 
 import argparse
@@ -29,8 +32,10 @@ import difflib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 
 REMOTE = "origin"
 # Written by build.sh. Never merged: rebuilt once the sources are merged.
@@ -504,15 +509,55 @@ def default_worktree(repo, target):
     return os.path.join(parent, "%s-sync-%s" % (os.path.basename(repo), target.replace("/", "-")))
 
 
-def start(args):
-    repo = git("rev-parse", "--show-toplevel").strip()
+def require_clean(repo):
     if git("status", "--porcelain", cwd=repo).strip():
         raise SyncError("The working tree has uncommitted changes. Commit them first: the merge "
                         "starts from the last commit, and git only recognises a moved file once it is committed.")
+
+
+def missing_releases(repo):
+    """Release tags on <remote>/main that HEAD does not contain, oldest first."""
+    out = git("tag", "--list", "v[0-9]*", "--merged", "%s/main" % REMOTE, "--no-merged", "HEAD",
+              "--sort=v:refname", cwd=repo)
+    return [tag for tag in out.split("\n") if tag.strip()]
+
+
+def sync_worktrees(repo):
+    """[(path, branch, tag)] for every worktree on a sync/<tag> branch."""
+    found, path = [], None
+    for line in git("worktree", "list", "--porcelain", cwd=repo).split("\n"):
+        if line.startswith("worktree "):
+            path = line[len("worktree "):]
+        elif line.startswith("branch refs/heads/sync/") and path:
+            branch = line[len("branch refs/heads/"):]
+            found.append((path, branch, branch[len("sync/"):]))
+    return found
+
+
+def land(repo, worktree, branch):
+    """Fast-forward this checkout to a committed sync and remove its worktree."""
+    git("merge", "--quiet", "--ff-only", branch, cwd=repo)
+    if git_ok("worktree", "remove", worktree, cwd=repo):
+        git("branch", "--quiet", "-d", branch, cwd=repo)
+    else:
+        print("Left %s in place: it holds files git does not track. Remove it with "
+              "git worktree remove, then git branch -d %s." % (worktree, branch))
+
+
+def start(args):
+    repo = git("rev-parse", "--show-toplevel").strip()
+    require_clean(repo)
     if not args.no_fetch:
         git("fetch", "--quiet", "--tags", REMOTE, cwd=repo)
     target = args.to or git("describe", "--tags", "--abbrev=0", "--match", "v[0-9]*",
                             "%s/main" % REMOTE, cwd=repo).strip()
+    return begin(repo, target, args.worktree, args.branch, args.skip_tests, args.trailer)
+
+
+def begin(repo, target, worktree=None, branch=None, skip_tests=False, trailers=()):
+    """Merge target into HEAD in a new sync worktree; commit it there when
+    nothing is left for a person. Returns 0 once committed (or nothing to do),
+    1 when the worktree waits for a person."""
     upstream_rev = git("rev-parse", "%s^{commit}" % target, cwd=repo).strip()
     ours_rev = git("rev-parse", "HEAD", cwd=repo).strip()
     if git_ok("merge-base", "--is-ancestor", upstream_rev, ours_rev, cwd=repo):
@@ -520,8 +565,8 @@ def start(args):
         return 0
     base_rev = git("merge-base", ours_rev, upstream_rev, cwd=repo).strip()
     from_branch = git("rev-parse", "--abbrev-ref", "HEAD", cwd=repo).strip()
-    branch = args.branch or "sync/%s" % target
-    worktree = os.path.abspath(args.worktree or default_worktree(repo, target))
+    branch = branch or "sync/%s" % target
+    worktree = os.path.abspath(worktree or default_worktree(repo, target))
     if os.path.exists(worktree):
         raise SyncError("%s already exists. Finish that sync with `continue` there, or remove it "
                         "(git worktree remove, then delete its branch) first." % worktree)
@@ -562,7 +607,89 @@ def start(args):
     if conflicts:
         print("Resolve the conflict markers in %s, then run there: scripts/sync-upstream.py continue" % worktree)
         return 1
-    return finish(worktree, args.skip_tests, args.trailer)
+    return finish(worktree, skip_tests, trailers)
+
+
+def status(args):
+    """Report the missing releases and dry-run the next one. Exit status 0
+    when up to date, 1 when a release is missing."""
+    repo = git("rev-parse", "--show-toplevel").strip()
+    if not args.no_fetch:
+        git("fetch", "--quiet", "--tags", REMOTE, cwd=repo)
+    have = git("describe", "--tags", "--abbrev=0", "--match", "v[0-9]*", "HEAD", cwd=repo).strip()
+    for path, branch, _ in sync_worktrees(repo):
+        pending = os.path.isfile(git_path(path, STATE_NAME))
+        print("Sync in progress: %s (%s, %s)" % (path, branch, "waiting for a person" if pending
+                                                 else "committed; catch-up lands it"))
+    tags = missing_releases(repo)
+    if not tags:
+        print("Up to date: this branch contains %s, the newest release on %s/main." % (have, REMOTE))
+        return 0
+    print("This branch contains %s. %d release(s) on %s/main to merge, oldest first:" % (have, len(tags), REMOTE))
+    previous = have
+    for tag in tags:
+        files = len([f for f in git("diff", "--name-only", previous, tag, cwd=repo).split("\n") if f])
+        date = git("log", "-1", "--format=%as", tag, cwd=repo).strip()
+        print("  %-14s %s  %d files changed upstream" % (tag, date, files))
+        previous = tag
+    if args.brief:
+        return 1
+    ours_rev = git("rev-parse", "HEAD", cwd=repo).strip()
+    upstream_rev = git("rev-parse", "%s^{commit}" % tags[0], cwd=repo).strip()
+    base_rev = git("merge-base", ours_rev, upstream_rev, cwd=repo).strip()
+    scratch = tempfile.mkdtemp(prefix="ags-sync-status-")
+    try:
+        _, report = plan_merge(repo, base_rev, upstream_rev, ours_rev, scratch)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    left = [entry["path"] for entry in report if entry["conflicts"]]
+    plain = plain_merge_conflicts(repo, ours_rev, upstream_rev)
+    print("Merging %s next would leave %d file(s) for a person (a plain git merge: %s)%s"
+          % (tags[0], len(left), "?" if plain is None else plain, ":" if left else "."))
+    for path in left:
+        print("  " + path)
+    print("Run: scripts/sync-upstream.py catch-up")
+    return 1
+
+
+def catch_up(args):
+    """Merge every missing release in order. Each one that merges cleanly (and
+    passes the tests) is committed and fast-forwarded into this branch; the
+    first that needs a person stops the run in its sync worktree. Run again
+    after `continue` there: the committed sync is landed first."""
+    repo = git("rev-parse", "--show-toplevel").strip()
+    require_clean(repo)
+    branch_here = git("rev-parse", "--abbrev-ref", "HEAD", cwd=repo).strip()
+    if branch_here == "HEAD":
+        raise SyncError("This checkout is on a detached HEAD; check out the branch to bring up to date.")
+    for path, branch, tag in sync_worktrees(repo):
+        if os.path.isfile(git_path(path, STATE_NAME)):
+            print("The sync of %s waits in %s. Resolve it, run scripts/sync-upstream.py continue there, "
+                  "then run catch-up again." % (tag, path))
+            return 1
+        if git_ok("merge-base", "--is-ancestor", "HEAD", branch, cwd=repo):
+            land(repo, path, branch)
+            print("Landed %s on %s." % (tag, branch_here))
+    if not args.no_fetch:
+        git("fetch", "--quiet", "--tags", REMOTE, cwd=repo)
+    tags = missing_releases(repo)
+    if not tags:
+        print("Up to date with %s/main." % REMOTE)
+        return 0
+    for index, tag in enumerate(tags):
+        print("== %s (%d of %d)" % (tag, index + 1, len(tags)))
+        code = begin(repo, tag, skip_tests=args.skip_tests, trailers=args.trailer)
+        if code != 0:
+            rest = tags[index + 1:]
+            if rest:
+                print("Still to merge after it: %s" % " ".join(rest))
+            return code
+        for path, branch, synced in sync_worktrees(repo):
+            if synced == tag:
+                land(repo, path, branch)
+                print("Landed %s on %s." % (tag, branch_here))
+    print("Up to date with %s/main." % REMOTE)
+    return 0
 
 
 def main():
@@ -575,7 +702,14 @@ def main():
     p_start.add_argument("--no-fetch", action="store_true", help="do not fetch %s first" % REMOTE)
     p_cont = sub.add_parser("continue", help="check, build, test and commit a resolved sync")
     p_cont.add_argument("--worktree", default=".", help="the sync worktree (default: here)")
-    for p in (p_start, p_cont):
+    p_status = sub.add_parser("status", help="list the missing releases and dry-run the next one "
+                                             "(exit 1 when one is missing)")
+    p_status.add_argument("--brief", action="store_true", help="list only; skip the dry run")
+    p_catch = sub.add_parser("catch-up", help="merge every missing release in order, landing each one "
+                                              "that needs no person")
+    for p in (p_status, p_catch):
+        p.add_argument("--no-fetch", action="store_true", help="do not fetch %s first" % REMOTE)
+    for p in (p_start, p_cont, p_catch):
         p.add_argument("--skip-tests", action="store_true", help="do not run tests/run_all.sh")
         p.add_argument("--trailer", action="append", default=[], help="trailer for the merge commit")
     args = parser.parse_args()
@@ -585,6 +719,10 @@ def main():
     try:
         if args.command == "start":
             return start(args)
+        if args.command == "status":
+            return status(args)
+        if args.command == "catch-up":
+            return catch_up(args)
         worktree = git("rev-parse", "--show-toplevel", cwd=args.worktree).strip()
         if not os.path.isfile(git_path(worktree, STATE_NAME)):
             raise SyncError("No sync in progress in %s." % worktree)

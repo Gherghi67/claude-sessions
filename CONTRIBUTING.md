@@ -160,7 +160,17 @@ lists the command files the installer and uninstaller delete.
 
 ## Merging upstream releases
 
-agent-sessions follows hex/claude-sessions (`origin`). Merge each upstream release with:
+agent-sessions follows hex/claude-sessions (`origin`), which often ships several releases a day. Merge them one at a time, as they come:
+
+```bash
+scripts/sync-upstream.py status       # the releases this branch lacks, oldest first, and what the next one conflicts in
+scripts/sync-upstream.py catch-up     # merge them in order
+# it stops at the first release that needs a person; resolve it in the sync worktree it prints, then, there:
+scripts/sync-upstream.py continue
+scripts/sync-upstream.py catch-up     # back in this checkout: lands that one and goes on with the rest
+```
+
+`status` fetches, lists the missing releases and dry-runs the next merge without writing anything; it exits 1 while a release is missing, so a script can use it as a check (`--brief` skips the dry run). `catch-up` merges each missing release on its own: one that needs no person is built, tested, committed and fast-forwarded into this branch, and its worktree removed. To merge a single release by hand instead:
 
 ```bash
 scripts/sync-upstream.py start        # newest v* tag on origin/main; --to <tag> for another
