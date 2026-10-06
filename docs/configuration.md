@@ -278,8 +278,9 @@ profile's Option key to Esc+; in Terminal.app, turn on "Use Option as Meta key".
   (or `./install.sh`) in a terminal; it asks again. To drop the keys after a
   `yes`, answer `no` there and delete the two entries from `keybindings.json`.
 - `cs -uninstall` removes only the keys that still hold cs's values, drops a
-  `Global` block that leaves empty, deletes the file when it holds nothing else,
-  and removes the recorded answer.
+  `Global` block that leaves empty, deletes the file when it holds nothing else
+  (a symlinked file keeps its link and gets `{"bindings": []}` written through
+  it), and removes the recorded answer.
 - `cs -doctor` reports one row: bound, declined, not asked, a conflict on
   `alt+1` or `alt+2`, or an unparseable file.
 

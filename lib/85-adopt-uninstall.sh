@@ -408,7 +408,6 @@ adopt_worktrees() {  # [--dry-run]
     [ "$dry_run" = 1 ] || echo -e "${DIM}$adopted adopted; open one with: cs $repo_name.<worktree>${NC}"
 }
 
-# Uninstall cs and all components
 # Take back the Option+1 / Option+2 bindings the installer added, only where a
 # key still holds cs's value: a key bound to anything else is the user's. A
 # Global block left empty by that goes, and so does a file left as exactly
@@ -451,6 +450,7 @@ _uninstall_option_keys() {
     fi
 }
 
+# Uninstall cs and all components
 run_uninstall() {
     local install_dir="$HOME/.local/bin"
     local hooks_parent_dir="$HOME/.claude/hooks"
