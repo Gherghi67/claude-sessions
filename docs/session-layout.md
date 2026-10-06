@@ -82,7 +82,7 @@ in `.cs/private/` instead.
 | `session.log` | Human-readable audit trail — bash commands, session lifecycle, autosave notes, UUID rebinds. Per-checkout by nature; the shared structured record is `timeline.jsonl`. |
 | `state` | Session state bound to this checkout: `claude_session_id` (the conversation UUID to resume), `claude_session_color` (the `/color` palette entry), `last_resumed` (last resume date), `session_name` for adopted sessions only (their name lives in the sessions-root symlink, which a hook resolving the directory has no way to read; an ordinary session takes its name from its directory), and, for feature worktrees, `task_branch`, `cs_base` and `cs_mode` (`tracked` when the base repo tracks `.cs/`, `ignored` when it does not; it decides how the worktree's records reach the base when the feature is integrated and retired). Each machine binds its own conversation, so this must not sync. Writers take turns on a `state.lock` directory beside it. `claude_session_id` is one slot, written only by the conversation `cs` launched — see [hooks.md](hooks.md) for how a teammate or walked-in claude is kept out of it. |
 | `identity` | Overrides the actor name for shared memory/narrative attribution (precedence: `$CS_ACTOR` > `local/identity` > git `user.email` > git `user.name`). |
-| `migrated` | The migration stamp, written when an open's migration finishes without a warning. Line 1: the cs version, the actor and `1` or `0` for an encrypted session, tab separated. Line 2: the files it checked that existed then. See [Migration](#migration). |
+| `migrated` | The migration stamp, written when every write an open's migration made succeeded. Line 1: the cs version, the actor and `1` or `0` for an encrypted session, tab separated. Line 2: the files it checked that existed then. See [Migration](#migration). |
 | `attention` | Status-line attention marker — raised by the `Stop` hook when Claude finishes, cleared on the next prompt. |
 | `presence` | This session's advertised status (`cs -status`): a single line read by `cs -live`. Falls back to the README objective when unset. |
 | `pending-handoff` | Basename of the `.cs/handoffs/` file to rotate into — armed by the `rotate` skill (for `/clear`) or by the `r` answer at the resume prompt. Consumed and cleared by the next SessionStart whose source is `startup` or `clear`; left armed on any other source; disarmed by any other resume-prompt answer. |
@@ -286,7 +286,7 @@ command-tracker files are pruned, and machine-local fields are moved out of
 shared files into `.cs/local/`. Migration is idempotent — a modern session is
 left untouched.
 
-A migration that finishes without a warning writes `.cs/local/migrated`, and
+A migration whose writes all succeed writes `.cs/local/migrated`, and
 the next open skips the one-time phases while that stamp still holds: same cs
 version, same actor, same encrypted state, every file it listed still there,
 and none of `.gitignore`, `.gitattributes`, `CLAUDE.local.md`, `CLAUDE.md` or
@@ -295,7 +295,7 @@ checkout cs commits into (cs reads the value: git rewrites `.git/config` on
 every `git config` write). When only `.cs/memory/MEMORY.md` changed,
 the open re-checks the narrative pointer and nothing else. The refusals (a
 tracked `.cs/local/`, an unmounted vault), the transcript binding and the checks
-for leftovers from old layouts run on every open. `cs -doctor` reports the
+that only look for a leftover from an old layout run on every open. `cs -doctor` reports the
 stamp; `rm .cs/local/migrated` forces a full migration on the next open, for
 an edit the stamp cannot see (a file restored with its old modification time,
 or saved within the same second as the stamp).

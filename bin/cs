@@ -4445,7 +4445,7 @@ migrate_session() {
         fi
     fi
 
-    # A migration that completes without a warning stamps .cs/local/migrated.
+    # A migration whose writes all succeeded stamps .cs/local/migrated.
     # While the stamp is fresh the one-time phases below have nothing left to
     # do, so a reopen skips them ("none"); when MEMORY.md alone changed it runs
     # only the narrative check and restamps ("narrative"). The refusals above
