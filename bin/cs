@@ -150,6 +150,51 @@ _strip_hook_registration() {
         else . end
     '
 }
+
+# Option+1 and Option+2: the two Claude Code keybindings cs offers to add,
+# each a "command:<name>" action, which submits /<name>. install.sh asks once
+# per machine and binds them, cs -uninstall takes back only the keys that
+# still hold these values, and cs -doctor reports them.
+CS_OPTION_KEYS='{"alt+1":"command:rotate","alt+2":"command:wrap"}'
+
+# Claude Code reads its keybindings from its config dir.
+_cs_keybindings_file() {
+    printf '%s\n' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/keybindings.json"
+}
+
+# This machine's answer to the installer's question, yes or no; absent until
+# it has been asked on a terminal.
+_cs_option_keys_answer_file() {
+    printf '%s\n' "${XDG_CONFIG_HOME:-$HOME/.config}/cs/option-keys"
+}
+
+# Whether a keybindings file has the shape cs reads and merges into: one JSON
+# object whose "bindings" is an array of context blocks, each an object whose
+# own "bindings", when present, is an object. Slurped, so a file holding two
+# documents is refused rather than read as two; -e turns invalid JSON, an
+# empty file and a false answer alike into a non-zero exit.
+_cs_keybindings_shape_ok() {  # file
+    jq -se 'length == 1 and (.[0] | type == "object" and (.bindings | type == "array")
+        and all(.bindings[]; type == "object" and ((.bindings // {}) | type == "object")))' \
+        "$1" > /dev/null 2>&1
+}
+
+# Reads a keybindings document that passed the shape check on stdin and prints
+# one line per cs key: "bound<TAB>key" when every binding of it, in any
+# context, holds cs's value; "free<TAB>key" when nothing binds it; and
+# "conflict<TAB>key<TAB>action" when something else does. An action that is
+# not a string (a null that unbinds the key) prints as JSON.
+_cs_option_keys_status() {
+    jq -r --argjson cs "$CS_OPTION_KEYS" '
+        [.bindings[] | (.bindings // {}) | to_entries[]] as $all
+        | $cs | to_entries[] | . as $c
+        | [$all[] | select(.key == $c.key) | .value] as $vals
+        | if ($vals | length) == 0 then "free\t\($c.key)"
+          elif all($vals[]; . == $c.value) then "bound\t\($c.key)"
+          else "conflict\t\($c.key)\t\([$vals[] | select(. != $c.value)][0]
+                | if type == "string" then . else tojson end)"
+          end'
+}
 # Normalize an arbitrary identity string to a filesystem-safe slug.
 _slugify() {
     printf '%s' "$1" \
@@ -6965,6 +7010,55 @@ _doctor_check_statusline() {
     esac
 }
 
+# The Option+1 / Option+2 bindings the installer offers: the answer this
+# machine gave, and whether keybindings.json still holds cs's keys. Not asked
+# and declined are healthy; a key the user binds to something else, a yes whose
+# keys are gone, and a file Claude Code cannot read either are warnings.
+_doctor_check_option_keys() {
+    local file answer_file answer status state key action bound=0 total=0
+    file="$(_cs_keybindings_file)"
+    answer_file="$(_cs_option_keys_answer_file)"
+    if ! command -v jq >/dev/null 2>&1; then
+        _doctor_warn "Option keys: jq not installed; $file could not be read"
+        return
+    fi
+    if [ -e "$file" ] && ! _cs_keybindings_shape_ok "$file"; then
+        _doctor_warn "Option keys: $file is unparseable (not JSON with a \"bindings\" array)"
+        return
+    fi
+    if [ -e "$file" ]; then
+        status=$(_cs_option_keys_status < "$file") || status=""
+    else
+        status=$(printf '{"bindings":[]}\n' | _cs_option_keys_status) || status=""
+    fi
+    while IFS=$'\t' read -r state key action; do
+        [ -n "$state" ] || continue
+        total=$((total + 1))
+        if [ "$state" = bound ]; then bound=$((bound + 1)); fi
+    done <<< "$status"
+    if [ "$total" -gt 0 ] && [ "$bound" = "$total" ]; then
+        _doctor_ok "Option keys: bound (Option+1 runs /rotate, Option+2 runs /wrap)"
+        return
+    fi
+    answer=$(cat "$answer_file" 2>/dev/null) || answer=""
+    case "$answer" in
+        yes)
+            while IFS=$'\t' read -r state key action; do
+                case "$state" in
+                    conflict) _doctor_warn "Option keys: conflict on $key (bound to $action in $file)" ;;
+                    free) _doctor_warn "Option keys: $key not bound (run cs -update to bind it)" ;;
+                esac
+            done <<< "$status"
+            ;;
+        no)
+            _doctor_ok "Option keys: declined (to be asked again, remove $answer_file and run cs -update in a terminal)"
+            ;;
+        *)
+            _doctor_ok "Option keys: not asked (run cs -update in a terminal to be asked)"
+            ;;
+    esac
+}
+
 _doctor_check_subagent_statusline() {
     local claude_dir="${CS_CLAUDE_DIR:-$HOME/.claude}"
     local settings="$claude_dir/settings.json"
@@ -7218,6 +7312,7 @@ run_doctor() {
     _doctor_check_claude_audit
     _doctor_check_statusline
     _doctor_check_subagent_statusline
+    _doctor_check_option_keys
     _doctor_check_iterm2
     _doctor_check_spawn
     _doctor_check_hook_authority
@@ -9876,6 +9971,48 @@ adopt_worktrees() {  # [--dry-run]
 }
 
 # Uninstall cs and all components
+# Take back the Option+1 / Option+2 bindings the installer added, only where a
+# key still holds cs's value: a key bound to anything else is the user's. A
+# Global block left empty by that goes, and so does a file left as exactly
+# {"bindings":[]}, unless it is a symlink, whose target is written through
+# instead so a dotfiles manager's copy does not keep cs's keys. The recorded
+# answer goes too, so a later install asks again.
+_uninstall_option_keys() {
+    local file stripped
+    file="$(_cs_keybindings_file)"
+    rm -f "$(_cs_option_keys_answer_file)"
+    [ -e "$file" ] || return 0
+    if ! command -v jq >/dev/null 2>&1; then
+        warn "jq not found - cannot remove cs's Option+1/Option+2 bindings from $file"
+        return 0
+    fi
+    if ! _cs_keybindings_shape_ok "$file"; then
+        warn "Left $file as it is: not JSON with a \"bindings\" array"
+        return 0
+    fi
+    jq -e --argjson cs "$CS_OPTION_KEYS" \
+        'any(.bindings[] | (.bindings // {}) | to_entries[]; . as $e | $cs | has($e.key) and .[$e.key] == $e.value)' \
+        "$file" > /dev/null 2>&1 || return 0
+    stripped=$(jq -c --argjson cs "$CS_OPTION_KEYS" '
+        def ours: . as $e | $cs | has($e.key) and .[$e.key] == $e.value;
+        .bindings |= map(
+            if any((.bindings // {}) | to_entries[]; ours) then
+                .bindings |= with_entries(select(ours | not))
+                | select(.bindings != {} or .context != "Global")
+            else . end)' "$file") || {
+        warn "Could not read $file; its Option+1/Option+2 bindings were left in place"
+        return 0
+    }
+    if [ "$stripped" = '{"bindings":[]}' ] && [ ! -L "$file" ]; then
+        rm -f "$file"
+        info "Removed $file"
+    elif cs_write_atomic "$file" jq . <<< "$stripped"; then
+        info "Removed cs's Option+1/Option+2 bindings from $file"
+    else
+        warn "Could not write $file; its Option+1/Option+2 bindings were left in place"
+    fi
+}
+
 run_uninstall() {
     local install_dir="$HOME/.local/bin"
     local hooks_parent_dir="$HOME/.claude/hooks"
@@ -9906,6 +10043,7 @@ run_uninstall() {
     echo "  - Shell completions"
     echo "  - Update-check cache in $update_cache_dir/"
     echo "  - Hook entries in $settings_file"
+    echo "  - cs's Option+1/Option+2 bindings in $(_cs_keybindings_file)"
     echo ""
     read -p "Continue with uninstall? [y/N] " -n 1 -r
     echo ""
@@ -10072,6 +10210,8 @@ run_uninstall() {
         warn "jq not found - cannot clean up $settings_file automatically"
         warn "Manually remove cs hook entries from $settings_file"
     fi
+
+    _uninstall_option_keys
 
     # Ask about secrets in keychain
     if [ -d "$SESSIONS_ROOT" ]; then

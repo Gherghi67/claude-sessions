@@ -204,6 +204,51 @@ _strip_hook_registration() {
         else . end
     '
 }
+
+# Option+1 and Option+2: the two Claude Code keybindings cs offers to add,
+# each a "command:<name>" action, which submits /<name>. install.sh asks once
+# per machine and binds them, cs -uninstall takes back only the keys that
+# still hold these values, and cs -doctor reports them.
+CS_OPTION_KEYS='{"alt+1":"command:rotate","alt+2":"command:wrap"}'
+
+# Claude Code reads its keybindings from its config dir.
+_cs_keybindings_file() {
+    printf '%s\n' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/keybindings.json"
+}
+
+# This machine's answer to the installer's question, yes or no; absent until
+# it has been asked on a terminal.
+_cs_option_keys_answer_file() {
+    printf '%s\n' "${XDG_CONFIG_HOME:-$HOME/.config}/cs/option-keys"
+}
+
+# Whether a keybindings file has the shape cs reads and merges into: one JSON
+# object whose "bindings" is an array of context blocks, each an object whose
+# own "bindings", when present, is an object. Slurped, so a file holding two
+# documents is refused rather than read as two; -e turns invalid JSON, an
+# empty file and a false answer alike into a non-zero exit.
+_cs_keybindings_shape_ok() {  # file
+    jq -se 'length == 1 and (.[0] | type == "object" and (.bindings | type == "array")
+        and all(.bindings[]; type == "object" and ((.bindings // {}) | type == "object")))' \
+        "$1" > /dev/null 2>&1
+}
+
+# Reads a keybindings document that passed the shape check on stdin and prints
+# one line per cs key: "bound<TAB>key" when every binding of it, in any
+# context, holds cs's value; "free<TAB>key" when nothing binds it; and
+# "conflict<TAB>key<TAB>action" when something else does. An action that is
+# not a string (a null that unbinds the key) prints as JSON.
+_cs_option_keys_status() {
+    jq -r --argjson cs "$CS_OPTION_KEYS" '
+        [.bindings[] | (.bindings // {}) | to_entries[]] as $all
+        | $cs | to_entries[] | . as $c
+        | [$all[] | select(.key == $c.key) | .value] as $vals
+        | if ($vals | length) == 0 then "free\t\($c.key)"
+          elif all($vals[]; . == $c.value) then "bound\t\($c.key)"
+          else "conflict\t\($c.key)\t\([$vals[] | select(. != $c.value)][0]
+                | if type == "string" then . else tojson end)"
+          end'
+}
 # ---- end lib/01-manifests.sh ----
 
 # Everything that lands in HOOKS_DIR, for the copy and cleanup loops. The
@@ -919,6 +964,97 @@ else
     fi
 
     echo "$SETTINGS" > "$CLAUDE_SETTINGS"
+
+    # Add cs's keys that nothing binds yet to keybindings.json: into its first
+    # Global block, or a Global block of their own, creating the file when
+    # there is none. A key bound to anything else, in any context, is the
+    # user's and is reported, never replaced. A file of a shape cs cannot read
+    # is refused before anything is written. The write is cs_write_atomic's,
+    # from the hooks' shared library deployed above: mode kept, and a
+    # symlinked file (a dotfiles manager's) rewritten through its link.
+    _bind_option_keys() {
+        local file doc status state key action added=""
+        file="$(_cs_keybindings_file)"
+        if [ -e "$file" ]; then
+            if ! _cs_keybindings_shape_ok "$file"; then
+                warn "Option keys: $file is not JSON with a \"bindings\" array; left as it is. Fix it, then run cs -update."
+                return 1
+            fi
+            doc=$(cat "$file") || { warn "Option keys: could not read $file"; return 1; }
+        else
+            doc='{"bindings":[]}'
+        fi
+        status=$(printf '%s\n' "$doc" | _cs_option_keys_status) \
+            || { warn "Option keys: could not read the bindings in $file"; return 1; }
+        while IFS=$'\t' read -r state key action; do
+            case "$state" in
+                conflict) warn "Option keys: $key is already bound to $action in $file; left as it is." ;;
+                free) added="$added $key" ;;
+            esac
+        done <<< "$status"
+        [ -n "$added" ] || return 0
+        # shellcheck source=hooks/cs-shared.sh
+        if ! . "$HOOKS_DIR/cs-shared.sh"; then
+            warn "Option keys: could not load $HOOKS_DIR/cs-shared.sh; $file left as it is."
+            return 1
+        fi
+        mkdir -p "$(dirname "$file")" 2>/dev/null || true
+        if ! printf '%s\n' "$doc" | cs_write_atomic "$file" jq --argjson cs "$CS_OPTION_KEYS" '
+            [.bindings[] | (.bindings // {}) | keys[]] as $used
+            | ($cs | with_entries(select(.key as $k | any($used[]; . == $k) | not))) as $add
+            | (first(.bindings | to_entries[] | select(.value.context == "Global") | .key) // null) as $i
+            | if $i == null then .bindings += [{context: "Global", bindings: $add}]
+              else .bindings[$i].bindings = ((.bindings[$i].bindings // {}) + $add) end'; then
+            warn "Option keys: could not write $file"
+            return 1
+        fi
+        info "Option keys: bound${added} in $file"
+    }
+
+    # Option+1 runs /rotate and Option+2 runs /wrap, through Claude Code's own
+    # keybindings.json. Keys are the user's keyboard, so they are offered once
+    # per machine and the answer is recorded: a yes is honoured on every
+    # install (keys already bound are left as they are), a no is never asked
+    # again, and with no terminal nothing is written or recorded. Every step
+    # reports and carries on; a keybinding must never take the install down.
+    _option_keys_answer_file="$(_cs_option_keys_answer_file)"
+    _option_keys_answer=$(cat "$_option_keys_answer_file" 2>/dev/null) || _option_keys_answer=""
+    case "$_option_keys_answer" in
+        yes) ;;
+        no)
+            info "Option keys: not bound (declined earlier). To be asked again, remove $_option_keys_answer_file and run cs -update."
+            ;;
+        *)
+            _option_keys_answer=""
+            if [ -t 0 ]; then
+                # An explicit y or n only: the status-line questions above read
+                # one key, so an Enter typed after one of them is still queued
+                # and would answer this one. EOF leaves it unanswered.
+                while :; do
+                    echo -en "Bind Option+1 to /rotate and Option+2 to /wrap in Claude Code? [y/n] "
+                    if ! read -n 1 -r; then echo ""; break; fi
+                    echo ""
+                    case "$REPLY" in
+                        [Yy]) _option_keys_answer=yes; break ;;
+                        [Nn]) _option_keys_answer=no; break ;;
+                    esac
+                done
+                if [ -z "$_option_keys_answer" ]; then
+                    info "Option keys: left unanswered; the next install asks again."
+                elif ! { mkdir -p "$(dirname "$_option_keys_answer_file")" \
+                        && printf '%s\n' "$_option_keys_answer" > "$_option_keys_answer_file"; } 2>/dev/null; then
+                    warn "Option keys: the answer could not be recorded in $_option_keys_answer_file, so the next install asks again."
+                elif [ "$_option_keys_answer" = no ]; then
+                    info "Option keys: not bound. You won't be asked again; to change that, remove $_option_keys_answer_file and run cs -update."
+                fi
+            else
+                info "Option keys: not bound. To bind Option+1 to /rotate and Option+2 to /wrap, run cs -update in a terminal."
+            fi
+            ;;
+    esac
+    if [ "$_option_keys_answer" = yes ]; then
+        _bind_option_keys || true
+    fi
 fi
 
 # Check if ~/.local/bin is in PATH

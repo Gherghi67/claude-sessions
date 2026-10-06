@@ -1617,7 +1617,7 @@ test_option_keys_refuse_an_unparseable_file() {
             || { echo "  FAIL: case $i: the file was changed"; return 1; }
         grep -qF "$kb" "$TEST_TMPDIR/ok-bad$i.out" \
             || { echo "  FAIL: case $i: the refusal does not name $kb"; return 1; }
-        assert_eq "keybindings.json" "$(ls -A "$home/.claude" | grep keybindings)" \
+        assert_eq "$kb" "$(find "$home/.claude" -maxdepth 1 -name '*keybindings*')" \
             "case $i: no temp file is left beside it" || return 1
     done
 }
