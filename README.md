@@ -306,7 +306,10 @@ running Claude: while it is open, `/finish` lands the work, says so in plain
 words, and you close that session and run `/finish <feature>` again. Nothing
 is ever removed by a keystroke or signal into the other session. Ordinary
 feature branches get the older `--no-ff` ritual from the same skill, gated the same way. It
-is user-invoked only (`disable-model-invocation: true`).
+is user-invoked only (`disable-model-invocation: true`). With the cs mod
+loaded, `/finish` toasts when it starts and when it lands, retires or refuses,
+and while the gate runs (with `--gate`) the band above the prompt shows the
+task and how long the gate has run.
 
 The `feature` skill (`/feature <name>` in any cs session) is the other end:
 it writes a brief from the conversation (goal, done-when, constraints, how to

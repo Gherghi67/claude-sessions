@@ -383,6 +383,65 @@ create_worktree_session() {
     echo "$wt_dir"
 }
 
+# The /finish progress record: one JSON object, replaced whole at each step of
+# an integrate or a retire, that the cs mod reads to toast a start and an
+# outcome and to draw a band while a gate runs (docs/session-layout.md). It
+# sits with the base's other cs files: behind .cs/private in an encrypted
+# session, in .cs/local otherwise, and nowhere while the vault is locked.
+# Advisory only: a record that cannot be written costs one warning on stderr
+# and the run goes on unrecorded, since landing correctly matters more than
+# saying so. Each run has its own id; pid is this cs process, so a reader can
+# tell a step a killed run left behind from one still running. Globals,
+# because the EXIT handler that records a refusal runs after the locals are
+# gone.
+_finish_progress_begin() {  # base_dir task
+    _FINISH_PROGRESS="" _FINISH_ID="$$-$(date +%s)" _FINISH_TASK="$2"
+    _FINISH_SHA="" _FINISH_GATE_STARTED="" _FINISH_OUTCOME=""
+    local dir
+    if ! dir=$(cs_private_dir "$1/.cs"); then
+        warn "cs: /finish progress not recorded: .cs/private $(cs_private_state "$1/.cs")" >&2
+        return 0
+    fi
+    mkdir -p "$dir" 2>/dev/null || true
+    _FINISH_PROGRESS="$dir/finish-progress.json"
+    trap '_finish_progress_exit "$?"' EXIT
+}
+
+# Replace the record with this run at <step>; an outcome (landed, refused,
+# retired) may carry one more field, the landed commit or the refusal's reason.
+_finish_progress_write() {  # step [key value]
+    [ -n "${_FINISH_PROGRESS:-}" ] || return 0
+    local step="$1" key="${2:-}" value="${3:-}"
+    case "$step" in landed|refused|retired) _FINISH_OUTCOME="$step" ;; esac
+    if ! cs_write_atomic "$_FINISH_PROGRESS" jq -nc \
+            --arg id "$_FINISH_ID" --argjson pid "$$" --arg task "$_FINISH_TASK" \
+            --arg sha "$_FINISH_SHA" --arg step "$step" --argjson ts "$(date +%s)" \
+            --arg gate_started "$_FINISH_GATE_STARTED" --arg key "$key" --arg value "$value" \
+            '{id: $id, pid: $pid, task: $task, sha: $sha, step: $step, ts: $ts}
+             + (if $gate_started == "" then {} else {gate_started: ($gate_started | tonumber)} end)
+             + (if $key == "" then {} else {($key): $value} end)' 2>/dev/null; then
+        warn "cs: /finish progress not recorded: could not write $_FINISH_PROGRESS" >&2
+        _FINISH_PROGRESS=""
+    fi
+    return 0
+}
+
+# The EXIT handler: a run that ends in failure before it wrote an outcome was
+# refused, and the reason is the first line of the error that ended it. Never
+# fails, so a handler chained after it still runs and the exit status stands.
+_finish_progress_exit() {  # exit status
+    if [ "$1" = 0 ] || [ -z "${_FINISH_PROGRESS:-}" ] || [ -n "${_FINISH_OUTCOME:-}" ]; then
+        return 0
+    fi
+    local reason="${_CS_ERROR_MESSAGE:-}"
+    reason="${reason%%$'\n'*}"
+    if [ -z "$reason" ]; then
+        case "$1" in 130|143) reason="interrupted" ;; *) reason="cs exited $1" ;; esac
+    fi
+    _finish_progress_write refused reason "$reason" || true
+    return 0
+}
+
 # Retire an integrated feature worktree: fuse its session records into the
 # base (ignored mode), remove the worktree and delete its branch. Backs the
 # unadvertised `cs <base> -retire-feature <task> <sha> [--force]` that
@@ -411,6 +470,7 @@ retire_feature_worktree() {  # base_name task sha [--force]
 
     [ -d "$base_dir" ] || error "Base session not found: $base_name"
     [ -d "$wt_dir" ] || error "No worktree for feature '$task' (expected $wt_dir)"
+    _finish_progress_begin "$base_dir" "$task"
 
     local wt_name="$base_name@$task"
     if [ "${CLAUDE_SESSION_NAME:-}" = "$wt_name" ]; then
@@ -419,6 +479,7 @@ retire_feature_worktree() {  # base_name task sha [--force]
 
     sha=$(git -C "$base_dir" rev-parse -q --verify "$sha^{commit}" 2>/dev/null) \
         || error "Commit not found in $base_name: $sha"
+    _FINISH_SHA="$sha"
     local tip
     tip=$(git -C "$wt_dir" rev-parse HEAD 2>/dev/null) || error "Not a git checkout: $wt_dir"
     # Without --force the captured commit must be in the base. With it (a
@@ -517,6 +578,7 @@ $remove_err"
            --arg task "$task" \
         '{ts: $ts, event: $event, task: $task}' \
         >> "$base_dir/.cs/timeline.jsonl"; } 2>/dev/null || true
+    _finish_progress_write retired
     printf 'retired %s %s\n' "$task" "$sha"
 }
 
@@ -577,6 +639,7 @@ integrate_feature_worktree() {  # base_name task sha [--from-remote [--ci-green]
     branch="cs/$task"
     [ -d "$base_dir" ] || error "Base session not found: $base_name"
     [ -d "$wt_dir" ] || error "No worktree for feature '$task' (expected $wt_dir)"
+    _finish_progress_begin "$base_dir" "$task"
     # Herestring, not a pipe: grep -q's early exit would SIGPIPE the writer
     # and pipefail would read that as "not registered".
     local features
@@ -593,6 +656,7 @@ integrate_feature_worktree() {  # base_name task sha [--from-remote [--ci-green]
 
     sha=$(git -C "$base_dir" rev-parse -q --verify "$sha^{commit}" 2>/dev/null) \
         || error "Commit not found in $base_name: $sha"
+    _FINISH_SHA="$sha"
     # Before the split: a detached base has no branch to land on either way,
     # and the ff-only would move a detached HEAD while the branch stays put.
     local base_branch
@@ -605,10 +669,13 @@ integrate_feature_worktree() {  # base_name task sha [--from-remote [--ci-green]
         git -C "$base_dir" merge-base --is-ancestor "$sha" "$branch" 2>/dev/null \
             || error "$sha is not reachable from $branch; capture the feature HEAD again"
     fi
+    # Nothing to land: the record gains no step, and the retire that follows
+    # writes the outcome.
     if git -C "$base_dir" merge-base --is-ancestor "$sha" HEAD 2>/dev/null; then
         printf 'already-integrated %s %s\n' "$task" "$sha"
         return 0
     fi
+    _finish_progress_write started
 
     if _tree_is_dirty "$base_dir"; then
         error "Base session has uncommitted changes; commit them in $base_dir first"
@@ -649,8 +716,9 @@ integrate_feature_worktree() {  # base_name task sha [--from-remote [--ci-green]
     # EXIT alone is not enough: a TERM/INT'd bash skips the EXIT trap
     # (measured: exit 143, no cleanup), stranding the mutex and the temp.
     # Same shape as lib/75-launch.sh:112-113. Armed before the pid write: a
-    # write that fails under set -e must still release the directory.
-    trap '_integrate_cleanup' EXIT
+    # write that fails under set -e must still release the directory. The
+    # progress handler goes first, while $? is still the exit status.
+    trap '_finish_progress_exit "$?"; _integrate_cleanup' EXIT
     trap '_integrate_cleanup; exit 130' INT TERM
     # The holder's pid, for cs -doctor's liveness check. Inside the lock, so
     # the directory and its evidence are created and removed together; the
@@ -708,6 +776,7 @@ _integrate_in_temp() {  # base_dir wt_dir task sha common from_remote ci_green g
     # origin and names the PR, so a fast-forward is the right shape there.
     local sha7 merge_status=0
     sha7=$(printf '%s' "$sha" | cut -c1-7)
+    _finish_progress_write merging
     if [ -n "$from_remote" ]; then
         git -C "$tmp" -c core.hooksPath="$no_hooks" merge --no-edit "$sha" >/dev/null 2>&1 || merge_status=$?
     else
@@ -781,6 +850,12 @@ Move or delete these untracked files in $base_dir, then re-run /finish $task"
     fi
     local gate_log
     if [ -z "$gate_skipped" ]; then
+        # `-- true` is how the caller says there is no gate: nothing worth a
+        # band runs, so only a real gate is a step of the record.
+        if [ $# -ne 1 ] || [ "$1" != true ]; then
+            _FINISH_GATE_STARTED=$(date +%s)
+            _finish_progress_write gate
+        fi
         gate_log=$(mktemp "${TMPDIR:-/tmp}/cs-gate.XXXXXX")
         # </dev/null: a gate that reads stdin would otherwise consume whatever
         # cs was given and block a non-interactive run forever.
@@ -834,6 +909,7 @@ Commit the generated output on the feature branch, then re-run /finish $task"
     # reachable only from the temp's detached HEAD.
     local R ff_err ff_status=0
     R="$M"
+    _finish_progress_write fast-forward
     ff_err=$(git -C "$base_dir" merge --ff-only "$R" 2>&1 >/dev/null) || ff_status=$?
     if [ "$ff_status" != 0 ]; then
         error "Base $base_dir moved or changed during the gates (was $B); re-run /finish $task
@@ -865,6 +941,7 @@ ${ff_err:-(no output from git merge --ff-only)}"
            --arg result "$landed" \
         '{ts: $ts, event: $event, task: $task, sha: $sha, result: $result}' \
         >> "$base_dir/.cs/timeline.jsonl"; } 2>/dev/null || true
+    _finish_progress_write landed result "$landed"
     printf 'integrated %s %s -> %s\n' "$task" "$sha" "$landed"
 }
 

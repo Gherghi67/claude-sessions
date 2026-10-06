@@ -341,8 +341,8 @@ of its own). A continuation turn, one started with no prompt as a Stop hook's
 feedback starts one, leaves it in place. A summary written any other way,
 a standalone `/summary` included, hides nothing, and a wrap that fails a pass
 skips the marker. Below the band the mod draws nothing, and it draws nothing while a
-turn runs or while a survey holds the band. It never submits a prompt of its
-own.
+turn runs or while a survey holds the band; the `/finish` gate band below is the
+one exception. It never submits a prompt of its own.
 
 The same button has a second state. Once the `rotate` skill has armed a
 handoff (`.cs/local/pending-handoff` names one), the band draws
@@ -507,6 +507,29 @@ The child inherits the claude process's environment, so the
 `CLAUDE_SESSION_META_DIR` the launch exported picks the session's queue. A
 refused task (empty, or more than one line) prints cs's exit code and the end
 of its stderr as cs wrote them.
+
+`/finish` gets a toast at each end. While `cs <base> -integrate-feature` and
+`-retire-feature` run, cs replaces a progress record at each step
+(`finish-progress.json`, see [session layout](session-layout.md#machine-local-files-cslocal-gitignored)).
+The `/finish` skill's prompt (the `skill.prompt` event, which fires for a typed
+`/finish` and for the conversation `cs <base> -finish` launches) starts a
+one-second `$.clock.every` watch that reads the record. A run's first running
+step toasts `cs: finishing <task>`, and its outcome toasts
+`cs: landed <task> <sha7> -> <base sha7>`, `cs: /finish <task> refused: <reason>`
+(the first line of cs's refusal) or `cs: retired <task>`. The toast cuts a task
+name past 60 characters, as `/queue`'s toast does. Each toasts once: the mod keeps
+which steps of which run (the record's `id`) it has shown, and the record the
+watch finds when it starts belongs to an earlier run, so the mod never toasts it.
+While a real gate runs (not `-- true`, and not one `--ci-green` skipped), the
+band above the prompt draws `finishing <task> · gate <elapsed>`, redrawn each
+second, during the turn as well. The gate counts as running only while the
+record's `pid` is alive (`kill -0` through `$.process.run`, once a second while
+a step runs), so a cs process that a signal ended leaves no band behind. The watch
+ends at the first read after the turn that ran `/finish` is over with nothing
+running. The rotation keys draw beneath the gate band when both show. An
+integrate or retire run from a shell, outside `/finish`, starts no watch and
+toasts nothing. The mod does not hook `command.run` for this: the contract scopes
+it to slash commands and registered ones, and says nothing of skills.
 
 Tests: `tests/test_mod_rotate.sh` runs the bun unit tests under
 `mods/cs/test/` (a fake engine drives the band, the press and the
