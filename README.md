@@ -297,7 +297,7 @@ delete the branch by hand.
 
 The `finish` skill (`/finish <feature>` in the base session) lands a feature
 and retires its worktree: it captures the feature commit, merges base and
-feature in a temporary detached worktree, runs the repo's gates there (skipped, and reported as `gate skipped`, when the PR is already merged, the checks origin recorded on its merge commit passed, and the base carries no commits of its own on top of it; the gate runs in a clean checkout without gitignored dependencies, `.env` or build output, so one that needs them installs them first, for example `-- sh -c 'npm ci && npm test'`),
+feature in a temporary detached worktree, runs no tests there unless you ask with `/finish <feature> --gate` (then it runs the repo's gates, skipped and reported as `gate skipped` when the PR is already merged, the checks origin recorded on its merge commit passed, and the base carries no commits of its own on top of it; the gate runs in a clean checkout without gitignored dependencies, `.env` or build output, so one that needs them installs them first, for example `-- sh -c 'npm ci && npm test'`),
 fast-forwards the base onto the result, reports whether a GitHub PR exists
 for the branch, then fuses the worktree's session records into the base and
 removes the worktree and branch. That last step needs the feature
@@ -305,7 +305,7 @@ conversation closed, because a directory cannot be removed from under a
 running Claude: while it is open, `/finish` lands the work, says so in plain
 words, and you close that session and run `/finish <feature>` again. Nothing
 is ever removed by a keystroke or signal into the other session. Ordinary
-feature branches get the older gated `--no-ff` ritual from the same skill. It
+feature branches get the older `--no-ff` ritual from the same skill, gated the same way. It
 is user-invoked only (`disable-model-invocation: true`).
 
 The `feature` skill (`/feature <name>` in any cs session) is the other end:
