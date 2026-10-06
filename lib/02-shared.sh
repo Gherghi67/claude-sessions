@@ -305,7 +305,7 @@ cs_write_atomic() {  # dest, command [args...]
 # The machine-local state file (.cs/local/state) is rewritten whole from its
 # old contents, by cs and by the SessionStart hook, so two writers can lose an
 # update unless they take turns: the lock is _cs_mkdir_lock on a directory
-# beside the file. Prints the lock directory when it holds it, nothing when it
+# beside the file. The vault holder list takes turns through it too. Prints the lock directory when it holds it, nothing when it
 # does not.
 _cs_local_state_lock() {  # state
     _cs_mkdir_lock "$1.lock" || return 0
@@ -343,6 +343,28 @@ cs_local_state_unset() {  # state, key
     local lock rc=0
     lock=$(_cs_local_state_lock "$1")
     cs_write_atomic "$1" _cs_local_state_render "$1" "$2" || rc=$?
+    _cs_mkdir_unlock "$lock"
+    return "$rc"
+}
+
+# .cs/local/vault-holders lists the pids whose life keeps an encrypted
+# session's vault mounted, one per line. An add appends; a drop rewrites the
+# list without one pid. Both take the lock beside the file, so a drop never
+# renames its copy over a line another opener added meanwhile.
+cs_vault_holder_add() {  # holders, pid
+    local lock rc=0
+    lock=$(_cs_local_state_lock "$1")
+    { printf '%s\n' "$2" >> "$1"; } 2>/dev/null || rc=$?
+    _cs_mkdir_unlock "$lock"
+    return "$rc"
+}
+
+# A missing list is a no-op. Other lines stay as they are.
+cs_vault_holder_drop() {  # holders, pid
+    [ -f "$1" ] || return 0
+    local lock rc=0
+    lock=$(_cs_local_state_lock "$1")
+    cs_write_atomic "$1" awk -v pid="$2" '$0 != pid' "$1" || rc=$?
     _cs_mkdir_unlock "$lock"
     return "$rc"
 }
