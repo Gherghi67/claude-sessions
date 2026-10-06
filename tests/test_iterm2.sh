@@ -259,7 +259,7 @@ test_unlinkable_claude_still_launches() {
 test_non_native_claude_binaries_are_run_as_given() {
     _tab_launch_env 1
     local inst="$TEST_TMPDIR/inst" out bin
-    for bin in "$inst/own/claude" "$inst/versions/3.12.1/bin/claude" "$inst/versions/1x.2y.3z" "$inst/releases/1.2.3"; do
+    for bin in "$inst/own/claude" "$inst/versions/3.12.1/bin/claude" "$inst/versions/1x.2y.3z" "$inst/releases/1.2.3" "$inst/versions/1.2" "$inst/versions/1..2.3"; do
         mkdir -p "$(dirname "$bin")"
         cp "$inst/versions/9.9.9" "$bin"
         export CLAUDE_CODE_BIN="$bin --flag"
@@ -283,9 +283,9 @@ test_native_claude_with_flags_runs_the_link_with_its_flags() {
     [ ! -L "$argv0" ] || { echo "  FAIL: $argv0 is a symlink, its process name stays the version"; return 1; }
     assert_eq "--permission-mode plan --name flagged --session-id" \
         "$(_launched "$out" args | cut -d' ' -f1-5)" "the flags stay in front, in order" || return 1
-    export CLAUDE_CODE_BIN="$TEST_TMPDIR/inst/bin/claude	--permission-mode	plan"
+    export CLAUDE_CODE_BIN="  $TEST_TMPDIR/inst/bin/claude	--permission-mode	plan"
     out=$("$CS_BIN" tabbed <<< "" 2>&1) || true
-    assert_eq "claude" "$(basename "$(_launched "$out" argv0)")" "a tab separates the path from the flags too" || return 1
+    assert_eq "claude" "$(basename "$(_launched "$out" argv0)")" "leading spaces and a tab around the path are split like the launch splits them" || return 1
     assert_eq "--permission-mode plan --name tabbed" \
         "$(_launched "$out" args | cut -d' ' -f1-4)" "flags after a tab are kept" || return 1
 }
@@ -350,6 +350,20 @@ test_resume_that_might_not_land_keeps_cs_as_the_parent() {
     assert_output_contains "$(_launched "$out" parent)" "unsure" "an encrypted session: cs stays the parent" || return 1
 }
 
+# A CLAUDE_CODE_BIN with no command word cannot launch anything; the error
+# names the value rather than a missing dependency.
+test_claude_bin_without_a_command_is_refused_by_name() {
+    local out rc=0
+    out=$(CLAUDE_CODE_BIN="--permission-mode plan" "$CS_BIN" nocommand <<< "" 2>&1) || rc=$?
+    assert_eq "1" "$rc" "a flag-first CLAUDE_CODE_BIN fails" || return 1
+    assert_output_contains "$out" "CLAUDE_CODE_BIN must start with a command: '--permission-mode plan'" \
+        "the error names the value" || return 1
+    rc=0
+    out=$(CLAUDE_CODE_BIN="   " "$CS_BIN" blankcommand <<< "" 2>&1) || rc=$?
+    assert_eq "1" "$rc" "a blank CLAUDE_CODE_BIN fails" || return 1
+    assert_output_contains "$out" "CLAUDE_CODE_BIN must start with a command: '   '" "the blank value is named" || return 1
+}
+
 # An npm install resolves claude to a cli.js that loads files beside it; run
 # from a hard link elsewhere it would lose them. Only the native installer's
 # self-contained versions/<version> file is linked.
@@ -367,6 +381,7 @@ test_npm_shaped_claude_is_not_linked() {
 
 run_test test_launch_under_iterm_cc_shows_loader_and_icon
 run_test test_npm_shaped_claude_is_not_linked
+run_test test_claude_bin_without_a_command_is_refused_by_name
 run_test test_resume_of_a_real_conversation_runs_claude_in_place_of_cs
 run_test test_resume_that_might_not_land_keeps_cs_as_the_parent
 run_test test_native_claude_with_flags_runs_the_link_with_its_flags

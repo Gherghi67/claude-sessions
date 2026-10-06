@@ -164,10 +164,10 @@ session_is_live() {  # meta_dir
 
 # True when target_pid is this cs process or one of its live ancestors. A cs
 # launched from inside Claude is a descendant of the process recorded in the
-# session lock: fresh launches exec Claude in place, while resume launches keep
-# the lock-owning shell as Claude's parent. The bounded BSD/POSIX ps walk fails
-# closed on malformed output, disappearing processes, or an unexpectedly deep
-# chain. PID 1 can never be a cs lock owner.
+# session lock: Claude runs in place of cs on a fresh launch and on a resume
+# that is sure to land, and as a child of the lock-owning shell otherwise. The
+# bounded BSD/POSIX ps walk fails closed on malformed output, disappearing
+# processes, or an unexpectedly deep chain. PID 1 can never be a cs lock owner.
 _pid_is_self_or_ancestor() {  # target_pid
     local target="$1" current="$$" parent="" depth=0
     case "$target" in

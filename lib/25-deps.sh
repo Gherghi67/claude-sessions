@@ -17,7 +17,12 @@ _claude_bin_word() {
 check_dependencies() {
     local missing=()
 
-    command -v "$(_claude_bin_word)" >/dev/null 2>&1 || missing+=("claude-code")
+    local word
+    word=$(_claude_bin_word)
+    case "$word" in
+        ''|-*) error "CLAUDE_CODE_BIN must start with a command: '$CLAUDE_CODE_BIN'" ;;
+    esac
+    command -v "$word" >/dev/null 2>&1 || missing+=("claude-code")
 
     if [ ${#missing[@]} -gt 0 ]; then
         error "Missing required dependencies: ${missing[*]}"
