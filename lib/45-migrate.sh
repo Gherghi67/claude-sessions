@@ -773,6 +773,15 @@ _migration_stamp_state() {  # session_dir, actor_raw
             return 0
         fi
     done
+    # setup_merge_attributes sets merge.ours.driver in a checkout cs commits
+    # into, and the doctor's advice for a missing one is to launch once. Every
+    # `git config` write rewrites .git/config (SessionStart's hideRefs on each
+    # launch among them), so its modification time says nothing: read the value.
+    if [ -e "$1/.git" ] && [ "$(_read_local_state "$1/.cs/local/state" git_bookkeeping)" != "exclude" ] \
+        && [ "$(git -C "$1" config --get merge.ours.driver 2>/dev/null)" != "true" ]; then
+        echo "stale: merge.ours.driver is not set"
+        return 0
+    fi
     if [ "$1/.cs/memory/MEMORY.md" -nt "$stamp" ]; then
         echo "narrative"
         return 0

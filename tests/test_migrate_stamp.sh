@@ -25,7 +25,7 @@ _stamped_session() {  # name
 _age_session() {  # dir
     local dir="$1" p
     for p in .gitignore .gitattributes CLAUDE.local.md CLAUDE.md .cs/README.md \
-        .git/config .cs/memory/MEMORY.md .claude/settings.local.json; do
+        .cs/memory/MEMORY.md .claude/settings.local.json; do
         if [ -e "$dir/$p" ]; then
             touch -t 202401010000 "$dir/$p"
         fi
@@ -89,19 +89,40 @@ test_deleted_claude_local_md_is_regenerated() {
         "a CLAUDE.local.md deleted after the stamp is written again" || return 1
 }
 
-# The doctor's advice for a missing merge.ours.driver is to launch once, and
-# setup_merge_attributes writes it into .git/config: a .git/config changed
-# after the stamp sends the open through the migration.
+# The doctor's advice for a missing merge.ours.driver is to launch once. The
+# stamp check reads the value, since every `git config` write rewrites
+# .git/config: .git/config is left at its old time here, so only the value
+# can send the open through the migration.
 test_merge_driver_removed_after_the_stamp_is_restored() {
     local dir="$CS_SESSIONS_ROOT/driver"
     _stamped_session driver || return 1
     git -C "$dir" config --unset merge.ours.driver \
         || { echo "  FAIL: the fixture has no merge driver to remove"; return 1; }
     _age_session "$dir"
-    touch -t 202601010000 "$dir/.git/config"
+    touch -t 202401010000 "$dir/.git/config"
     _open driver > /dev/null || { echo "  FAIL: the reopen failed"; return 1; }
     assert_eq "true" "$(git -C "$dir" config --get merge.ours.driver)" \
         "a merge driver removed after the stamp is set again" || return 1
+}
+
+# A checkout cs hides itself in (git_bookkeeping: exclude) never gets the merge
+# driver, so its absence there must not send every open through the migration.
+test_excluded_bookkeeping_without_a_driver_stays_fresh() {
+    local dir="$CS_SESSIONS_ROOT/excluded"
+    _stamped_session excluded || return 1
+    printf 'git_bookkeeping: exclude\n' >> "$dir/.cs/local/state"
+    git -C "$dir" config --unset merge.ours.driver \
+        || { echo "  FAIL: the fixture has no merge driver to remove"; return 1; }
+    _drop_line "$dir/CLAUDE.local.md" "<!-- cs:memory-note -->"
+    _age_session "$dir"
+    _open excluded > /dev/null || { echo "  FAIL: the reopen failed"; return 1; }
+    assert_file_not_contains "$dir/CLAUDE.local.md" '<!-- cs:memory-note -->' \
+        "an excluded checkout without a driver keeps its fresh stamp" || return 1
+
+    rm "$dir/.cs/local/migrated"
+    _open excluded > /dev/null || { echo "  FAIL: the unstamped reopen failed"; return 1; }
+    assert_file_contains "$dir/CLAUDE.local.md" '<!-- cs:memory-note -->' \
+        "positive control: without the stamp the memory note is restored" || return 1
 }
 
 # Replace line 1 of a session's stamp, keeping line 2 (the probe list).
@@ -258,6 +279,7 @@ run_test test_fresh_stamp_skips_the_one_time_phases
 run_test test_gitignore_edited_after_the_stamp_is_repaired
 run_test test_deleted_claude_local_md_is_regenerated
 run_test test_merge_driver_removed_after_the_stamp_is_restored
+run_test test_excluded_bookkeeping_without_a_driver_stays_fresh
 run_test test_stamp_from_another_version_reruns_the_migration
 run_test test_another_actor_reruns_the_migration
 run_test test_session_encrypted_after_the_stamp_gains_the_protocol

@@ -289,7 +289,9 @@ A migration that finishes without a warning writes `.cs/local/migrated`, and
 the next open skips the one-time phases while that stamp still holds: same cs
 version, same actor, same encrypted state, every file it listed still there,
 and none of `.gitignore`, `.gitattributes`, `CLAUDE.local.md`, `CLAUDE.md` or
-`.cs/README.md` modified after it. When only `.cs/memory/MEMORY.md` changed,
+`.cs/README.md` modified after it, and `merge.ours.driver` still set in a
+checkout cs commits into (cs reads the value: git rewrites `.git/config` on
+every `git config` write). When only `.cs/memory/MEMORY.md` changed,
 the open re-checks the narrative pointer and nothing else. The refusals (a
 tracked `.cs/local/`, an unmounted vault), the transcript binding and the checks
 for leftovers from old layouts run on every open. `cs -doctor` reports the
