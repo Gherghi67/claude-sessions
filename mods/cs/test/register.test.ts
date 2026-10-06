@@ -1155,8 +1155,17 @@ test('/queue with a task runs cs -queue add with the task as one argument and sa
   const r = await queue('fix the flaky "rotate" test; then rerun it')
   expect(runs.map(x => x.argv)).toEqual([['/opt/cs/bin/cs', '-queue', 'add', 'fix the flaky "rotate" test; then rerun it']])
   expect(r).toEqual({ text: 'Queued: fix the flaky "rotate" test; then rerun it' })
+  expect(toasts).toEqual(['cs: queued: fix the flaky "rotate" test; then rerun it'])
   await settle()
   expect(asks).toEqual([])
+})
+
+// The toast is one line under the prompt; a long task is cut so it fits.
+test('/queue with a long task confirms it in a toast cut to 60 characters', async () => {
+  envVars.CS_BIN = '/opt/cs/bin/cs'
+  const task = 'a'.repeat(59) + 'bc' + ' tail'
+  await queue(`  ${task}  `)
+  expect(toasts).toEqual([`cs: queued: ${'a'.repeat(59)}b…`])
 })
 
 test('/queue with no task, or only spaces, prints cs -queue list', async () => {
@@ -1165,6 +1174,7 @@ test('/queue with no task, or only spaces, prints cs -queue list', async () => {
   expect(await queue('')).toEqual({ text: 'Pending:\n  1. first\n  2. second' })
   expect(await queue('   ')).toEqual({ text: 'Pending:\n  1. first\n  2. second' })
   expect(runs.map(x => x.argv)).toEqual([['/opt/cs/bin/cs', '-queue', 'list'], ['/opt/cs/bin/cs', '-queue', 'list']])
+  expect(toasts).toEqual([])
 })
 
 // The offer is made after the listing is back on screen, so the person reads
@@ -1321,6 +1331,7 @@ test('a refused add prints the exit code and cs\'s own stderr, verbatim', async 
   const r = await queue('one\ntwo')
   expect(runs[0].argv).toEqual(['/opt/cs/bin/cs', '-queue', 'add', 'one\ntwo'])
   expect(r).toEqual({ text: "cs -queue add exited 1.\nwarning: an earlier line\nError: task bodies must be a single line (the queue's done log and listing are line-oriented)" })
+  expect(toasts).toEqual([])
 })
 
 test('a run that cannot start says why', async () => {

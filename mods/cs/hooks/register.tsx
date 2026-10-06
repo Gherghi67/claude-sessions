@@ -147,6 +147,8 @@ export const WRAP_YES = 'Yes, wrap up'
 // a turn ends, so an idle session needs one turn to reach that first stop.
 export const QUEUE_START = 'Start'
 export const QUEUE_COMPACT = 'Compact'
+// How much of a queued task the confirmation toast shows.
+const TOAST_TASK_CHARS = 60
 export const QUEUE_KICK = 'The cs walk-away queue is started. Reply with one short line saying so, then stop: the cs Stop hook hands you each queued task in turn.'
 
 // The countdown: seconds left, its ticker, and what the band last saw. Module
@@ -217,7 +219,13 @@ export function register(on: On) {
       const tail = result.stderr.split('\n').filter(l => l.trim() !== '').slice(-5).join('\n')
       return { text: tail === '' ? `${what} exited ${result.exitCode}.` : `${what} exited ${result.exitCode}.\n${tail}` }
     }
-    if (task !== '') return { text: `Queued: ${task}` }
+    if (task !== '') {
+      // The command's text lands in the transcript, which a running turn
+      // scrolls past; the toast under the prompt confirms the add where the
+      // person is looking. One line, so a long task is cut.
+      $.ui.toast(`cs: queued: ${task.length > TOAST_TASK_CHARS ? `${task.slice(0, TOAST_TASK_CHARS)}…` : task}`)
+      return { text: `Queued: ${task}` }
+    }
     const pending = /^Pending \((\d+)\)$/m.exec(result.stdout)
     if (pending && !(await queueRunning($))) void offerToStart($, bin, Number(pending[1]))
     return { text: result.stdout.trimEnd() }

@@ -359,7 +359,9 @@ runs `cs -queue start` / `cs -queue defer` on your behalf — you don't
 need to run those directly.)
 
 Inside a cs session, `/queue <task>` does the same as `cs -queue add` without
-leaving Claude Code, and runs at once even while Claude is mid-turn; `/queue`
+leaving Claude Code, and runs at once even while Claude is mid-turn. A toast
+under the prompt confirms each add (`cs: queued: <task>`, cut at 60
+characters). `/queue`
 alone prints `cs -queue list` and, when tasks are pending and the queue is not
 already running, asks whether to start them. Start arms the queue (and starts
 a turn if Claude is idle, so the first task arrives); Not yet waits, as the
