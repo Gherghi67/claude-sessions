@@ -6,7 +6,7 @@ import { test, expect, beforeEach } from 'bun:test'
 ;(globalThis as any).h = (type: any, props: any, ...children: any[]) => ({ type, props: props ?? {}, children })
 ;(globalThis as any).Fragment = 'Fragment'
 
-import { register, DEFAULT_PERCENT, GRACE_SECONDS, PREVIEW_PANE, WRAP_QUESTION, WRAP_YES, QUEUE_START, QUEUE_COMPACT, QUEUE_KICK, MARKDOWN_LIMIT, nextStep, surfaceColor, isUnconsumed } from '../hooks/register.tsx'
+import { register, DEFAULT_PERCENT, GRACE_SECONDS, PREVIEW_PANE, WRAP_QUESTION, WRAP_YES, QUEUE_START, QUEUE_COMPACT, QUEUE_KICK, QUEUE_MODE_QUESTION, QUEUE_HERE, QUEUE_SUBAGENTS, QUEUE_WORKFLOWS, MARKDOWN_LIMIT, nextStep, surfaceColor, isUnconsumed } from '../hooks/register.tsx'
 
 type Hook = ($: any, e: any, next: (e: any) => Promise<any>) => Promise<any>
 const hooks: Record<string, Hook> = {}
@@ -32,6 +32,8 @@ let asks: { question: string; options: any }[]
 let panes: { op: 'open' | 'close'; args: any }[]
 // What the person does with the next dialog: a label, or a rejection (dismissed, or a `-p` run).
 let answer: string | Error
+// What the person answers to the queue's "how should the tasks run" question.
+let modeAnswer: string | Error
 // What `$.process.run` was asked to run, and what it answers with (or rejects with).
 let runs: { argv: string[]; init: any }[]
 let runResult: { exitCode: number; stdout: string; stderr: string } | Error
@@ -84,8 +86,9 @@ const $ = {
     close: async (args: any) => { panes.push({ op: 'close', args }) },
     ask: async (question: string, options: any) => {
       asks.push({ question, options })
-      if (answer instanceof Error) throw answer
-      return answer
+      const reply = question === QUEUE_MODE_QUESTION ? modeAnswer : answer
+      if (reply instanceof Error) throw reply
+      return reply
     },
   },
   clock: { after: timer('after'), every: timer('every') },
@@ -110,7 +113,7 @@ const findButton = (tree: any) => buttons(tree)[0]
 beforeEach(() => {
   for (const k of Object.keys(hooks)) delete hooks[k]
   percent = undefined; filled = []; ran = []; written = {}; existing = new Set(['/work/.cs/local'])
-  timers = []; invalidated = []; toasts = []; asks = []; answer = WRAP_YES; panes = []
+  timers = []; invalidated = []; toasts = []; asks = []; answer = WRAP_YES; modeAnswer = QUEUE_HERE; panes = []
   runs = []; runResult = { exitCode: 0, stdout: '', stderr: '' }; nextRuns = []; submitted = []; commands = []
   compactedAt = []; compactResult = { messages: [] }
   // The default fixture is the lead conversation of a cs session.
@@ -1178,9 +1181,64 @@ test('/queue with pending tasks offers to start them; Start while idle arms the 
   answer = QUEUE_START
   expect(await queue('')).toEqual({ text: 'Pending (2)\n  1. first\n  2. second\n\nDone (1)\n  - shipped' })
   await settle()
-  expect(asks).toEqual([{ question: 'Start the 2 queued tasks now?', options: { header: 'Queue', options: [QUEUE_START, 'Not yet', QUEUE_COMPACT] } }])
+  expect(asks).toEqual([
+    { question: 'Start the 2 queued tasks now?', options: { header: 'Queue', options: [QUEUE_START, 'Not yet', QUEUE_COMPACT] } },
+    { question: QUEUE_MODE_QUESTION, options: { header: 'Queue', options: [QUEUE_HERE, QUEUE_SUBAGENTS, QUEUE_WORKFLOWS] } },
+  ])
   expect(runs.map(x => x.argv)).toEqual([['/opt/cs/bin/cs', '-queue', 'list'], ['/opt/cs/bin/cs', '-queue', 'start']])
   expect(submitted).toEqual([{ text: QUEUE_KICK }])
+})
+
+// Start also asks how the tasks run: here, each in a subagent, or each as a
+// workflow; the answer rides on cs -queue start.
+test('Start then In subagents or As workflows arms the queue in that mode', async () => {
+  envVars.CS_BIN = '/opt/cs/bin/cs'
+  runResult = LISTED
+  answer = QUEUE_START
+  modeAnswer = QUEUE_SUBAGENTS
+  await queue('')
+  await settle()
+  modeAnswer = QUEUE_WORKFLOWS
+  await queue('')
+  await settle()
+  expect(runs.map(x => x.argv.slice(1))).toEqual([['-queue', 'list'], ['-queue', 'start', 'subagents'], ['-queue', 'list'], ['-queue', 'start', 'workflow']])
+})
+
+test('Not yet asks nothing more', async () => {
+  envVars.CS_BIN = '/opt/cs/bin/cs'
+  runResult = LISTED
+  answer = 'Not yet'
+  await queue('')
+  await settle()
+  expect(asks.map(a => a.question)).toEqual(['Start the 2 queued tasks now?'])
+})
+
+// A dismissed second question starts nothing and compacts nothing, as a
+// dismissed first one does.
+test('a dismissed mode question starts nothing', async () => {
+  envVars.CS_BIN = '/opt/cs/bin/cs'
+  runResult = LISTED
+  modeAnswer = new Error('dismissed')
+  for (const a of [QUEUE_START, QUEUE_COMPACT]) {
+    answer = a
+    await queue('')
+    await settle()
+  }
+  expect(runs.map(x => x.argv[2])).toEqual(['list', 'list'])
+  expect(compactedAt).toEqual([])
+  expect(submitted).toEqual([])
+})
+
+test('Compact asks the mode before compacting, then starts in it', async () => {
+  envVars.CS_BIN = '/opt/cs/bin/cs'
+  runResult = LISTED
+  answer = QUEUE_COMPACT
+  modeAnswer = QUEUE_WORKFLOWS
+  await queue('')
+  await settle()
+  expect(asks.map(a => a.question)).toEqual(['Start the 2 queued tasks now?', QUEUE_MODE_QUESTION])
+  expect(compactedAt).toEqual([1])
+  expect(runs.map(x => x.argv.slice(1))).toEqual([['-queue', 'list'], ['-queue', 'start', 'workflow']])
 })
 
 // A turn already running reaches a stop on its own, where the Stop hook hands
