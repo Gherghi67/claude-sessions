@@ -1,5 +1,5 @@
 // ABOUTME: Unit tests for the cs mod against a fake engine `$`.
-// ABOUTME: Covers the band's gate (crit, working, survey), the three presses and the wrap key's two-press guard, the armed handoff, the heartbeat, and /queue.
+// ABOUTME: Covers the band's gate (crit, working, survey), the three presses and the wrap key's two-press guard, the armed handoff, the heartbeat, /queue, and the /finish toasts and gate band.
 import { test, expect, beforeEach } from 'bun:test'
 
 // The plugin realm provides `h` and `Fragment` as globals; the test does the same.
@@ -1528,7 +1528,7 @@ test('a gate whose pid is dead, or a record past its gate, draws no band', async
   expect(await band({ isWorking: true })).toBe(DRAWN)
 })
 
-test('with the rotation keys up, the gate band draws beneath them and both keys stay', async () => {
+test('with the rotation keys up, the gate band draws above them and both keys stay', async () => {
   livePids.add('4242')
   nowMs = NOW * 1000
   percent = 40
@@ -1537,7 +1537,9 @@ test('with the rotation keys up, the gate band draws beneath them and both keys 
   await watchTick()
   const tree = await band()
   expect(buttons(tree)).toHaveLength(2)
-  expect(JSON.stringify(tree)).toContain('finishing fix-auth · gate 3s')
+  const json = JSON.stringify(tree)
+  expect(json.indexOf('finishing fix-auth · gate 3s')).toBeGreaterThan(json.indexOf('"Survey"'))
+  expect(json.indexOf('finishing fix-auth · gate 3s')).toBeLessThan(json.indexOf('rotate this conversation'))
 })
 
 test('the watch ends once the turn is over and nothing runs, and not while a step still runs', async () => {
