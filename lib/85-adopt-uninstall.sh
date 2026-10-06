@@ -408,6 +408,48 @@ adopt_worktrees() {  # [--dry-run]
     [ "$dry_run" = 1 ] || echo -e "${DIM}$adopted adopted; open one with: cs $repo_name.<worktree>${NC}"
 }
 
+# Take back the Option+1 / Option+2 bindings the installer added, only where a
+# key still holds cs's value: a key bound to anything else is the user's. A
+# Global block left empty by that goes, and so does a file left as exactly
+# {"bindings":[]}, unless it is a symlink, whose target is written through
+# instead so a dotfiles manager's copy does not keep cs's keys. The recorded
+# answer goes too, so a later install asks again.
+_uninstall_option_keys() {
+    local file stripped
+    file="$(_cs_keybindings_file)"
+    rm -f "$(_cs_option_keys_answer_file)"
+    [ -e "$file" ] || return 0
+    if ! command -v jq >/dev/null 2>&1; then
+        warn "jq not found - cannot remove cs's Option+1/Option+2 bindings from $file"
+        return 0
+    fi
+    if ! _cs_keybindings_shape_ok "$file"; then
+        warn "Left $file as it is: not JSON with a \"bindings\" array"
+        return 0
+    fi
+    jq -e --argjson cs "$CS_OPTION_KEYS" \
+        'any(.bindings[] | (.bindings // {}) | to_entries[]; . as $e | $cs | has($e.key) and .[$e.key] == $e.value)' \
+        "$file" > /dev/null 2>&1 || return 0
+    stripped=$(jq -c --argjson cs "$CS_OPTION_KEYS" '
+        def ours: . as $e | $cs | has($e.key) and .[$e.key] == $e.value;
+        .bindings |= map(
+            if any((.bindings // {}) | to_entries[]; ours) then
+                .bindings |= with_entries(select(ours | not))
+                | select(.bindings != {} or .context != "Global")
+            else . end)' "$file") || {
+        warn "Could not read $file; its Option+1/Option+2 bindings were left in place"
+        return 0
+    }
+    if [ "$stripped" = '{"bindings":[]}' ] && [ ! -L "$file" ]; then
+        rm -f "$file"
+        info "Removed $file"
+    elif cs_write_atomic "$file" jq . <<< "$stripped"; then
+        info "Removed cs's Option+1/Option+2 bindings from $file"
+    else
+        warn "Could not write $file; its Option+1/Option+2 bindings were left in place"
+    fi
+}
+
 # Uninstall cs and all components
 run_uninstall() {
     local install_dir="$HOME/.local/bin"
@@ -439,6 +481,7 @@ run_uninstall() {
     echo "  - Shell completions"
     echo "  - Update-check cache in $update_cache_dir/"
     echo "  - Hook entries in $settings_file"
+    echo "  - cs's Option+1/Option+2 bindings in $(_cs_keybindings_file)"
     echo ""
     read -p "Continue with uninstall? [y/N] " -n 1 -r
     echo ""
@@ -605,6 +648,8 @@ run_uninstall() {
         warn "jq not found - cannot clean up $settings_file automatically"
         warn "Manually remove cs hook entries from $settings_file"
     fi
+
+    _uninstall_option_keys
 
     # Ask about secrets in keychain
     if [ -d "$SESSIONS_ROOT" ]; then

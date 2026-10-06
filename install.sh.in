@@ -797,6 +797,97 @@ else
     fi
 
     echo "$SETTINGS" > "$CLAUDE_SETTINGS"
+
+    # Add cs's keys that nothing binds yet to keybindings.json: into its first
+    # Global block, or a Global block of their own, creating the file when
+    # there is none. A key bound to anything else, in any context, is the
+    # user's and is reported, never replaced. A file of a shape cs cannot read
+    # is refused before anything is written. The write is cs_write_atomic's,
+    # from the hooks' shared library deployed above: mode kept, and a
+    # symlinked file (a dotfiles manager's) rewritten through its link.
+    _bind_option_keys() {
+        local file doc status state key action added=""
+        file="$(_cs_keybindings_file)"
+        if [ -e "$file" ]; then
+            if ! _cs_keybindings_shape_ok "$file"; then
+                warn "Option keys: $file is not JSON with a \"bindings\" array; left as it is. Fix it, then run cs -update."
+                return 1
+            fi
+            doc=$(cat "$file") || { warn "Option keys: could not read $file"; return 1; }
+        else
+            doc='{"bindings":[]}'
+        fi
+        status=$(printf '%s\n' "$doc" | _cs_option_keys_status) \
+            || { warn "Option keys: could not read the bindings in $file"; return 1; }
+        while IFS=$'\t' read -r state key action; do
+            case "$state" in
+                conflict) warn "Option keys: $key is already bound to $action in $file; left as it is." ;;
+                free) added="$added $key" ;;
+            esac
+        done <<< "$status"
+        [ -n "$added" ] || return 0
+        # shellcheck source=hooks/cs-shared.sh
+        if ! . "$HOOKS_DIR/cs-shared.sh"; then
+            warn "Option keys: could not load $HOOKS_DIR/cs-shared.sh; $file left as it is."
+            return 1
+        fi
+        mkdir -p "$(dirname "$file")" 2>/dev/null || true
+        if ! printf '%s\n' "$doc" | cs_write_atomic "$file" jq --argjson cs "$CS_OPTION_KEYS" '
+            [.bindings[] | (.bindings // {}) | keys[]] as $used
+            | ($cs | with_entries(select(.key as $k | any($used[]; . == $k) | not))) as $add
+            | (first(.bindings | to_entries[] | select(.value.context == "Global") | .key) // null) as $i
+            | if $i == null then .bindings += [{context: "Global", bindings: $add}]
+              else .bindings[$i].bindings = ((.bindings[$i].bindings // {}) + $add) end'; then
+            warn "Option keys: could not write $file"
+            return 1
+        fi
+        info "Option keys: bound${added} in $file"
+    }
+
+    # Option+1 runs /rotate and Option+2 runs /wrap, through Claude Code's own
+    # keybindings.json. Keys are the user's keyboard, so they are offered once
+    # per machine and the answer is recorded: a yes is honoured on every
+    # install (keys already bound are left as they are), a no is never asked
+    # again, and with no terminal nothing is written or recorded. Every step
+    # reports and carries on; a keybinding must never take the install down.
+    _option_keys_answer_file="$(_cs_option_keys_answer_file)"
+    _option_keys_answer=$(cat "$_option_keys_answer_file" 2>/dev/null) || _option_keys_answer=""
+    case "$_option_keys_answer" in
+        yes) ;;
+        no)
+            info "Option keys: not bound (declined earlier). To be asked again, remove $_option_keys_answer_file and run cs -update."
+            ;;
+        *)
+            _option_keys_answer=""
+            if [ -t 0 ]; then
+                # An explicit y or n only: the status-line questions above read
+                # one key, so an Enter typed after one of them is still queued
+                # and would answer this one. EOF leaves it unanswered.
+                while :; do
+                    echo -en "Bind Option+1 to /rotate and Option+2 to /wrap in Claude Code? [y/n] "
+                    if ! read -n 1 -r; then echo ""; break; fi
+                    echo ""
+                    case "$REPLY" in
+                        [Yy]) _option_keys_answer=yes; break ;;
+                        [Nn]) _option_keys_answer=no; break ;;
+                    esac
+                done
+                if [ -z "$_option_keys_answer" ]; then
+                    info "Option keys: left unanswered; the next install asks again."
+                elif ! { mkdir -p "$(dirname "$_option_keys_answer_file")" \
+                        && printf '%s\n' "$_option_keys_answer" > "$_option_keys_answer_file"; } 2>/dev/null; then
+                    warn "Option keys: the answer could not be recorded in $_option_keys_answer_file, so the next install asks again."
+                elif [ "$_option_keys_answer" = no ]; then
+                    info "Option keys: not bound. You won't be asked again; to change that, remove $_option_keys_answer_file and run cs -update."
+                fi
+            else
+                info "Option keys: not bound. To bind Option+1 to /rotate and Option+2 to /wrap, run cs -update in a terminal."
+            fi
+            ;;
+    esac
+    if [ "$_option_keys_answer" = yes ]; then
+        _bind_option_keys || true
+    fi
 fi
 
 # Check if ~/.local/bin is in PATH

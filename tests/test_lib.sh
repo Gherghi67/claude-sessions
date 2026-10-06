@@ -17,7 +17,10 @@ set -euo pipefail
 # The two conversation ids go too: doctor judges the shadow ref of whichever id
 # it inherits, so a suite run inside a live conversation would check that
 # conversation's ref instead of the state the test set up.
-unset CLAUDE_PROJECT_DIR CS_ACTOR CLAUDE_CODE_SESSION_ID CS_CLAUDE_SESSION_ID 2>/dev/null || true
+# CLAUDE_CONFIG_DIR goes because it outranks HOME: an install or uninstall
+# under a fake HOME would still read and write the keybindings.json of the
+# config dir the suite was started from.
+unset CLAUDE_PROJECT_DIR CS_ACTOR CLAUDE_CODE_SESSION_ID CS_CLAUDE_SESSION_ID CLAUDE_CONFIG_DIR 2>/dev/null || true
 
 # --- State ---
 TESTS_RUN=0

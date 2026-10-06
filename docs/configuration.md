@@ -248,6 +248,44 @@ export CS_TMUX_BIN="/opt/homebrew/bin/tmux"
 export CS_PLATFORM_OVERRIDE="linux"   # macos, wsl, or linux
 ```
 
+## Option-key bindings
+
+The installer offers, once per machine, to bind two keys in Claude Code's
+`keybindings.json` (in `$CLAUDE_CONFIG_DIR` when you set it, otherwise
+`~/.claude/keybindings.json`). Run inside an encrypted session, where
+`CLAUDE_CONFIG_DIR` is the session's `.cs/claude-config`, cs writes the shell's
+file instead, the one that session links:
+
+```json
+{"bindings": [{"context": "Global", "bindings": {"alt+1": "command:rotate", "alt+2": "command:wrap"}}]}
+```
+
+Option+1 then submits `/rotate` and Option+2 submits `/wrap`. The terminal has
+to send Option as Meta for the key to arrive as `alt+1`: in iTerm2, set the
+profile's Option key to Esc+; in Terminal.app, turn on "Use Option as Meta key".
+
+- A yes merges the two keys into the file's first `Global` block (or adds one,
+  creating the file when there is none). cs never replaces a key you already
+  bind to something else, in any context: it keeps your action and names the
+  key in a warning. cs refuses a file that is not JSON with a `bindings` array
+  and leaves it untouched.
+- The installer records the answer in `~/.config/cs/option-keys` (`yes` or
+  `no`; `$XDG_CONFIG_HOME/cs/option-keys` when you set that). After a `no` it
+  never asks again. After a `yes`, every install and `cs -update` adds back
+  either key if nothing binds it.
+- With no terminal attached (CI, a pipe) the installer asks nothing, writes
+  nothing and records nothing; it prints one line saying to run `cs -update` in
+  a terminal.
+- To change the answer, remove `~/.config/cs/option-keys` and run `cs -update`
+  (or `./install.sh`) in a terminal; it asks again. To drop the keys after a
+  `yes`, answer `no` there and delete the two entries from `keybindings.json`.
+- `cs -uninstall` removes only the keys that still hold cs's values, drops a
+  `Global` block that leaves empty, deletes the file when it holds nothing else
+  (a symlinked file keeps its link and gets `{"bindings": []}` written through
+  it), and removes the recorded answer.
+- `cs -doctor` reports one row: bound, declined, not asked, a conflict on
+  `alt+1` or `alt+2`, or an unparseable file.
+
 ## In-session switches
 
 The release-notes pane is a Claude Code `/config` row, `cs-update.showReleaseNotes`

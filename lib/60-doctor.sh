@@ -517,6 +517,55 @@ _doctor_check_statusline() {
     esac
 }
 
+# The Option+1 / Option+2 bindings the installer offers: the answer this
+# machine gave, and whether keybindings.json still holds cs's keys. Not asked
+# and declined are healthy; a key the user binds to something else, a yes whose
+# keys are gone, and a file Claude Code cannot read either are warnings.
+_doctor_check_option_keys() {
+    local file answer_file answer status state key action bound=0 total=0
+    file="$(_cs_keybindings_file)"
+    answer_file="$(_cs_option_keys_answer_file)"
+    if ! command -v jq >/dev/null 2>&1; then
+        _doctor_warn "Option keys: jq not installed; $file could not be read"
+        return
+    fi
+    if [ -e "$file" ] && ! _cs_keybindings_shape_ok "$file"; then
+        _doctor_warn "Option keys: $file is unparseable (not JSON with a \"bindings\" array)"
+        return
+    fi
+    if [ -e "$file" ]; then
+        status=$(_cs_option_keys_status < "$file") || status=""
+    else
+        status=$(printf '{"bindings":[]}\n' | _cs_option_keys_status) || status=""
+    fi
+    while IFS=$'\t' read -r state key action; do
+        [ -n "$state" ] || continue
+        total=$((total + 1))
+        if [ "$state" = bound ]; then bound=$((bound + 1)); fi
+    done <<< "$status"
+    if [ "$total" -gt 0 ] && [ "$bound" = "$total" ]; then
+        _doctor_ok "Option keys: bound (Option+1 runs /rotate, Option+2 runs /wrap)"
+        return
+    fi
+    answer=$(cat "$answer_file" 2>/dev/null) || answer=""
+    case "$answer" in
+        yes)
+            while IFS=$'\t' read -r state key action; do
+                case "$state" in
+                    conflict) _doctor_warn "Option keys: conflict on $key (bound to $action in $file)" ;;
+                    free) _doctor_warn "Option keys: $key not bound (run cs -update to bind it)" ;;
+                esac
+            done <<< "$status"
+            ;;
+        no)
+            _doctor_ok "Option keys: declined (to be asked again, remove $answer_file and run cs -update in a terminal)"
+            ;;
+        *)
+            _doctor_ok "Option keys: not asked (run cs -update in a terminal to be asked)"
+            ;;
+    esac
+}
+
 _doctor_check_subagent_statusline() {
     local claude_dir="${CS_CLAUDE_DIR:-$HOME/.claude}"
     local settings="$claude_dir/settings.json"
@@ -770,6 +819,7 @@ run_doctor() {
     _doctor_check_claude_audit
     _doctor_check_statusline
     _doctor_check_subagent_statusline
+    _doctor_check_option_keys
     _doctor_check_iterm2
     _doctor_check_spawn
     _doctor_check_hook_authority
