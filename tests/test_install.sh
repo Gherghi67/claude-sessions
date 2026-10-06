@@ -41,7 +41,7 @@ spawn env HOME=$fake_home bash $INSTALL_SH
 expect {
     -re {status line.*\[y/N\]} { send "n\r"; exp_continue }
     -re {status line.*\[Y/n\]} { send "n\r"; exp_continue }
-    -re {Option\+1.*\[y/n\]} { send "n"; exp_continue }
+    -re {Ctrl\+X R.*\[y/n\]} { send "n"; exp_continue }
     eof
 }
 catch wait result
@@ -78,7 +78,7 @@ log_file -noappend $out
 spawn env HOME=$fake_home bash $INSTALL_SH
 expect {
     -re {status line.*\[y/N\]} { send "n\r"; exp_continue }
-    -re {Option\+1.*\[y/n\]} { send "n"; exp_continue }
+    -re {Ctrl\+X R.*\[y/n\]} { send "n"; exp_continue }
     eof
 }
 EXPECT
@@ -116,7 +116,7 @@ spawn env HOME=$fake_home bash $INSTALL_SH
 expect {
     -re {status line.*\[Y/n\]} { send "n\r"; exp_continue }
     -re {Complete|complete} { exp_continue }
-    -re {Option\+1.*\[y/n\]} { send "n"; exp_continue }
+    -re {Ctrl\+X R.*\[y/n\]} { send "n"; exp_continue }
     eof
 }
 EXPECT
@@ -204,7 +204,7 @@ set timeout 120
 spawn env HOME=$fake_home bash $INSTALL_SH
 expect {
     -re {status line.*\[y/N\]} { send "$ans\r"; exp_continue }
-    -re {Option\+1.*\[y/n\]} { send "n"; exp_continue }
+    -re {Ctrl\+X R.*\[y/n\]} { send "n"; exp_continue }
     -re {Complete|complete} { exp_continue }
     eof
 }
