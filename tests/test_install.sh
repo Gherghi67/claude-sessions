@@ -1793,13 +1793,14 @@ test_option_keys_migration_keeps_a_users_alt_key() {
 
 # 14. Claude Code waits for a chord's second key once its first is pressed, so
 # binding ctrl+x r would silence a user's own bare ctrl+x. That counts as a
-# conflict for both chords: the file is left as it is and each is named.
+# conflict for both chords: the file is left as it is, each is named, and
+# cs's Option+1 / Option+2 stay, as the only rotate and wrap keys there are.
 test_option_keys_never_shadow_a_users_ctrl_x() {
     local home="$TEST_TMPDIR/home-ok-prefix" kb
     kb="$home/.claude/keybindings.json"
     mkdir -p "$home/.claude" "$home/.config/cs"
     printf 'yes\n' > "$home/.config/cs/option-keys"
-    printf '%s\n' '{"bindings":[{"context":"Chat","bindings":{"ctrl+x":"chat:externalEditor"}}]}' > "$kb"
+    printf '%s\n' '{"bindings":[{"context":"Chat","bindings":{"ctrl+x":"chat:externalEditor"}},{"context":"Global","bindings":{"alt+1":"command:rotate","alt+2":"command:wrap"}}]}' > "$kb"
     cp "$kb" "$TEST_TMPDIR/prefix.orig"
     env -u CLAUDE_CONFIG_DIR -u XDG_CONFIG_HOME HOME="$home" bash "$INSTALL_SH" \
         < /dev/null > "$TEST_TMPDIR/ok-prefix.out" 2>&1 \
