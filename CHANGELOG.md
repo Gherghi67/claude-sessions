@@ -12,6 +12,9 @@ All notable changes to cs are documented here. Release notes are also available 
 ### Changed
 - `/queue <task>` confirms the add in a toast under the prompt, `cs: queued: <task>` (cut at 60 characters). The command's own line lands in the transcript, and a running turn scrolls it out of view.
 
+### Performance
+- Reopening a session no longer re-runs every one-time migration check. A migration that finishes without a warning writes `.cs/local/migrated`, and the next open skips the `.gitignore` and `.gitattributes` backfills and the `CLAUDE.md`, `CLAUDE.local.md` and README phases while the stamp holds: same cs version, same actor, same encryption, no checked file deleted, and none of `.gitignore`, `.gitattributes`, `CLAUDE.local.md`, `CLAUDE.md` or `.cs/README.md` edited since. A newer `MEMORY.md` re-runs only the narrative check. On a loaded Mac a reopen went from 1.27 s to 0.56 s (median of 8), and from 54 external commands to 13. cs reads `.cs/local/state` with shell builtins instead of one `awk` per key. `cs -doctor` reports the stamp, and `rm .cs/local/migrated` forces the full migration on the next open.
+
 ### Fixes
 - Every launch asked GitHub for the latest cs version, about 0.4 s and up to 4 s on a slow network. cs used its hourly cache only when it named a newer version, so when you were up to date, the usual case, cs asked again each time. A fresh cache now answers either way.
 - `/finish` ran the project's gate in a temporary checkout inside the base's `.git` directory (`.git/cs/finish/`), and tools refuse files under a `.git` directory. Vite's default `server.fs.deny` holds `**/.git/**`, so a vitest browser suite never connected and the gate failed every time. The checkout now lives under `$TMPDIR` (`cs-finish-<task>.XXXXXX`) and cs removes it the same way when the gate ends.
