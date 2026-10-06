@@ -13,7 +13,7 @@ const hooks: Record<string, Hook> = {}
 const on = (event: string, a: any, b?: any) => {
   const matcher = b ? a : undefined
   const fn: Hook = b ?? a
-  const narrowed = matcher?.component ?? matcher?.command
+  const narrowed = matcher?.component ?? matcher?.command ?? matcher?.skill
   hooks[narrowed ? `${event}:${narrowed}` : event] = fn
 }
 
@@ -45,6 +45,9 @@ let submitted: any[]
 let compactedAt: number[]
 let compactResult: any
 let commands: any[]
+// The clock `$.clock.now` reads, and the pids `kill -0` finds alive.
+let nowMs: number
+let livePids: Set<string>
 const timer = (kind: 'after' | 'every') => (ms: number, fn: () => void) => {
   const t = { ms, fn, kind, cancelled: false }
   timers.push(t)
@@ -72,6 +75,7 @@ const $ = {
   },
   process: {
     run: async (argv: string[], init: any) => {
+      if (argv[0] === 'kill' && argv[1] === '-0') return { exitCode: livePids.has(argv[2]) ? 0 : 1, stdout: '', stderr: '' }
       runs.push({ argv, init })
       const r = nextRuns.length > 0 ? nextRuns.shift()! : runResult
       if (r instanceof Error) throw r
@@ -91,7 +95,7 @@ const $ = {
       return reply
     },
   },
-  clock: { after: timer('after'), every: timer('every') },
+  clock: { after: timer('after'), every: timer('every'), now: async () => nowMs },
   fs: {
     write: async (path: string, text: string) => { written[path] = text; files[path] = text },
     exists: async (path: string) => existing.has(path) || path in files,
@@ -116,6 +120,7 @@ beforeEach(() => {
   timers = []; invalidated = []; toasts = []; asks = []; answer = WRAP_YES; modeAnswer = QUEUE_HERE; panes = []
   runs = []; runResult = { exitCode: 0, stdout: '', stderr: '' }; nextRuns = []; submitted = []; commands = []
   compactedAt = []; compactResult = { messages: [] }
+  nowMs = 1_800_000_000_000; livePids = new Set()
   // The default fixture is the lead conversation of a cs session.
   sessionId = 'uuid-lead'
   envVars = {}
@@ -1414,4 +1419,140 @@ test('without CS_BIN /queue says the launch did not say where cs is, and runs no
   const r = await queue('something')
   expect(runs).toHaveLength(0)
   expect(r).toEqual({ text: 'The launch did not say where cs is (CS_BIN); run `cs -queue add "<task>"` from a shell in this session.' })
+})
+
+// /finish progress: cs writes one record per step while it integrates and
+// retires; the mod reads it on a one-second watch that /finish starts.
+const RECORD = '/work/.cs/local/finish-progress.json'
+const SHA = '1234567' + 'f'.repeat(33)
+const RESULT = '89abcde' + '0'.repeat(33)
+const NOW = 1_800_000_000
+const record = (r: any, path = RECORD) => { files[path] = JSON.stringify(r) }
+const running = (step: string, extra: any = {}) => ({ id: '4242-1799999990', pid: 4242, task: 'fix-auth', sha: SHA, step, ts: NOW, ...extra })
+const startFinish = () => hooks['skill.prompt:finish']($, { skill: 'finish', text: 'land it' }, async (e: any) => ({ text: e.text }))
+const watches = () => timers.filter(t => t.kind === 'every' && t.ms === 1000)
+const watchTick = async () => {
+  const live = watches().filter(t => !t.cancelled)
+  expect(live).toHaveLength(1)
+  await live[0].fn()
+}
+
+test('/finish starts one watch, passes its prompt through, and never toasts the outcome of an earlier run', async () => {
+  record({ id: '100-1', pid: 100, task: 'old-task', sha: SHA, step: 'landed', result: RESULT, ts: 1 })
+  expect(await startFinish()).toEqual({ text: 'land it' })
+  await startFinish()
+  expect(watches()).toHaveLength(1)
+  await watchTick()
+  expect(toasts).toEqual([])
+})
+
+test('a /finish that starts toasts its task once, however many steps follow', async () => {
+  livePids.add('4242')
+  await startFinish()
+  record(running('started'))
+  await watchTick()
+  record(running('merging'))
+  await watchTick()
+  record(running('fast-forward'))
+  await watchTick()
+  expect(toasts).toEqual(['cs: finishing fix-auth'])
+})
+
+test('each outcome toasts once, in its own words, and not again on the next tick', async () => {
+  await startFinish()
+  record(running('landed', { result: RESULT }))
+  await watchTick()
+  await watchTick()
+  record({ id: '5151-1800000001', pid: 5151, task: 'fix-auth', sha: SHA, step: 'refused', reason: 'Base /work moved during the gates (was abc, now def); re-run /finish fix-auth', ts: NOW })
+  await watchTick()
+  await watchTick()
+  record({ id: '6161-1800000002', pid: 6161, task: 'fix-auth', sha: SHA, step: 'retired', ts: NOW })
+  await watchTick()
+  await watchTick()
+  expect(toasts).toEqual([
+    'cs: landed fix-auth 1234567 -> 89abcde',
+    'cs: /finish fix-auth refused: Base /work moved during the gates (was abc, now def); re-run /finish fix-auth',
+    'cs: retired fix-auth',
+  ])
+})
+
+test('a long task is cut in the toast as /queue cuts it', async () => {
+  livePids.add('4242')
+  await startFinish()
+  record(running('started', { task: 'a'.repeat(59) + 'bc tail' }))
+  await watchTick()
+  expect(toasts).toEqual([`cs: finishing ${'a'.repeat(59)}b…`])
+})
+
+test('an encrypted session\'s record is read behind .cs/private', async () => {
+  await startFinish()
+  record({ id: '6161-1800000002', pid: 6161, task: 'fix-auth', sha: SHA, step: 'retired', ts: NOW }, '/work/.cs/private/finish-progress.json')
+  await watchTick()
+  expect(toasts).toEqual(['cs: retired fix-auth'])
+})
+
+test('while a gate runs under a live pid the band shows the task and the time since the gate started, even mid-turn', async () => {
+  livePids.add('4242')
+  nowMs = NOW * 1000
+  await startFinish()
+  record(running('gate', { gate_started: NOW - 75 }))
+  await watchTick()
+  expect(invalidated).toContain('ui.render')
+  const tree = JSON.stringify(await band({ isWorking: true }))
+  expect(tree).toContain('"Survey"')
+  expect(tree).toContain('finishing fix-auth · gate 1m 15s')
+  nowMs += 10_000
+  expect(JSON.stringify(await band({ isWorking: true }))).toContain('finishing fix-auth · gate 1m 25s')
+  nowMs = (NOW - 75 + 42) * 1000
+  expect(JSON.stringify(await band({ isWorking: true }))).toContain('finishing fix-auth · gate 42s')
+})
+
+test('a gate whose pid is dead, or a record past its gate, draws no band', async () => {
+  nowMs = NOW * 1000
+  await startFinish()
+  record(running('gate', { gate_started: NOW - 5 }))
+  await watchTick()
+  expect(await band({ isWorking: true })).toBe(DRAWN)
+  livePids.add('4242')
+  await watchTick()
+  expect(JSON.stringify(await band({ isWorking: true }))).toContain('gate 5s')
+  record(running('fast-forward', { gate_started: NOW - 5 }))
+  invalidated = []
+  await watchTick()
+  expect(invalidated).toContain('ui.render')
+  expect(await band({ isWorking: true })).toBe(DRAWN)
+  record(running('gate', { gate_started: NOW - 5 }))
+  await watchTick()
+  record(running('landed', { gate_started: NOW - 5, result: RESULT }))
+  await watchTick()
+  expect(await band({ isWorking: true })).toBe(DRAWN)
+})
+
+test('with the rotation keys up, the gate band draws beneath them and both keys stay', async () => {
+  livePids.add('4242')
+  nowMs = NOW * 1000
+  percent = 40
+  await startFinish()
+  record(running('gate', { gate_started: NOW - 3 }))
+  await watchTick()
+  const tree = await band()
+  expect(buttons(tree)).toHaveLength(2)
+  expect(JSON.stringify(tree)).toContain('finishing fix-auth · gate 3s')
+})
+
+test('the watch ends once the turn is over and nothing runs, and not while a step still runs', async () => {
+  livePids.add('4242')
+  await startFinish()
+  record(running('gate', { gate_started: NOW }))
+  await watchTick()
+  await hooks['turn.complete']($, { reason: 'answer' }, async () => ({ text: '' }))
+  await watchTick()
+  expect(watches()[0].cancelled).toBe(false)
+  record({ id: '6161-1800000002', pid: 6161, task: 'fix-auth', sha: SHA, step: 'retired', ts: NOW })
+  await watchTick()
+  expect(toasts).toEqual(['cs: finishing fix-auth', 'cs: retired fix-auth'])
+  expect(watches()[0].cancelled).toBe(true)
+  // the next /finish watches afresh
+  await startFinish()
+  expect(watches().filter(t => !t.cancelled)).toHaveLength(1)
 })
