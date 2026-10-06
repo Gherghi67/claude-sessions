@@ -530,6 +530,31 @@ test_two_state_writers_lose_no_update() {
     assert_not_exists "$state.lock" "no lock left behind" || return 1
 }
 
+# Dropping a vault holder rewrites the list while an opener may be adding to
+# it. The two take turns, so the opener's line is never lost.
+test_vault_holder_drop_keeps_a_concurrent_add() {
+    local holders="$TEST_TMPDIR/vault-holders" lib="$SCRIPT_DIR/../hooks/cs-shared.sh"
+    local shim="$TEST_TMPDIR/slow-mv" added="$TEST_TMPDIR/added" real_mv i=0
+    real_mv=$(command -v mv)
+    mkdir -p "$shim"
+    printf '111\n222\n' > "$holders"
+    # The drop's rename waits half a second, and an opener adds 333 meanwhile.
+    cat > "$shim/mv" <<EOF
+#!/bin/sh
+bash -c 'source "\$1"; cs_vault_holder_add "\$2" 333; : > "\$3"' _ "$lib" "$holders" "$added" &
+sleep 0.5
+exec "$real_mv" "\$@"
+EOF
+    chmod +x "$shim/mv"
+    PATH="$shim:$PATH" bash -c 'source "$1"; cs_vault_holder_drop "$2" 111' _ "$lib" "$holders" \
+        || { echo "  FAIL: the drop failed"; return 1; }
+    while [ ! -e "$added" ] && [ "$i" -lt 80 ]; do sleep 0.1; i=$((i + 1)); done
+    [ -e "$added" ] || { echo "  FAIL: the opener's add never finished"; return 1; }
+    assert_eq "222
+333" "$(cat "$holders")" "the drop removed 111 and the opener's 333 survived" || return 1
+    assert_not_exists "$holders.lock" "no lock left behind" || return 1
+}
+
 # Homebrew's gnubin puts GNU stat first on a Mac's PATH; the mode read must
 # work with either stat, so the dispatch is by behaviour, not by OSTYPE.
 test_atomic_write_keeps_the_mode_with_gnu_stat_on_a_mac() {
@@ -820,6 +845,7 @@ run_test test_state_write_waits_for_a_live_lock_holder
 run_test test_state_write_takes_over_a_dead_holders_lock
 run_test test_state_write_fails_loudly_when_the_old_state_cannot_be_read
 run_test test_two_state_writers_lose_no_update
+run_test test_vault_holder_drop_keeps_a_concurrent_add
 run_test test_atomic_write_keeps_the_mode_with_gnu_stat_on_a_mac
 run_test test_atomic_write_refuses_a_directory_destination
 report_results

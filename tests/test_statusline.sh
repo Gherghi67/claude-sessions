@@ -1923,6 +1923,25 @@ test_enable_warns_that_a_restart_is_required() {
     assert_output_contains "$out" "restart" "enabling must mention the restart requirement" || return 1
 }
 
+# cs rewrites settings.json where it lies: a symlinked file (a dotfiles
+# manager's) stays a link, and the file keeps its permission bits.
+test_enable_and_disable_rewrite_settings_in_place() {
+    export CS_CLAUDE_DIR="$TEST_TMPDIR/claude"
+    local real="$TEST_TMPDIR/dotfiles/settings.json" step
+    mkdir -p "$CS_CLAUDE_DIR" "$TEST_TMPDIR/dotfiles"
+    echo '{"model":"opus"}' > "$real"
+    chmod 640 "$real"
+    ln -s "$real" "$CS_CLAUDE_DIR/settings.json"
+    for step in enable disable; do
+        bash "$CS_BIN" -statusline "$step" >/dev/null 2>&1 || { echo "  FAIL: cs -statusline $step failed"; return 1; }
+        [ -L "$CS_CLAUDE_DIR/settings.json" ] \
+            || { echo "  FAIL: $step replaced the symlinked settings.json with a plain file"; return 1; }
+        assert_eq "640" "$(_file_mode "$real")" "$step keeps settings.json's mode" || return 1
+        assert_eq "opus" "$(jq -r '.model' "$real")" "$step keeps the other settings" || return 1
+    done
+    assert_eq "null" "$(jq -r '.statusLine' "$real")" "disable removed the registration enable wrote" || return 1
+}
+
 run_test test_notes_segment_shows_queue_depth
 run_test test_notes_segment_absent_when_queue_empty
 run_test test_notes_segment_counts_only_files
@@ -1941,6 +1960,7 @@ run_test test_executed_directly_still_renders
 run_test test_enable_registers_both_status_lines
 run_test test_disable_leaves_a_foreign_subagent_statusline_alone
 run_test test_enable_warns_that_a_restart_is_required
+run_test test_enable_and_disable_rewrite_settings_in_place
 
 # ============================================================================
 # Rate-limit stamp: the render writes .cs/local/limits for cs -usage anchoring
