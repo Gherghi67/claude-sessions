@@ -891,6 +891,7 @@ Commands:
   -queue list         Show pending and completed queued tasks
   -queue rm <n>       Remove pending task n
   -queue clear        Empty the queue and stop draining
+  -queue start [subagents|workflow]  Start draining the queue; each task runs in this conversation, a subagent or a workflow
   -queue log          Show the walk-away run journal (drains, breaker trips)
   -msg <session> "<body>"  Send a message to another session (--kind notify|task|text|result; '-' reads the body from stdin)
   -msg --reply <thread> "<body>"  Reply into a thread; the target comes from the thread
