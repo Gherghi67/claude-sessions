@@ -391,7 +391,7 @@ _launch_with_cache() {  # cache-epoch -> prints the curl calls the launch made
     chmod +x "$stub/curl"
     : > "$TEST_TMPDIR/curl-calls"
     printf '%s 2000.1.1\n' "$1" > "$TEST_TMPDIR/home/.cache/cs/update-check"
-    HOME="$TEST_TMPDIR/home" PATH="$stub:$PATH" CS_NO_UPDATE_CHECK= \
+    HOME="$TEST_TMPDIR/home" PATH="$stub:$PATH" CS_NO_UPDATE_CHECK='' \
         "$CS_BIN" "cache-session-$1" < /dev/null > /dev/null 2>&1 || true
     cat "$TEST_TMPDIR/curl-calls"
 }

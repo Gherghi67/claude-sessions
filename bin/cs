@@ -1554,13 +1554,16 @@ check_update_notify() {
     local now
     now=$(date +%s)
 
-    # Check if cache exists and is fresh
+    # Check if cache exists and is fresh. A fresh cache answers the question
+    # either way, so a launch that is up to date asks GitHub at most hourly.
+    local cache_fresh=""
     if [ -f "$UPDATE_CACHE" ]; then
         local cache_time cached_version
         read -r cache_time cached_version < "$UPDATE_CACHE" 2>/dev/null || true
 
         # If cache is fresh, use it
         if [ -n "$cache_time" ] && [ $((now - cache_time)) -lt $UPDATE_CHECK_INTERVAL ]; then
+            cache_fresh=1
             # Set update available if cached version is newer
             if [ -n "$cached_version" ] && version_greater "$cached_version" "$VERSION"; then
                 UPDATE_AVAILABLE="$cached_version"
@@ -1569,7 +1572,7 @@ check_update_notify() {
     fi
 
     # No fresh cache - do a quick synchronous check
-    if [ -z "$UPDATE_AVAILABLE" ]; then
+    if [ -z "$cache_fresh" ]; then
         local remote_version
         remote_version=$(get_remote_version 2>/dev/null) || remote_version=""
 
