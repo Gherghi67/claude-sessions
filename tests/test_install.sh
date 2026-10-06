@@ -1518,12 +1518,13 @@ test_rewake_labels_do_not_claim_the_wake_is_mail() {
 }
 
 # ============================================================================
-# Option keys: the installer offers, once per machine, to bind Option+1 to
-# /rotate and Option+2 to /wrap in Claude Code's keybindings.json.
+# Rotate/wrap keys: the installer offers, once per machine, to bind Ctrl+X R
+# to /rotate and Ctrl+X W to /wrap in Claude Code's keybindings.json, and
+# replaces the Option+1 / Option+2 bindings an older cs wrote.
 # ============================================================================
 
 # cs's block, as `jq -c` prints it.
-_OK_CS_BLOCK='{"context":"Global","bindings":{"alt+1":"command:rotate","alt+2":"command:wrap"}}'
+_OK_CS_BLOCK='{"context":"Global","bindings":{"ctrl+x r":"command:rotate","ctrl+x w":"command:wrap"}}'
 
 _need_expect() {
     command -v expect >/dev/null 2>&1 && return 0
@@ -1545,7 +1546,7 @@ log_file -noappend $TEST_TMPDIR/$label.out
 spawn env -u CLAUDE_CONFIG_DIR -u XDG_CONFIG_HOME HOME=$home $* bash $INSTALL_SH
 expect {
     -re {status line.*\[Y/n\]} { send "n"; exp_continue }
-    -re {Option\+1.*\[y/n\]} { send "$ans"; exp_continue }
+    -re {Ctrl\+X R.*\[y/n\]} { send "$ans"; exp_continue }
     eof
 }
 catch wait result
@@ -1577,7 +1578,7 @@ test_option_keys_merge_into_the_existing_global_block() {
         > "$home/.claude/keybindings.json"
     _install_answering_option_keys ok-merge "$home" y \
         || { echo "  FAIL: install.sh exited non-zero"; return 1; }
-    assert_eq '{"$schema":"https://example.com/kb.json","bindings":[{"context":"Chat","bindings":{"ctrl+e":"chat:externalEditor"}},{"context":"Global","bindings":{"ctrl+t":"app:toggleTodos","alt+1":"command:rotate","alt+2":"command:wrap"}}]}' \
+    assert_eq '{"$schema":"https://example.com/kb.json","bindings":[{"context":"Chat","bindings":{"ctrl+e":"chat:externalEditor"}},{"context":"Global","bindings":{"ctrl+t":"app:toggleTodos","ctrl+x r":"command:rotate","ctrl+x w":"command:wrap"}}]}' \
         "$(jq -c . "$home/.claude/keybindings.json" 2>&1)" \
         "the keys join the user's Global block and nothing else changes" || return 1
 }
@@ -1588,15 +1589,15 @@ test_option_keys_never_overwrite_a_user_binding() {
     _need_expect || return 77
     local home="$TEST_TMPDIR/home-ok-conflict"
     mkdir -p "$home/.claude"
-    printf '%s\n' '{"bindings":[{"context":"Chat","bindings":{"alt+1":"chat:submit"}}]}' \
+    printf '%s\n' '{"bindings":[{"context":"Chat","bindings":{"ctrl+x r":"chat:submit"}}]}' \
         > "$home/.claude/keybindings.json"
     _install_answering_option_keys ok-conflict "$home" y \
         || { echo "  FAIL: install.sh exited non-zero"; return 1; }
-    assert_eq '{"bindings":[{"context":"Chat","bindings":{"alt+1":"chat:submit"}},{"context":"Global","bindings":{"alt+2":"command:wrap"}}]}' \
+    assert_eq '{"bindings":[{"context":"Chat","bindings":{"ctrl+x r":"chat:submit"}},{"context":"Global","bindings":{"ctrl+x w":"command:wrap"}}]}' \
         "$(jq -c . "$home/.claude/keybindings.json" 2>&1)" \
-        "alt+1 keeps the user's action and alt+2 is added" || return 1
-    grep -q 'alt+1.*chat:submit' "$TEST_TMPDIR/ok-conflict.out" \
-        || { echo "  FAIL: no warning naming alt+1 and its current action"; return 1; }
+        "ctrl+x r keeps the user's action and ctrl+x w is added" || return 1
+    grep -q 'ctrl+x r.*chat:submit' "$TEST_TMPDIR/ok-conflict.out" \
+        || { echo "  FAIL: no warning naming ctrl+x r and its current action"; return 1; }
 }
 
 # 4. A file cs cannot read as {"bindings":[...]} is refused and left byte for
@@ -1635,11 +1636,11 @@ test_option_keys_decline_is_remembered() {
         || { echo "  FAIL: install.sh exited non-zero"; return 1; }
     cmp -s "$TEST_TMPDIR/no.orig" "$kb" || { echo "  FAIL: a no changed the file"; return 1; }
     assert_eq "no" "$(cat "$home/.config/cs/option-keys" 2>&1)" "the no is recorded" || return 1
-    grep -q 'Option+1.*\[y/n\]' "$TEST_TMPDIR/ok-no1.out" \
+    grep -q 'Ctrl+X R.*\[y/n\]' "$TEST_TMPDIR/ok-no1.out" \
         || { echo "  FAIL: the first install never asked"; return 1; }
     _install_answering_option_keys ok-no2 "$home" y \
         || { echo "  FAIL: the second install exited non-zero"; return 1; }
-    if grep -q 'Option+1.*\[y/n\]' "$TEST_TMPDIR/ok-no2.out"; then
+    if grep -q 'Ctrl+X R.*\[y/n\]' "$TEST_TMPDIR/ok-no2.out"; then
         echo "  FAIL: the second install asked again"; return 1
     fi
     cmp -s "$TEST_TMPDIR/no.orig" "$kb" || { echo "  FAIL: the second install changed the file"; return 1; }
@@ -1655,10 +1656,10 @@ test_option_keys_non_interactive_writes_nothing_and_says_how() {
         || { echo "  FAIL: install.sh exited non-zero"; return 1; }
     assert_file_not_exists "$home/.claude/keybindings.json" "no keybindings.json without a terminal" || return 1
     assert_file_not_exists "$home/.config/cs/option-keys" "no answer recorded without a terminal" || return 1
-    assert_eq "1" "$(grep -c 'Option+1' "$TEST_TMPDIR/ok-pipe.out")" "exactly one line mentions Option+1" || return 1
+    assert_eq "1" "$(grep -c 'Ctrl+X R' "$TEST_TMPDIR/ok-pipe.out")" "exactly one line mentions Ctrl+X R" || return 1
     # The whole line: the installer's notes sit in the three-space gutter
     # behind a dot, like every other line it prints.
-    grep -qxF '   · Option keys: not bound. To bind Option+1 to /rotate and Option+2 to /wrap, run cs -update in a terminal.' \
+    grep -qxF '   · Rotate/wrap keys: not bound. To bind Ctrl+X R to /rotate and Ctrl+X W to /wrap, run cs -update in a terminal.' \
         "$TEST_TMPDIR/ok-pipe.out" || { echo "  FAIL: the hint line is missing, reworded or out of the gutter"; return 1; }
 }
 
@@ -1677,23 +1678,23 @@ test_option_keys_reinstall_after_yes_is_idempotent() {
     env -u CLAUDE_CONFIG_DIR -u XDG_CONFIG_HOME HOME="$home" bash "$INSTALL_SH" < /dev/null > /dev/null 2>&1 \
         || { echo "  FAIL: the third install exited non-zero"; return 1; }
     cmp -s "$TEST_TMPDIR/again.after1" "$kb" || { echo "  FAIL: a re-install changed the file"; return 1; }
-    assert_eq '{"bindings":[{"context":"Global","bindings":{"ctrl+t":"app:toggleTodos","alt+1":"command:rotate","alt+2":"command:wrap"}}]}' \
+    assert_eq '{"bindings":[{"context":"Global","bindings":{"ctrl+t":"app:toggleTodos","ctrl+x r":"command:rotate","ctrl+x w":"command:wrap"}}]}' \
         "$(jq -c . "$kb" 2>&1)" "one Global block, each key once" || return 1
 }
 
-# 8. Uninstall takes back only keys that still hold cs's values, keeps every
-# user binding (an unbinding null included), and deletes a file it leaves
-# holding nothing.
+# 8. Uninstall takes back only keys that still hold cs's values, the chords and
+# an older cs's Option+1 / Option+2 alike, keeps every user binding (an
+# unbinding null included), and deletes a file it leaves holding nothing.
 test_option_keys_uninstall_removes_only_cs_values() {
     local home="$TEST_TMPDIR/home-ok-un" kb
     kb="$home/.claude/keybindings.json"
     mkdir -p "$home/.claude" "$home/.config/cs"
     printf 'yes\n' > "$home/.config/cs/option-keys"
-    printf '%s\n' '{"bindings":[{"context":"Chat","bindings":{"ctrl+e":"chat:externalEditor"}},{"context":"Global","bindings":{"ctrl+t":"app:toggleTodos","ctrl+x":null,"alt+1":"command:rotate","alt+2":"command:other"}}]}' > "$kb"
+    printf '%s\n' '{"bindings":[{"context":"Chat","bindings":{"ctrl+e":"chat:externalEditor"}},{"context":"Global","bindings":{"ctrl+t":"app:toggleTodos","ctrl+x":null,"ctrl+x r":"command:rotate","ctrl+x w":"command:other","alt+1":"command:rotate","alt+2":"chat:submit"}}]}' > "$kb"
     printf 'y\n' | env -u CLAUDE_CONFIG_DIR -u XDG_CONFIG_HOME HOME="$home" "$CS_BIN" -uninstall > /dev/null 2>&1 \
         || { echo "  FAIL: cs -uninstall exited non-zero"; return 1; }
-    assert_eq '{"bindings":[{"context":"Chat","bindings":{"ctrl+e":"chat:externalEditor"}},{"context":"Global","bindings":{"ctrl+t":"app:toggleTodos","ctrl+x":null,"alt+2":"command:other"}}]}' \
-        "$(jq -c . "$kb" 2>&1)" "only alt+1, which held cs's value, is removed" || return 1
+    assert_eq '{"bindings":[{"context":"Chat","bindings":{"ctrl+e":"chat:externalEditor"}},{"context":"Global","bindings":{"ctrl+t":"app:toggleTodos","ctrl+x":null,"ctrl+x w":"command:other","alt+2":"chat:submit"}}]}' \
+        "$(jq -c . "$kb" 2>&1)" "only ctrl+x r and alt+1, which held cs's values, are removed" || return 1
 
     local home2="$TEST_TMPDIR/home-ok-un2"
     mkdir -p "$home2/.claude"
@@ -1727,7 +1728,7 @@ test_option_keys_write_through_a_symlink() {
     _install_answering_option_keys ok-link "$home" y \
         || { echo "  FAIL: install.sh exited non-zero"; return 1; }
     [ -L "$home/.claude/keybindings.json" ] || { echo "  FAIL: the link was replaced by a file"; return 1; }
-    assert_eq '{"bindings":[{"context":"Global","bindings":{"ctrl+t":"app:toggleTodos","alt+1":"command:rotate","alt+2":"command:wrap"}}]}' \
+    assert_eq '{"bindings":[{"context":"Global","bindings":{"ctrl+t":"app:toggleTodos","ctrl+x r":"command:rotate","ctrl+x w":"command:wrap"}}]}' \
         "$(jq -c . "$target" 2>&1)" "the link's target takes the keys" || return 1
     assert_eq "600" "$(_file_mode "$target")" "the target keeps its mode" || return 1
 }
@@ -1755,6 +1756,60 @@ test_option_keys_skip_an_encrypted_sessions_config_dir() {
     assert_eq "{\"bindings\":[$_OK_CS_BLOCK]}" "$(jq -c . "$cfg/keybindings.json" 2>&1)" \
         "a recorded dir takes the keys" || return 1
     assert_file_not_exists "$sess/keybindings.json" "still nothing in the session's config dir" || return 1
+}
+
+# 12. A machine an older cs bound Option+1 / Option+2 on: its recorded yes is
+# honoured without a terminal, cs's alt+1 and alt+2 make way for the chords,
+# and every other binding stays. The one line says what was replaced.
+test_option_keys_replace_the_old_option_keys() {
+    local home="$TEST_TMPDIR/home-ok-mig" kb
+    kb="$home/.claude/keybindings.json"
+    mkdir -p "$home/.claude" "$home/.config/cs"
+    printf 'yes\n' > "$home/.config/cs/option-keys"
+    printf '%s\n' '{"bindings":[{"context":"Chat","bindings":{"ctrl+e":"chat:externalEditor"}},{"context":"Global","bindings":{"ctrl+t":"app:toggleTodos","alt+1":"command:rotate","alt+2":"command:wrap"}}]}' > "$kb"
+    env -u CLAUDE_CONFIG_DIR -u XDG_CONFIG_HOME HOME="$home" bash "$INSTALL_SH" \
+        < /dev/null > "$TEST_TMPDIR/ok-mig.out" 2>&1 \
+        || { echo "  FAIL: install.sh exited non-zero"; return 1; }
+    assert_eq '{"bindings":[{"context":"Chat","bindings":{"ctrl+e":"chat:externalEditor"}},{"context":"Global","bindings":{"ctrl+t":"app:toggleTodos","ctrl+x r":"command:rotate","ctrl+x w":"command:wrap"}}]}' \
+        "$(jq -c . "$kb" 2>&1)" "alt+1 and alt+2 are gone and the chords are bound" || return 1
+    grep -qxF "   · Rotate/wrap keys: bound ctrl+x r, ctrl+x w in $kb (replacing cs's alt+1, alt+2)" \
+        "$TEST_TMPDIR/ok-mig.out" || { echo "  FAIL: the replacement line is missing or reworded"; return 1; }
+}
+
+# 13. Only cs's own values are taken back: an alt+1 the user binds to anything
+# else stays, while cs's alt+2 goes.
+test_option_keys_migration_keeps_a_users_alt_key() {
+    local home="$TEST_TMPDIR/home-ok-mig2" kb
+    kb="$home/.claude/keybindings.json"
+    mkdir -p "$home/.claude" "$home/.config/cs"
+    printf 'yes\n' > "$home/.config/cs/option-keys"
+    printf '%s\n' '{"bindings":[{"context":"Global","bindings":{"alt+1":"chat:submit","alt+2":"command:wrap"}}]}' > "$kb"
+    env -u CLAUDE_CONFIG_DIR -u XDG_CONFIG_HOME HOME="$home" bash "$INSTALL_SH" \
+        < /dev/null > /dev/null 2>&1 \
+        || { echo "  FAIL: install.sh exited non-zero"; return 1; }
+    assert_eq '{"bindings":[{"context":"Global","bindings":{"alt+1":"chat:submit","ctrl+x r":"command:rotate","ctrl+x w":"command:wrap"}}]}' \
+        "$(jq -c . "$kb" 2>&1)" "the user's alt+1 stays, cs's alt+2 goes" || return 1
+}
+
+# 14. Claude Code waits for a chord's second key once its first is pressed, so
+# binding ctrl+x r would silence a user's own bare ctrl+x. That counts as a
+# conflict for both chords: the file is left as it is and each is named.
+test_option_keys_never_shadow_a_users_ctrl_x() {
+    local home="$TEST_TMPDIR/home-ok-prefix" kb
+    kb="$home/.claude/keybindings.json"
+    mkdir -p "$home/.claude" "$home/.config/cs"
+    printf 'yes\n' > "$home/.config/cs/option-keys"
+    printf '%s\n' '{"bindings":[{"context":"Chat","bindings":{"ctrl+x":"chat:externalEditor"}}]}' > "$kb"
+    cp "$kb" "$TEST_TMPDIR/prefix.orig"
+    env -u CLAUDE_CONFIG_DIR -u XDG_CONFIG_HOME HOME="$home" bash "$INSTALL_SH" \
+        < /dev/null > "$TEST_TMPDIR/ok-prefix.out" 2>&1 \
+        || { echo "  FAIL: install.sh exited non-zero"; return 1; }
+    cmp -s "$TEST_TMPDIR/prefix.orig" "$kb" || { echo "  FAIL: the file was changed"; return 1; }
+    local chord
+    for chord in 'ctrl+x r' 'ctrl+x w'; do
+        grep -qF "Rotate/wrap keys: $chord would shadow ctrl+x, which is bound to chat:externalEditor in $kb; left unbound." \
+            "$TEST_TMPDIR/ok-prefix.out" || { echo "  FAIL: no warning naming $chord and the ctrl+x it would shadow"; return 1; }
+    done
 }
 
 run_test test_install_survives_an_unwritable_declined_marker_dir
@@ -1797,4 +1852,7 @@ run_test test_option_keys_uninstall_removes_only_cs_values
 run_test test_option_keys_follow_claude_config_dir
 run_test test_option_keys_write_through_a_symlink
 run_test test_option_keys_skip_an_encrypted_sessions_config_dir
+run_test test_option_keys_replace_the_old_option_keys
+run_test test_option_keys_migration_keeps_a_users_alt_key
+run_test test_option_keys_never_shadow_a_users_ctrl_x
 report_results
