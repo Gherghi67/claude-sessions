@@ -1265,6 +1265,40 @@ run_test test_doctor_warns_when_the_session_clone_lacks_the_merge_driver
 run_test test_doctor_is_quiet_when_the_session_clone_has_the_merge_driver
 
 
+# Stamp the setup session the way a clean open would for alice: the probe
+# files it has (CLAUDE.md, .cs/README.md) at a fixed old time, the stamp a
+# year later. Prints the cs version the stamp names.
+_doctor_stamp_session() {
+    local dir="$CLAUDE_SESSION_DIR" version
+    version=$("$CS_BIN" -version)
+    version=${version#cs }
+    touch -t 202401010000 "$dir/CLAUDE.md" "$dir/.cs/README.md"
+    printf '%s\talice\t0\nCLAUDE.md\t.cs/README.md\n' "$version" > "$dir/.cs/local/migrated"
+    touch -t 202501010000 "$dir/.cs/local/migrated"
+    echo "$version"
+}
+
+test_doctor_reports_a_current_migration_stamp() {
+    local version output
+    version=$(_doctor_stamp_session)
+    output=$(CS_ACTOR=alice "$CS_BIN" -doctor 2>&1) || true
+    assert_output_contains "$output" "Migration stamp: current for cs $version; opens skip the one-time migration checks. To force them: rm .cs/local/migrated" \
+        "a fresh stamp reads as current and names the reset" || return 1
+}
+
+test_doctor_reports_a_stale_migration_stamp() {
+    local output
+    _doctor_stamp_session > /dev/null
+    touch -t 202601010000 "$CLAUDE_SESSION_DIR/CLAUDE.md"
+    output=$(CS_ACTOR=alice "$CS_BIN" -doctor 2>&1) || true
+    assert_output_contains "$output" "Migration stamp: stale (CLAUDE.md changed after the stamp); the next open runs the full migration and restamps. Reset by hand: rm .cs/local/migrated" \
+        "a stale stamp names what changed and the reset" || return 1
+}
+
+run_test test_doctor_reports_a_current_migration_stamp
+run_test test_doctor_reports_a_stale_migration_stamp
+
+
 # `cs <base> -integrate-feature` takes <git-dir>/cs/integrate.lock and the
 # autosave hook skips its snapshot while it exists. A lock left behind by a
 # killed integrate would silence autosave forever, with nothing to say why.

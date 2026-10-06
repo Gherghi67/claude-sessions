@@ -224,6 +224,21 @@ test_memory_index_edit_reruns_only_the_narrative_check() {
         "a newer MEMORY.md alone runs no other phase" || return 1
 }
 
+# A directory where the stamp goes makes every stamp write fail, the way a
+# full disk or a permission change would, without denying the other writes an
+# open makes in .cs/local (the state file, the session lock).
+test_stamp_that_cannot_be_written_does_not_stop_the_open() {
+    local dir="$CS_SESSIONS_ROOT/unwritable" out rc=0
+    _stamped_session unwritable || return 1
+    rm "$dir/.cs/local/migrated"
+    mkdir "$dir/.cs/local/migrated"
+    out=$(_open unwritable) || rc=$?
+    assert_eq "0" "$rc" "an open whose stamp cannot be written succeeds: $out" || return 1
+    assert_output_contains "$out" "--resume" "the open still launches" || return 1
+    assert_output_not_contains "$out" "is a directory" "the failed stamp write is not reported" || return 1
+    assert_dir "$dir/.cs/local/migrated" "the open leaves what it could not replace" || return 1
+}
+
 run_test test_fresh_stamp_skips_the_one_time_phases
 run_test test_gitignore_edited_after_the_stamp_is_repaired
 run_test test_deleted_claude_local_md_is_regenerated
@@ -234,5 +249,6 @@ run_test test_migration_that_warns_leaves_no_stamp
 run_test test_unusable_stamp_reruns_the_migration_quietly
 run_test test_committed_stamp_is_refused
 run_test test_memory_index_edit_reruns_only_the_narrative_check
+run_test test_stamp_that_cannot_be_written_does_not_stop_the_open
 
 report_results
