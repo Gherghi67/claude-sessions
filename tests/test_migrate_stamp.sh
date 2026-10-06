@@ -108,19 +108,23 @@ test_merge_driver_removed_after_the_stamp_is_restored() {
 # A checkout cs hides itself in (git_bookkeeping: exclude) never gets the merge
 # driver, so its absence there must not send every open through the migration.
 test_excluded_bookkeeping_without_a_driver_stays_fresh() {
-    local dir="$CS_SESSIONS_ROOT/excluded"
+    local dir="$CS_SESSIONS_ROOT/excluded" out
     _stamped_session excluded || return 1
+    # An excluded checkout tracks none of cs's files, or the open refuses it.
+    git -C "$dir" rm -r -q --cached --ignore-unmatch .cs .claude/settings.local.json CLAUDE.local.md \
+        && git -C "$dir" commit -q -m "untrack cs files" \
+        || { echo "  FAIL: could not untrack cs's files"; return 1; }
     printf 'git_bookkeeping: exclude\n' >> "$dir/.cs/local/state"
     git -C "$dir" config --unset merge.ours.driver \
         || { echo "  FAIL: the fixture has no merge driver to remove"; return 1; }
     _drop_line "$dir/CLAUDE.local.md" "<!-- cs:memory-note -->"
     _age_session "$dir"
-    _open excluded > /dev/null || { echo "  FAIL: the reopen failed"; return 1; }
+    out=$(_open excluded) || { echo "  FAIL: the reopen failed: $out"; return 1; }
     assert_file_not_contains "$dir/CLAUDE.local.md" '<!-- cs:memory-note -->' \
         "an excluded checkout without a driver keeps its fresh stamp" || return 1
 
     rm "$dir/.cs/local/migrated"
-    _open excluded > /dev/null || { echo "  FAIL: the unstamped reopen failed"; return 1; }
+    out=$(_open excluded) || { echo "  FAIL: the unstamped reopen failed: $out"; return 1; }
     assert_file_contains "$dir/CLAUDE.local.md" '<!-- cs:memory-note -->' \
         "positive control: without the stamp the memory note is restored" || return 1
 }
