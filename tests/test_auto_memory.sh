@@ -828,16 +828,16 @@ test_plaintext_mailbox_left_beside_private_refuses_open() {
     assert_file_not_exists "$TEST_TMPDIR/launched" "claude must not launch" || return 1
 }
 
-# The queue, its inbox, the traces, the pending-handoff marker and the
-# /finish progress record are cs files too: each one left in .cs/local is
-# named the same way.
+# The queue, its run mode, its inbox, the traces, the pending-handoff marker
+# and the /finish progress record are cs files too: each one left in
+# .cs/local is named the same way.
 test_plaintext_queue_files_left_beside_private_refuse_open() {
     _make_vaulted_session vt
     _make_vaulted_private vt
     local meta="$CS_SESSIONS_ROOT/vt/.cs" name out rc
     for name in queue queue.tmp queue.state queue.done queue.declined queue.migrating \
                 notifications.jsonl notifications.seen failures rewrite.trace pending-handoff \
-                finish-progress.json; do
+                finish-progress.json queue.mode; do
         case "$name" in queue|queue.tmp) mkdir -p "$meta/local/$name" ;; *) printf 'x\n' > "$meta/local/$name" ;; esac
         rc=0
         out=$("$CS_BIN" vt <<< "" 2>&1) || rc=$?
