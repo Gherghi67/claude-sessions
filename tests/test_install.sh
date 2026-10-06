@@ -1656,8 +1656,10 @@ test_option_keys_non_interactive_writes_nothing_and_says_how() {
     assert_file_not_exists "$home/.claude/keybindings.json" "no keybindings.json without a terminal" || return 1
     assert_file_not_exists "$home/.config/cs/option-keys" "no answer recorded without a terminal" || return 1
     assert_eq "1" "$(grep -c 'Option+1' "$TEST_TMPDIR/ok-pipe.out")" "exactly one line mentions Option+1" || return 1
-    grep -qF 'Option keys: not bound. To bind Option+1 to /rotate and Option+2 to /wrap, run cs -update in a terminal.' \
-        "$TEST_TMPDIR/ok-pipe.out" || { echo "  FAIL: the hint line is missing or reworded"; return 1; }
+    # The whole line: the installer's notes sit in the three-space gutter
+    # behind a dot, like every other line it prints.
+    grep -qxF '   · Option keys: not bound. To bind Option+1 to /rotate and Option+2 to /wrap, run cs -update in a terminal.' \
+        "$TEST_TMPDIR/ok-pipe.out" || { echo "  FAIL: the hint line is missing, reworded or out of the gutter"; return 1; }
 }
 
 # 7. Installing again after a yes, with or without a terminal, changes nothing.
