@@ -216,11 +216,22 @@ _strip_hook_registration() {
     '
 }
 
-# Option+1 and Option+2: the two Claude Code keybindings cs offers to add,
+# Ctrl+X R and Ctrl+X W: the two Claude Code keybindings cs offers to add,
 # each a "command:<name>" action, which submits /<name>. install.sh asks once
 # per machine and binds them, cs -uninstall takes back only the keys that
 # still hold these values, and cs -doctor reports them.
-CS_OPTION_KEYS='{"alt+1":"command:rotate","alt+2":"command:wrap"}'
+CS_OPTION_KEYS='{"ctrl+x r":"command:rotate","ctrl+x w":"command:wrap"}'
+
+# Option+1 and Option+2 on the same two commands, as cs 2026.10.6 bound them.
+# iTerm2 selects panes with Option+number, so there they never reach Claude
+# Code. Wherever they still hold these values, an install that binds the
+# chords takes them back, and so does cs -uninstall.
+# shellcheck disable=SC2034  # read by install.sh's _bind_option_keys and by cs -uninstall
+CS_RETIRED_OPTION_KEYS='{"alt+1":"command:rotate","alt+2":"command:wrap"}'
+
+# The jq definition shared by the filters below: whether a to_entries pair
+# from a context block is one of the bindings in $cs, key and value both.
+_CS_KEYBINDING_OURS='def ours: . as $e | $cs | has($e.key) and .[$e.key] == $e.value;'
 
 # Claude Code reads its keybindings from its config dir. Inside an encrypted
 # session that dir is the session's .cs/claude-config, which no other session
@@ -255,18 +266,45 @@ _cs_keybindings_shape_ok() {  # file
 # Reads a keybindings document that passed the shape check on stdin and prints
 # one line per cs key: "bound<TAB>key" when every binding of it, in any
 # context, holds cs's value; "free<TAB>key" when nothing binds it; and
-# "conflict<TAB>key<TAB>action" when something else does. An action that is
-# not a string (a null that unbinds the key) prints as JSON.
+# "conflict<TAB>key<TAB>action" when something else does. A chord also
+# conflicts when its first key is bound on its own to an action, which
+# Claude Code would stop reaching once it waits for the chord's second key:
+# "conflict<TAB>key<TAB>action<TAB>prefix". An action that is not a string
+# (a null that unbinds the key) prints as JSON; a null on the prefix is no
+# conflict, as it binds nothing.
 _cs_option_keys_status() {
     jq -r --argjson cs "$CS_OPTION_KEYS" '
+        def show: if type == "string" then . else tojson end;
         [.bindings[] | (.bindings // {}) | to_entries[]] as $all
         | $cs | to_entries[] | . as $c
         | [$all[] | select(.key == $c.key) | .value] as $vals
-        | if ($vals | length) == 0 then "free\t\($c.key)"
-          elif all($vals[]; . == $c.value) then "bound\t\($c.key)"
-          else "conflict\t\($c.key)\t\([$vals[] | select(. != $c.value)][0]
-                | if type == "string" then . else tojson end)"
+        | ($c.key | split(" ") | if length > 1 then .[0] else null end) as $prefix
+        | [$all[] | select(.key == $prefix and .value != null) | .value] as $pvals
+        | if any($vals[]; . != $c.value) then
+            "conflict\t\($c.key)\t\([$vals[] | select(. != $c.value)][0] | show)"
+          elif ($pvals | length) > 0 then "conflict\t\($c.key)\t\($pvals[0] | show)\t\($prefix)"
+          elif ($vals | length) == 0 then "free\t\($c.key)"
+          else "bound\t\($c.key)"
           end'
+}
+
+# Prints, comma-separated, the keys of a keybindings document on stdin that
+# hold one of the bindings in the JSON object $1; empty when none does.
+_cs_keybindings_held() {  # bindings-json
+    jq -r --argjson cs "$1" "$_CS_KEYBINDING_OURS"'
+        [.bindings[] | (.bindings // {}) | to_entries[] | select(ours) | .key] | unique | join(", ")'
+}
+
+# Prints a keybindings document on stdin, compact, without the bindings in the
+# JSON object $1 (key and value both; a key bound to anything else stays). A
+# Global block left empty goes; another context keeps its block.
+_cs_keybindings_strip() {  # bindings-json
+    jq -c --argjson cs "$1" "$_CS_KEYBINDING_OURS"'
+        .bindings |= map(
+            if any((.bindings // {}) | to_entries[]; ours) then
+                .bindings |= with_entries(select(ours | not))
+                | select(.bindings != {} or .context != "Global")
+            else . end)'
 }
 # ---- end lib/01-manifests.sh ----
 
@@ -987,50 +1025,80 @@ else
     # Add cs's keys that nothing binds yet to keybindings.json: into its first
     # Global block, or a Global block of their own, creating the file when
     # there is none. A key bound to anything else, in any context, is the
-    # user's and is reported, never replaced. A file of a shape cs cannot read
-    # is refused before anything is written. The write is cs_write_atomic's,
-    # from the hooks' shared library deployed above: mode kept, and a
-    # symlinked file (a dotfiles manager's) rewritten through its link.
+    # user's and is reported, never replaced; so is a bare key a chord would
+    # shadow. With no conflict, cs's own Option+1 / Option+2 bindings make
+    # way for the chords; a conflict keeps them, as the only rotate and wrap
+    # keys left. A file of a shape cs cannot read is refused before anything
+    # is written. The write is cs_write_atomic's, from the hooks' shared
+    # library deployed above: mode kept, and a symlinked file (a dotfiles
+    # manager's) rewritten through its link.
     _bind_option_keys() {
-        local file doc status state key action added=""
+        local file doc status state key action prefix added="" free="" conflicts=0 retired="" add
         file="$(_cs_keybindings_file)"
         if [ -e "$file" ]; then
             if ! _cs_keybindings_shape_ok "$file"; then
-                warn "Option keys: $file is not JSON with a \"bindings\" array; left as it is. Fix it, then run cs -update."
+                warn "Rotate/wrap keys: $file is not JSON with a \"bindings\" array; left as it is. Fix it, then run cs -update."
                 return 1
             fi
-            doc=$(cat "$file") || { warn "Option keys: could not read $file"; return 1; }
+            doc=$(cat "$file") || { warn "Rotate/wrap keys: could not read $file"; return 1; }
         else
             doc='{"bindings":[]}'
         fi
         status=$(printf '%s\n' "$doc" | _cs_option_keys_status) \
-            || { warn "Option keys: could not read the bindings in $file"; return 1; }
-        while IFS=$'\t' read -r state key action; do
+            || { warn "Rotate/wrap keys: could not read the bindings in $file"; return 1; }
+        while IFS=$'\t' read -r state key action prefix; do
             case "$state" in
-                conflict) warn "Option keys: $key is already bound to $action in $file; left as it is." ;;
-                free) added="$added $key" ;;
+                conflict)
+                    conflicts=$((conflicts + 1))
+                    if [ -n "$prefix" ]; then
+                        warn "Rotate/wrap keys: $key would shadow $prefix, which is bound to $action in $file; left unbound."
+                    else
+                        warn "Rotate/wrap keys: $key is already bound to $action in $file; left as it is."
+                    fi
+                    ;;
+                free)
+                    added="${added:+$added, }$key"
+                    free="$free$key"$'\n'
+                    ;;
             esac
         done <<< "$status"
-        [ -n "$added" ] || return 0
+        if [ "$conflicts" = 0 ]; then
+            retired=$(printf '%s\n' "$doc" | _cs_keybindings_held "$CS_RETIRED_OPTION_KEYS") \
+                || { warn "Rotate/wrap keys: could not read the bindings in $file"; return 1; }
+            if [ -n "$retired" ]; then
+                doc=$(printf '%s\n' "$doc" | _cs_keybindings_strip "$CS_RETIRED_OPTION_KEYS") \
+                    || { warn "Rotate/wrap keys: could not read the bindings in $file"; return 1; }
+            fi
+        fi
+        [ -n "$added" ] || [ -n "$retired" ] || return 0
+        add=$(jq -cn --argjson cs "$CS_OPTION_KEYS" --arg free "$free" \
+            '$cs | with_entries(select(.key as $k | $free | split("\n") | any(.[]; . == $k)))') \
+            || { warn "Rotate/wrap keys: could not build the bindings for $file"; return 1; }
         # shellcheck source=hooks/cs-shared.sh
         if ! . "$HOOKS_DIR/cs-shared.sh"; then
-            warn "Option keys: could not load $HOOKS_DIR/cs-shared.sh; $file left as it is."
+            warn "Rotate/wrap keys: could not load $HOOKS_DIR/cs-shared.sh; $file left as it is."
             return 1
         fi
         mkdir -p "$(dirname "$file")" 2>/dev/null || true
-        if ! printf '%s\n' "$doc" | cs_write_atomic "$file" jq --argjson cs "$CS_OPTION_KEYS" '
-            [.bindings[] | (.bindings // {}) | keys[]] as $used
-            | ($cs | with_entries(select(.key as $k | any($used[]; . == $k) | not))) as $add
-            | (first(.bindings | to_entries[] | select(.value.context == "Global") | .key) // null) as $i
-            | if $i == null then .bindings += [{context: "Global", bindings: $add}]
-              else .bindings[$i].bindings = ((.bindings[$i].bindings // {}) + $add) end'; then
-            warn "Option keys: could not write $file"
+        if ! printf '%s\n' "$doc" | cs_write_atomic "$file" jq --argjson add "$add" '
+            if $add == {} then .
+            else (first(.bindings | to_entries[] | select(.value.context == "Global") | .key) // null) as $i
+                | if $i == null then .bindings += [{context: "Global", bindings: $add}]
+                  else .bindings[$i].bindings = ((.bindings[$i].bindings // {}) + $add) end
+            end'; then
+            warn "Rotate/wrap keys: could not write $file"
             return 1
         fi
-        info "Option keys: bound${added} in $file"
+        if [ -z "$retired" ]; then
+            info "Rotate/wrap keys: bound $added in $file"
+        elif [ -z "$added" ]; then
+            info "Rotate/wrap keys: removed cs's $retired from $file"
+        else
+            info "Rotate/wrap keys: bound $added in $file (replacing cs's $retired)"
+        fi
     }
 
-    # Option+1 runs /rotate and Option+2 runs /wrap, through Claude Code's own
+    # Ctrl+X R runs /rotate and Ctrl+X W runs /wrap, through Claude Code's own
     # keybindings.json. Keys are the user's keyboard, so they are offered once
     # per machine and the answer is recorded: a yes is honoured on every
     # install (keys already bound are left as they are), a no is never asked
@@ -1041,7 +1109,7 @@ else
     case "$_option_keys_answer" in
         yes) ;;
         no)
-            info "Option keys: not bound (declined earlier). To be asked again, remove $_option_keys_answer_file and run cs -update."
+            info "Rotate/wrap keys: not bound (declined earlier). To be asked again, remove $_option_keys_answer_file and run cs -update."
             ;;
         *)
             _option_keys_answer=""
@@ -1050,7 +1118,7 @@ else
                 # one key, so an Enter typed after one of them is still queued
                 # and would answer this one. EOF leaves it unanswered.
                 while :; do
-                    echo -en "   Bind Option+1 to /rotate and Option+2 to /wrap in Claude Code? [y/n] "
+                    echo -en "   Bind Ctrl+X R to /rotate and Ctrl+X W to /wrap in Claude Code? [y/n] "
                     if ! read -n 1 -r; then echo ""; break; fi
                     echo ""
                     case "$REPLY" in
@@ -1059,15 +1127,15 @@ else
                     esac
                 done
                 if [ -z "$_option_keys_answer" ]; then
-                    info "Option keys: left unanswered; the next install asks again."
+                    info "Rotate/wrap keys: left unanswered; the next install asks again."
                 elif ! { mkdir -p "$(dirname "$_option_keys_answer_file")" \
                         && printf '%s\n' "$_option_keys_answer" > "$_option_keys_answer_file"; } 2>/dev/null; then
-                    warn "Option keys: the answer could not be recorded in $_option_keys_answer_file, so the next install asks again."
+                    warn "Rotate/wrap keys: the answer could not be recorded in $_option_keys_answer_file, so the next install asks again."
                 elif [ "$_option_keys_answer" = no ]; then
-                    info "Option keys: not bound. You won't be asked again; to change that, remove $_option_keys_answer_file and run cs -update."
+                    info "Rotate/wrap keys: not bound. You won't be asked again; to change that, remove $_option_keys_answer_file and run cs -update."
                 fi
             else
-                info "Option keys: not bound. To bind Option+1 to /rotate and Option+2 to /wrap, run cs -update in a terminal."
+                info "Rotate/wrap keys: not bound. To bind Ctrl+X R to /rotate and Ctrl+X W to /wrap, run cs -update in a terminal."
             fi
             ;;
     esac

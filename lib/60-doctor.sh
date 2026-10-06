@@ -517,20 +517,22 @@ _doctor_check_statusline() {
     esac
 }
 
-# The Option+1 / Option+2 bindings the installer offers: the answer this
+# The Ctrl+X R / Ctrl+X W bindings the installer offers: the answer this
 # machine gave, and whether keybindings.json still holds cs's keys. Not asked
-# and declined are healthy; a key the user binds to something else, a yes whose
-# keys are gone, and a file Claude Code cannot read either are warnings.
+# and declined are healthy; a key the user binds to something else (or a bare
+# ctrl+x a chord would shadow), a yes whose keys are gone or are still an
+# earlier cs's Option+1 / Option+2, and a file Claude Code cannot read either
+# are warnings.
 _doctor_check_option_keys() {
-    local file answer_file answer status state key action bound=0 total=0
+    local file answer_file answer status state key action prefix bound=0 total=0
     file="$(_cs_keybindings_file)"
     answer_file="$(_cs_option_keys_answer_file)"
     if ! command -v jq >/dev/null 2>&1; then
-        _doctor_warn "Option keys: jq not installed; $file could not be read"
+        _doctor_warn "Rotate/wrap keys: jq not installed; $file could not be read"
         return
     fi
     if [ -e "$file" ] && ! _cs_keybindings_shape_ok "$file"; then
-        _doctor_warn "Option keys: $file is unparseable (not JSON with a \"bindings\" array)"
+        _doctor_warn "Rotate/wrap keys: $file is unparseable (not JSON with a \"bindings\" array)"
         return
     fi
     if [ -e "$file" ]; then
@@ -538,30 +540,36 @@ _doctor_check_option_keys() {
     else
         status=$(printf '{"bindings":[]}\n' | _cs_option_keys_status) || status=""
     fi
-    while IFS=$'\t' read -r state key action; do
+    while IFS=$'\t' read -r state key action prefix; do
         [ -n "$state" ] || continue
         total=$((total + 1))
         if [ "$state" = bound ]; then bound=$((bound + 1)); fi
     done <<< "$status"
     if [ "$total" -gt 0 ] && [ "$bound" = "$total" ]; then
-        _doctor_ok "Option keys: bound (Option+1 runs /rotate, Option+2 runs /wrap)"
+        _doctor_ok "Rotate/wrap keys: bound (Ctrl+X R runs /rotate, Ctrl+X W runs /wrap)"
         return
     fi
     answer=$(cat "$answer_file" 2>/dev/null) || answer=""
     case "$answer" in
         yes)
-            while IFS=$'\t' read -r state key action; do
+            while IFS=$'\t' read -r state key action prefix; do
                 case "$state" in
-                    conflict) _doctor_warn "Option keys: conflict on $key (bound to $action in $file)" ;;
-                    free) _doctor_warn "Option keys: $key not bound (run cs -update to bind it)" ;;
+                    conflict)
+                        if [ -n "$prefix" ]; then
+                            _doctor_warn "Rotate/wrap keys: conflict on $key ($prefix is bound to $action in $file)"
+                        else
+                            _doctor_warn "Rotate/wrap keys: conflict on $key (bound to $action in $file)"
+                        fi
+                        ;;
+                    free) _doctor_warn "Rotate/wrap keys: $key not bound (run cs -update to bind it)" ;;
                 esac
             done <<< "$status"
             ;;
         no)
-            _doctor_ok "Option keys: declined (to be asked again, remove $answer_file and run cs -update in a terminal)"
+            _doctor_ok "Rotate/wrap keys: declined (to be asked again, remove $answer_file and run cs -update in a terminal)"
             ;;
         *)
-            _doctor_ok "Option keys: not asked (run cs -update in a terminal to be asked)"
+            _doctor_ok "Rotate/wrap keys: not asked (run cs -update in a terminal to be asked)"
             ;;
     esac
 }
