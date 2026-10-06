@@ -50,14 +50,17 @@ SETTINGS
 # The narrative is the looser-bar lab notebook, held as a native memory topic
 # file so it inherits lazy-load and /memory tooling. Idempotent: creates the
 # stub on first run and re-adds the index pointer if a memory write dropped it.
-ensure_narrative_file() {
+# A caller that has already resolved the actor's slug passes it.
+ensure_narrative_file() {  # session_dir, [actor_slug]
     local session_dir="$1"
     local mem_dir="$session_dir/.cs/memory"
     local index="$mem_dir/MEMORY.md"
     mkdir -p "$mem_dir"
 
-    local actor
-    actor=$(cs_actor_slug "$session_dir")
+    local actor="${2:-}"
+    if [ -z "$actor" ]; then
+        actor=$(cs_actor_slug "$session_dir")
+    fi
     local narrative="$mem_dir/narrative.$actor.md"
 
     # One-time migration: a pre-per-actor narrative.md becomes this actor's file.
@@ -82,7 +85,7 @@ EOF
     # GNU sed and would abort session resume on Linux under set -e.
     if [ -f "$index" ] && grep -q '(narrative\.md)' "$index" 2>/dev/null; then
         cs_write_atomic "$index" sed '/(narrative\.md)/d' "$index" \
-            || warn "could not rewrite $index; the stale narrative.md pointer stays"
+            || { warn "could not rewrite $index; the stale narrative.md pointer stays"; _CS_MIGRATE_CLEAN=0; }
     fi
 
     if [ ! -f "$index" ] || ! grep -q "(narrative\.$actor\.md)" "$index" 2>/dev/null; then
