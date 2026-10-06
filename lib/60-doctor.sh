@@ -523,10 +523,10 @@ _doctor_check_statusline() {
 # ctrl+x a chord would shadow), a yes whose keys are gone or are still an
 # earlier cs's Option+1 / Option+2, and a file Claude Code cannot read either
 # are warnings.
-_doctor_check_option_keys() {
+_doctor_check_rotate_wrap_keys() {
     local file answer_file answer status state key action prefix bound=0 total=0
     file="$(_cs_keybindings_file)"
-    answer_file="$(_cs_option_keys_answer_file)"
+    answer_file="$(_cs_rotate_wrap_keys_answer_file)"
     if ! command -v jq >/dev/null 2>&1; then
         _doctor_warn "Rotate/wrap keys: jq not installed; $file could not be read"
         return
@@ -536,9 +536,9 @@ _doctor_check_option_keys() {
         return
     fi
     if [ -e "$file" ]; then
-        status=$(_cs_option_keys_status < "$file") || status=""
+        status=$(_cs_rotate_wrap_keys_status < "$file") || status=""
     else
-        status=$(printf '{"bindings":[]}\n' | _cs_option_keys_status) || status=""
+        status=$(printf '{"bindings":[]}\n' | _cs_rotate_wrap_keys_status) || status=""
     fi
     while IFS=$'\t' read -r state key action prefix; do
         [ -n "$state" ] || continue
@@ -847,7 +847,7 @@ run_doctor() {
     _doctor_check_claude_audit
     _doctor_check_statusline
     _doctor_check_subagent_statusline
-    _doctor_check_option_keys
+    _doctor_check_rotate_wrap_keys
     _doctor_check_iterm2
     _doctor_check_spawn
     _doctor_check_hook_authority

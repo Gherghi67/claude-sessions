@@ -417,10 +417,10 @@ adopt_worktrees() {  # [--dry-run]
 # unless it is a symlink, whose target is written through instead so a
 # dotfiles manager's copy does not keep cs's keys. The recorded answer goes
 # too, so a later install asks again.
-_uninstall_option_keys() {
+_uninstall_rotate_wrap_keys() {
     local file ours held stripped
     file="$(_cs_keybindings_file)"
-    rm -f "$(_cs_option_keys_answer_file)"
+    rm -f "$(_cs_rotate_wrap_keys_answer_file)"
     [ -e "$file" ] || return 0
     if ! command -v jq >/dev/null 2>&1; then
         warn "jq not found - cannot remove cs's rotate/wrap bindings from $file"
@@ -430,7 +430,7 @@ _uninstall_option_keys() {
         warn "Left $file as it is: not JSON with a \"bindings\" array"
         return 0
     fi
-    ours=$(jq -cn --argjson a "$CS_OPTION_KEYS" --argjson b "$CS_RETIRED_OPTION_KEYS" '$a + $b')
+    ours=$(jq -cn --argjson a "$CS_ROTATE_WRAP_KEYS" --argjson b "$CS_RETIRED_OPTION_KEYS" '$a + $b')
     held=$(_cs_keybindings_held "$ours" < "$file") \
         && stripped=$(_cs_keybindings_strip "$ours" < "$file") || {
         warn "Could not read $file; its rotate/wrap bindings were left in place"
@@ -646,7 +646,7 @@ run_uninstall() {
         warn "Manually remove cs hook entries from $settings_file"
     fi
 
-    _uninstall_option_keys
+    _uninstall_rotate_wrap_keys
 
     # Ask about secrets in keychain
     if [ -d "$SESSIONS_ROOT" ]; then

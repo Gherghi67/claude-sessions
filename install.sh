@@ -220,13 +220,13 @@ _strip_hook_registration() {
 # each a "command:<name>" action, which submits /<name>. install.sh asks once
 # per machine and binds them, cs -uninstall takes back only the keys that
 # still hold these values, and cs -doctor reports them.
-CS_OPTION_KEYS='{"ctrl+x r":"command:rotate","ctrl+x w":"command:wrap"}'
+CS_ROTATE_WRAP_KEYS='{"ctrl+x r":"command:rotate","ctrl+x w":"command:wrap"}'
 
 # Option+1 and Option+2 on the same two commands, as cs 2026.10.6 bound them.
 # iTerm2 selects panes with Option+number, so there they never reach Claude
 # Code. Wherever they still hold these values, an install that binds the
 # chords takes them back, and so does cs -uninstall.
-# shellcheck disable=SC2034  # read by install.sh's _bind_option_keys and by cs -uninstall
+# shellcheck disable=SC2034  # read by install.sh's _bind_rotate_wrap_keys and by cs -uninstall
 CS_RETIRED_OPTION_KEYS='{"alt+1":"command:rotate","alt+2":"command:wrap"}'
 
 # The jq definition shared by the filters below: whether a to_entries pair
@@ -247,8 +247,10 @@ _cs_keybindings_file() {
 }
 
 # This machine's answer to the installer's question, yes or no; absent until
-# it has been asked on a terminal.
-_cs_option_keys_answer_file() {
+# it has been asked on a terminal. The file keeps the name it had when the
+# keys were Option+1 / Option+2, so a machine that said yes then gets the
+# chords on its next install.
+_cs_rotate_wrap_keys_answer_file() {
     printf '%s\n' "${XDG_CONFIG_HOME:-$HOME/.config}/cs/option-keys"
 }
 
@@ -272,8 +274,8 @@ _cs_keybindings_shape_ok() {  # file
 # "conflict<TAB>key<TAB>action<TAB>prefix". An action that is not a string
 # (a null that unbinds the key) prints as JSON; a null on the prefix is no
 # conflict, as it binds nothing.
-_cs_option_keys_status() {
-    jq -r --argjson cs "$CS_OPTION_KEYS" '
+_cs_rotate_wrap_keys_status() {
+    jq -r --argjson cs "$CS_ROTATE_WRAP_KEYS" '
         def show: if type == "string" then . else tojson end;
         [.bindings[] | (.bindings // {}) | to_entries[]] as $all
         | $cs | to_entries[] | . as $c
@@ -1032,7 +1034,7 @@ else
     # is written. The write is cs_write_atomic's, from the hooks' shared
     # library deployed above: mode kept, and a symlinked file (a dotfiles
     # manager's) rewritten through its link.
-    _bind_option_keys() {
+    _bind_rotate_wrap_keys() {
         local file doc status state key action prefix added="" free="" conflicts=0 retired="" add
         file="$(_cs_keybindings_file)"
         if [ -e "$file" ]; then
@@ -1044,7 +1046,7 @@ else
         else
             doc='{"bindings":[]}'
         fi
-        status=$(printf '%s\n' "$doc" | _cs_option_keys_status) \
+        status=$(printf '%s\n' "$doc" | _cs_rotate_wrap_keys_status) \
             || { warn "Rotate/wrap keys: could not read the bindings in $file"; return 1; }
         while IFS=$'\t' read -r state key action prefix; do
             case "$state" in
@@ -1071,7 +1073,7 @@ else
             fi
         fi
         [ -n "$added" ] || [ -n "$retired" ] || return 0
-        add=$(jq -cn --argjson cs "$CS_OPTION_KEYS" --arg free "$free" \
+        add=$(jq -cn --argjson cs "$CS_ROTATE_WRAP_KEYS" --arg free "$free" \
             '$cs | with_entries(select(.key as $k | $free | split("\n") | any(.[]; . == $k)))') \
             || { warn "Rotate/wrap keys: could not build the bindings for $file"; return 1; }
         # shellcheck source=hooks/cs-shared.sh
@@ -1104,15 +1106,15 @@ else
     # install (keys already bound are left as they are), a no is never asked
     # again, and with no terminal nothing is written or recorded. Every step
     # reports and carries on; a keybinding must never take the install down.
-    _option_keys_answer_file="$(_cs_option_keys_answer_file)"
-    _option_keys_answer=$(cat "$_option_keys_answer_file" 2>/dev/null) || _option_keys_answer=""
-    case "$_option_keys_answer" in
+    _rotate_wrap_keys_answer_file="$(_cs_rotate_wrap_keys_answer_file)"
+    _rotate_wrap_keys_answer=$(cat "$_rotate_wrap_keys_answer_file" 2>/dev/null) || _rotate_wrap_keys_answer=""
+    case "$_rotate_wrap_keys_answer" in
         yes) ;;
         no)
-            info "Rotate/wrap keys: not bound (declined earlier). To be asked again, remove $_option_keys_answer_file and run cs -update."
+            info "Rotate/wrap keys: not bound (declined earlier). To be asked again, remove $_rotate_wrap_keys_answer_file and run cs -update."
             ;;
         *)
-            _option_keys_answer=""
+            _rotate_wrap_keys_answer=""
             if [ -t 0 ]; then
                 # An explicit y or n only: the status-line questions above read
                 # one key, so an Enter typed after one of them is still queued
@@ -1122,25 +1124,25 @@ else
                     if ! read -n 1 -r; then echo ""; break; fi
                     echo ""
                     case "$REPLY" in
-                        [Yy]) _option_keys_answer=yes; break ;;
-                        [Nn]) _option_keys_answer=no; break ;;
+                        [Yy]) _rotate_wrap_keys_answer=yes; break ;;
+                        [Nn]) _rotate_wrap_keys_answer=no; break ;;
                     esac
                 done
-                if [ -z "$_option_keys_answer" ]; then
+                if [ -z "$_rotate_wrap_keys_answer" ]; then
                     info "Rotate/wrap keys: left unanswered; the next install asks again."
-                elif ! { mkdir -p "$(dirname "$_option_keys_answer_file")" \
-                        && printf '%s\n' "$_option_keys_answer" > "$_option_keys_answer_file"; } 2>/dev/null; then
-                    warn "Rotate/wrap keys: the answer could not be recorded in $_option_keys_answer_file, so the next install asks again."
-                elif [ "$_option_keys_answer" = no ]; then
-                    info "Rotate/wrap keys: not bound. You won't be asked again; to change that, remove $_option_keys_answer_file and run cs -update."
+                elif ! { mkdir -p "$(dirname "$_rotate_wrap_keys_answer_file")" \
+                        && printf '%s\n' "$_rotate_wrap_keys_answer" > "$_rotate_wrap_keys_answer_file"; } 2>/dev/null; then
+                    warn "Rotate/wrap keys: the answer could not be recorded in $_rotate_wrap_keys_answer_file, so the next install asks again."
+                elif [ "$_rotate_wrap_keys_answer" = no ]; then
+                    info "Rotate/wrap keys: not bound. You won't be asked again; to change that, remove $_rotate_wrap_keys_answer_file and run cs -update."
                 fi
             else
                 info "Rotate/wrap keys: not bound. To bind Ctrl+X R to /rotate and Ctrl+X W to /wrap, run cs -update in a terminal."
             fi
             ;;
     esac
-    if [ "$_option_keys_answer" = yes ]; then
-        _bind_option_keys || true
+    if [ "$_rotate_wrap_keys_answer" = yes ]; then
+        _bind_rotate_wrap_keys || true
     fi
 fi
 

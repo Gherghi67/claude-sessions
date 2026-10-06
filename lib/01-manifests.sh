@@ -127,13 +127,13 @@ _strip_hook_registration() {
 # each a "command:<name>" action, which submits /<name>. install.sh asks once
 # per machine and binds them, cs -uninstall takes back only the keys that
 # still hold these values, and cs -doctor reports them.
-CS_OPTION_KEYS='{"ctrl+x r":"command:rotate","ctrl+x w":"command:wrap"}'
+CS_ROTATE_WRAP_KEYS='{"ctrl+x r":"command:rotate","ctrl+x w":"command:wrap"}'
 
 # Option+1 and Option+2 on the same two commands, as cs 2026.10.6 bound them.
 # iTerm2 selects panes with Option+number, so there they never reach Claude
 # Code. Wherever they still hold these values, an install that binds the
 # chords takes them back, and so does cs -uninstall.
-# shellcheck disable=SC2034  # read by install.sh's _bind_option_keys and by cs -uninstall
+# shellcheck disable=SC2034  # read by install.sh's _bind_rotate_wrap_keys and by cs -uninstall
 CS_RETIRED_OPTION_KEYS='{"alt+1":"command:rotate","alt+2":"command:wrap"}'
 
 # The jq definition shared by the filters below: whether a to_entries pair
@@ -154,8 +154,10 @@ _cs_keybindings_file() {
 }
 
 # This machine's answer to the installer's question, yes or no; absent until
-# it has been asked on a terminal.
-_cs_option_keys_answer_file() {
+# it has been asked on a terminal. The file keeps the name it had when the
+# keys were Option+1 / Option+2, so a machine that said yes then gets the
+# chords on its next install.
+_cs_rotate_wrap_keys_answer_file() {
     printf '%s\n' "${XDG_CONFIG_HOME:-$HOME/.config}/cs/option-keys"
 }
 
@@ -179,8 +181,8 @@ _cs_keybindings_shape_ok() {  # file
 # "conflict<TAB>key<TAB>action<TAB>prefix". An action that is not a string
 # (a null that unbinds the key) prints as JSON; a null on the prefix is no
 # conflict, as it binds nothing.
-_cs_option_keys_status() {
-    jq -r --argjson cs "$CS_OPTION_KEYS" '
+_cs_rotate_wrap_keys_status() {
+    jq -r --argjson cs "$CS_ROTATE_WRAP_KEYS" '
         def show: if type == "string" then . else tojson end;
         [.bindings[] | (.bindings // {}) | to_entries[]] as $all
         | $cs | to_entries[] | . as $c

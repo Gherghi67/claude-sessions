@@ -659,7 +659,7 @@ test_doctor_statusline_caps_row_names_the_answer_or_the_ask() {
 # and what keybindings.json holds. A healthy state is OK; a binding the user
 # holds on cs's key or on its ctrl+x prefix, keys an older cs bound that the
 # next update replaces, or a file Claude Code cannot read, is a WARN.
-test_doctor_option_keys_row_names_the_state() {
+test_doctor_rotate_wrap_keys_row_names_the_state() {
     local cfg="$TEST_TMPDIR/ok-cfg" xdg="$TEST_TMPDIR/ok-xdg" output kb
     kb="$cfg/keybindings.json"
     mkdir -p "$cfg" "$xdg/cs"
@@ -964,7 +964,7 @@ run_test test_doctor_skips_inline_shell_hook_commands
 run_test test_doctor_statusline_ok_when_registered_and_executable
 run_test test_doctor_statusline_fails_when_binary_missing
 run_test test_doctor_statusline_caps_row_names_the_answer_or_the_ask
-run_test test_doctor_option_keys_row_names_the_state
+run_test test_doctor_rotate_wrap_keys_row_names_the_state
 run_test test_doctor_rotate_mod_row_observes_execution_not_presence
 run_test test_doctor_statusline_no_fail_when_not_registered
 run_test test_doctor_statusline_names_context_gating_when_absent

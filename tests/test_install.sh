@@ -1532,12 +1532,12 @@ _need_expect() {
     return 77
 }
 
-# Run install.sh on a pty, declining the status line so the option-keys
+# Run install.sh on a pty, declining the status line so the rotate/wrap keys
 # question is the only one that decides what reaches keybindings.json, and
 # answering that question with the given key. Extra VAR=value arguments go to
 # the installer's environment. The transcript lands in $TEST_TMPDIR/<label>.out;
 # returns the installer's exit status.
-_install_answering_option_keys() {  # label, home, answer, [VAR=value...]
+_install_answering_rotate_wrap_keys() {  # label, home, answer, [VAR=value...]
     local label="$1" home="$2" ans="$3"; shift 3
     local exp="$TEST_TMPDIR/$label.exp"
     cat > "$exp" <<EXPECT
@@ -1557,11 +1557,11 @@ EXPECT
 
 # 1. No keybindings.json: a yes creates it holding exactly cs's block, and the
 # answer is recorded for the next install.
-test_option_keys_yes_creates_the_file_with_only_cs_block() {
+test_rotate_wrap_keys_yes_creates_the_file_with_only_cs_block() {
     _need_expect || return 77
     local home="$TEST_TMPDIR/home-ok-create"
     mkdir -p "$home"
-    _install_answering_option_keys ok-create "$home" y \
+    _install_answering_rotate_wrap_keys ok-create "$home" y \
         || { echo "  FAIL: install.sh exited non-zero"; return 1; }
     assert_eq "{\"bindings\":[$_OK_CS_BLOCK]}" "$(jq -c . "$home/.claude/keybindings.json" 2>&1)" \
         "a new keybindings.json holds exactly cs's block" || return 1
@@ -1570,13 +1570,13 @@ test_option_keys_yes_creates_the_file_with_only_cs_block() {
 
 # 2. An existing Global block takes the two keys beside the user's own; every
 # other block and key is kept, and no second Global block appears.
-test_option_keys_merge_into_the_existing_global_block() {
+test_rotate_wrap_keys_merge_into_the_existing_global_block() {
     _need_expect || return 77
     local home="$TEST_TMPDIR/home-ok-merge"
     mkdir -p "$home/.claude"
     printf '%s\n' '{"$schema":"https://example.com/kb.json","bindings":[{"context":"Chat","bindings":{"ctrl+e":"chat:externalEditor"}},{"context":"Global","bindings":{"ctrl+t":"app:toggleTodos"}}]}' \
         > "$home/.claude/keybindings.json"
-    _install_answering_option_keys ok-merge "$home" y \
+    _install_answering_rotate_wrap_keys ok-merge "$home" y \
         || { echo "  FAIL: install.sh exited non-zero"; return 1; }
     assert_eq '{"$schema":"https://example.com/kb.json","bindings":[{"context":"Chat","bindings":{"ctrl+e":"chat:externalEditor"}},{"context":"Global","bindings":{"ctrl+t":"app:toggleTodos","ctrl+x r":"command:rotate","ctrl+x w":"command:wrap"}}]}' \
         "$(jq -c . "$home/.claude/keybindings.json" 2>&1)" \
@@ -1585,13 +1585,13 @@ test_option_keys_merge_into_the_existing_global_block() {
 
 # 3. A key the user already binds, in any context, is never overwritten: it is
 # left as it is and named in a warning, and the other key is still added.
-test_option_keys_never_overwrite_a_user_binding() {
+test_rotate_wrap_keys_never_overwrite_a_user_binding() {
     _need_expect || return 77
     local home="$TEST_TMPDIR/home-ok-conflict"
     mkdir -p "$home/.claude"
     printf '%s\n' '{"bindings":[{"context":"Chat","bindings":{"ctrl+x r":"chat:submit"}}]}' \
         > "$home/.claude/keybindings.json"
-    _install_answering_option_keys ok-conflict "$home" y \
+    _install_answering_rotate_wrap_keys ok-conflict "$home" y \
         || { echo "  FAIL: install.sh exited non-zero"; return 1; }
     assert_eq '{"bindings":[{"context":"Chat","bindings":{"ctrl+x r":"chat:submit"}},{"context":"Global","bindings":{"ctrl+x w":"command:wrap"}}]}' \
         "$(jq -c . "$home/.claude/keybindings.json" 2>&1)" \
@@ -1602,7 +1602,7 @@ test_option_keys_never_overwrite_a_user_binding() {
 
 # 4. A file cs cannot read as {"bindings":[...]} is refused and left byte for
 # byte as it was, with no temp file beside it, and the message names it.
-test_option_keys_refuse_an_unparseable_file() {
+test_rotate_wrap_keys_refuse_an_unparseable_file() {
     _need_expect || return 77
     local body i=0
     for body in '{"bindings": [' '{"bindings":{"alt+3":"command:x"}}'; do
@@ -1612,7 +1612,7 @@ test_option_keys_refuse_an_unparseable_file() {
         mkdir -p "$home/.claude"
         printf '%s\n' "$body" > "$kb"
         cp "$kb" "$TEST_TMPDIR/bad$i.orig"
-        _install_answering_option_keys "ok-bad$i" "$home" y \
+        _install_answering_rotate_wrap_keys "ok-bad$i" "$home" y \
             || { echo "  FAIL: install.sh exited non-zero on case $i"; return 1; }
         cmp -s "$TEST_TMPDIR/bad$i.orig" "$kb" \
             || { echo "  FAIL: case $i: the file was changed"; return 1; }
@@ -1625,20 +1625,20 @@ test_option_keys_refuse_an_unparseable_file() {
 
 # 5. A no leaves the file alone and is remembered: the next install, on a
 # terminal too, does not ask again.
-test_option_keys_decline_is_remembered() {
+test_rotate_wrap_keys_decline_is_remembered() {
     _need_expect || return 77
     local home="$TEST_TMPDIR/home-ok-no" kb
     kb="$home/.claude/keybindings.json"
     mkdir -p "$home/.claude"
     printf '%s\n' '{"bindings":[{"context":"Global","bindings":{"ctrl+t":"app:toggleTodos"}}]}' > "$kb"
     cp "$kb" "$TEST_TMPDIR/no.orig"
-    _install_answering_option_keys ok-no1 "$home" n \
+    _install_answering_rotate_wrap_keys ok-no1 "$home" n \
         || { echo "  FAIL: install.sh exited non-zero"; return 1; }
     cmp -s "$TEST_TMPDIR/no.orig" "$kb" || { echo "  FAIL: a no changed the file"; return 1; }
     assert_eq "no" "$(cat "$home/.config/cs/option-keys" 2>&1)" "the no is recorded" || return 1
     grep -q 'Ctrl+X R.*\[y/n\]' "$TEST_TMPDIR/ok-no1.out" \
         || { echo "  FAIL: the first install never asked"; return 1; }
-    _install_answering_option_keys ok-no2 "$home" y \
+    _install_answering_rotate_wrap_keys ok-no2 "$home" y \
         || { echo "  FAIL: the second install exited non-zero"; return 1; }
     if grep -q 'Ctrl+X R.*\[y/n\]' "$TEST_TMPDIR/ok-no2.out"; then
         echo "  FAIL: the second install asked again"; return 1
@@ -1648,7 +1648,7 @@ test_option_keys_decline_is_remembered() {
 
 # 6. With no terminal there is no one to ask: nothing is written, nothing is
 # recorded, and one line says how to be asked.
-test_option_keys_non_interactive_writes_nothing_and_says_how() {
+test_rotate_wrap_keys_non_interactive_writes_nothing_and_says_how() {
     local home="$TEST_TMPDIR/home-ok-pipe"
     mkdir -p "$home"
     env -u CLAUDE_CONFIG_DIR -u XDG_CONFIG_HOME HOME="$home" bash "$INSTALL_SH" \
@@ -1664,16 +1664,16 @@ test_option_keys_non_interactive_writes_nothing_and_says_how() {
 }
 
 # 7. Installing again after a yes, with or without a terminal, changes nothing.
-test_option_keys_reinstall_after_yes_is_idempotent() {
+test_rotate_wrap_keys_reinstall_after_yes_is_idempotent() {
     _need_expect || return 77
     local home="$TEST_TMPDIR/home-ok-again" kb
     kb="$home/.claude/keybindings.json"
     mkdir -p "$home/.claude"
     printf '%s\n' '{"bindings":[{"context":"Global","bindings":{"ctrl+t":"app:toggleTodos"}}]}' > "$kb"
-    _install_answering_option_keys ok-again1 "$home" y \
+    _install_answering_rotate_wrap_keys ok-again1 "$home" y \
         || { echo "  FAIL: install.sh exited non-zero"; return 1; }
     cp "$kb" "$TEST_TMPDIR/again.after1"
-    _install_answering_option_keys ok-again2 "$home" y \
+    _install_answering_rotate_wrap_keys ok-again2 "$home" y \
         || { echo "  FAIL: the second install exited non-zero"; return 1; }
     env -u CLAUDE_CONFIG_DIR -u XDG_CONFIG_HOME HOME="$home" bash "$INSTALL_SH" < /dev/null > /dev/null 2>&1 \
         || { echo "  FAIL: the third install exited non-zero"; return 1; }
@@ -1685,7 +1685,7 @@ test_option_keys_reinstall_after_yes_is_idempotent() {
 # 8. Uninstall takes back only keys that still hold cs's values, the chords and
 # an older cs's Option+1 / Option+2 alike, keeps every user binding (an
 # unbinding null included), and deletes a file it leaves holding nothing.
-test_option_keys_uninstall_removes_only_cs_values() {
+test_rotate_wrap_keys_uninstall_removes_only_cs_values() {
     local home="$TEST_TMPDIR/home-ok-un" kb
     kb="$home/.claude/keybindings.json"
     mkdir -p "$home/.claude" "$home/.config/cs"
@@ -1705,11 +1705,11 @@ test_option_keys_uninstall_removes_only_cs_values() {
 }
 
 # 9. CLAUDE_CONFIG_DIR moves Claude Code's config, keybindings.json included.
-test_option_keys_follow_claude_config_dir() {
+test_rotate_wrap_keys_follow_claude_config_dir() {
     _need_expect || return 77
     local home="$TEST_TMPDIR/home-ok-cfg" cfg="$TEST_TMPDIR/claude-cfg"
     mkdir -p "$home" "$cfg"
-    _install_answering_option_keys ok-cfg "$home" y "CLAUDE_CONFIG_DIR=$cfg" \
+    _install_answering_rotate_wrap_keys ok-cfg "$home" y "CLAUDE_CONFIG_DIR=$cfg" \
         || { echo "  FAIL: install.sh exited non-zero"; return 1; }
     assert_eq "{\"bindings\":[$_OK_CS_BLOCK]}" "$(jq -c . "$cfg/keybindings.json" 2>&1)" \
         "the file is written in CLAUDE_CONFIG_DIR" || return 1
@@ -1718,14 +1718,14 @@ test_option_keys_follow_claude_config_dir() {
 
 # 10. A symlinked keybindings.json (a dotfiles manager's) is written through:
 # the link stays a link, and its target takes the keys and keeps its mode.
-test_option_keys_write_through_a_symlink() {
+test_rotate_wrap_keys_write_through_a_symlink() {
     _need_expect || return 77
     local home="$TEST_TMPDIR/home-ok-link" target="$TEST_TMPDIR/dotfiles/keybindings.json"
     mkdir -p "$home/.claude" "$(dirname "$target")"
     printf '%s\n' '{"bindings":[{"context":"Global","bindings":{"ctrl+t":"app:toggleTodos"}}]}' > "$target"
     chmod 600 "$target"
     ln -s "$target" "$home/.claude/keybindings.json"
-    _install_answering_option_keys ok-link "$home" y \
+    _install_answering_rotate_wrap_keys ok-link "$home" y \
         || { echo "  FAIL: install.sh exited non-zero"; return 1; }
     [ -L "$home/.claude/keybindings.json" ] || { echo "  FAIL: the link was replaced by a file"; return 1; }
     assert_eq '{"bindings":[{"context":"Global","bindings":{"ctrl+t":"app:toggleTodos","ctrl+x r":"command:rotate","ctrl+x w":"command:wrap"}}]}' \
@@ -1737,12 +1737,12 @@ test_option_keys_write_through_a_symlink() {
 # .cs/claude-config, which every other session cannot see. The keys go to the
 # shell's config dir that cs recorded in CLAUDE_SECURESTORAGE_CONFIG_DIR:
 # empty selects ~/.claude, a path selects that dir.
-test_option_keys_skip_an_encrypted_sessions_config_dir() {
+test_rotate_wrap_keys_skip_an_encrypted_sessions_config_dir() {
     _need_expect || return 77
     local home="$TEST_TMPDIR/home-ok-enc" sess="$TEST_TMPDIR/enc-sess/.cs/claude-config"
     local cfg="$TEST_TMPDIR/claude-cfg-enc"
     mkdir -p "$home" "$sess" "$cfg"
-    _install_answering_option_keys ok-enc "$home" y \
+    _install_answering_rotate_wrap_keys ok-enc "$home" y \
         "CLAUDE_CONFIG_DIR=$sess" "CLAUDE_SECURESTORAGE_CONFIG_DIR=" \
         || { echo "  FAIL: install.sh exited non-zero"; return 1; }
     assert_eq "{\"bindings\":[$_OK_CS_BLOCK]}" "$(jq -c . "$home/.claude/keybindings.json" 2>&1)" \
@@ -1750,7 +1750,7 @@ test_option_keys_skip_an_encrypted_sessions_config_dir() {
     assert_file_not_exists "$sess/keybindings.json" "nothing is written in the session's config dir" || return 1
 
     rm -f "$home/.config/cs/option-keys"
-    _install_answering_option_keys ok-enc2 "$home" y \
+    _install_answering_rotate_wrap_keys ok-enc2 "$home" y \
         "CLAUDE_CONFIG_DIR=$sess" "CLAUDE_SECURESTORAGE_CONFIG_DIR=$cfg" \
         || { echo "  FAIL: install.sh exited non-zero"; return 1; }
     assert_eq "{\"bindings\":[$_OK_CS_BLOCK]}" "$(jq -c . "$cfg/keybindings.json" 2>&1)" \
@@ -1761,7 +1761,7 @@ test_option_keys_skip_an_encrypted_sessions_config_dir() {
 # 12. A machine an older cs bound Option+1 / Option+2 on: its recorded yes is
 # honoured without a terminal, cs's alt+1 and alt+2 make way for the chords,
 # and every other binding stays. The one line says what was replaced.
-test_option_keys_replace_the_old_option_keys() {
+test_rotate_wrap_keys_replace_cs_option_keys() {
     local home="$TEST_TMPDIR/home-ok-mig" kb
     kb="$home/.claude/keybindings.json"
     mkdir -p "$home/.claude" "$home/.config/cs"
@@ -1778,7 +1778,7 @@ test_option_keys_replace_the_old_option_keys() {
 
 # 13. Only cs's own values are taken back: an alt+1 the user binds to anything
 # else stays, while cs's alt+2 goes.
-test_option_keys_migration_keeps_a_users_alt_key() {
+test_rotate_wrap_keys_migration_keeps_a_users_alt_key() {
     local home="$TEST_TMPDIR/home-ok-mig2" kb
     kb="$home/.claude/keybindings.json"
     mkdir -p "$home/.claude" "$home/.config/cs"
@@ -1795,7 +1795,7 @@ test_option_keys_migration_keeps_a_users_alt_key() {
 # binding ctrl+x r would silence a user's own bare ctrl+x. That counts as a
 # conflict for both chords: the file is left as it is, each is named, and
 # cs's Option+1 / Option+2 stay, as the only rotate and wrap keys there are.
-test_option_keys_never_shadow_a_users_ctrl_x() {
+test_rotate_wrap_keys_never_shadow_a_users_ctrl_x() {
     local home="$TEST_TMPDIR/home-ok-prefix" kb
     kb="$home/.claude/keybindings.json"
     mkdir -p "$home/.claude" "$home/.config/cs"
@@ -1842,18 +1842,18 @@ run_test test_statusline_disable_sets_and_enable_clears_declined_marker
 run_test test_uninstall_removes_declined_marker
 run_test test_install_removes_the_retired_hint_mod
 run_test test_install_removes_the_mod_under_its_old_name
-run_test test_option_keys_yes_creates_the_file_with_only_cs_block
-run_test test_option_keys_merge_into_the_existing_global_block
-run_test test_option_keys_never_overwrite_a_user_binding
-run_test test_option_keys_refuse_an_unparseable_file
-run_test test_option_keys_decline_is_remembered
-run_test test_option_keys_non_interactive_writes_nothing_and_says_how
-run_test test_option_keys_reinstall_after_yes_is_idempotent
-run_test test_option_keys_uninstall_removes_only_cs_values
-run_test test_option_keys_follow_claude_config_dir
-run_test test_option_keys_write_through_a_symlink
-run_test test_option_keys_skip_an_encrypted_sessions_config_dir
-run_test test_option_keys_replace_the_old_option_keys
-run_test test_option_keys_migration_keeps_a_users_alt_key
-run_test test_option_keys_never_shadow_a_users_ctrl_x
+run_test test_rotate_wrap_keys_yes_creates_the_file_with_only_cs_block
+run_test test_rotate_wrap_keys_merge_into_the_existing_global_block
+run_test test_rotate_wrap_keys_never_overwrite_a_user_binding
+run_test test_rotate_wrap_keys_refuse_an_unparseable_file
+run_test test_rotate_wrap_keys_decline_is_remembered
+run_test test_rotate_wrap_keys_non_interactive_writes_nothing_and_says_how
+run_test test_rotate_wrap_keys_reinstall_after_yes_is_idempotent
+run_test test_rotate_wrap_keys_uninstall_removes_only_cs_values
+run_test test_rotate_wrap_keys_follow_claude_config_dir
+run_test test_rotate_wrap_keys_write_through_a_symlink
+run_test test_rotate_wrap_keys_skip_an_encrypted_sessions_config_dir
+run_test test_rotate_wrap_keys_replace_cs_option_keys
+run_test test_rotate_wrap_keys_migration_keeps_a_users_alt_key
+run_test test_rotate_wrap_keys_never_shadow_a_users_ctrl_x
 report_results
