@@ -195,19 +195,23 @@ test_public_launchers_keep_the_users_home_and_point_tools_at_the_profile() {
     cat > "$PROFILE/.local/bin/ags" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$HOME" "$CLAUDE_CONFIG_DIR" "$CODEX_HOME" "$CS_SESSIONS_ROOT" "$CS_INSTALL_DIR" \
-    "$CS_CONFIG_DIR" "$CS_CACHE_DIR" "$CS_SECRETS_DIR" "${XDG_CONFIG_HOME:-unset}"
+    "$CS_CONFIG_DIR" "$CS_CACHE_DIR" "$CS_DATA_DIR" "$CS_SECRETS_DIR" "${XDG_CONFIG_HOME:-unset}" \
+    "${CS_TMUX_SOCKET:-unset}" "${CS_TMUX_SESSION:-unset}" "${CS_SECRETS_BACKEND:-unset}"
 mkdir -p "$CS_CACHE_DIR"
 printf 'experimental cache\n' > "$CS_CACHE_DIR/update-check"
 EOF
     chmod +x "$PROFILE/.local/bin/ags"
     local output
     output=$(CS_SESSIONS_ROOT="$HOME/.claude-sessions" CLAUDE_CONFIG_DIR="$HOME/.claude" \
-        CODEX_HOME="$HOME/.codex" "$HOME/.local/bin/ags" -version)
+        CODEX_HOME="$HOME/.codex" CS_SECRETS_BACKEND=keychain "$HOME/.local/bin/ags" -version)
     # HOME stays the user's: macOS finds the login keychain through it, and ~/.ssh
     # and the rest of the user's credentials stay visible to the session. Every
     # tool is pointed at the profile through its own directory variable, and the
     # generic XDG roots are left alone so gh, git and friends keep their config.
-    assert_eq "$HOME"$'\n'"$PROFILE/.claude"$'\n'"$PROFILE/.codex"$'\n'"$PROFILE/sessions"$'\n'"$PROFILE/.local/bin"$'\n'"$PROFILE/.config/cs"$'\n'"$PROFILE/.cache/cs"$'\n'"$PROFILE/.cs-secrets"$'\n'unset "$output" || return 1
+    # ags -spawn opens its windows on a tmux server of its own, and secrets stay
+    # in the profile's encrypted store, out of the keychain's shared cs:<session>
+    # namespace, whatever the caller's shell says.
+    assert_eq "$HOME"$'\n'"$PROFILE/.claude"$'\n'"$PROFILE/.codex"$'\n'"$PROFILE/sessions"$'\n'"$PROFILE/.local/bin"$'\n'"$PROFILE/.config/cs"$'\n'"$PROFILE/.cache/cs"$'\n'"$PROFILE/.local/share/cs"$'\n'"$PROFILE/.cs-secrets"$'\n'unset$'\n'ags$'\n'ags$'\n'encrypted "$output" || return 1
     assert_eq 'stable cache' "$(cat "$HOME/.cache/cs/update-check")" || return 1
     assert_eq 'experimental cache' "$(cat "$PROFILE/.cache/cs/update-check")" || return 1
     local status=0

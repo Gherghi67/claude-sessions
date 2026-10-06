@@ -402,6 +402,21 @@ test_remove_force_on_adopted_removes_only_the_link() {
     assert_dir "$project_dir/.cs" "project .cs/ should still be present" || return 1
 }
 
+# Under the ags profile's encrypted backend the keychain holds the stable
+# install's cs:<session>:* secrets, and a session both have shares the name.
+# -rm deletes the session's files and nothing in any secrets store, so it must
+# never call security at all.
+test_remove_never_touches_the_keychain() {
+    local stub="$TEST_TMPDIR/security-stub"
+    create_test_session ask >/dev/null
+    mkdir -p "$stub"
+    printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$*" >> "${0%/*}/calls"' 'exit 0' > "$stub/security"
+    chmod +x "$stub/security"
+    CS_SECRETS_BACKEND=encrypted PATH="$stub:$PATH" "$CS_BIN" -rm ask --force </dev/null >/dev/null 2>&1 || return 1
+    assert_not_exists "$CS_SESSIONS_ROOT/ask" "the session is removed" || return 1
+    assert_file_not_exists "$stub/calls" "ags -rm must not call security" || return 1
+}
+
 run_test test_remove_empty_name_rejected_before_any_deletion
 run_test test_remove_refuses_live_session_without_force
 run_test test_remove_allows_heartbeat_only_session_without_force
@@ -423,6 +438,7 @@ run_test test_remove_force_refuses_worktree_with_untracked_or_ignored_files
 run_test test_remove_force_with_delete_files_removes_worktree
 run_test test_remove_worktree_confirm_lists_untracked_files
 run_test test_remove_force_on_adopted_removes_only_the_link
+run_test test_remove_never_touches_the_keychain
 run_test test_remove_refuses_while_the_vault_is_mounted_inside
 run_test test_remove_goes_ahead_once_the_vault_is_unmounted
 run_test test_remove_refuses_a_volume_mounted_inside_without_vault_links

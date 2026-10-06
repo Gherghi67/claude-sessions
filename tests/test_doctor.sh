@@ -795,14 +795,19 @@ test_doctor_subagent_statusline_no_fail_when_not_registered() {
 # that cs did not create.
 
 # Minimal tmux fake for the doctor's spawn tmux check.
-#   arg1: "cs" if a session named cs exists, "" otherwise
+#   arg1: name of the one tmux session that exists (e.g. "cs"), "" for none;
+#         has-session answers only for its exact-match target
 #   arg2: value returned for @cs_managed (e.g. "1" or "")
-_doctor_tmux_fake() {  # has_cs managed
+#   arg3: the -L socket that session's server runs on, "" (default) for the
+#         default server; a call to any other server finds no session
+_doctor_tmux_fake() {  # existing_session managed [socket]
     local fake="$TEST_TMPDIR/fake-tmux"
     {
         printf '#!/usr/bin/env bash\n'
+        printf 'sock=""; [ "$1" = -L ] && { sock=$2; shift 2; }\n'
+        printf '[ "$sock" = "%s" ] || exit 1\n' "${3:-}"
         printf 'case "$1" in\n'
-        printf '  has-session) [ "%s" = cs ]; exit $? ;;\n' "$1"
+        printf '  has-session) [ -n "%s" ] && [ "$3" = "=%s" ]; exit $? ;;\n' "$1" "$1"
         printf '  show-option) printf "%%s" "%s" ;;\n' "$2"
         printf 'esac\n'
         printf 'exit 0\n'
@@ -904,6 +909,41 @@ test_doctor_no_warning_when_cs_tmux_session_managed() {
     fi
 }
 
+# The doctor checks the tmux session ags -spawn would use: with
+# CS_TMUX_SESSION=ags, a foreign 'ags' warns by that name, and stable cs's own
+# 'cs' session, which the ags profile never touches, is no concern of it.
+test_doctor_checks_the_configured_tmux_session() {
+    local output
+    output=$(CS_TMUX_SESSION=ags CS_TMUX_BIN="$(_doctor_tmux_fake ags '')" "$CS_BIN" -doctor 2>&1) || true
+    assert_output_contains "$output" "session named 'ags' exists but is not cs-managed" \
+        "doctor should warn about a foreign tmux session named ags" || return 1
+}
+
+test_doctor_ignores_cs_tmux_session_when_another_is_configured() {
+    local output
+    output=$(CS_TMUX_SESSION=ags CS_TMUX_BIN="$(_doctor_tmux_fake cs '')" "$CS_BIN" -doctor 2>&1) || true
+    if echo "$output" | grep -i "tmux" | grep -q "not cs-managed"; then
+        echo "  FAIL: a session named cs must not warn when CS_TMUX_SESSION=ags"
+        return 1
+    fi
+    assert_output_contains "$output" "foreign 'ags' tmux session" \
+        "the spawn check ran, against ags" || return 1
+}
+
+# With CS_TMUX_SOCKET the spawner runs its own tmux server, and the doctor asks
+# that one: a foreign 'ags' there warns, one on the default server does not.
+test_doctor_checks_the_tmux_session_on_the_configured_server() {
+    local output
+    output=$(CS_TMUX_SOCKET=ags CS_TMUX_SESSION=ags CS_TMUX_BIN="$(_doctor_tmux_fake ags '' ags)" "$CS_BIN" -doctor 2>&1) || true
+    assert_output_contains "$output" "session named 'ags' exists but is not cs-managed" \
+        "doctor should warn about a foreign ags session on the ags server" || return 1
+    output=$(CS_TMUX_SOCKET=ags CS_TMUX_SESSION=ags CS_TMUX_BIN="$(_doctor_tmux_fake ags '')" "$CS_BIN" -doctor 2>&1) || true
+    if echo "$output" | grep -i "tmux" | grep -q "not cs-managed"; then
+        echo "  FAIL: an ags session on the default server is not the spawner's"
+        return 1
+    fi
+}
+
 echo "Running doctor tests..."
 run_test test_doctor_subcommand_exists
 run_test test_doctor_runs_default_checks_from_session
@@ -960,6 +1000,9 @@ run_test test_doctor_warns_on_dangling_spawned_by
 run_test test_doctor_spawned_by_ok_when_spawner_exists
 run_test test_doctor_warns_on_unmarked_cs_tmux_session
 run_test test_doctor_no_warning_when_cs_tmux_session_managed
+run_test test_doctor_checks_the_configured_tmux_session
+run_test test_doctor_ignores_cs_tmux_session_when_another_is_configured
+run_test test_doctor_checks_the_tmux_session_on_the_configured_server
 
 # --- Checks that must not report green on the state they exist to catch ---
 # Every fixture below is in the BROKEN state. A green-path test proves nothing

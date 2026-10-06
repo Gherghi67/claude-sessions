@@ -142,7 +142,8 @@ On macOS, `ags -encrypt <name>` sets this up for an existing session. Run it
 from a terminal, with the session closed. It:
 
 1. Creates an AES-256 encrypted sparse bundle at
-   `~/.local/share/cs/vaults/<name>.sparsebundle` with `hdiutil`, which asks
+   `~/.local/share/cs/vaults/<name>.sparsebundle` (`$CS_DATA_DIR/vaults/` when
+   that is set, as the ags profile sets it) with `hdiutil`, which asks
    for a new password. The bundle grows as it fills, up to 50 GB. It lives
    outside the session directory, so `ags -rm` never deletes it.
 2. Mounts it at `.cs/vault-mnt` (`hdiutil` asks for the password again) and
@@ -150,7 +151,8 @@ from a terminal, with the session closed. It:
 3. Moves `.cs/memory`, `.cs/plans`, the `.cs/local/` files listed under
    `.cs/private` above, and `.cs/handoffs`, `.cs/checkpoints` and
    `.cs/narrative-archive` into the volume, then links the four names into it.
-4. Writes `.cs/local/pre-open` and `.cs/local/vault` (the bundle's path), tags
+4. Writes `.cs/local/pre-open` and `.cs/local/vault` (the bundle's path, which
+   every later open attaches whatever `CS_DATA_DIR` says), tags
    the session `encrypted`, and unmounts the volume.
 
 From then on every open asks for the password in the terminal. `pre-open`

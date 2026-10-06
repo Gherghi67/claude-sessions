@@ -1301,10 +1301,16 @@ fn extract_user_repo(url: &str) -> Option<String> {
 /// Only macOS ships the `security` tool and a keychain; on Linux the TUI's
 /// keychain panel is empty by design (secrets there live in the encrypted-file
 /// backend, which this view does not enumerate). Gated to macOS so non-macOS
-/// builds don't spawn a missing binary on every refresh.
+/// builds don't spawn a missing binary on every refresh. Skipped too when
+/// CS_SECRETS_BACKEND names another store; see `keychain_is_secrets_store`.
 #[cfg(target_os = "macos")]
 fn count_secrets_from_keychain() -> HashMap<String, u32> {
     let mut counts = HashMap::new();
+
+    let backend = std::env::var("CS_SECRETS_BACKEND").ok();
+    if !keychain_is_secrets_store(backend.as_deref()) {
+        return counts;
+    }
 
     let output = std::process::Command::new("security")
         .args(["dump-keychain"])
@@ -1331,6 +1337,17 @@ fn count_secrets_from_keychain() -> HashMap<String, u32> {
 #[cfg(not(target_os = "macos"))]
 fn count_secrets_from_keychain() -> HashMap<String, u32> {
     HashMap::new()
+}
+
+/// Whether the keychain is the store `ags-secrets` uses, given its
+/// CS_SECRETS_BACKEND override (unset or empty: the keychain, on macOS).
+/// Under any other backend the keychain holds another install's secrets, and
+/// a count read from it would land beside a session that merely shares the
+/// name. KEEP IN SYNC with detect_backend in bin/ags-secrets and the dump in
+/// list_sessions (lib/65-sessions.sh).
+#[cfg(any(target_os = "macos", test))]
+fn keychain_is_secrets_store(backend: Option<&str>) -> bool {
+    matches!(backend, None | Some("") | Some("keychain"))
 }
 
 #[cfg(test)]
@@ -2535,6 +2552,18 @@ mod tests {
         assert!(counts.is_empty());
         #[cfg(target_os = "macos")]
         let _ = counts; // content depends on the login keychain; only assert no panic
+    }
+
+    // The ags profile runs the encrypted backend, and the keychain beside it
+    // holds the stable install's cs:<session>:* items. Counted, they showed
+    // against any profile session of the same name.
+    #[test]
+    fn keychain_counts_only_when_the_keychain_is_the_secrets_store() {
+        assert!(keychain_is_secrets_store(None), "unset picks the keychain");
+        assert!(keychain_is_secrets_store(Some("")), "detect_backend reads empty as unset");
+        assert!(keychain_is_secrets_store(Some("keychain")));
+        assert!(!keychain_is_secrets_store(Some("encrypted")), "the profile's backend");
+        assert!(!keychain_is_secrets_store(Some("bogus")), "ags-secrets refuses it; no keychain count either");
     }
 
     #[test]

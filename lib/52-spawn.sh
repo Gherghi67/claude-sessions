@@ -6,6 +6,14 @@ _tmux() {
     "${CS_TMUX_BIN:-tmux}" "$@"
 }
 
+# The spawner's own calls: on the server CS_TMUX_SOCKET names (tmux -L), else
+# the default one. A window runs with its server's environment, not the
+# spawner's, so a second install on a shared server would run as the first.
+# Not in _tmux: the launch publishes into whichever server $TMUX names.
+_spawn_tmux() {
+    _tmux ${CS_TMUX_SOCKET:+-L "$CS_TMUX_SOCKET"} "$@"
+}
+
 # Single-quote encode one word for a shell command line handed to tmux.
 _sq() {  # text
     printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
@@ -28,62 +36,72 @@ _spawn_discard_seeds() {  # name
           "$SESSIONS_ROOT/.spawn/$1.brief.md" "$SESSIONS_ROOT/.spawn/$1.brief.md.stale"
 }
 
-# True when the tmux session named 'cs' carries cs's ownership stamp. Only
-# meaningful once has-session has confirmed exact 'cs' exists: the plain '-t cs'
+# True when the tmux session named $CS_TMUX_SESSION carries cs's stamp. Only
+# meaningful once has-session has confirmed the exact name exists: the plain '-t'
 # target is required because tmux 3.6a rejects '=' anchors on the options
 # commands. Shared by _spawn_precheck (errors on a foreign session) and the
 # doctor's spawn check (warns), so the @cs_managed contract lives in one place.
 _cs_tmux_managed() {
-    [ "$(_tmux show-option -t cs -v @cs_managed 2>/dev/null || true)" = "1" ]
+    [ "$(_spawn_tmux show-option -t "${CS_TMUX_SESSION:-cs}" -v @cs_managed 2>/dev/null || true)" = "1" ]
 }
 
 # Pre-window checks that must pass BEFORE the seed is written, so a refused
 # spawn never leaves a pending seed behind.
 _spawn_precheck() {  # name
-    local name="$1"
+    local name="$1" tmux_session="${CS_TMUX_SESSION:-cs}"
+    # tmux will not keep ':' or '.' in a session name (a target uses them to
+    # reach a window or pane), so no later '-t' would find what '-s' made.
+    case "$tmux_session" in
+        *[:.]*) error "CS_TMUX_SESSION=$tmux_session: a tmux session name cannot contain ':' or '.'";;
+    esac
     command -v "${CS_TMUX_BIN:-tmux}" >/dev/null 2>&1 || error "ags -spawn needs tmux"
     if session_is_live "$SESSIONS_ROOT/$name/.cs"; then
         error "Session $name is already live"
     fi
-    if _tmux has-session -t =cs 2>/dev/null; then
-        _cs_tmux_managed || error "A tmux session named 'cs' exists but was not created by cs; close or rename it"
+    if _spawn_tmux has-session -t "=$tmux_session" 2>/dev/null; then
+        _cs_tmux_managed || error "A tmux session named '$tmux_session' exists but was not created by cs; close or rename it"
         # Best-effort tidiness check only. session_is_live above is the real
         # guard against double-launching a session; tmux automatic-rename can
         # rename a window out from under this name match, and the only cost of a
         # miss is a duplicate window name in the cs session, never a second live
         # launch. Do not add locking here for that benign case.
-        if _tmux list-windows -t =cs -F '#{window_name}' 2>/dev/null | grep -Fxq "$name"; then
-            error "A window named $name already exists in tmux session cs"
+        if _spawn_tmux list-windows -t "=$tmux_session" -F '#{window_name}' 2>/dev/null | grep -Fxq "$name"; then
+            error "A window named $name already exists in tmux session $tmux_session"
         fi
     fi
 }
 
 # How to reach the cs tmux session. tmux attach refuses to nest, so a caller
-# already inside tmux is told to switch-client instead.
+# already inside tmux is told to switch-client instead. switch-client cannot
+# leave the server $TMUX names ("<socket path>,<pid>,<session>"), so from any
+# other one the hint for CS_TMUX_SOCKET's server attaches.
 _spawn_attach_hint() {
-    if [ -n "${TMUX:-}" ]; then
-        printf 'tmux switch-client -t cs'
+    local tmux="tmux" here="${TMUX:-}"
+    [ -z "${CS_TMUX_SOCKET:-}" ] || tmux=$(printf 'tmux -L %q' "$CS_TMUX_SOCKET")
+    here="${here%%,*}"
+    if [ -n "$here" ] && { [ -z "${CS_TMUX_SOCKET:-}" ] || [ "${here##*/}" = "$CS_TMUX_SOCKET" ]; }; then
+        printf '%s switch-client -t %q' "$tmux" "${CS_TMUX_SESSION:-cs}"
     else
-        printf 'tmux attach -t cs'
+        printf '%s attach -t %q' "$tmux" "${CS_TMUX_SESSION:-cs}"
     fi
 }
 
 _spawn_window() {  # name
-    local name="$1" cmd wid
+    local name="$1" tmux_session="${CS_TMUX_SESSION:-cs}" cmd wid
     cmd="$(_sq "$(_cs_self)") $(_sq "$name")"
     # Try to create the cs session outright: tmux rejects a duplicate -s name,
     # so "already exists" and "a concurrent spawner just created it" collapse
     # into the same fallthrough to new-window.
-    if wid=$(_tmux new-session -d -s cs -n "$name" -P -F '#{window_id}' "$cmd" 2>/dev/null); then
+    if wid=$(_spawn_tmux new-session -d -s "$tmux_session" -n "$name" -P -F '#{window_id}' "$cmd" 2>/dev/null); then
         # Plain target: tmux 3.6a rejects '=' anchors on the options commands;
-        # exact 'cs' was just created by new-session, so this cannot misfire.
-        _tmux set-option -t cs @cs_managed 1
-        info "spawned $name in tmux session cs (window $wid). Attach: $(_spawn_attach_hint)"
+        # the exact name was just created by new-session, so this cannot misfire.
+        _spawn_tmux set-option -t "$tmux_session" @cs_managed 1
+        info "spawned $name in tmux session $tmux_session (window $wid). Attach: $(_spawn_attach_hint)"
         return 0
     fi
-    wid=$(_tmux new-window -t =cs -n "$name" -P -F '#{window_id}' "$cmd") \
+    wid=$(_spawn_tmux new-window -t "=$tmux_session" -n "$name" -P -F '#{window_id}' "$cmd") \
         || error "tmux new-window failed for $name"
-    info "spawned $name in tmux session cs (window $wid). Attach: $(_spawn_attach_hint)"
+    info "spawned $name in tmux session $tmux_session (window $wid). Attach: $(_spawn_attach_hint)"
 }
 
 run_spawn() {

@@ -25,3 +25,6 @@ HOOKS_DEPLOY_DIR="${CS_HOOKS_DIR:-$HOME/.claude/hooks/cs}"
 export CS_INSTALL_DIR="${CS_INSTALL_DIR:-$HOME/.local/bin}"
 export CS_CONFIG_DIR="${CS_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/cs}"
 export CS_CACHE_DIR="${CS_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/cs}"
+# And cs's data, the -encrypt containers. No XDG_DATA_HOME: they were always
+# made under ~/.local/share/cs, and a new one belongs beside the old ones.
+export CS_DATA_DIR="${CS_DATA_DIR:-$HOME/.local/share/cs}"

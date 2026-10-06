@@ -21,6 +21,14 @@ export CS_SESSIONS_ROOT="/path/to/sessions"
 export CS_CONFIG_DIR="$HOME/.config/cs"
 export CS_CACHE_DIR="$HOME/.cache/cs"
 
+# Where ags -encrypt makes new containers, under vaults/ (default:
+# ~/.local/share/cs, whatever XDG_DATA_HOME says). The profile launcher sets it
+# to the profile's own, so a session the stable install also has never shares
+# its container. An encrypted session opens the container it recorded, so
+# changing this later moves no existing vault. ags -encrypt refuses a relative
+# path: every open attaches the container from the session directory.
+export CS_DATA_DIR="$HOME/.local/share/cs"
+
 # Where the deployed ags executables and the installer's adapter record live
 # (default: ~/.local/bin). The profile launcher sets it to the profile's own.
 export CS_INSTALL_DIR="$HOME/.local/bin"
@@ -43,7 +51,8 @@ export CS_NO_UPDATE_CHECK="1"
 # Legacy password for secrets sync (age encryption preferred - see secrets.md)
 export CS_SECRETS_PASSWORD="your-secure-password"
 
-# Override secrets backend (keychain or encrypted)
+# Override secrets backend (keychain or encrypted). ags -list and the picker
+# count secrets from the keychain, so under any other backend they show none.
 export CS_SECRETS_BACKEND="keychain"
 
 # Override Claude Code binary (default: claude)
@@ -262,6 +271,19 @@ export CS_NO_FUNCTION_HOOKS="1"
 
 # Override the tmux binary ags -spawn uses (default: tmux on PATH)
 export CS_TMUX_BIN="/opt/homebrew/bin/tmux"
+
+# The tmux session ags -spawn opens its windows in (default: cs). The profile
+# launcher sets ags. A name with ':' or '.' is refused: tmux would not keep it.
+export CS_TMUX_SESSION="cs"
+
+# The tmux server ags -spawn and the doctor's spawn check use, as a tmux -L
+# socket name (default: unset, the default server). A window runs with its
+# server's environment, not the spawner's, so the profile launcher sets ags:
+# on the default server a spawned profile session would run as the stable
+# install, and a server the profile started would hand the profile's
+# variables to every later window. The attach hint names it
+# (tmux -L ags attach -t ags).
+export CS_TMUX_SOCKET="ags"
 
 # Force the detected platform instead of probing for it; any other
 # value is rejected. Read by ags -secrets only, to choose between the

@@ -2,9 +2,10 @@
 # ABOUTME: hdiutil-encrypted sparsebundle and links the four vault names into its mount.
 
 # Where the container lives: outside every session directory, so neither
-# ags -rm nor the autosave snapshot ever reaches it.
+# ags -rm nor the autosave snapshot ever reaches it. Only -encrypt asks: an
+# open attaches the path pre-open recorded, wherever CS_DATA_DIR points now.
 _encrypt_container_path() {  # session_name
-    printf '%s/.local/share/cs/vaults/%s.sparsebundle' "$HOME" "$1"
+    printf '%s/vaults/%s.sparsebundle' "${CS_DATA_DIR:-$HOME/.local/share/cs}" "$1"
 }
 
 # Every precondition, checked before anything is written.
@@ -31,6 +32,8 @@ _encrypt_refuse() {  # session_name
     done
     [ -e "$meta/local/pre-open" ] && error "$name: .cs/local/pre-open already exists; ags -encrypt writes its own. Move yours aside first."
     container=$(_encrypt_container_path "$name")
+    # pre-open records this path and attaches it from the session directory.
+    case "$container" in /*) ;; *) error "CS_DATA_DIR=$CS_DATA_DIR: ags -encrypt needs an absolute path; every open attaches the container from the session directory." ;; esac
     [ -e "$container" ] && error "$name: $container already exists; ags -encrypt will not reuse or overwrite it."
     if ! _tags_has_frontmatter "$meta/README.md" || _tags_has_block_style "$meta/README.md"; then
         error "$name: .cs/README.md has no YAML frontmatter to carry the encrypted tag."

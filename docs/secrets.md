@@ -13,6 +13,8 @@ The `ags -secrets` command auto-detects the best available backend for the platf
 
 Override the choice with `CS_SECRETS_BACKEND=keychain|encrypted`. `CS_SECRETS_DIR` moves the encrypted store from `~/.cs-secrets`; the ags profile launcher points it at the profile's own directory.
 
+`ags -list` and the session picker show how many secrets each session holds only while the keychain is the active backend. They read the counts from one keychain dump; the encrypted store would take a decrypt per session, so under it they show no count. `ags <name> -secrets list` names a session's secrets under either backend.
+
 **Encrypted File Backend:**
 
 The encrypted file backend uses AES-256-CBC with PBKDF2 key derivation (100,000 iterations). The encryption key is derived from a machine-specific salt stored in `~/.cs-secrets/.salt`. This provides protection against:

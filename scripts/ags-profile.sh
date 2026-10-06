@@ -39,6 +39,14 @@ export CS_SESSIONS_ROOT="$profile_home/sessions" CS_CLAUDE_DIR="$profile_home/.c
 export CS_HOOKS_DIR="$profile_home/.claude/hooks/cs" CS_TRANSCRIPTS_DIR="$profile_home/.claude/projects"
 export CS_COMMANDS_DIR="$profile_home/.claude/commands" CS_SKILLS_DIR="$profile_home/.claude/skills"
 export CS_CONFIG_DIR="$profile_home/.config/cs" CS_CACHE_DIR="$profile_home/.cache/cs"
+# ags -encrypt names a container after its session alone, and stable cs keeps
+# its own in ~/.local/share/cs/vaults: a session both have would share one.
+export CS_DATA_DIR="$profile_home/.local/share/cs"
+# ags -spawn uses a tmux server of its own. A window runs with its server's
+# environment, so on the default one, which stable cs -spawn and the user's
+# tmux start too, a spawned ags ran as stable cs, and a server ags started
+# handed this profile to stable's windows.
+export CS_TMUX_SOCKET=ags CS_TMUX_SESSION=ags
 # The default macOS keychain backend shares cs:<session>:<name> keys globally.
 # Use the profile's encrypted-file backend instead of that shared namespace.
 export CS_SECRETS_BACKEND=encrypted CS_SECRETS_DIR="$profile_home/.cs-secrets" CS_NO_UPDATE_CHECK=1

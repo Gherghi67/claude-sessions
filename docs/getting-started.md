@@ -31,9 +31,11 @@ Claude Code and Codex CLI separately. See [Codex sessions](codex.md) for the
 current runtime compatibility limit.
 
 The experimental profile is `~/.local/share/agent-sessions/home/`. Its Claude
-and Codex configuration, hooks, commands, cache, and sessions are separate from
-your original installation. Log in to the selected CLI when first prompted in
-this profile. Normal `cs`, `claude`, and `codex` keep their existing configuration.
+and Codex configuration, hooks, commands, cache, sessions, `ags -encrypt`
+vaults and `ags -spawn` tmux server (`tmux -L ags attach -t ags`, where
+`cs -spawn` uses the default server) are separate from your original
+installation. Log in to the selected CLI when first prompted in this profile.
+Normal `cs`, `claude`, and `codex` keep their existing configuration.
 One preference crosses over: setup copies the Claude display mode (`tui`) from
 your `~/.claude/settings.json` into the profile when the profile has none yet.
 Otherwise a fresh profile would start in Claude Code's fullscreen renderer, which
@@ -41,7 +43,9 @@ captures trackpad gestures such as iTerm2's two-finger tab swipe. Run `/tui`
 inside the profile to change it; later setups keep that choice.
 Your HOME stays your own, so the macOS keychain, `~/.ssh`, your Git identity and
 other credentials work as usual inside a session. Secrets use encrypted files
-within the profile, with their own master password.
+within the profile, with their own master password, so `ags -list` and the
+picker show no secret counts (they count keychain secrets only, which here are
+the original installation's). `ags <name> -secrets list` lists a session's own.
 
 Keep using `cs` in existing workspaces. For testing `ags`, create a new workspace
 or adopt a separate project; `ags .` and adoption refuse an existing `cs` workspace.

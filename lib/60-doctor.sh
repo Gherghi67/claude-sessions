@@ -229,8 +229,8 @@ _doctor_check_iterm2() {
 #   - a pending .seed for a session that does not exist blocks re-spawning
 #     that name until it is removed,
 #   - a spawned-by pointer at a deleted session sends the drain notify nowhere,
-#   - a tmux session named 'cs' without the @cs_managed stamp is one ags -spawn
-#     will refuse to reuse.
+#   - a tmux session named 'cs' (or CS_TMUX_SESSION) without the @cs_managed
+#     stamp is one ags -spawn will refuse to reuse.
 _doctor_check_spawn() {
     local spawn_dir="$SESSIONS_ROOT/.spawn"
     local stale=() orphan=() dangling=() clean=1
@@ -271,9 +271,10 @@ _doctor_check_spawn() {
         clean=0
     fi
 
-    if command -v "${CS_TMUX_BIN:-tmux}" >/dev/null 2>&1 && _tmux has-session -t =cs 2>/dev/null; then
+    local tmux_session="${CS_TMUX_SESSION:-cs}"
+    if command -v "${CS_TMUX_BIN:-tmux}" >/dev/null 2>&1 && _spawn_tmux has-session -t "=$tmux_session" 2>/dev/null; then
         if ! _cs_tmux_managed; then
-            _doctor_warn "tmux: a session named 'cs' exists but is not cs-managed (@cs_managed unset); ags -spawn will refuse to use it"
+            _doctor_warn "tmux: a session named '$tmux_session' exists but is not cs-managed (@cs_managed unset); ags -spawn will refuse to use it"
             clean=0
         fi
     fi
@@ -282,7 +283,7 @@ _doctor_check_spawn() {
     # warning fired: under `set -e` a non-zero return here would abort the
     # whole `ags -doctor` run before its later checks and the summary.
     if [ "$clean" = "1" ]; then
-        _doctor_ok "Spawn: no stale seeds, dangling spawned-by links, or foreign 'cs' tmux session"
+        _doctor_ok "Spawn: no stale seeds, dangling spawned-by links, or foreign '$tmux_session' tmux session"
     fi
 }
 

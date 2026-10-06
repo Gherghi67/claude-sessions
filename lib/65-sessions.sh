@@ -257,9 +257,12 @@ list_sessions() {
     fi
 
     # Dump the keychain once; per-session counts are computed inline in the
-    # display loop. No associative array — bash 3.2 lacks `local -A`.
+    # display loop. No associative array — bash 3.2 lacks `local -A`. Only
+    # when the keychain is the store ags-secrets uses: under any other
+    # CS_SECRETS_BACKEND it holds another install's secrets, and counting the
+    # encrypted file would take a decrypt per session, so no count shows.
     local keychain_dump=""
-    if find_secrets_script >/dev/null 2>&1; then
+    if [ "${CS_SECRETS_BACKEND:-keychain}" = keychain ] && find_secrets_script >/dev/null 2>&1; then
         keychain_dump=$(security dump-keychain 2>/dev/null | grep -o '"svce"<blob>="cs:[^"]*"' || true)
     fi
 

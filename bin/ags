@@ -25,6 +25,9 @@ HOOKS_DEPLOY_DIR="${CS_HOOKS_DIR:-$HOME/.claude/hooks/cs}"
 export CS_INSTALL_DIR="${CS_INSTALL_DIR:-$HOME/.local/bin}"
 export CS_CONFIG_DIR="${CS_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/cs}"
 export CS_CACHE_DIR="${CS_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/cs}"
+# And cs's data, the -encrypt containers. No XDG_DATA_HOME: they were always
+# made under ~/.local/share/cs, and a new one belongs beside the old ones.
+export CS_DATA_DIR="${CS_DATA_DIR:-$HOME/.local/share/cs}"
 # Files a past version deployed into the hooks directory and this one does not:
 # retired hooks, and any support file that went with them. Removed on install
 # and on uninstall, wherever an older cs left them.
@@ -5236,6 +5239,14 @@ _tmux() {
     "${CS_TMUX_BIN:-tmux}" "$@"
 }
 
+# The spawner's own calls: on the server CS_TMUX_SOCKET names (tmux -L), else
+# the default one. A window runs with its server's environment, not the
+# spawner's, so a second install on a shared server would run as the first.
+# Not in _tmux: the launch publishes into whichever server $TMUX names.
+_spawn_tmux() {
+    _tmux ${CS_TMUX_SOCKET:+-L "$CS_TMUX_SOCKET"} "$@"
+}
+
 # Single-quote encode one word for a shell command line handed to tmux.
 _sq() {  # text
     printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
@@ -5258,62 +5269,72 @@ _spawn_discard_seeds() {  # name
           "$SESSIONS_ROOT/.spawn/$1.brief.md" "$SESSIONS_ROOT/.spawn/$1.brief.md.stale"
 }
 
-# True when the tmux session named 'cs' carries cs's ownership stamp. Only
-# meaningful once has-session has confirmed exact 'cs' exists: the plain '-t cs'
+# True when the tmux session named $CS_TMUX_SESSION carries cs's stamp. Only
+# meaningful once has-session has confirmed the exact name exists: the plain '-t'
 # target is required because tmux 3.6a rejects '=' anchors on the options
 # commands. Shared by _spawn_precheck (errors on a foreign session) and the
 # doctor's spawn check (warns), so the @cs_managed contract lives in one place.
 _cs_tmux_managed() {
-    [ "$(_tmux show-option -t cs -v @cs_managed 2>/dev/null || true)" = "1" ]
+    [ "$(_spawn_tmux show-option -t "${CS_TMUX_SESSION:-cs}" -v @cs_managed 2>/dev/null || true)" = "1" ]
 }
 
 # Pre-window checks that must pass BEFORE the seed is written, so a refused
 # spawn never leaves a pending seed behind.
 _spawn_precheck() {  # name
-    local name="$1"
+    local name="$1" tmux_session="${CS_TMUX_SESSION:-cs}"
+    # tmux will not keep ':' or '.' in a session name (a target uses them to
+    # reach a window or pane), so no later '-t' would find what '-s' made.
+    case "$tmux_session" in
+        *[:.]*) error "CS_TMUX_SESSION=$tmux_session: a tmux session name cannot contain ':' or '.'";;
+    esac
     command -v "${CS_TMUX_BIN:-tmux}" >/dev/null 2>&1 || error "ags -spawn needs tmux"
     if session_is_live "$SESSIONS_ROOT/$name/.cs"; then
         error "Session $name is already live"
     fi
-    if _tmux has-session -t =cs 2>/dev/null; then
-        _cs_tmux_managed || error "A tmux session named 'cs' exists but was not created by cs; close or rename it"
+    if _spawn_tmux has-session -t "=$tmux_session" 2>/dev/null; then
+        _cs_tmux_managed || error "A tmux session named '$tmux_session' exists but was not created by cs; close or rename it"
         # Best-effort tidiness check only. session_is_live above is the real
         # guard against double-launching a session; tmux automatic-rename can
         # rename a window out from under this name match, and the only cost of a
         # miss is a duplicate window name in the cs session, never a second live
         # launch. Do not add locking here for that benign case.
-        if _tmux list-windows -t =cs -F '#{window_name}' 2>/dev/null | grep -Fxq "$name"; then
-            error "A window named $name already exists in tmux session cs"
+        if _spawn_tmux list-windows -t "=$tmux_session" -F '#{window_name}' 2>/dev/null | grep -Fxq "$name"; then
+            error "A window named $name already exists in tmux session $tmux_session"
         fi
     fi
 }
 
 # How to reach the cs tmux session. tmux attach refuses to nest, so a caller
-# already inside tmux is told to switch-client instead.
+# already inside tmux is told to switch-client instead. switch-client cannot
+# leave the server $TMUX names ("<socket path>,<pid>,<session>"), so from any
+# other one the hint for CS_TMUX_SOCKET's server attaches.
 _spawn_attach_hint() {
-    if [ -n "${TMUX:-}" ]; then
-        printf 'tmux switch-client -t cs'
+    local tmux="tmux" here="${TMUX:-}"
+    [ -z "${CS_TMUX_SOCKET:-}" ] || tmux=$(printf 'tmux -L %q' "$CS_TMUX_SOCKET")
+    here="${here%%,*}"
+    if [ -n "$here" ] && { [ -z "${CS_TMUX_SOCKET:-}" ] || [ "${here##*/}" = "$CS_TMUX_SOCKET" ]; }; then
+        printf '%s switch-client -t %q' "$tmux" "${CS_TMUX_SESSION:-cs}"
     else
-        printf 'tmux attach -t cs'
+        printf '%s attach -t %q' "$tmux" "${CS_TMUX_SESSION:-cs}"
     fi
 }
 
 _spawn_window() {  # name
-    local name="$1" cmd wid
+    local name="$1" tmux_session="${CS_TMUX_SESSION:-cs}" cmd wid
     cmd="$(_sq "$(_cs_self)") $(_sq "$name")"
     # Try to create the cs session outright: tmux rejects a duplicate -s name,
     # so "already exists" and "a concurrent spawner just created it" collapse
     # into the same fallthrough to new-window.
-    if wid=$(_tmux new-session -d -s cs -n "$name" -P -F '#{window_id}' "$cmd" 2>/dev/null); then
+    if wid=$(_spawn_tmux new-session -d -s "$tmux_session" -n "$name" -P -F '#{window_id}' "$cmd" 2>/dev/null); then
         # Plain target: tmux 3.6a rejects '=' anchors on the options commands;
-        # exact 'cs' was just created by new-session, so this cannot misfire.
-        _tmux set-option -t cs @cs_managed 1
-        info "spawned $name in tmux session cs (window $wid). Attach: $(_spawn_attach_hint)"
+        # the exact name was just created by new-session, so this cannot misfire.
+        _spawn_tmux set-option -t "$tmux_session" @cs_managed 1
+        info "spawned $name in tmux session $tmux_session (window $wid). Attach: $(_spawn_attach_hint)"
         return 0
     fi
-    wid=$(_tmux new-window -t =cs -n "$name" -P -F '#{window_id}' "$cmd") \
+    wid=$(_spawn_tmux new-window -t "=$tmux_session" -n "$name" -P -F '#{window_id}' "$cmd") \
         || error "tmux new-window failed for $name"
-    info "spawned $name in tmux session cs (window $wid). Attach: $(_spawn_attach_hint)"
+    info "spawned $name in tmux session $tmux_session (window $wid). Attach: $(_spawn_attach_hint)"
 }
 
 run_spawn() {
@@ -7171,8 +7192,8 @@ _doctor_check_iterm2() {
 #   - a pending .seed for a session that does not exist blocks re-spawning
 #     that name until it is removed,
 #   - a spawned-by pointer at a deleted session sends the drain notify nowhere,
-#   - a tmux session named 'cs' without the @cs_managed stamp is one ags -spawn
-#     will refuse to reuse.
+#   - a tmux session named 'cs' (or CS_TMUX_SESSION) without the @cs_managed
+#     stamp is one ags -spawn will refuse to reuse.
 _doctor_check_spawn() {
     local spawn_dir="$SESSIONS_ROOT/.spawn"
     local stale=() orphan=() dangling=() clean=1
@@ -7213,9 +7234,10 @@ _doctor_check_spawn() {
         clean=0
     fi
 
-    if command -v "${CS_TMUX_BIN:-tmux}" >/dev/null 2>&1 && _tmux has-session -t =cs 2>/dev/null; then
+    local tmux_session="${CS_TMUX_SESSION:-cs}"
+    if command -v "${CS_TMUX_BIN:-tmux}" >/dev/null 2>&1 && _spawn_tmux has-session -t "=$tmux_session" 2>/dev/null; then
         if ! _cs_tmux_managed; then
-            _doctor_warn "tmux: a session named 'cs' exists but is not cs-managed (@cs_managed unset); ags -spawn will refuse to use it"
+            _doctor_warn "tmux: a session named '$tmux_session' exists but is not cs-managed (@cs_managed unset); ags -spawn will refuse to use it"
             clean=0
         fi
     fi
@@ -7224,7 +7246,7 @@ _doctor_check_spawn() {
     # warning fired: under `set -e` a non-zero return here would abort the
     # whole `ags -doctor` run before its later checks and the summary.
     if [ "$clean" = "1" ]; then
-        _doctor_ok "Spawn: no stale seeds, dangling spawned-by links, or foreign 'cs' tmux session"
+        _doctor_ok "Spawn: no stale seeds, dangling spawned-by links, or foreign '$tmux_session' tmux session"
     fi
 }
 
@@ -7790,9 +7812,10 @@ run_doctor() {
 
 # Search across all sessions' metadata
 # Where the container lives: outside every session directory, so neither
-# ags -rm nor the autosave snapshot ever reaches it.
+# ags -rm nor the autosave snapshot ever reaches it. Only -encrypt asks: an
+# open attaches the path pre-open recorded, wherever CS_DATA_DIR points now.
 _encrypt_container_path() {  # session_name
-    printf '%s/.local/share/cs/vaults/%s.sparsebundle' "$HOME" "$1"
+    printf '%s/vaults/%s.sparsebundle' "${CS_DATA_DIR:-$HOME/.local/share/cs}" "$1"
 }
 
 # Every precondition, checked before anything is written.
@@ -7819,6 +7842,8 @@ _encrypt_refuse() {  # session_name
     done
     [ -e "$meta/local/pre-open" ] && error "$name: .cs/local/pre-open already exists; ags -encrypt writes its own. Move yours aside first."
     container=$(_encrypt_container_path "$name")
+    # pre-open records this path and attaches it from the session directory.
+    case "$container" in /*) ;; *) error "CS_DATA_DIR=$CS_DATA_DIR: ags -encrypt needs an absolute path; every open attaches the container from the session directory." ;; esac
     [ -e "$container" ] && error "$name: $container already exists; ags -encrypt will not reuse or overwrite it."
     if ! _tags_has_frontmatter "$meta/README.md" || _tags_has_block_style "$meta/README.md"; then
         error "$name: .cs/README.md has no YAML frontmatter to carry the encrypted tag."
@@ -8275,9 +8300,12 @@ list_sessions() {
     fi
 
     # Dump the keychain once; per-session counts are computed inline in the
-    # display loop. No associative array — bash 3.2 lacks `local -A`.
+    # display loop. No associative array — bash 3.2 lacks `local -A`. Only
+    # when the keychain is the store ags-secrets uses: under any other
+    # CS_SECRETS_BACKEND it holds another install's secrets, and counting the
+    # encrypted file would take a decrypt per session, so no count shows.
     local keychain_dump=""
-    if find_secrets_script >/dev/null 2>&1; then
+    if [ "${CS_SECRETS_BACKEND:-keychain}" = keychain ] && find_secrets_script >/dev/null 2>&1; then
         keychain_dump=$(security dump-keychain 2>/dev/null | grep -o '"svce"<blob>="cs:[^"]*"' || true)
     fi
 

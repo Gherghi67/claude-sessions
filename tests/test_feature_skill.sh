@@ -61,10 +61,18 @@ test_feature_skill_brief_is_a_temporary_file() {
     assert_file_contains "$SKILL" "rm -f" "the temp file is removed afterwards" || return 1
 }
 
+# The spawner's tmux session is 'cs' only by default (CS_TMUX_SESSION; the ags
+# profile uses ags), so the skill relays the hint -spawn prints, never a name.
+test_feature_skill_names_no_tmux_session() {
+    assert_file_not_contains "$SKILL" "attach -t cs\|switch-client -t cs" \
+        "the attach hint comes from the spawner's output" || return 1
+}
+
 run_test test_feature_skill_exists_with_frontmatter
 run_test test_feature_skill_is_model_invocable_and_keeps_the_prompt
 run_test test_feature_registered_in_all_manifests
 run_test test_feature_skill_teaches_the_spawn_with_a_brief
 run_test test_feature_skill_brief_is_a_temporary_file
+run_test test_feature_skill_names_no_tmux_session
 
 report_results

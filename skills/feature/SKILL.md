@@ -94,8 +94,10 @@ a different name on your own.
 
 ## Report
 
-Print the spawner's output: the tmux window and the attach hint (`tmux
-attach -t cs`, or `tmux switch-client -t cs` from inside tmux). Then tell the
+Print the spawner's output: the tmux window and the attach hint as printed
+(`tmux attach -t <session>`, or `tmux switch-client -t <session>` from inside
+tmux; the session is `cs` unless `CS_TMUX_SESSION` names another, and a
+`CS_TMUX_SOCKET` server adds `-L <socket>`). Then tell the
 user, in one or two lines, that the feature session reads its brief at
 `.cs/brief.md` and begins, that its result arrives here as mail from
 `ags -msg`, and that `/finish <feature>` lands it. The mail surfaces in this
