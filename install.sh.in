@@ -34,12 +34,23 @@ error() {
     exit 1
 }
 
+# Every line sits in the same three-space gutter as the Installed lines and
+# the closing check mark: a dim dot marks a note, an amber triangle a warning.
 info() {
-    echo -e "${GREEN}$1${NC}"
+    echo -e "   ${COMMENT}·${NC} ${GREEN}$1${NC}"
 }
 
 warn() {
-    echo -e "${YELLOW}$1${NC}"
+    echo -e "   ${YELLOW}▲ $1${NC}"
+}
+
+# A follow-on line of the note or warning above it, aligned with its text.
+info_more() {
+    echo -e "     ${GREEN}$1${NC}"
+}
+
+warn_more() {
+    echo -e "     ${YELLOW}$1${NC}"
 }
 
 installed() {
@@ -300,7 +311,7 @@ for retired in "${RETIRED_HOOKS[@]}"; do
     for dir in "$HOOKS_DIR" "$HOOKS_PARENT_DIR"; do
         if [ -f "$dir/$retired" ]; then
             rm "$dir/$retired"
-            info "  Removed retired hook: $dir/$retired"
+            info "Removed retired hook: $dir/$retired"
         fi
     done
 done
@@ -310,7 +321,7 @@ done
 for hook in "${CS_HOOK_FILES[@]}"; do
     if [ -f "$HOOKS_PARENT_DIR/$hook" ]; then
         rm "$HOOKS_PARENT_DIR/$hook"
-        info "  Removed $HOOKS_PARENT_DIR/$hook"
+        info "Removed $HOOKS_PARENT_DIR/$hook"
     fi
 done
 
@@ -367,7 +378,7 @@ installed "skills" "$SKILLS_DIR/"
 for retired in "${RETIRED_SKILLS[@]}"; do
     if [ -d "$SKILLS_DIR/$retired" ]; then
         rm -rf "$SKILLS_DIR/$retired"
-        info "  Removed retired skill: $SKILLS_DIR/$retired/"
+        info "Removed retired skill: $SKILLS_DIR/$retired/"
     fi
 done
 
@@ -385,7 +396,7 @@ _mod_path_real() {
     for p in "${rel%%/*}" "$(dirname "$rel")" "$rel"; do
         if [ -L "$SKILLS_DIR/$p" ]; then
             rm "$SKILLS_DIR/$p"
-            info "  Replaced symlink $SKILLS_DIR/$p with a deployed copy"
+            info "Replaced symlink $SKILLS_DIR/$p with a deployed copy"
         fi
     done
 }
@@ -621,10 +632,10 @@ else
         if mkdir -p "$(dirname "$_statusline_declined")" 2>/dev/null \
             && touch "$_statusline_declined" 2>/dev/null; then
             info "$1"
-            info "You won't be asked again. $2"
+            info_more "You won't be asked again. $2"
         else
             warn "$1"
-            warn "  (could not record the choice in $_statusline_declined, so cs -update will ask again)"
+            warn_more "(could not record the choice in $_statusline_declined, so cs -update will ask again)"
         fi
     }
 
@@ -682,7 +693,7 @@ else
         # so an indented printf produced a bar flush against the margin while
         # every other line sat three spaces in.
         echo ""
-        info "   This is what it looks like:"
+        info "This is what it looks like:"
         printf '%s\n' "$rendered"
         echo ""
     }
@@ -707,7 +718,7 @@ else
                     # read -p prints its argument verbatim, so an escape in it
                     # would show as literal characters. Emit the styled prompt
                     # with echo -e and read with no prompt of its own.
-                    echo -en "Register ${BOLD}cs-statusline${NC} as the Claude Code status line? [Y/n] "
+                    echo -en "   Register ${BOLD}cs-statusline${NC} as the Claude Code status line? [Y/n] "
                     read -n 1 -r
                     echo ""
                     if [[ $REPLY =~ ^[Nn]$ ]]; then
@@ -723,7 +734,7 @@ else
             else
                 if [ -t 0 ]; then
                     _preview_statusline
-                    echo -en "Replace current status line ($_current_statusline) with ${BOLD}cs-statusline${NC}? [y/N] "
+                    echo -en "   Replace current status line ($_current_statusline) with ${BOLD}cs-statusline${NC}? [y/N] "
                     read -n 1 -r
                     echo ""
                     # Anything but y declines, enter included: the point of the
@@ -740,7 +751,7 @@ else
                     fi
                 else
                     warn "Keeping current status line. To switch to cs-statusline:"
-                    warn "  set statusLine.command to $_statusline_cmd in ~/.claude/settings.json"
+                    warn_more "set statusLine.command to $_statusline_cmd in ~/.claude/settings.json"
                 fi
             fi
             ;;
@@ -754,7 +765,7 @@ else
     _statusline_caps="${XDG_CONFIG_HOME:-$HOME/.config}/cs/statusline-caps"
     if [ -n "$_register_statusline" ] && [ ! -f "$_statusline_caps" ]; then
         if [ -t 0 ]; then
-            printf '\n  %s\n' "$(printf '\xee\x82\xb6')cs-statusline$(printf '\xee\x82\xb4')"
+            printf '\n   %s\n' "$(printf '\xee\x82\xb6')cs-statusline$(printf '\xee\x82\xb4')"
             # An explicit y or n only: the registration question just above
             # reads one key, so an Enter typed after it is still queued and
             # would answer this one. EOF (Ctrl-D) leaves the question
@@ -762,7 +773,7 @@ else
             # non-zero must not trip errexit before settings.json is written.
             _caps_answer=""
             while :; do
-                echo -en "Do the ends of that capsule render as rounded shapes (not boxes)? [y/n] "
+                echo -en "   Do the ends of that capsule render as rounded shapes (not boxes)? [y/n] "
                 if ! read -n 1 -r; then echo ""; break; fi
                 echo ""
                 case "$REPLY" in
@@ -777,7 +788,7 @@ else
                 info "Capsule caps: $_caps_answer. Change later with: cs -statusline caps on|off|ask"
             else
                 warn "Capsule caps: $_caps_answer, but the answer could not be recorded in $_statusline_caps"
-                warn "  The bar shows square ends until: cs -statusline caps $_caps_answer"
+                warn_more "The bar shows square ends until: cs -statusline caps $_caps_answer"
             fi
         else
             info "Capsule caps: square ends until you answer once with: cs -statusline caps ask"
@@ -864,7 +875,7 @@ else
                 # one key, so an Enter typed after one of them is still queued
                 # and would answer this one. EOF leaves it unanswered.
                 while :; do
-                    echo -en "Bind Option+1 to /rotate and Option+2 to /wrap in Claude Code? [y/n] "
+                    echo -en "   Bind Option+1 to /rotate and Option+2 to /wrap in Claude Code? [y/n] "
                     if ! read -n 1 -r; then echo ""; break; fi
                     echo ""
                     case "$REPLY" in
@@ -893,10 +904,9 @@ fi
 # Check if ~/.local/bin is in PATH
 if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
     echo ""
-    warn "   WARNING: $INSTALL_DIR is not in your PATH"
-    echo ""
-    warn "   Add this line to your ~/.bashrc, ~/.zshrc, or equivalent:"
-    warn "     export PATH=\"\$HOME/.local/bin:\$PATH\""
+    warn "$INSTALL_DIR is not in your PATH"
+    warn_more "Add this line to your ~/.bashrc, ~/.zshrc, or equivalent:"
+    warn_more "  export PATH=\"\$HOME/.local/bin:\$PATH\""
     echo ""
 fi
 
@@ -918,16 +928,16 @@ SHELL_NAME=$(basename "$SHELL")
 case "$SHELL_NAME" in
     bash)
         if ! grep -q 'bash_completion.d/cs.bash' "$HOME/.bashrc" 2>/dev/null; then
-            warn "   To enable tab completion, add to ~/.bashrc:"
-            warn "     [[ -f ~/.bash_completion.d/cs.bash ]] && source ~/.bash_completion.d/cs.bash"
+            warn "To enable tab completion, add to ~/.bashrc:"
+            warn_more "  [[ -f ~/.bash_completion.d/cs.bash ]] && source ~/.bash_completion.d/cs.bash"
             echo ""
         fi
         ;;
     zsh)
         if ! grep -qE 'fpath.*zsh/completions?' "$HOME/.zshrc" 2>/dev/null; then
-            warn "   To enable tab completion, add to ~/.zshrc (before compinit):"
-            warn "     fpath=(~/.zsh/completions \$fpath)"
-            warn "     autoload -Uz compinit && compinit"
+            warn "To enable tab completion, add to ~/.zshrc (before compinit):"
+            warn_more "  fpath=(~/.zsh/completions \$fpath)"
+            warn_more "  autoload -Uz compinit && compinit"
             echo ""
         fi
         ;;
@@ -941,7 +951,7 @@ echo -e "     ${COMMENT}cs${NC} ${GOLD}server-fix${NC}   ${COMMENT}# Work on ser
 echo ""
 
 echo ""
-echo "Getting started:"
-echo "  cs my-first-session    # Create your first session"
-echo "  cs -help               # See all commands"
-echo "  cs -version            # Verify installation"
+echo "   Getting started:"
+echo "     cs my-first-session    # Create your first session"
+echo "     cs -help               # See all commands"
+echo "     cs -version            # Verify installation"
