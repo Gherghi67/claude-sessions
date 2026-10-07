@@ -1,0 +1,6 @@
+# Codex reads this beside SKILL.md. It accepts SKILL.md's
+# disable-model-invocation and ignores it, so switch would run whenever the
+# model judged an engine change useful, ending the conversation it runs in;
+# this keeps it to an explicit $switch.
+policy:
+  allow_implicit_invocation: false

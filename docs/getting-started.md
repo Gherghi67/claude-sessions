@@ -117,10 +117,46 @@ ags research-notes --engine codex
 ```
 
 The workspace files and `.cs/` notes are shared. Claude and Codex keep separate
-native conversation histories. Before switching, ask the current assistant to
-write important findings, decisions, and next steps into `.cs/summary.md` so
-the other engine can pick them up. Keep one interactive owner open for a
-workspace at a time.
+native conversation histories, so `--engine` alone opens the other engine's
+own conversation, which has not seen the work done since it last ran. Keep
+one interactive owner open for a workspace at a time.
+
+To carry the current conversation's work across, ask for the `switch` skill
+from inside the conversation (`/switch` in Claude, `$switch` in Codex; name
+`claude` or `codex`, or leave it out for the other engine). It writes and arms
+a rotation handoff the way the `rotate` skill does, then records the move with
+`ags -switch` and tells you how to leave: `/exit` in Claude (the `ags` mod
+counts down and runs it for you), `/quit` in Codex. When the CLI exits, ags
+reopens the session in the same terminal under the other engine, in a fresh
+conversation that starts from the handoff. That engine becomes the session's
+saved engine. The previous conversation stays on disk and is not resumed;
+`ags research-notes --engine <previous engine>` opens it again.
+
+Ask for `--resume` with the switch to resume the other engine's last
+conversation in this session instead. The handoff becomes its first new
+message. When that engine has no conversation recorded here, ags says so and
+starts a fresh one.
+
+`ags -switch cancel` drops a recorded switch and leaves the handoff armed, so
+`/clear` continues from it in the same engine. A `/clear` instead of the exit
+also takes the handoff in the same engine; ags then drops the switch with a
+notice. If the CLI exits with an error, or the other engine cannot start, ags
+prints both ways back and the handoff stays armed:
+
+```bash
+ags research-notes --engine codex --from-handoff
+ags research-notes --engine claude
+```
+
+`--from-handoff` starts a fresh conversation from the pending handoff without
+the resume prompt: the armed one, otherwise the newest unconsumed one, labelled
+`(from another checkout)` when this checkout did not write it. Without a
+pending handoff it refuses and points at `--fresh`. It cannot be combined with
+`--fresh`, `--resume` or `-finish`. Codex cannot yet start from the handoffs of
+an [encrypted session](session-layout.md#encrypted-sessions), so the switch
+into Codex and `--engine codex --from-handoff` refuse there. A switch out of
+Codex refuses there as well while Codex's plaintext `.cs/local/session.log`
+exists; move it into `.cs/private/` first.
 
 Run `ags .` from the root of an adopted project or registered session to open
 that workspace. From anywhere, `ags` with no arguments opens the interactive
@@ -163,11 +199,12 @@ separately when you want to preserve the contents of the changes themselves.
 
 ## Current Codex limits
 
-Codex currently supports engine selection, launch, exact thread resume, and
-shared startup context. Claude's hooks and mods do not run inside Codex. Codex
-does not yet provide agent-sessions autosave and crash recovery, automatic
-queue or mailbox delivery, runtime usage reporting, cross-engine handoffs, or
-native terminal controls. Manual status and workspace management are available.
+Codex currently supports engine selection, launch, exact thread resume,
+shared startup context, rotation, and the `switch` skill in both directions.
+Claude's hooks and mods do not run inside Codex. Codex does not yet provide
+agent-sessions autosave and crash recovery, automatic queue or mailbox
+delivery, runtime usage reporting, rotation in an encrypted session, or native
+terminal controls. Manual status and workspace management are available.
 
 This branch has not been published. The experimental launcher disables
 `ags -update` and `ags -uninstall`; rerun `setup.sh` to install checkout changes.

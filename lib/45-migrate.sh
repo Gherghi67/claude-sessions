@@ -137,7 +137,8 @@ _refuse_worktree_of_encrypted_base() {  # base_name, base_dir
 # and ags -encrypt moves each into the vault.
 CS_PRIVATE_LOCAL_FILES="session.log scope-prompt.trace memory-index.snapshot mail
     queue queue.tmp queue.state queue.done queue.declined queue.migrating
-    notifications.jsonl notifications.seen failures rewrite.trace pending-handoff"
+    notifications.jsonl notifications.seen failures rewrite.trace pending-handoff
+    pending-switch"
 
 # Once .cs/private holds a session's ags content files, a copy still in
 # .cs/local is plaintext the vault was meant to hold: an unmigrated log, or one

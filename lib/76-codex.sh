@@ -208,9 +208,24 @@ _launch_codex_bound() {
 
     # A rotation handoff the rotate skill wrote adds r (and d) to the question,
     # as on Claude: r starts a fresh thread that continues from it.
-    local pending_handoff rotation_handoff=""
+    local pending_handoff rotation_handoff="" rotation_origin=""
     pending_handoff=$(_pending_handoff_pick "$session_dir")
-    if [ "$intent" = auto ] && cs_interactive && { [ -n "$recorded_id" ] || [ -n "$pending_handoff" ]; }; then
+    if [ "$intent" = handoff ]; then
+        # --from-handoff (and the relaunch of an ags -switch): the r answer,
+        # unasked, as on Claude. Not from an encrypted session's vault, which
+        # the r path below does not read (lib/78-switch.sh).
+        if _switch_session_encrypted "$session_dir"; then
+            _codex_launch_error "Codex does not read handoffs from .cs/private yet. Continue from it under Claude: ags $session_name --engine claude --from-handoff"
+            return 1
+        fi
+        [ -n "$pending_handoff" ] || {
+            _codex_launch_error "$(_switch_no_handoff_message "$session_name")"
+            return 1
+        }
+        rotation_handoff=$(basename "$pending_handoff")
+        rotation_origin=$(_switch_handoff_origin "$pending_handoff" "$session_dir")
+        intent=fresh
+    elif [ "$intent" = auto ] && cs_interactive && { [ -n "$recorded_id" ] || [ -n "$pending_handoff" ]; }; then
         local response=""
         if [ -n "$pending_handoff" ]; then
             local origin=""
@@ -257,9 +272,15 @@ _launch_codex_bound() {
             *) _disarm_rotation_marker "$session_dir" "$pending_handoff" ;;
         esac
     elif [ "$intent" = fresh ]; then
-        # An explicit fresh start with a rotation armed continues it, as a
-        # Claude fresh launch does (its SessionStart consumes the marker).
+        # An explicit fresh start with a rotation armed continues it. Claude's
+        # --fresh does not: it disarms the marker (lib/75-launch.sh). Both are
+        # kept as they are; --from-handoff is the spelling both engines read
+        # as r.
         rotation_handoff=$(_rotation_armed_handoff "$session_dir")
+    elif [ "$intent" = resume ] && [ -n "${_cs_switch_resume:-}" ]; then
+        # A switch relaunched with --resume: the armed handoff rides the
+        # resume as its first message, spent once the thread is refreshed.
+        :
     else
         # Resuming, or unattended: the armed rotation is not taken, so it must
         # not survive to be consumed by an unrelated /clear later.
@@ -353,10 +374,17 @@ _launch_codex_bound() {
     # prompt on the same answer: without it the thread would wait for a message.
     local kick=""
     if [ -n "$rotation_handoff" ]; then
+        # Spent before Codex starts; a switch relaunch's settle puts it back
+        # if Codex never takes it up (lib/78-switch.sh).
+        if declare -F _switch_note_spent >/dev/null; then
+            _switch_note_spent "$session_dir" "$rotation_handoff" "$thread_id"
+        fi
         _handoff_set_status "$session_dir/.cs/handoffs/$rotation_handoff" consumed "$thread_id" || true
         rm -f "$local_dir/pending-handoff" 2>/dev/null || true
         kick="Continue from the pending rotation handoff: read .cs/handoffs/$rotation_handoff first."
-        printf "${DIM}Continuing from handoff:${NC} %s\n" "$rotation_handoff"
+        printf "${DIM}Continuing from handoff:${NC} %s%b\n" "$rotation_handoff" "$rotation_origin"
+    elif [ "$intent" = resume ] && [ -n "${_cs_switch_resume:-}" ]; then
+        _switch_resume_handoff "$session_dir" "$thread_id" kick
     fi
 
     printf '%s\n' 'Codex via ags: session context, exact resume and rotation are enabled; Claude hooks, autosave, and task queue integration are unavailable.'

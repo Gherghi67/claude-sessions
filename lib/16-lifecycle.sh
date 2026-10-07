@@ -100,7 +100,8 @@ cs_launch_session() {  # engine, name, directory, is_new, force, merge, intent
     export CS_RUN_ID CS_RUN_ENGINE CS_RUN_OWNER_PID CS_LEAD_PID
     unset CS_COLLISION_FORCE
     [ -d "$directory" ] || { printf 'Error: Session directory does not exist: %s\n' "$directory" >&2; return 1; }
-    case "$intent" in auto|resume|fresh) ;; *) printf 'Error: Unknown launch intent: %s\n' "$intent" >&2; return 2 ;; esac
+    # handoff: --from-handoff, the resume prompt's r answer taken unasked.
+    case "$intent" in auto|resume|fresh|handoff) ;; *) printf 'Error: Unknown launch intent: %s\n' "$intent" >&2; return 2 ;; esac
     acquire_session_lock "$_cs_run_meta" "$force" "$name" || return $?
     _cs_run_active=1
     saved_exit=$(trap -p EXIT); saved_int=$(trap -p INT); saved_term=$(trap -p TERM)
@@ -112,11 +113,20 @@ cs_launch_session() {  # engine, name, directory, is_new, force, merge, intent
     if [ "$status" -eq 0 ]; then
         cs_run_with_lease "$_cs_run_meta" _cs_run_unarchive "$_cs_run_meta" "$name" || status=$?
     fi
+    # ags -switch (lib/78-switch.sh): a pending switch found as a run starts is
+    # an earlier run's leftover; the one this run arms is settled at its end,
+    # while the lease is held and an encrypted session's vault is mounted.
+    if [ "$status" -eq 0 ] && declare -F _switch_run_start >/dev/null; then
+        _switch_run_start "$directory" || true
+    fi
     if [ "$status" -eq 0 ]; then
         cs_engine_call "$engine" launch "$name" "$directory" "$is_new" "$force" "$merge" "$intent" || status=$?
     fi
     if [ "$status" -eq 0 ]; then
         cs_run_with_lease "$_cs_run_meta" _cs_set_local_state_unlocked "$_cs_run_meta/local/state" engine "$engine" || status=$?
+    fi
+    if declare -F _switch_settle >/dev/null; then
+        _switch_settle "$name" "$directory" "$engine" "$status" || true
     fi
     _cs_run_cleanup
     trap - EXIT INT TERM

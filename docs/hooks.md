@@ -357,6 +357,14 @@ appears only for a marker the hook accepts: a bare basename, a file in
 an aborted rotation left naming a handoff since consumed or gone, leaves the
 rotate button in place.
 
+The `switch` skill arms the same marker and then records where the session goes
+next with `ags -switch` (`.cs/local/pending-switch`, or `.cs/private/pending-switch`
+in an encrypted session). While that record is there, the armed button reads
+`1: /exit and continue in codex` and pressing it runs `/exit`, not `/clear`: a
+`/clear` would hand the handoff to Claude again, while the exit lets ags reopen
+the session under Codex from it. The grace below counts the same way and reads
+`/exit in 20s`.
+
 The mod presses the button for you by default. The forcing is **on at 80%**;
 `CS_ROTATE_FORCE_CTX=<percent>` in the shell that launches cs moves it,
 `CS_ROTATE_FORCE_CTX=off` (or `0`) turns it off, and a value that is neither —

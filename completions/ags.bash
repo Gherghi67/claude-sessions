@@ -11,7 +11,7 @@ _cs_completions() {
     }
 
     # Global flags
-    local global_flags="-tui -list -ls -adopt -remove -rm -whoami -who -engine -secrets -checkpoint -narrative -queue -msg -spawn -conversations -search -statusline -detect-theme -doctor -diag -update -uninstall -help -h -version -v -live -usage -status -tag -archive -unarchive -encrypt"
+    local global_flags="-tui -list -ls -adopt -remove -rm -whoami -who -engine -switch -secrets -checkpoint -narrative -queue -msg -spawn -conversations -search -statusline -detect-theme -doctor -diag -update -uninstall -help -h -version -v -live -usage -status -tag -archive -unarchive -encrypt"
 
     # Secrets subcommands
     local secrets_cmds="set store get list ls delete rm purge export export-file import-file migrate migrate-backend backend age"
@@ -30,7 +30,7 @@ _cs_completions() {
     local update_cmds="--check -c --force -f"
 
     # Session-level options
-    local session_opts="-secrets -queue -msg -narrative -conversations -usage -tag -features -finish --engine --fresh --resume --force"
+    local session_opts="-secrets -queue -msg -narrative -conversations -usage -tag -features -finish --engine --fresh --resume --from-handoff --force"
     local engine_values="claude codex"
 
     # Ask the command being completed so ags and its cs alias both work.

@@ -171,6 +171,7 @@ CS_SKILLS=(
     store-secret
     prose-hygiene
     rotate
+    switch
     finish
     feature
     write-as-me
@@ -210,6 +211,7 @@ CS_SKILL_FILES=(
     write-as-me/scripts/build-corpus.sh
     finish/scripts/finish.sh
     finish/agents/openai.yaml   # Codex ignores disable-model-invocation; this is its switch
+    switch/agents/openai.yaml   # the same switch for the switch skill: run only when the user asks
     sweep/scripts/memory-index-guard.sh
     sweep/scripts/cs-shared.sh  # build.sh's copy of hooks/cs-shared.sh, which the guard sources
 )

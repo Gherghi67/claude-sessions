@@ -108,6 +108,11 @@ main() {
             cmd_engine "$@"
             return $?
             ;;
+        -switch)
+            shift
+            cmd_switch "$@"
+            return $?
+            ;;
         -secrets)
             shift
             run_secrets "$@"
@@ -236,6 +241,10 @@ main() {
     local merge_feature=""
     local explicit_engine=""
     local launch_intent=auto
+    # ags -switch (lib/78-switch.sh): set by its relaunch's hidden flag, and by
+    # _switch_settle when the run that ends here armed a switch.
+    local _cs_switched_from="" _cs_switch_resume=""
+    local _cs_switch_next="" _cs_switch_next_mode="" _cs_switch_prev="" _cs_switch_handoff=""
 
     # Validate inputs
     local wt_base="" wt_task=""
@@ -400,26 +409,58 @@ main() {
                 ;;
             --fresh|--resume)
                 local selected_intent="${1#--}"
+                [ "$launch_intent" != handoff ] || error "--from-handoff cannot be combined with $1"
                 [ "$launch_intent" = auto ] || [ "$launch_intent" = "$selected_intent" ] \
                     || error "--fresh and --resume cannot be combined"
                 launch_intent="$selected_intent"
                 shift
+                ;;
+            --from-handoff)
+                [ "$launch_intent" = auto ] || [ "$launch_intent" = handoff ] \
+                    || error "--from-handoff cannot be combined with --$launch_intent"
+                launch_intent=handoff
+                shift
+                ;;
+            --switched-from) # hidden: the relaunch ags -switch execs (lib/78-switch.sh), not typed by a user
+                [ $# -ge 2 ] && cs_engine_known "$2" || error "--switched-from needs claude or codex"
+                _cs_switched_from="$2"
+                shift 2
                 ;;
             --force)
                 force_flag="true"
                 shift
                 ;;
             *)
-                error "Unknown session command: $1. Use -secrets, -queue, -msg, -narrative, -conversations, -usage, -tag, -features, -finish, --engine, --fresh, --resume, or --force."
+                error "Unknown session command: $1. Use -secrets, -queue, -msg, -narrative, -conversations, -usage, -tag, -features, -finish, --engine, --fresh, --resume, --from-handoff, or --force."
                 ;;
         esac
     done
+
+    # A relaunch must start from what this launch started from; taken before
+    # anything below exports, changes directory or sets the umask.
+    _switch_snapshot
+    if [ "$launch_intent" = handoff ] && [ -n "$merge_feature" ]; then
+        error "--from-handoff cannot be combined with -finish"
+    fi
+    if [ -n "$_cs_switched_from" ]; then
+        case "$launch_intent" in
+            handoff) ;;
+            resume) _cs_switch_resume=1 ;;
+            *) error "--switched-from needs --from-handoff or --resume" ;;
+        esac
+        _switch_guard_relaunch "$session_name" "$explicit_engine"
+    fi
 
     local session_dir="$SESSIONS_ROOT/$session_name"
     local engine
     engine=$(_session_engine "$session_dir" "$explicit_engine")
     if [ -n "$merge_feature" ] && ! cs_engine_supports "$engine" feature_finish; then
         error "-finish requires Claude. Use: ags $session_name --engine claude -finish $merge_feature"
+    fi
+    # The handoff lives in the session; a session that does not exist yet has
+    # none, and creating one here would only refuse later.
+    if [ "$launch_intent" = handoff ] && [ ! -d "$session_dir" ]; then
+        error "Cannot start from a handoff: session $session_name does not exist. Create it with: ags $session_name"
     fi
 
     # An explicit resume must never create a workspace or allocate a binding
@@ -535,6 +576,10 @@ $merge_feature
     fi
 
     cs_launch_session "$engine" "$session_name" "$session_dir" "$is_new" "$force_flag" "$merge_feature" "$launch_intent"
+    # Reached when the run succeeded (errexit ends ags on a failed one; the
+    # switch's own notices for that case were printed as the run settled).
+    # With a switch settled, this execs ags for the target and never returns.
+    _switch_relaunch "$session_name"
 }
 
 main "$@"

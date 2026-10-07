@@ -141,6 +141,7 @@ iteration does not move the entire source tree or migrate storage formats.
 | `40-state.sh`, `41-bindings.sh`: local state and engine-qualified bindings | `46-claude-workspace.sh`: Claude workspace preparation and native migrations |
 | `30-worktree.sh`, `45-migrate.sh`: shared worktree/scaffold/migration operations | `75-launch.sh`: existing Claude launch adapter and its orchestration |
 | CLI commands consume `CS_SESSION_*`, falling back to legacy aliases | `76-codex.sh`, `bin/ags-codex-thread`: Codex launch, context renderer, and protocol |
+| `78-switch.sh`: `ags -switch`, `pending-switch`, and the relaunch under the other engine | |
 
 Create/adopt/migrate/worktree paths dispatch `prepare_workspace` after preparing
 portable storage. They allocate no native conversation IDs themselves. Claude adoption appends its
@@ -184,6 +185,74 @@ New conversation records include `engine` and `run_id`. `ags -conversations`
 labels each engine, counts resumes separately, and treats older records without
 an engine as Claude records. Each engine retains its own current binding.
 
+## Switching engines
+
+`ags -switch` (lib/78-switch.sh) moves a session to the other engine through a
+rotation handoff; no transcript crosses engines. The `switch` skill writes and
+arms the handoff by the `rotate` skill's steps, then runs
+`ags -switch [claude|codex] [--resume]` from inside the conversation. The verb
+refuses, naming the fix, outside a session or a live run of it (its
+`CS_RUN_ID` must match `.cs/local/run-lease.json`), for an unknown engine or the
+current one, for a target the install did not set up or whose CLI is missing,
+for a target adapter without `rotation`, for a switch already pending, for an
+encrypted session whose vault is locked, whose target is Codex (its rotation
+does not read `.cs/private` yet) or whose open would refuse the relaunch
+(`_refuse_unmounted_meta`, for example the plaintext `.cs/local/session.log`
+Codex's session-start hook writes), and when no unconsumed handoff is armed.
+`--check` runs every refusal except the last and writes nothing; the skill
+calls it before writing a handoff. On success the verb writes
+`pending-switch` atomically to the session's private directory (`.cs/local/`,
+or `.cs/private/` when encrypted):
+
+```
+engine=<target>
+mode=fresh|resume
+handoff=<basename of the armed handoff>
+run=<CS_RUN_ID of the run that wrote it>
+```
+
+and prints how to leave the CLI (`/exit` for Claude, `/quit` for Codex).
+`ags -switch cancel` removes it and leaves the handoff armed. Under Claude the
+`ags` mod reads the same file: its forced-rotation countdown runs `/exit`
+instead of `/clear` while a switch is pending.
+
+`cs_launch_session` settles the switch after the CLI exits, while the run
+still holds its lease and an encrypted session's vault is mounted. Only the
+run named by `run=` takes it, once: the file is removed first. A non-zero CLI
+exit, a handoff a `/clear` already consumed, a missing target CLI, or a session
+the relaunch's open would refuse ends the switch there, with the handoff left
+armed and, except for the consumed case, both reopen commands printed. A switch
+file found as a run starts belongs to an earlier run that ended without
+settling it, and is dropped.
+
+Otherwise `main` re-execs `ags <name> --engine <target>` once
+`cs_launch_session` returns: with `--from-handoff` for `mode=fresh`, or with
+`--resume` for `mode=resume` when the target has a recorded conversation (a
+notice and a fresh start otherwise). The exec restores the environment, umask
+and working directory `main` started from and clears `CS_RUN_ID`,
+`CS_RUN_ENGINE`, `CS_RUN_OWNER_PID`, `CS_LEAD_PID`, `CS_FRESH_REBIND` and
+`CS_CLAUDE_SESSION_ID`, so the target's own open steps run (dependencies,
+migration or the worktree path, the adapter's launch) under a new run that
+records `state engine <target>`. The previous engine's binding is untouched.
+The process id survives the exec, so an encrypted session's vault stays
+mounted and the relaunch joins it. A relaunch that fails before its CLI starts
+prints both reopen commands, from its settle or from an exit trap `main` sets
+for it. The settle looks at the handoff the relaunch came to carry, which it
+notes as the run starts. When the CLI exits non-zero and that handoff is still
+unconsumed, or the launch spent it (the resume path, Codex's `r` path) with no
+session start logged since, it is marked unconsumed and armed again. A
+relaunched conversation that did run, or that armed a newer handoff, keeps what
+it took, and nothing is printed.
+
+Launch intent `handoff` (`--from-handoff`) is the `r` answer taken without the
+prompt on both adapters, from `_pending_handoff_pick`. The relaunch's resume
+mode spends the handoff in the launch, just before the CLI starts: it marks it
+consumed by the resumed conversation, removes the marker so a later `/clear`
+cannot rotate into it again, and passes a prompt pointing at it (Claude's
+launch prompt, Codex's `codex resume <id> -C <dir> <prompt>`). An encrypted
+session's prompt names `.cs/private/handoffs/` and the `consumed_by` value
+rather than the handoff, whose name is the session's topic.
+
 ## Deferred boundaries
 
 Hooks, recovery, usage, and TUI runtime observations retain their Claude
@@ -213,6 +282,8 @@ carrying the new thread's id. On `clear`, under the run lease, the hook rebinds
 `.cs/local/codex-thread-id`, records `rotated` and `started` events, consumes an
 armed handoff and returns the rotation context; on every source it logs the
 `Session started` line the rotate skill and the launch prompt read. The launch
-owns the other way in: `r` at the `[Y/n/r/d]` prompt (or an explicit `--fresh`
-with a rotation armed) adds the handoff to the new thread's context, consumes it,
-and starts the thread with `codex resume <id> <prompt>`.
+owns the other way in: `r` at the `[Y/n/r/d]` prompt (or `--from-handoff`, or an
+explicit `--fresh` with a rotation armed) adds the handoff to the new thread's
+context, consumes it, and starts the thread with `codex resume <id> <prompt>`.
+These paths read `.cs/handoffs` and `.cs/local/pending-handoff` only, so Codex
+rotation does not yet work in an encrypted session.

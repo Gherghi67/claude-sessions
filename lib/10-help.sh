@@ -15,6 +15,7 @@ Commands:
   <name>              Create or resume session <name> (locks session)
   <name> --fresh      Start a fresh conversation after native acknowledgement
   <name> --resume     Resume the exact recorded conversation without prompting
+  <name> --from-handoff  Start a fresh conversation from the pending rotation handoff without prompting
   <name> --force      Override active session lock
   <name> --engine <claude|codex>  Select and remember this session's runtime
   <base>@<feature>    Open a parallel feature worktree of session <base>
@@ -49,6 +50,7 @@ Commands:
   -whoami             Show the current actor (for shared, multi-person sessions)
   -who                Show who contributed to shared memory/narrative (git history)
   -engine [supports <capability>]  Show this session's engine, conversation and capabilities
+  -switch [claude|codex] [--resume]  From inside a conversation with a handoff armed: on exit, ags reopens the session under the other engine from it (--check tests it; -switch cancel drops it)
   -live               List sessions running right now on this machine
   -usage              Per-session token usage over the 5h/weekly rate-limit windows
   -tag add|rm <tag>   Tag the current session (frontmatter); -tag list [<name>] to view

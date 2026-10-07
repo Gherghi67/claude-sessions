@@ -608,6 +608,9 @@ _launch_claude_bound() {
     elif [ "$intent" = fresh ]; then
         status_icon="+"
         status_text="fresh"
+    elif [ "$intent" = handoff ]; then
+        status_icon="+"
+        status_text="from handoff"
     else
         status_icon="↻"
         status_text="resuming"
@@ -761,7 +764,8 @@ EOF
         # That uuid still resolves, so `--resume` can succeed: the launch would continue a superseded
         # prefix with nothing said. Name the newer one rather than switching to
         # it, which would hand the session to whatever was last opened here.
-        if [ -n "$claude_session_id" ]; then
+        # A launch from the handoff resumes nothing, so it has nothing to name.
+        if [ -n "$claude_session_id" ] && [ "$intent" != handoff ]; then
             local _proj _newest
             _proj=$(_claude_project_dir "$session_dir")
             # Suggest a newer conversation only when the recorded transcript
@@ -795,7 +799,20 @@ EOF
         # of parking the tmux window on an interactive ask. So is an explicit
         # --resume, and an open with no terminal to ask on. Unbound, the
         # default is fresh, and a pending handoff waits for an attended open.
-        if [ "$intent" = resume ] || [ -n "$spawn_kick" ] || ! cs_interactive; then
+        # --from-handoff (and the relaunch of an ags -switch) is the r answer,
+        # unasked; a switch relaunched with --resume resumes, and its handoff
+        # rides along as the first message (lib/78-switch.sh).
+        if [ "$intent" = handoff ]; then
+            if [ -z "$pending_handoff" ]; then
+                printf 'Error: %s\n' "$(_switch_no_handoff_message "$session_name")" >&2
+                return 1
+            fi
+            printf "${DIM}Continuing from handoff:${NC} %s%b\n" "$(basename "$pending_handoff")" \
+                "$(_switch_handoff_origin "$pending_handoff" "$session_dir")"
+            response=r
+        elif [ "$intent" = resume ] && [ -n "${_cs_switch_resume:-}" ] && [ -n "$claude_session_id" ]; then
+            response=switch-resume
+        elif [ "$intent" = resume ] || [ -n "$spawn_kick" ] || ! cs_interactive; then
             response=""
             [ -n "$claude_session_id" ] || response="n"
         elif [ -z "$claude_session_id" ] && [ -z "$pending_handoff" ]; then
@@ -869,6 +886,13 @@ EOF
                 fi
                 # d without a pending handoff was never offered: treat as the
                 # default resume answer.
+                resume_id="$claude_session_id"
+                ;;
+            switch-resume)
+                # Never typed (one keypress is read): set above for a switch
+                # relaunched with --resume. Spends the armed handoff and makes
+                # it this resume's prompt.
+                _switch_resume_handoff "$session_dir" "$claude_session_id" launch_prompt
                 resume_id="$claude_session_id"
                 ;;
             *)

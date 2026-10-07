@@ -64,10 +64,53 @@ Without either flag, an interactive reopen offers resume or fresh. Unattended
 launches resume the recorded conversation by default. A new workspace starts a
 conversation. Engine switching preserves the other engine's saved ID.
 
+`--from-handoff` takes the `r` answer without asking: a fresh thread starts
+from the pending rotation handoff (the armed one, otherwise the newest
+unconsumed one) and runs its first turn on its own. Without a pending handoff
+it refuses and points at `--fresh`; it cannot be combined with `--fresh`,
+`--resume` or `-finish`. An explicit `--fresh` on Codex also continues an
+armed rotation, while Claude's `--fresh` disarms it; `--from-handoff` reads the
+same on both engines.
+
 Both engines run under the same launcher-owned lease and cleanup. Codex's
 persistent helper acknowledgement establishes its binding; this does not mean
 the interactive CLI has completed authentication or a model turn. The normal
 CLI exit status is returned to the caller.
+
+## Switching engines
+
+```bash
+ags investigate --engine claude
+```
+
+A plain `--engine` reopens the other engine's own conversation, which has not
+seen the work done since it last ran. To carry the work across, ask for
+`$switch` in Codex (or `/switch` in Claude), optionally naming the engine and
+`--resume`. The skill writes and arms a handoff by the `rotate` skill's steps,
+then runs `ags -switch`; Codex may ask you to approve that call, since it writes
+into `.cs/` from the launch's read-only sandbox. Quit Codex with `/quit`, and
+the `ags` that launched it reopens the session in the same terminal under
+Claude, in a fresh conversation that starts from the handoff. From Claude the
+`ags` mod runs `/exit` for you after a countdown, and Codex opens a fresh thread
+from the handoff the way `r` does.
+
+`--resume` resumes the target's last conversation in the session instead and
+gives it the handoff as its first message (`codex resume <id> -C <dir>
+<prompt>` on Codex). A target with no recorded conversation starts fresh, with
+a notice. `ags -switch cancel` drops the recorded switch and keeps the handoff
+armed. A `/clear` instead of quitting takes the handoff in the same engine, and
+the switch is dropped with a notice. A CLI that exits with an error, or a target
+that cannot start, leaves the handoff armed and prints both ways back:
+`ags <name> --engine <target> --from-handoff` and `ags <name> --engine
+<current>`. When the target exits with an error before its conversation
+starts, ags also puts back a handoff its launch had already marked consumed.
+
+Codex does not yet read an encrypted session's vault for rotation, so a switch
+into Codex refuses in an [encrypted session](session-layout.md#encrypted-sessions),
+as does `--engine codex --from-handoff`. A switch from Codex to Claude refuses
+there too while `.cs/local/session.log` exists: Codex's session-start hook
+writes that log in plaintext, and an encrypted session does not open beside it.
+Move the file into `.cs/private/`, then ask for the switch again.
 
 ## Workspace preparation and installation
 
@@ -99,8 +142,9 @@ The workspace and CS records remain shared across engines: project files,
 `.cs/README.md`, plans, handoffs, and memory are in the same session directory.
 At startup, CS appends context about the relevant `.cs/` files to the Codex
 thread so it can load the session protocol and current notes. This does not
-transfer the other engine's conversation history or native memory. When
-switching engines, summarize important findings in the shared notes so both
+transfer the other engine's conversation history or native memory. The
+`switch` skill carries the work across in a rotation handoff; for a plain
+`--engine` reopen, summarize important findings in the shared notes so both
 conversations can pick them up.
 
 CS does not replace or edit a project's `AGENTS.md`. Claude-specific session
@@ -124,11 +168,12 @@ that first message through the one hook ags registers for Codex
 `config.toml` by the installer). The same hook rebinds the session after every
 `/clear`, so the next `ags <name>` resumes the conversation you were in.
 Exiting instead and answering `r` at the next launch starts a fresh thread from
-the handoff and runs its first turn on its own. The Claude hooks and
+the handoff and runs its first turn on its own. `$switch` does the same across
+engines (see [Switching engines](#switching-engines)). The Claude hooks and
 function-hook mods do not run in Codex. Codex does
 not yet participate in CS autosave and crash recovery, queue delivery, usage
-reporting, automatic cross-engine handoffs, observed runtime status, or native terminal
-controls. CS session-management commands continue to manage the shared
+reporting, rotation in an encrypted session, observed runtime status, or native
+terminal controls. CS session-management commands continue to manage the shared
 workspace, including manual `ags -status` updates through `CS_SESSION_*`; native runtime observations remain Claude-specific for now.
 
 The shared internal dispatch, binding, and context interfaces are described in

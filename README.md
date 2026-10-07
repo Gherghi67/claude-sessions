@@ -108,6 +108,7 @@ No git repo required. No project structure needed. Just a name for what you're w
 | Workspace preparation | Dispatches selected adapter | Native instructions and memory redirect | Startup context; preserves `AGENTS.md` and Claude configuration |
 | Exact native conversation binding | Separate binding per engine | Claude UUID | Codex thread ID |
 | Conversation rotation (`/rotate`, then `/clear` or `r` at launch) | Handoff store and marker | SessionStart hook, auto-start, forced rotation | SessionStart hook; `/clear` then a message |
+| Engine switch (`/switch`, then exit; ags reopens under the other engine) | `ags -switch`, `pending-switch`, relaunch | Leave with `/exit` (the mod's countdown runs it); arrive from the handoff | Leave with `/quit`; arrive from the handoff (not in an encrypted session) |
 | Automatic recovery, queue/mail delivery, usage, native status UI | Shared storage; transport depends on adapter | Available | Unavailable |
 
 The feature descriptions above include Claude's native integrations. Codex
@@ -162,8 +163,8 @@ Within the experimental profile, the installer:
 
 - Adds `ags`, its companion commands, and the optional `ags-tui` picker to `~/.local/bin/`
 - Installs the agent-sessions [hooks](docs/hooks.md) to `~/.claude/hooks/cs/` for session tracking (including the `scope-prompt` auto-grounding hook on UserPromptSubmit)
-- Adds the `summary`, `checkpoint`, `sweep`, `wrap`, `store-secret`, `prose-hygiene`, `rotate`, `finish`, `feature`, and `write-as-me` skills (each answers `/<name>`), and the `cs` and `cs-update` mods to `~/.claude/`; slash-command files an earlier install left under `~/.claude/commands/` for the first four are removed
-- Adds the same skills to Codex, under the profile's `.codex/skills/` (Codex's `CODEX_HOME`); `finish` stays out of Codex's automatic skill choice and runs only when asked
+- Adds the `summary`, `checkpoint`, `sweep`, `wrap`, `store-secret`, `prose-hygiene`, `rotate`, `switch`, `finish`, `feature`, and `write-as-me` skills (each answers `/<name>`), and the `cs` and `cs-update` mods to `~/.claude/`; slash-command files an earlier install left under `~/.claude/commands/` for the first four are removed
+- Adds the same skills to Codex, under the profile's `.codex/skills/` (Codex's `CODEX_HOME`); `finish` and `switch` stay out of Codex's automatic skill choice and run only when asked
 - Registers one Codex SessionStart hook in the profile's `.codex/hooks.json` and trusts it in `.codex/config.toml`, so a `/clear` in Codex rebinds the session and picks up an armed rotation
 - Installs shell completions for bash and zsh
 - Configures hook entries in `~/.claude/settings.json`
@@ -192,6 +193,8 @@ ags -- <session-name>        # '--' ends the options, for launchers that insert 
 ags <session-name>           # Create or resume a session
 ags <session-name> --engine codex  # Create or resume with Codex CLI
 ags <session-name> --force   # Override active session lock
+ags <session-name> --from-handoff  # Fresh conversation from the pending rotation handoff, without the resume prompt
+ags -switch [claude|codex] [--resume]  # Inside a conversation with a handoff armed: on exit, reopen under the other engine (the switch skill runs it; -switch cancel drops it)
 ags <base>@<feature>         # Create/resume a parallel feature worktree off <base>
 ags <base> -features         # List a base's feature worktrees and their merge readiness
 ags <base> -finish <feature> # Open <base> and run /finish for <feature> (integrate, then retire the worktree)
@@ -511,6 +514,16 @@ spent or missing file, the lexicographically last unconsumed basename wins — t
 precedence because `.cs/handoffs/` is shared and nothing deletes a handoff: a
 co-worker's file stays unconsumed indefinitely, and sorting last it would
 otherwise shadow the rotation this checkout armed.
+
+To continue under the other engine instead, invoke the `switch` skill
+(`/switch` in Claude, `$switch` in Codex). It writes and arms the handoff by the
+rotate skill's steps, records the move with `ags -switch`, and has you exit the
+CLI (`/exit` in Claude, where the `cs` mod's countdown runs it for you; `/quit`
+in Codex). The `ags` that launched it then reopens the session in the same
+terminal under the other engine, in a fresh conversation that starts from the
+handoff; `--resume` resumes that engine's last conversation here with the
+handoff as its first message. `ags -switch cancel` keeps you where you are with
+the handoff still armed. See [docs/getting-started.md](docs/getting-started.md#resume-and-switch-engines).
 
 A compaction or a context-limit fork between arming and rotating leaves the
 marker alone, so a pending rotation survives either.

@@ -166,6 +166,124 @@ test_rotate_names_the_codex_closing_line() {
         "Codex declares rotation now" || return 1
 }
 
+# switch ends the conversation it runs in, so it runs only when the user asks:
+# Claude reads disable-model-invocation in the frontmatter, Codex ignores it
+# and reads its own policy beside SKILL.md.
+test_switch_is_user_invoked_only() {
+    local skill="$SKILLS_DIR/switch/SKILL.md" front
+    front=$(awk 'NR==1&&/^---$/{f=1;next} f&&/^---$/{exit} f' "$skill" 2>/dev/null)
+    grep -qx 'name: switch' <<< "$front" \
+        || { echo "  FAIL: switch/SKILL.md's frontmatter must declare name: switch"; return 1; }
+    grep -qx 'disable-model-invocation: true' <<< "$front" \
+        || { echo "  FAIL: switch must be user-invoked only on Claude (disable-model-invocation: true)"; return 1; }
+    grep -q '^description: .*Invoke only when the user asks to switch engines\.$' <<< "$front" \
+        || { echo "  FAIL: switch's description must say it is invoked only when the user asks"; return 1; }
+    assert_file_contains "$SKILLS_DIR/switch/agents/openai.yaml" '^policy:$' \
+        "switch's openai.yaml must nest the switch under policy" || return 1
+    assert_file_contains "$SKILLS_DIR/switch/agents/openai.yaml" '^  allow_implicit_invocation: false$' \
+        "Codex must not invoke switch on its own" || return 1
+}
+
+# Nothing is written before ags says the switch can happen: a handoff armed for
+# a switch that cannot happen is armed for a /clear nobody asked for. Running
+# background work refuses too, since the exit would cut it off.
+test_switch_checks_before_writing() {
+    local skill="$SKILLS_DIR/switch/SKILL.md" check_at rotate_at record_at
+    check_at=$(grep -n -x -F 'ags -switch --check <target>' "$skill" | head -1 | cut -d: -f1)
+    rotate_at=$(grep -n -F '`../rotate/SKILL.md`' "$skill" | head -1 | cut -d: -f1)
+    record_at=$(grep -n -x -F '   ags -switch <target>' "$skill" | head -1 | cut -d: -f1)
+    if [ -z "$check_at" ] || [ -z "$rotate_at" ] || [ -z "$record_at" ]; then
+        echo "  FAIL: switch must run 'ags -switch --check <target>', read rotate's steps, then run 'ags -switch <target>'"
+        return 1
+    fi
+    [ "$check_at" -lt "$rotate_at" ] && [ "$rotate_at" -lt "$record_at" ] \
+        || { echo "  FAIL: the check (line $check_at) must come before rotate's steps (line $rotate_at), and the record (line $record_at) after them"; return 1; }
+    assert_file_contains "$skill" 'BEFORE writing anything' \
+        "the check must be placed before anything is written" || return 1
+    assert_file_contains "$skill" 'and stop: no handoff,' \
+        "a refused check must stop the skill with nothing written" || return 1
+    assert_file_contains "$skill" '^Refuse, and write nothing, while anything this conversation started in the$' \
+        "switch must refuse while this conversation's background work runs" || return 1
+    assert_file_contains "$skill" 'background agents, workflows, monitors,' \
+        "the refusal must name the background work an exit would cut off" || return 1
+}
+
+# rotate stays the single source of the handoff ritual: switch reads its steps
+# 1-9 from the skill beside it and never restates them, and drops rotate's
+# /clear ending, which would hand the handoff to the same engine.
+test_switch_runs_rotates_steps_by_reference() {
+    local skill="$SKILLS_DIR/switch/SKILL.md"
+    assert_file_contains "$skill" '`../rotate/SKILL.md`, relative to the folder this' \
+        "switch must read rotate beside its own directory" || return 1
+    assert_file_contains "$skill" "Run rotate's Process steps 1-9 exactly as its file writes them" \
+        "switch must run rotate's steps 1-9 as rotate writes them" || return 1
+    assert_file_contains "$skill" "Do not run rotate's steps 10 and 11" \
+        "rotate's /clear ending must be replaced, not run" || return 1
+    assert_file_contains "$skill" 'purpose: Continue under <target>: <next step>' \
+        "the handoff's purpose names the move" || return 1
+    assert_file_not_contains "$skill" 'Build the ledger before you write any prose' \
+        "the ledger rule stays in rotate's file alone" || return 1
+    assert_file_not_contains "$skill" 'check-ignore' \
+        "the staging rule stays in rotate's file alone" || return 1
+}
+
+# switch names rotate's steps by number (1-9 run, 10 and 11 replaced), so a
+# renumbered rotate must fail here rather than leave switch arming nothing.
+test_switch_step_numbers_match_rotate() {
+    local rotate="$SKILLS_DIR/rotate/SKILL.md" skill="$SKILLS_DIR/switch/SKILL.md"
+    assert_file_contains "$rotate" '^9\. Arm it, LAST' \
+        "rotate's step 9 must still be the arming step switch runs last" || return 1
+    assert_file_contains "$rotate" '^10\. Tell the user what the rotation now does' \
+        "rotate's step 10 must still be the /clear explanation switch replaces" || return 1
+    assert_file_contains "$rotate" '^11\. End your response with the instruction' \
+        "rotate's step 11 must still be the final line switch replaces" || return 1
+    if grep -q '^12\. ' "$rotate"; then
+        echo "  FAIL: rotate gained a step 12; switch's 'steps 10 and 11' no longer covers its ending"
+        return 1
+    fi
+    assert_file_contains "$skill" "rotate's step 9 did not land" \
+        "a late 'no handoff armed' refusal must send the model back to rotate's step 9" || return 1
+}
+
+# Each engine has its own way out, and the last line is the one instruction the
+# user must act on, so both lines are pinned exactly.
+test_switch_names_both_final_lines() {
+    local skill="$SKILLS_DIR/switch/SKILL.md"
+    grep -qxF '   **Run `/exit` now** (or press `1` on the capsule above the prompt) — ags reopens this session under Codex.' "$skill" \
+        || { echo "  FAIL: switch must end, under Claude, on the exact /exit line"; return 1; }
+    grep -qxF '   **Quit Codex now (`/quit`)** — ags reopens this session under Claude.' "$skill" \
+        || { echo "  FAIL: switch must end, under Codex, on the exact /quit line"; return 1; }
+    assert_file_contains "$skill" 'CS_ROTATE_FORCE_CTX=off' \
+        "the skill must name the switch that turns the mod's /exit countdown off" || return 1
+    assert_file_contains "$skill" 'ags -switch cancel' \
+        "the skill must say how to call a recorded switch off" || return 1
+}
+
+# Codex hands a skill no arguments, and Claude would replace the placeholder
+# with the user's arguments wherever the file names it, so the skill reads the
+# target from the user's message and never spells the placeholder.
+test_switch_reads_its_arguments_from_the_message() {
+    local skill="$SKILLS_DIR/switch/SKILL.md"
+    assert_file_contains "$skill" '^Codex hands a skill no arguments' \
+        "switch must say Codex passes no arguments" || return 1
+    assert_file_contains "$skill" "read them from the user's message" \
+        "switch must read the target and --resume from the user's message" || return 1
+    assert_file_not_contains "$skill" 'ARGUMENTS' \
+        "the placeholder must not appear: Claude substitutes it, Codex never does" || return 1
+}
+
+# The skill tells the user the new conversation starts by itself under either
+# engine. That holds while both launches pass the handoff as their opening
+# prompt; if a launch stops doing so, the claim (and this test) must change.
+test_switch_says_the_new_conversation_starts_itself() {
+    assert_file_contains "$SKILLS_DIR/switch/SKILL.md" 'to type, not even `go`' \
+        "switch must say nothing needs typing after the relaunch" || return 1
+    grep -qF 'resume "$thread_id" -C "$session_dir" ${kick:+"$kick"}' "$SCRIPT_DIR/../lib/76-codex.sh" \
+        || { echo "  FAIL: the Codex launch no longer passes the handoff kick as its starting prompt"; return 1; }
+    grep -qF 'handoff_arg="Continue from the pending rotation handoff: read .cs/handoffs/$handoff first."' "$SCRIPT_DIR/../lib/42-claude-state.sh" \
+        || { echo "  FAIL: the Claude fresh launch no longer passes the handoff as its launch prompt"; return 1; }
+}
+
 # The four former commands are skills: each declares its name and the
 # description an engine lists it by.
 test_former_commands_are_skills() {
@@ -538,6 +656,13 @@ run_test test_explicit_only_skills_ship_a_codex_policy
 run_test test_skills_check_adapter_capabilities_before_use
 run_test test_rotate_describes_the_default_countdown
 run_test test_rotate_names_the_codex_closing_line
+run_test test_switch_is_user_invoked_only
+run_test test_switch_checks_before_writing
+run_test test_switch_runs_rotates_steps_by_reference
+run_test test_switch_step_numbers_match_rotate
+run_test test_switch_names_both_final_lines
+run_test test_switch_reads_its_arguments_from_the_message
+run_test test_switch_says_the_new_conversation_starts_itself
 run_test test_wrap_does_not_duplicate_memory_bars
 run_test test_wrap_does_not_duplicate_summary_skeleton
 run_test test_scoring_threshold_owned_by_skill

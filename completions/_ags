@@ -102,6 +102,7 @@ _ags() {
         '-whoami:Show the current actor (multi-person sessions)'
         '-who:Show who contributed to shared memory/narrative'
         '-engine:Show the engine, conversation and capabilities of this session'
+        '-switch:Leave this CLI for the other engine; ags reopens the session there from the armed handoff'
         '-secrets:Manage session secrets'
         '-checkpoint:Save or manage session checkpoints'
         '-narrative:Archive the oldest sections of your session narrative'
@@ -281,6 +282,7 @@ _ags() {
             '--engine:Choose Claude Code or Codex CLI for this session'
             '--fresh:Start a fresh native conversation'
             '--resume:Resume the exact recorded conversation'
+            '--from-handoff:Start a fresh conversation from the pending rotation handoff'
             '--force:Override active session lock'
         )
         _describe 'option' session_opts
