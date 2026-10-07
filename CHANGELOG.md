@@ -4,14 +4,14 @@ All notable changes to cs are documented here. Release notes are also available 
 
 <!-- New entries group changes under Keep-a-Changelog headings (Added / Changed / Removed / Fixes / Docs), or Features / Performance where those fit the release. -->
 
-## Unreleased
+## 2026.10.7
 
 ### Changed
 - The band above the prompt looks like the status bar now. A `cs` chip in the session's colour leads it, coral once a handoff is armed. The keys are bold in the session's colour, and the bar's rounded caps close the band where you said yes to them.
 
 ### Fixes
-- The `cs` band's keys were a bare `1` and `2`, and those fire from an empty prompt, so a `1` typed to answer a numbered question ran `/rotate`. The band now takes Ctrl+X 1 (rotate, or the `/clear` once a handoff is armed) and Ctrl+X 2 (wrap). The installer binds them beside Ctrl+X R and Ctrl+X W, and a machine that said yes gets them on its next `cs -update`, with or without a terminal. The band shows the chord your `keybindings.json` binds to each key, and none when nothing does; a click or Ctrl+X Tab still reaches it. `cs -doctor` warns until `keybindings.json` holds the chords. See [docs/configuration.md](docs/configuration.md#rotate-and-wrap-keys).
 - The Option+1 and Option+2 keys from 2026.10.6 did nothing in iTerm2, which uses Option+number to switch panes. The installer now offers Ctrl+X R for `/rotate` and Ctrl+X W for `/wrap`, and they need no terminal setting. If you said yes before, the next `cs -update` swaps cs's `alt+1` and `alt+2` for the two chords, with or without a terminal. An `alt+1` or `alt+2` you bound to something else stays. If you bound a bare `ctrl+x`, cs binds neither chord and keeps the Option keys, because Claude Code would wait for the second key and never run yours. `cs -uninstall` removes both sets, and `cs -doctor` names the conflict. See [docs/configuration.md](docs/configuration.md#rotate-and-wrap-keys).
+- The `cs` band's keys were a bare `1` and `2`, and those fire from an empty prompt, so a `1` typed to answer a numbered question ran `/rotate`. The band now takes Ctrl+X 1 (rotate, or the `/clear` once a handoff is armed) and Ctrl+X 2 (wrap). The installer binds them beside Ctrl+X R and Ctrl+X W, and a machine that said yes gets them on its next `cs -update`, with or without a terminal. The band shows the chord your `keybindings.json` binds to each key, and none when nothing does; a click or Ctrl+X Tab still reaches it. `cs -doctor` warns until `keybindings.json` holds the chords. See [docs/configuration.md](docs/configuration.md#rotate-and-wrap-keys).
 
 ## 2026.10.6
 
