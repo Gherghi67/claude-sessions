@@ -32,3 +32,4 @@ CLAUDE.local.md
 tests/.run_all.lock/
 .skillopt-sleep/
 .cs/vault-mnt/
+__pycache__/
