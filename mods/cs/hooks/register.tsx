@@ -58,6 +58,16 @@ export const CRIT_AT = 5
 // The pane's bar: one block per second of the grace.
 export const BAR_FULL = '\u2588'
 export const BAR_EMPTY = '\u2591'
+// The band's chip and caps, in the bar's inks. KEEP IN SYNC with _sgr in
+// bin/cs-statusline (tests/test_mod_rotate.sh pins them): brand is the Claude
+// coral the bar's mark wears, and white the chip's ink on a filled chip, softer
+// on a dark terminal as the bar's is.
+export const BRAND = '217,119,87'
+export const WHITE_LIGHT = '255,255,255'
+export const WHITE_DARK = '230,230,230'
+// The bar's rounded capsule ends, Powerline glyphs drawn in the fill they close.
+export const CAP_LEFT = '\ue0b6'
+export const CAP_RIGHT = '\ue0b4'
 
 // The colour the count wears with `left` seconds to go: the session's own
 // colour while there is time (none, so the surrounding ink, when the session
@@ -338,6 +348,18 @@ export function register(on: On) {
     const fill = surfaceColor(await $.env.get("CS_TERM_BG_RGB"))
     const chords = await boundChords($)
     const own = paletteColor(await sessionColor($))
+    // The chip is the band's identity, as the session name is the bar's: on
+    // the session colour, Claude coral once a handoff is armed so the /clear
+    // reads apart, and on the surface in the terminal's own ink for a session
+    // with no colour. The body keeps the surface either way, where the count's
+    // ramp keeps its contrast.
+    const chipFill = armed ? `rgb(${BRAND})` : own ?? fill
+    const chipInk = chipFill === fill
+      ? undefined
+      : `rgb(${(await $.env.get("CS_TERM_THEME")) === 'dark' ? WHITE_DARK : WHITE_LIGHT})`
+    // Caps close a fill on the terminal's own background, so they need both a
+    // fill and this machine's consent to the glyph.
+    const caps = fill !== undefined && chipFill !== undefined && (await capsWanted($))
     const { Box, Text, Button } = await $.ui.resolve(e)
     // The Buttons carry no hotkey: a bare digit pressed them from an empty
     // composer, where a digit typed as the answer to a numbered question
@@ -346,16 +368,19 @@ export function register(on: On) {
     // is spelled beside it, and only when keybindings.json binds one.
     const key = (action: string) => chords[action] !== undefined &&
       <Box marginRight={1}><Text bold color={own}>{chords[action]}</Text></Box>
-    // One capsule in the status bar's idiom: the keys on the bar's own fill,
-    // a blank line above them so the band reads apart from the transcript.
-    // The context percentage is the bar's to carry; the band does not repeat
-    // it. The keyed box lights coral under the pointer; the engine restyles it
-    // without running the hook.
+    // One capsule in the status bar's idiom: the cs chip, then the keys on the
+    // bar's own fill, a blank line above them so the band reads apart from the
+    // transcript. The context percentage is the bar's to carry; the band does
+    // not repeat it. The keyed box lights coral under the pointer; the engine
+    // restyles it without running the hook.
     return (
       <Box flexDirection="column">
         {drawn}
         <Box marginTop={1}>
-          <Box key="cs-rotate-band" paddingX={1} backgroundColor={fill}>
+          <Box key="cs-rotate-band">
+            {caps && <Text color={chipFill}>{CAP_LEFT}</Text>}
+            <Box paddingX={1} backgroundColor={chipFill}><Text bold color={chipInk}>cs</Text></Box>
+            <Box key="cs-rotate-band-body" paddingX={1} backgroundColor={fill}>
             {key(ROTATE_ACTION)}
             {armed
               ? <Button key="cs-rotate" action={ROTATE_ACTION} plain label="/clear and continue from the handoff"
@@ -369,6 +394,8 @@ export function register(on: On) {
             {/* the forced rotation's grace: the seconds left before the mod runs the /clear itself */}
             {armed && left !== undefined && <Text dimColor>{'  \u00b7  '}</Text>}
             {armed && left !== undefined && <Text bold color={await rampColor($, left)}>{`/clear in ${left}s`}</Text>}
+            </Box>
+            {caps && <Text color={fill}>{CAP_RIGHT}</Text>}
           </Box>
         </Box>
       </Box>
@@ -626,6 +653,22 @@ async function rampColor($: EngineInterface, secs: number): Promise<string | und
 async function sessionColor($: EngineInterface): Promise<string | undefined> {
   const state = await readState($)
   return state?.match(/^claude_session_color: *"?([^"\s]+)"?[ \t]*$/m)?.[1]
+}
+
+// Whether this machine has said its font has the bar's cap glyphs: the
+// statusline's own rule (_caps_wanted in bin/cs-statusline, KEEP IN SYNC).
+// CS_STATUSLINE_CAPS=1 or 0 decides; otherwise the per-machine answer file
+// holding `on`. Unanswered, or unreadable, means square ends.
+async function capsWanted($: EngineInterface): Promise<boolean> {
+  const forced = await $.env.get("CS_STATUSLINE_CAPS")
+  if (forced === '1') return true
+  if (forced === '0') return false
+  const config = (await $.env.get("XDG_CONFIG_HOME")) || `${await $.env.get("HOME")}/.config`
+  try {
+    return (await $.fs.read(`${config}/cs/statusline-caps`)).split('\n')[0] === 'on'
+  } catch {
+    return false // no answer file: unanswered
+  }
 }
 
 // The engine actions the band's Buttons answer to. They carry no default

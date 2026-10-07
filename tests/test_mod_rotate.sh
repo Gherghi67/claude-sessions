@@ -93,6 +93,14 @@ test_mod_ramp_inks_match_the_statusline() {
     assert_eq "$(tr ';' ',' <<< "$crit")" \
         "$(sed -n "s/^export const CRIT_DARK = '\([0-9,]*\)'$/\1/p" "$mod") $(sed -n "s/^export const CRIT_LIGHT = '\([0-9,]*\)'$/\1/p" "$mod")" \
         "mod crit dark and light == statusline crit" || return 1
+
+    # The band's chip: the bar's brand coral, and its white, softer on dark.
+    assert_eq "$(sed -n 's/^ *brand) *rgb="\([0-9;]*\)" ;;.*/\1/p' <<< "$truecolor" | tr ';' ',')" \
+        "$(sed -n "s/^export const BRAND = '\([0-9,]*\)'$/\1/p" "$mod")" \
+        "mod BRAND == statusline brand" || return 1
+    assert_eq "$(sed -n 's/^ *\[ "\$SL_THEME" = "dark" \] && rgb="\([0-9;]*\)" || rgb="\([0-9;]*\)" ;;$/\1 \2/p' <<< "$(sed -n '/^ *white)$/,/;;/p' <<< "$truecolor")" | tr ';' ',')" \
+        "$(sed -n "s/^export const WHITE_DARK = '\([0-9,]*\)'$/\1/p" "$mod") $(sed -n "s/^export const WHITE_LIGHT = '\([0-9,]*\)'$/\1/p" "$mod")" \
+        "mod white dark and light == statusline white" || return 1
 }
 
 # The installer deploys the mod under ~/.claude/skills/cs and a cs
@@ -137,13 +145,13 @@ test_mod_validate_inventories_the_hooks_and_calls() {
     fi
     assert_output_contains "$out" "hooks: session.start, command.run{command=queue}, turn.complete, skill.prompt{skill=finish}, prompt.submit, command.run{command=clear}, turn.start, ui.render{component=AbovePrompt}, ui.render{component=Pane}" "all nine hooks inventoried" || return 1
     assert_output_not_contains "$out" '$.prompt.fill' "nothing fills the composer any more" || return 1
-    assert_output_contains "$out" 'env reads: CLAUDE_CONFIG_DIR, CS_BIN, CS_ROTATE_BUTTON_CTX, CS_ROTATE_FORCE_CTX, CS_STATUSLINE_CTX_WARN, CS_TERM_BG_RGB, CS_TERM_THEME, HOME' "the cs path, the two thresholds, the bar's warn band, the measured background, the theme and where keybindings.json lives are read from the environment" || return 1
+    assert_output_contains "$out" 'env reads: CLAUDE_CONFIG_DIR, CS_BIN, CS_ROTATE_BUTTON_CTX, CS_ROTATE_FORCE_CTX, CS_STATUSLINE_CAPS, CS_STATUSLINE_CTX_WARN, CS_TERM_BG_RGB, CS_TERM_THEME, HOME, XDG_CONFIG_HOME' "the cs path, the two thresholds, the bar's warn band, the measured background, the theme, the caps consent and where keybindings.json and the caps answer live are read from the environment" || return 1
     assert_output_contains "$out" '$.process.run, $.prompt.submit (via offerToStart), $.session.compact (via offerToStart), $.session.cwd' "/queue runs cs from its own hook and its start offer, which alone submits a prompt and compacts; the /finish watch runs kill -0 to ask after cs's pid" || return 1
     assert_output_contains "$out" '$.command.run (via askToWrap, clearAndContinue, rotate)' "the keys run their commands, and nothing else runs one" || return 1
     assert_output_contains "$out" '$.clock.after (via forceRotation, startCountdown), $.clock.every (via startCountdown, watchFinish), $.clock.now (via withGateBand)' "the forced /rotate and the pane's open are one-shot timers, the grace and the /finish watch tickers, and the gate band alone reads the time" || return 1
     assert_output_contains "$out" '$.ui.ask (via askToWrap, offerToStart)' "the wrap key and the /queue start offer ask through the engine's own dialog" || return 1
     assert_output_contains "$out" '$.ui.close (via openPreview, stopCountdown)' "the handoff pane closes where the count ends, and where it lands after one" || return 1
-    assert_output_contains "$out" '$.fs.read (via armedHandoff, boundChords, forceRotation, queueRunning, readFinish, readState, readWrapped)' "the wrap marker, the state, the queue's state, the /finish record and keybindings.json are read, never a file's age" || return 1
+    assert_output_contains "$out" '$.fs.read (via armedHandoff, boundChords, capsWanted, forceRotation, queueRunning, readFinish, readState, readWrapped)' "the wrap marker, the state, the queue's state, the /finish record, keybindings.json and the caps answer are read, never a file's age" || return 1
     assert_output_not_contains "$out" '$.fs.stat' "no rule hangs on a modification time" || return 1
     assert_output_contains "$out" '$.ui.open (via openPreview)' "and opens in one place" || return 1
 }

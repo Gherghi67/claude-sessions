@@ -305,7 +305,7 @@ const boxes = (tree: any): any[] => {
   const own = tree.type === 'Box' ? [tree] : []
   return [...own, ...(tree.children ?? []).flatMap(boxes)]
 }
-const chip = (tree: any) => boxes(tree).find((b: any) => texts(b).some((t: any) => textOf(t) === 'cs'))
+const chip = (tree: any) => boxes(tree).find((b: any) => (b.children ?? []).some((c: any) => c?.type === 'Text' && textOf(c) === 'cs'))
 const chipText = (tree: any) => texts(chip(tree)).find((t: any) => textOf(t) === 'cs')
 
 test('a cs chip on the session colour leads the band, the keys bold in that colour', async () => {
