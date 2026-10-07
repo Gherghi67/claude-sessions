@@ -170,22 +170,77 @@ test('a quoted claude_session_id in state still names the lead', async () => {
   expect(findButton(await band())).toBeDefined()
 })
 
-test('at the threshold the band adds the rotate key on hotkey 1, first, beneath what was drawn', async () => {
+test('at the threshold the band adds the rotate key on the strip:jump1 action, first, beneath what was drawn', async () => {
   percent = 40
   const tree = await band()
   expect(tree).not.toBe(DRAWN)
   expect(buttons(tree)).toHaveLength(2)
   const button = findButton(tree)
-  expect(button.props.hotkey).toBe('1')
+  expect(button.props.action).toBe('strip:jump1')
+  // No bare digit: a hotkey fires from an empty composer, where a digit typed
+  // as an answer to a numbered question belongs (measured live).
+  expect(button.props.hotkey).toBeUndefined()
   expect(button.props.plain).toBe(true)
-  // The engine draws the hotkey itself, as "1: label", and it draws that
-  // prefix even for an empty label (measured live), so the wording stays on
-  // the button rather than being spelled beside it.
   expect(button.props.label).toBe('rotate this conversation')
   const json1 = JSON.stringify(tree)
   expect(json1).toContain('"Survey"')
-  expect(json1).not.toContain('"children":["1"]')
   expect(json1).not.toContain('borderStyle')
+})
+
+// The engine draws a Button with no hotkey as its label alone, so the band
+// spells the key itself: the chord the person's keybindings.json gives the
+// Button's action, as written there, and nothing when no chord presses it.
+const KEYS = '/home/.claude/keybindings.json'
+const bindKeys = (bindings: Record<string, string | null>, context = 'Global') => {
+  files[KEYS] = JSON.stringify({ bindings: [{ context, bindings }] })
+}
+const words = (tree: any): string[] => texts(tree).map(textOf)
+
+test('the band spells the chord keybindings.json binds to each Button\'s action', async () => {
+  envVars.HOME = '/home'
+  bindKeys({ 'ctrl+x 1': 'strip:jump1', 'ctrl+x 2': 'strip:jump2', 'ctrl+x r': 'command:rotate' })
+  percent = 40
+  expect(words(await band())).toEqual(expect.arrayContaining(['ctrl+x 1', 'ctrl+x 2']))
+  arm()
+  expect(words(await band())).toEqual(expect.arrayContaining(['ctrl+x 1']))
+  expect(words(await band())).not.toContain('ctrl+x 2')
+})
+
+test('a chord bound elsewhere is spelled as the person wrote it', async () => {
+  envVars.HOME = '/home'
+  bindKeys({ 'Ctrl+K 9': 'strip:jump1' })
+  percent = 40
+  const drawn = words(await band())
+  expect(drawn).toContain('Ctrl+K 9')
+  expect(drawn.join(' ')).not.toContain('ctrl+x')
+})
+
+test('with no chord bound the band draws no key, and the Buttons stay', async () => {
+  envVars.HOME = '/home'
+  percent = 40
+  const cases: (() => void)[] = [
+    () => { delete files[KEYS] },
+    () => { files[KEYS] = '{ not json' },
+    () => { files[KEYS] = '[]' },
+    () => bindKeys({ 'ctrl+x 1': null, 'ctrl+x 2': 'command:wrap' }),
+    () => bindKeys({ 'ctrl+x 1': 'strip:jump1' }, 'Transcript'),
+  ]
+  for (const arrange of cases) {
+    arrange()
+    const tree = await band()
+    expect(buttons(tree)).toHaveLength(2)
+    expect(words(tree).join(' ')).not.toContain('+')
+  }
+})
+
+test('CLAUDE_CONFIG_DIR names the keybindings.json the band reads, as it does for Claude Code', async () => {
+  envVars.HOME = '/home'
+  envVars.CLAUDE_CONFIG_DIR = '/cfg'
+  bindKeys({ 'ctrl+x 1': 'strip:jump1' })
+  percent = 40
+  expect(words(await band()).join(' ')).not.toContain('ctrl+x 1')
+  files['/cfg/keybindings.json'] = files[KEYS]
+  expect(words(await band())).toContain('ctrl+x 1')
 })
 
 test('the band draws no context gauge: the status bar already carries it', async () => {
@@ -298,7 +353,8 @@ test('an armed handoff turns the button into the clear button, whatever the cont
     const tree = await band()
     expect(buttons(tree)).toHaveLength(1)
     const button = findButton(tree)
-    expect(button.props.hotkey).toBe('1')
+    expect(button.props.action).toBe('strip:jump1')
+    expect(button.props.hotkey).toBeUndefined()
     expect(button.props.plain).toBe(true)
     expect(findButton(tree).props.label).toBe('/clear and continue from the handoff')
     const json = JSON.stringify(tree)
@@ -811,16 +867,17 @@ test('a typed /clear that the engine refuses leaves no birth behind either', asy
   expect(toasts).toEqual([])
 })
 
-// The wrap key: a second button on hotkey 2 that runs /wrap. It draws only
-// where the band draws unarmed; once a handoff is armed the band's one job is
-// the /clear.
-const wrapButton = (tree: any) => buttons(tree).find((b: any) => b.props.hotkey === '2')
-test('at the threshold the band adds a second button on hotkey 2 that reads as the wrap key, after the rotate key', async () => {
+// The wrap key: a second button on the strip:jump2 action that runs /wrap. It
+// draws only where the band draws unarmed; once a handoff is armed the band's
+// one job is the /clear.
+const wrapButton = (tree: any) => buttons(tree).find((b: any) => b.props.action === 'strip:jump2')
+test('at the threshold the band adds a second button on strip:jump2 that reads as the wrap key, after the rotate key', async () => {
   percent = 40
   const tree = await band()
   expect(buttons(tree)).toHaveLength(2)
-  expect(buttons(tree)[0].props.hotkey).toBe('1')
+  expect(buttons(tree)[0].props.action).toBe('strip:jump1')
   const button = wrapButton(tree)
+  expect(button.props.hotkey).toBeUndefined()
   expect(button.props.plain).toBe(true)
   expect(wrapButton(tree).props.label).toBe('wrap up this session')
 })
@@ -871,7 +928,7 @@ test('a finished wrap hides the wrap key until a turn starts from a prompt', asy
   await turnStart('please wrap up')
   files[WRAPPED] = 'uuid-lead\n'
   expect(wrapButton(await band())).toBeUndefined()
-  expect(findButton(await band()).props.hotkey).toBe('1')
+  expect(findButton(await band()).props.action).toBe('strip:jump1')
 
   await turnStart('')
   expect(wrapButton(await band())).toBeUndefined()
