@@ -655,37 +655,58 @@ test_doctor_statusline_caps_row_names_the_answer_or_the_ask() {
     assert_output_contains "$output" "caps: rounded" "answered on: doctor says rounded" || return 1
 }
 
-# One row for the Option+1 / Option+2 bindings: the installer's recorded answer
+# One row for the Ctrl+X R / Ctrl+X W bindings: the installer's recorded answer
 # and what keybindings.json holds. A healthy state is OK; a binding the user
-# holds on cs's key, or a file Claude Code cannot read either, is a WARN.
-test_doctor_option_keys_row_names_the_state() {
+# holds on cs's key or on its ctrl+x prefix, keys an older cs bound that the
+# next update replaces, or a file Claude Code cannot read, is a WARN.
+test_doctor_rotate_wrap_keys_row_names_the_state() {
     local cfg="$TEST_TMPDIR/ok-cfg" xdg="$TEST_TMPDIR/ok-xdg" output kb
     kb="$cfg/keybindings.json"
     mkdir -p "$cfg" "$xdg/cs"
     _ok_doctor() { CLAUDE_CONFIG_DIR="$cfg" XDG_CONFIG_HOME="$xdg" "$CS_BIN" -doctor 2>&1 || true; }
 
     output=$(_ok_doctor)
-    assert_output_contains "$output" "OK.*Option keys: not asked (run cs -update in a terminal to be asked)" \
+    assert_output_contains "$output" "OK.*Rotate/wrap keys: not asked (run cs -update in a terminal to be asked)" \
         "no answer: not asked" || return 1
 
     printf 'no\n' > "$xdg/cs/option-keys"
     output=$(_ok_doctor)
-    assert_output_contains "$output" "OK.*Option keys: declined" "answered no: declined" || return 1
+    assert_output_contains "$output" "OK.*Rotate/wrap keys: declined" "answered no: declined" || return 1
 
     printf 'yes\n' > "$xdg/cs/option-keys"
-    printf '%s\n' '{"bindings":[{"context":"Global","bindings":{"alt+1":"command:rotate","alt+2":"command:wrap"}}]}' > "$kb"
+    printf '%s\n' '{"bindings":[{"context":"Global","bindings":{"ctrl+x r":"command:rotate","ctrl+x w":"command:wrap"}}]}' > "$kb"
     output=$(_ok_doctor)
-    assert_output_contains "$output" "OK.*Option keys: bound (Option+1 runs /rotate, Option+2 runs /wrap)" \
+    assert_output_contains "$output" "OK.*Rotate/wrap keys: bound (Ctrl+X R runs /rotate, Ctrl+X W runs /wrap)" \
         "both keys hold cs's values: bound" || return 1
 
-    printf '%s\n' '{"bindings":[{"context":"Chat","bindings":{"alt+1":"chat:submit"}},{"context":"Global","bindings":{"alt+2":"command:wrap"}}]}' > "$kb"
+    printf '%s\n' '{"bindings":[{"context":"Chat","bindings":{"ctrl+x r":"chat:submit"}},{"context":"Global","bindings":{"ctrl+x w":"command:wrap"}}]}' > "$kb"
     output=$(_ok_doctor)
-    assert_output_contains "$output" "WARN.*Option keys: conflict on alt+1 (bound to chat:submit in $kb)" \
-        "a user binding on alt+1: conflict" || return 1
+    assert_output_contains "$output" "WARN.*Rotate/wrap keys: conflict on ctrl+x r (bound to chat:submit in $kb)" \
+        "a user binding on ctrl+x r: conflict" || return 1
+
+    printf '%s\n' '{"bindings":[{"context":"Chat","bindings":{"ctrl+x":"chat:externalEditor"}}]}' > "$kb"
+    output=$(_ok_doctor)
+    assert_output_contains "$output" "WARN.*Rotate/wrap keys: conflict on ctrl+x w (ctrl+x is bound to chat:externalEditor in $kb)" \
+        "a user binding on the bare prefix: conflict" || return 1
+
+    printf '%s\n' '{"bindings":[{"context":"Chat","bindings":{"ctrl+x":""}}]}' > "$kb"
+    output=$(_ok_doctor)
+    assert_output_contains "$output" "WARN.*Rotate/wrap keys: conflict on ctrl+x r (ctrl+x is bound to \"\" in $kb)" \
+        "an empty action on the prefix is named as JSON" || return 1
+
+    printf '%s\n' '{"bindings":[{"context":"Global","bindings":{"ctrl+x r":"command:rotate","ctrl+x w":"command:wrap","alt+1":"command:rotate","alt+2":"command:wrap"}}]}' > "$kb"
+    output=$(_ok_doctor)
+    assert_output_contains "$output" "WARN.*Rotate/wrap keys: alt+1, alt+2 still hold cs's earlier bindings in $kb (run cs -update to remove them)" \
+        "chords bound beside cs's alt keys: the alt keys are named" || return 1
+
+    printf '%s\n' '{"bindings":[{"context":"Global","bindings":{"alt+1":"command:rotate","alt+2":"command:wrap"}}]}' > "$kb"
+    output=$(_ok_doctor)
+    assert_output_contains "$output" "WARN.*Rotate/wrap keys: ctrl+x r not bound (run cs -update to bind it)" \
+        "an older cs's alt+1/alt+2: the next update binds the chords" || return 1
 
     printf '%s\n' '{"bindings": [' > "$kb"
     output=$(_ok_doctor)
-    assert_output_contains "$output" "WARN.*Option keys: $kb is unparseable" "bad JSON: unparseable" || return 1
+    assert_output_contains "$output" "WARN.*Rotate/wrap keys: $kb is unparseable" "bad JSON: unparseable" || return 1
 }
 
 # The cs mod is an opt-in the user links under ~/.claude/skills. Doctor
@@ -953,7 +974,7 @@ run_test test_doctor_skips_inline_shell_hook_commands
 run_test test_doctor_statusline_ok_when_registered_and_executable
 run_test test_doctor_statusline_fails_when_binary_missing
 run_test test_doctor_statusline_caps_row_names_the_answer_or_the_ask
-run_test test_doctor_option_keys_row_names_the_state
+run_test test_doctor_rotate_wrap_keys_row_names_the_state
 run_test test_doctor_rotate_mod_row_observes_execution_not_presence
 run_test test_doctor_statusline_no_fail_when_not_registered
 run_test test_doctor_statusline_names_context_gating_when_absent

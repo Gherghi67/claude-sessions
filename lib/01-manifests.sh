@@ -1,5 +1,5 @@
 # ABOUTME: The deploy manifests (hooks, commands, skills, mods, and what past versions
-# ABOUTME: left behind), the settings-strip filter and the Option-key bindings; build.sh
+# ABOUTME: left behind), the settings-strip filter and the rotate/wrap key bindings; build.sh
 # ABOUTME: folds this into bin/cs and splices it into install.sh, so both read one list.
 
 # Files a past version deployed into the hooks directory and this one does not:
@@ -123,11 +123,40 @@ _strip_hook_registration() {
     '
 }
 
-# Option+1 and Option+2: the two Claude Code keybindings cs offers to add,
+# Ctrl+X R and Ctrl+X W: the two Claude Code keybindings cs offers to add,
 # each a "command:<name>" action, which submits /<name>. install.sh asks once
 # per machine and binds them, cs -uninstall takes back only the keys that
 # still hold these values, and cs -doctor reports them.
-CS_OPTION_KEYS='{"alt+1":"command:rotate","alt+2":"command:wrap"}'
+CS_ROTATE_WRAP_KEYS='{"ctrl+x r":"command:rotate","ctrl+x w":"command:wrap"}'
+
+# Option+1 and Option+2 on the same two commands, as cs 2026.10.6 bound them.
+# iTerm2 selects panes with Option+number, so there they never reach Claude
+# Code. Wherever they still hold these values, an install that binds the
+# chords takes them back, and so does cs -uninstall.
+# shellcheck disable=SC2034  # read by install.sh's _bind_rotate_wrap_keys, cs -uninstall and cs -doctor
+CS_RETIRED_OPTION_KEYS='{"alt+1":"command:rotate","alt+2":"command:wrap"}'
+
+# The jq definitions shared by the filters below. keynorm follows Claude
+# Code's key parser (2.1.291) as far as the keys cs compares need: case
+# ignored, control is ctrl, opt and option are alt, command, super and win
+# are cmd, esc, return and del are escape, enter and delete, modifiers in
+# any order, and a chord's keys split on any run of spaces. It keeps meta
+# apart from alt and leaves space and arrow glyphs as typed, which no cs key
+# uses. cs's own keys are already in that form. ours: whether a to_entries pair from a context block is one of
+# the bindings in $cs, key and value both.
+_CS_KEYBINDING_DEFS='
+    def keynorm:
+        ["alt", "cmd", "ctrl", "meta", "shift"] as $mods
+        | [splits("\\s+") | select(length > 0) | ascii_downcase | split("+")
+            | map({"control": "ctrl", "opt": "alt", "option": "alt", "command": "cmd",
+                   "super": "cmd", "win": "cmd", "esc": "escape", "return": "enter",
+                   "del": "delete"}[.] // .)
+            | ([.[] | select(. as $p | any($mods[]; . == $p))] | unique)
+              + [.[] | select(. as $p | any($mods[]; . == $p) | not)]
+            | join("+")]
+        | join(" ");
+    def ours: . as $e | ($e.key | keynorm) as $k | $cs | has($k) and .[$k] == $e.value;
+'
 
 # Claude Code reads its keybindings from its config dir. Inside an encrypted
 # session that dir is the session's .cs/claude-config, which no other session
@@ -143,8 +172,10 @@ _cs_keybindings_file() {
 }
 
 # This machine's answer to the installer's question, yes or no; absent until
-# it has been asked on a terminal.
-_cs_option_keys_answer_file() {
+# it has been asked on a terminal. The file keeps the name it had when the
+# keys were Option+1 / Option+2, so a machine that said yes then gets the
+# chords on its next install.
+_cs_rotate_wrap_keys_answer_file() {
     printf '%s\n' "${XDG_CONFIG_HOME:-$HOME/.config}/cs/option-keys"
 }
 
@@ -162,16 +193,45 @@ _cs_keybindings_shape_ok() {  # file
 # Reads a keybindings document that passed the shape check on stdin and prints
 # one line per cs key: "bound<TAB>key" when every binding of it, in any
 # context, holds cs's value; "free<TAB>key" when nothing binds it; and
-# "conflict<TAB>key<TAB>action" when something else does. An action that is
-# not a string (a null that unbinds the key) prints as JSON.
-_cs_option_keys_status() {
-    jq -r --argjson cs "$CS_OPTION_KEYS" '
-        [.bindings[] | (.bindings // {}) | to_entries[]] as $all
+# "conflict<TAB>key<TAB>action" when something else does. A chord also
+# conflicts when its first key is bound on its own to an action, which
+# Claude Code would stop reaching once it waits for the chord's second key:
+# "conflict<TAB>key<TAB>action<TAB>prefix". Keys compare as keynorm spells
+# them. An action that is not a non-empty string (a null that unbinds the
+# key, an empty "") prints as JSON, so no field is ever empty; a null on the
+# prefix is no conflict, as it binds nothing.
+_cs_rotate_wrap_keys_status() {
+    jq -r --argjson cs "$CS_ROTATE_WRAP_KEYS" "$_CS_KEYBINDING_DEFS"'
+        def show: if type == "string" and length > 0 then . else tojson end;
+        [.bindings[] | (.bindings // {}) | to_entries[] | .key |= keynorm] as $all
         | $cs | to_entries[] | . as $c
         | [$all[] | select(.key == $c.key) | .value] as $vals
-        | if ($vals | length) == 0 then "free\t\($c.key)"
-          elif all($vals[]; . == $c.value) then "bound\t\($c.key)"
-          else "conflict\t\($c.key)\t\([$vals[] | select(. != $c.value)][0]
-                | if type == "string" then . else tojson end)"
+        | ($c.key | split(" ") | if length > 1 then .[0] else null end) as $prefix
+        | [$all[] | select(.key == $prefix and .value != null) | .value] as $pvals
+        | if any($vals[]; . != $c.value) then
+            "conflict\t\($c.key)\t\([$vals[] | select(. != $c.value)][0] | show)"
+          elif ($pvals | length) > 0 then "conflict\t\($c.key)\t\($pvals[0] | show)\t\($prefix)"
+          elif ($vals | length) == 0 then "free\t\($c.key)"
+          else "bound\t\($c.key)"
           end'
+}
+
+# Prints, comma-separated, the keys of a keybindings document on stdin that
+# hold one of the bindings in the JSON object $1, spelled as the file spells
+# them; empty when none does.
+_cs_keybindings_held() {  # bindings-json
+    jq -r --argjson cs "$1" "$_CS_KEYBINDING_DEFS"'
+        [.bindings[] | (.bindings // {}) | to_entries[] | select(ours) | .key] | unique | join(", ")'
+}
+
+# Prints a keybindings document on stdin, compact, without the bindings in the
+# JSON object $1 (key and value both; a key bound to anything else stays). A
+# Global block left empty goes; another context keeps its block.
+_cs_keybindings_strip() {  # bindings-json
+    jq -c --argjson cs "$1" "$_CS_KEYBINDING_DEFS"'
+        .bindings |= map(
+            if any((.bindings // {}) | to_entries[]; ours) then
+                .bindings |= with_entries(select(ours | not))
+                | select(.bindings != {} or .context != "Global")
+            else . end)'
 }
