@@ -287,7 +287,8 @@ key within 3 seconds. The chords need no terminal setting.
   never asks again. After a `yes`, every install and `cs -update` adds any of
   the keys nothing binds, so a machine that bound Ctrl+X R and Ctrl+X W before
   gets Ctrl+X 1 and Ctrl+X 2 on its next update. Claude Code picks the file up
-  without a relaunch.
+  without a relaunch. An encrypted session launched before the file existed
+  gets it at its next launch, when cs links it into the session.
 - With no terminal attached (CI, a pipe) and no recorded answer, the installer
   asks nothing, writes nothing and records nothing; it prints one line saying
   to run `cs -update` in a terminal.

@@ -287,7 +287,7 @@ vault is locked: tell the user to mount it and stop.
 11. End your response with the instruction and nothing after it, on its own
    final line, exactly:
 
-   **Run `/clear` now** (or press Ctrl+X 1 for the capsule above the prompt) — this conversation is ready to rotate.
+   **Run `/clear` now** (or press the capsule above the prompt, or Ctrl+X 1 if you bound it) — this conversation is ready to rotate.
 
    This is the one step you cannot take for the user. A hook cannot submit
    to Claude Code's command queue (it accepts the TUI's own input only); the
