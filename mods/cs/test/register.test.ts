@@ -261,6 +261,15 @@ test('the band sits a line clear of what is above it, on the bar\'s capsule surf
   expect(tree).toContain('"backgroundColor":"rgb(226,222,206)"')
 })
 
+// Claude Code draws its footer (the status bar and the mode line) two columns
+// in from the prompt's rule (measured on 2.1.292); the band starts in the same
+// column so the twins line up.
+test('the band starts in the status bar\'s column, two in from the prompt\'s rule', async () => {
+  percent = 40
+  const tree = await band()
+  expect(boxes(tree).find((b: any) => b.props.key === 'cs-rotate-band').props.marginLeft).toBe(2)
+})
+
 test('without a measured terminal background the band keeps the spacing and paints no surface', async () => {
   percent = 40
   const tree = await band()
