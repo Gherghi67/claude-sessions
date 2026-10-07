@@ -1051,14 +1051,15 @@ else
     # Global block, or a Global block of their own, creating the file when
     # there is none. A key bound to anything else, in any context, is the
     # user's and is reported, never replaced; so is a bare key a chord would
-    # shadow. With no conflict, cs's own Option+1 / Option+2 bindings make
-    # way for the chords; a conflict on any chord keeps both, so the
-    # command whose chord is taken keeps a key. A file of a shape cs cannot read is refused before anything
+    # shadow. cs's own Option+1 / Option+2 bindings stood for /rotate and
+    # /wrap, so they make way unless Ctrl+X R or Ctrl+X W conflicts: then
+    # both stay, so the command whose chord is taken keeps a key. A conflict
+    # on a band chord leaves both commands their chords and keeps nothing. A file of a shape cs cannot read is refused before anything
     # is written. The write is cs_write_atomic's, from the hooks' shared
     # library deployed above: mode kept, and a symlinked file (a dotfiles
     # manager's) rewritten through its link.
     _bind_rotate_wrap_keys() {
-        local file doc status state key action prefix added="" conflicts=0 retired="" add
+        local file doc status state key action prefix added="" command_conflicts=0 retired="" add
         file="$(_cs_keybindings_file)"
         if [ -e "$file" ]; then
             if ! _cs_keybindings_shape_ok "$file"; then
@@ -1074,7 +1075,9 @@ else
         while IFS=$'\t' read -r state key action prefix; do
             case "$state" in
                 conflict)
-                    conflicts=$((conflicts + 1))
+                    case "$key" in
+                        "ctrl+x r"|"ctrl+x w") command_conflicts=$((command_conflicts + 1)) ;;
+                    esac
                     if [ -n "$prefix" ]; then
                         warn "Rotate/wrap keys: $key would shadow $prefix, which is bound to $action in $file; left unbound."
                     else
@@ -1086,7 +1089,7 @@ else
                     ;;
             esac
         done <<< "$status"
-        if [ "$conflicts" = 0 ]; then
+        if [ "$command_conflicts" = 0 ]; then
             retired=$(printf '%s\n' "$doc" | _cs_keybindings_held "$CS_RETIRED_OPTION_KEYS") \
                 || { warn "Rotate/wrap keys: could not read the bindings in $file"; return 1; }
             if [ -n "$retired" ]; then

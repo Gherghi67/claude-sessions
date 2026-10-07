@@ -524,7 +524,7 @@ _doctor_check_statusline() {
 # earlier cs's Option+1 / Option+2, and a file Claude Code cannot read either
 # are warnings.
 _doctor_check_rotate_wrap_keys() {
-    local file answer_file answer status state key action prefix retired bound=0 total=0
+    local file answer_file answer status state key action prefix retired bound=0 total=0 commands_bound=0
     file="$(_cs_keybindings_file)"
     answer_file="$(_cs_rotate_wrap_keys_answer_file)"
     if ! command -v jq >/dev/null 2>&1; then
@@ -558,6 +558,9 @@ _doctor_check_rotate_wrap_keys() {
     case "$answer" in
         yes)
             while IFS=$'\t' read -r state key action prefix; do
+                case "$state $key" in
+                    "bound ctrl+x r"|"bound ctrl+x w") commands_bound=$((commands_bound + 1)) ;;
+                esac
                 case "$state" in
                     conflict)
                         if [ -n "$prefix" ]; then
@@ -569,6 +572,14 @@ _doctor_check_rotate_wrap_keys() {
                     free) _doctor_warn "Rotate/wrap keys: $key not bound (run cs -update to bind it)" ;;
                 esac
             done <<< "$status"
+            # With /rotate and /wrap on their chords, the next update takes
+            # cs's Option keys back whatever a band chord holds.
+            if [ "$commands_bound" = 2 ]; then
+                retired=$(_cs_keybindings_held "$CS_RETIRED_OPTION_KEYS" < "$file") || retired=""
+                if [ -n "$retired" ]; then
+                    _doctor_warn "Rotate/wrap keys: $retired still hold cs's earlier bindings in $file (run cs -update to remove them)"
+                fi
+            fi
             ;;
         no)
             _doctor_ok "Rotate/wrap keys: declined (to be asked again, remove $answer_file and run cs -update in a terminal)"

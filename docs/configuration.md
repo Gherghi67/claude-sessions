@@ -279,7 +279,9 @@ key within 3 seconds. The chords need no terminal setting.
   uses to switch panes. On a machine that answered yes, an install removes
   those two where they still hold cs's values and binds the chords, with or
   without a terminal. An `alt+1` or `alt+2` you bound to something else stays.
-  cs's own stay too when any chord conflicts.
+  cs's own stay too when Ctrl+X R or Ctrl+X W conflicts, so the command
+  whose chord is taken keeps a key; a conflict on Ctrl+X 1 or Ctrl+X 2 does
+  not keep them.
 - The installer records the answer in `~/.config/cs/option-keys` (`yes` or
   `no`; `$XDG_CONFIG_HOME/cs/option-keys` when you set that). After a `no` it
   never asks again. After a `yes`, every install and `cs -update` adds any of
