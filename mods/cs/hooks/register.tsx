@@ -372,12 +372,13 @@ export function register(on: On) {
     // bar's own fill, a blank line above them so the band reads apart from the
     // transcript. The context percentage is the bar's to carry; the band does
     // not repeat it. The keyed box lights coral under the pointer; the engine
-    // restyles it without running the hook.
+    // restyles it without running the hook. It starts two columns in, where
+    // Claude Code draws the bar and the mode line under the prompt.
     return (
       <Box flexDirection="column">
         {drawn}
         <Box marginTop={1}>
-          <Box key="cs-rotate-band">
+          <Box key="cs-rotate-band" marginLeft={2}>
             {caps && <Text color={chipFill}>{CAP_LEFT}</Text>}
             <Box paddingX={1} backgroundColor={chipFill}><Text bold color={chipInk}>cs</Text></Box>
             <Box key="cs-rotate-band-body" paddingX={1} backgroundColor={fill}>
