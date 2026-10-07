@@ -517,7 +517,7 @@ _doctor_check_statusline() {
     esac
 }
 
-# The Ctrl+X R / Ctrl+X W bindings the installer offers: the answer this
+# The Ctrl+X bindings the installer offers: the answer this
 # machine gave, and whether keybindings.json still holds cs's keys. Not asked
 # and declined are healthy; a key the user binds to something else (or a bare
 # ctrl+x a chord would shadow), a yes whose keys are gone or are still an
@@ -550,7 +550,7 @@ _doctor_check_rotate_wrap_keys() {
         if [ -n "$retired" ]; then
             _doctor_warn "Rotate/wrap keys: $retired still hold cs's earlier bindings in $file (run cs -update to remove them)"
         else
-            _doctor_ok "Rotate/wrap keys: bound (Ctrl+X R runs /rotate, Ctrl+X W runs /wrap)"
+            _doctor_ok "Rotate/wrap keys: bound (Ctrl+X R runs /rotate, Ctrl+X W runs /wrap, Ctrl+X 1 and Ctrl+X 2 press the cs band)"
         fi
         return
     fi

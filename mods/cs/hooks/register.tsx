@@ -336,7 +336,16 @@ export function register(on: On) {
     if (!(await ownsRotation($))) return drawn
     const wrapped = !armed && (await wrapFinished($))
     const fill = surfaceColor(await $.env.get("CS_TERM_BG_RGB"))
+    const chords = await boundChords($)
+    const own = paletteColor(await sessionColor($))
     const { Box, Text, Button } = await $.ui.resolve(e)
+    // The Buttons carry no hotkey: a bare digit pressed them from an empty
+    // composer, where a digit typed as the answer to a numbered question
+    // belongs. A chord bound to each Button's action presses it instead, and
+    // the engine draws a Button with no hotkey as its label alone, so the key
+    // is spelled beside it, and only when keybindings.json binds one.
+    const key = (action: string) => chords[action] !== undefined &&
+      <Box marginRight={1}><Text bold color={own}>{chords[action]}</Text></Box>
     // One capsule in the status bar's idiom: the keys on the bar's own fill,
     // a blank line above them so the band reads apart from the transcript.
     // The context percentage is the bar's to carry; the band does not repeat
@@ -347,18 +356,16 @@ export function register(on: On) {
         {drawn}
         <Box marginTop={1}>
           <Box key="cs-rotate-band" paddingX={1} backgroundColor={fill}>
-            {/* The engine draws a plain button as "1: label", and it draws
-                that prefix whether or not the label is empty (measured live:
-                a hand-drawn digit beside an empty-label button prints the
-                hotkey twice), so the label stays on the button. */}
+            {key(ROTATE_ACTION)}
             {armed
-              ? <Button key="cs-rotate" hotkey="1" plain label="/clear and continue from the handoff"
+              ? <Button key="cs-rotate" action={ROTATE_ACTION} plain label="/clear and continue from the handoff"
                         onPress={() => clearAndContinue($)} />
-              : <Button key="cs-rotate" hotkey="1" plain label="rotate this conversation"
+              : <Button key="cs-rotate" action={ROTATE_ACTION} plain label="rotate this conversation"
                         onPress={() => rotate($)} />}
             {/* a Button is a block: nested in a Text the engine refuses the whole tree (measured), so the separator stands beside it */}
             {!armed && !wrapped && <Text dimColor>{'  \u00b7  '}</Text>}
-            {!armed && !wrapped && <Button key="cs-wrap" hotkey="2" plain label="wrap up this session" onPress={() => askToWrap($)} />}
+            {!armed && !wrapped && key(WRAP_ACTION)}
+            {!armed && !wrapped && <Button key="cs-wrap" action={WRAP_ACTION} plain label="wrap up this session" onPress={() => askToWrap($)} />}
             {/* the forced rotation's grace: the seconds left before the mod runs the /clear itself */}
             {armed && left !== undefined && <Text dimColor>{'  \u00b7  '}</Text>}
             {armed && left !== undefined && <Text bold color={await rampColor($, left)}>{`/clear in ${left}s`}</Text>}
@@ -619,6 +626,36 @@ async function rampColor($: EngineInterface, secs: number): Promise<string | und
 async function sessionColor($: EngineInterface): Promise<string | undefined> {
   const state = await readState($)
   return state?.match(/^claude_session_color: *"?([^"\s]+)"?[ \t]*$/m)?.[1]
+}
+
+// The engine actions the band's Buttons answer to. They carry no default
+// chord and no engine handler is mounted for them (measured on 2.1.291 and
+// 2.1.292), so the chord a person binds to one presses the Button. KEEP IN
+// SYNC with CS_ROTATE_WRAP_KEYS in lib/01-manifests.sh, which binds them.
+export const ROTATE_ACTION = 'strip:jump1'
+export const WRAP_ACTION = 'strip:jump2'
+
+// The chord keybindings.json binds to each action in the Global context, as
+// the person wrote it. Claude Code reads that file from CLAUDE_CONFIG_DIR, else
+// ~/.claude; an encrypted session's config dir holds a link to the shell's
+// file, so this reads the file Claude Code reads. An unreadable or malformed
+// file, or a key unbound with null, binds nothing.
+async function boundChords($: EngineInterface): Promise<Record<string, string>> {
+  const dir = (await $.env.get("CLAUDE_CONFIG_DIR")) || `${await $.env.get("HOME")}/.claude`
+  let doc: any
+  try {
+    doc = JSON.parse(await $.fs.read(`${dir}/keybindings.json`))
+  } catch {
+    return {} // no file, or not JSON: no chord to spell
+  }
+  const chords: Record<string, string> = {}
+  for (const block of Array.isArray(doc?.bindings) ? doc.bindings : []) {
+    if (block?.context !== 'Global' || typeof block.bindings !== 'object' || block.bindings === null) continue
+    for (const [chord, action] of Object.entries(block.bindings)) {
+      if (typeof action === 'string' && chords[action] === undefined) chords[action] = chord
+    }
+  }
+  return chords
 }
 
 async function readState($: EngineInterface): Promise<string | undefined> {

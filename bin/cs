@@ -151,11 +151,14 @@ _strip_hook_registration() {
     '
 }
 
-# Ctrl+X R and Ctrl+X W: the two Claude Code keybindings cs offers to add,
-# each a "command:<name>" action, which submits /<name>. install.sh asks once
-# per machine and binds them, cs -uninstall takes back only the keys that
-# still hold these values, and cs -doctor reports them.
-CS_ROTATE_WRAP_KEYS='{"ctrl+x r":"command:rotate","ctrl+x w":"command:wrap"}'
+# The Claude Code keybindings cs offers to add. Ctrl+X R and Ctrl+X W are
+# "command:<name>" actions, which submit /<name>. Ctrl+X 1 and Ctrl+X 2 are
+# the engine actions the cs mod's band Buttons answer to, so they press the
+# band's rotate (or /clear) and wrap keys (KEEP IN SYNC with ROTATE_ACTION
+# and WRAP_ACTION in mods/cs/hooks/register.tsx). install.sh asks once per
+# machine and binds them, cs -uninstall takes back only the keys that still
+# hold these values, and cs -doctor reports them.
+CS_ROTATE_WRAP_KEYS='{"ctrl+x r":"command:rotate","ctrl+x w":"command:wrap","ctrl+x 1":"strip:jump1","ctrl+x 2":"strip:jump2"}'
 
 # Option+1 and Option+2 on the same two commands, as cs 2026.10.6 bound them.
 # iTerm2 selects panes with Option+number, so there they never reach Claude
@@ -7337,7 +7340,7 @@ _doctor_check_statusline() {
     esac
 }
 
-# The Ctrl+X R / Ctrl+X W bindings the installer offers: the answer this
+# The Ctrl+X bindings the installer offers: the answer this
 # machine gave, and whether keybindings.json still holds cs's keys. Not asked
 # and declined are healthy; a key the user binds to something else (or a bare
 # ctrl+x a chord would shadow), a yes whose keys are gone or are still an
@@ -7370,7 +7373,7 @@ _doctor_check_rotate_wrap_keys() {
         if [ -n "$retired" ]; then
             _doctor_warn "Rotate/wrap keys: $retired still hold cs's earlier bindings in $file (run cs -update to remove them)"
         else
-            _doctor_ok "Rotate/wrap keys: bound (Ctrl+X R runs /rotate, Ctrl+X W runs /wrap)"
+            _doctor_ok "Rotate/wrap keys: bound (Ctrl+X R runs /rotate, Ctrl+X W runs /wrap, Ctrl+X 1 and Ctrl+X 2 press the cs band)"
         fi
         return
     fi
@@ -10312,7 +10315,7 @@ adopt_worktrees() {  # [--dry-run]
     [ "$dry_run" = 1 ] || echo -e "${DIM}$adopted adopted; open one with: cs $repo_name.<worktree>${NC}"
 }
 
-# Take back the Ctrl+X R / Ctrl+X W bindings the installer added, and the
+# Take back the Ctrl+X bindings the installer added, and the
 # Option+1 / Option+2 ones an earlier cs added, only where a key still holds
 # cs's value: a key bound to anything else is the user's. A Global block left
 # empty by that goes, and so does a file left as exactly {"bindings":[]},
