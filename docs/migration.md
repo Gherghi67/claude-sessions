@@ -11,9 +11,12 @@ URLs remain `hex/claude-sessions`; this local rebrand does not publish a rename.
 keeps the original global `cs` installation and deploys the experimental build
 under `~/.local/share/agent-sessions/home/`. Only `ags` names are exposed globally.
 Compatibility aliases inside that private payload support its own integrations.
-Existing sessions and Claude settings are not migrated. Native CLI configuration
-and login are separate in the experimental profile; the one exception is the
-Claude display mode (`tui`), which setup copies from `~/.claude/settings.json`
+Existing sessions are not migrated. Native CLI login is separate in the
+experimental profile. Setup carries the user's own Claude and Codex setup in
+without writing to `~/.claude` or `~/.codex`: instructions, agents, skills and
+commands by link, hooks, plugins, MCP servers and preferences by merge (see
+[Your own setup in the ags profile](configuration.md#your-own-setup-in-the-ags-profile)),
+and it copies the Claude display mode (`tui`) from `~/.claude/settings.json`
 when the profile has none. Direct `install.sh` refuses
 to replace an existing original `cs` executable; use `setup.sh`.
 

@@ -5,13 +5,16 @@ set -eu
 
 usage() {
     cat <<'EOF'
-Usage: sh /path/to/agent-sessions/setup.sh [--skip-tui-build]
+Usage: sh /path/to/agent-sessions/setup.sh [--skip-tui-build] [--no-carry-over]
 
 Installs ags and the Claude/Codex integrations from this checkout.
 Uses an isolated profile; leaves existing cs commands and configuration alone.
 Defaults to both on a fresh install; remembers the previous selection.
 Builds the optional session picker when Cargo is available.
 Use --skip-tui-build to skip compiling the picker.
+Carries your own ~/.claude and ~/.codex setup into the profile (read only;
+see scripts/ags-carry-over.sh). Use --no-carry-over, or AGS_CARRY_OVER=0,
+to skip that.
 
 Requires bash, git, jq, and Python 3 (for Codex).
 Install and authenticate Claude Code and Codex CLI separately.
@@ -22,13 +25,17 @@ EOF
 fail() { printf 'Error: %s\n' "$1" >&2; exit 1; }
 
 build_tui=1
-case "${1:-}" in
-    '') ;;
-    --skip-tui-build) build_tui=0; shift ;;
-    -h|--help) usage; exit 0 ;;
-    *) usage >&2; exit 2 ;;
-esac
-[ "$#" -eq 0 ] || { usage >&2; exit 2; }
+carry_over=1
+for argument in "$@"; do
+    case "$argument" in
+        '') ;;
+        --skip-tui-build) build_tui=0 ;;
+        --no-carry-over) carry_over=0 ;;
+        -h|--help) usage; exit 0 ;;
+        *) usage >&2; exit 2 ;;
+    esac
+done
+case "${AGS_CARRY_OVER:-1}" in 0|no|false) carry_over=0 ;; esac
 
 : "${HOME:?HOME must be set}"
 checkout_dir=$(CDPATH='' cd -P "$(dirname "$0")" && pwd)
@@ -171,6 +178,12 @@ case ",$CS_INSTALL_ENGINES," in
     *,codex,*) mkdir -p "$profile_home/.codex" && chmod 700 "$profile_home/.codex" ;;
 esac
 
+# A link an earlier carry-over made, named like a skill this install now
+# deploys, would have install.sh copy ags's files through it into ~/.claude or
+# ~/.codex. Drop such links, and dangling ones, first; this only ever removes
+# links into the user's own directories, so it runs even with --no-carry-over.
+bash ./scripts/ags-carry-over.sh --prune
+
 # install.sh lays files out under HOME, so it runs inside the profile. The
 # launcher it deploys keeps the user's HOME, hence the absolute hook paths.
 # CODEX_HOME is set for the same reason: one inherited from the caller's shell
@@ -193,6 +206,14 @@ if [ -f "$user_settings" ] && [ -f "$profile_settings" ] \
     && carried=$(jq --arg tui "$user_tui" '.tui = $tui' "$profile_settings" 2>/dev/null); then
     printf '%s\n' "$carried" > "$profile_settings"
     printf 'Carried your Claude display mode (tui: %s) into the profile.\n' "$user_tui"
+fi
+
+# The rest of the user's own setup follows: instructions, agents, skills and
+# commands by link, hooks, plugins, MCP servers and preferences by merge. It
+# only reads ~/.claude and ~/.codex, and a failure leaves the install as it is.
+if [ "$carry_over" -eq 1 ]; then
+    bash ./scripts/ags-carry-over.sh \
+        || printf 'Warning: the carry-over stopped; rerun it with: bash %s/scripts/ags-carry-over.sh\n' "$checkout_dir" >&2
 fi
 
 # Move the sessions just before the launchers that point at the new root, so
@@ -250,7 +271,7 @@ esac
 printf '\nInstalled. Open a new terminal, then run:\n'
 printf '  ags my-project --engine codex\n  ags my-project --engine claude\n'
 printf 'Experimental profile: %s\n' "$profile_home"
-printf 'Claude and Codex use separate configuration and login in this profile.\n'
+printf 'Claude and Codex keep their own login and configuration files in this profile.\n'
 printf 'Your original cs commands, Claude settings, and sessions are unchanged by setup.\n'
 for runtime in claude codex; do
     case ",$CS_INSTALL_ENGINES," in

@@ -332,3 +332,90 @@ See [Migration](migration.md) for the compatibility policy.
 `settings.json` by absolute path instead of `~/.claude/hooks/cs/...`. setup.sh
 sets it for the profile, whose launcher keeps the user's HOME: a tilde there
 would run the stable install's hooks.
+
+## Your own setup in the ags profile
+
+setup.sh ends by running `scripts/ags-carry-over.sh`, which brings your own
+Claude and Codex setup from `~/.claude`, `~/.claude.json` and `~/.codex` into
+the profile at `~/.local/share/agent-sessions/home`. It reads those and writes
+only inside the profile. Every path comes from `HOME`: inside an ags session
+`CLAUDE_CONFIG_DIR`, `CODEX_HOME` and the `CS_*` variables name the profile.
+
+- **Linked**, one symlink per entry, so an edit in `~/.claude` or `~/.codex`
+  shows in ags at once: `CLAUDE.md`, `keybindings.json`, and the entries of
+  `agents/`, `commands/`, `skills/`, `workflows/`, `themes/` and
+  `output-styles/`; for Codex, `AGENTS.md` and the entries of `skills/` and
+  `agents/`. A skill directory holding `.claude-plugin/`, such as the Agents
+  sidebar's, loads there as a plugin too.
+- **Skipped**: every name ags installs itself, read from the installer's own
+  lists (the skills, mods, retired skills and retired commands that uninstall
+  removes), Claude Code's `skills/synced`, dot entries, and backups
+  (`*.pre-*`, `*.before-*`).
+- **Merged** into the profile's own files, adding what is missing and never
+  replacing or removing what the profile has: hooks in `settings.json` (except
+  cs's own under `~/.claude/hooks/cs/`), `enabledPlugins`,
+  `extraKnownMarketplaces`, `permissions` (lists are joined), `modelSettings`,
+  `env` and your other preference keys; `mcpServers` in the profile's
+  `.claude.json`; for Codex, `hooks.json`, the `[mcp_servers.*]` tables and
+  `[sandbox_workspace_write]` in `config.toml`. A profile value of another
+  shape than yours (a string where you have a list) stays as it is. A Codex
+  MCP server you defined inline (`mcp_servers.x = {...}`) cannot be copied as
+  a table; every run names it so you can copy it by hand.
+- **Hooks** are told apart by event, matcher and command, so one command under
+  two matchers is two hooks. The hooks a run adds are listed in
+  `.ags-carried-hooks.json` beside `settings.json` and `hooks.json`. One you
+  later change or remove in `~/.claude` or `~/.codex` leaves the profile on
+  the next run, so an old and a new version never both run. A hook the profile
+  had before is never removed.
+- **Left as the profile's**: `model`, `theme`, `tui` (setup carries that once
+  itself), `statusLine`, `subagentStatusLine`, `disableAllHooks`, the login
+  helpers (`apiKeyHelper`, `awsAuthRefresh`, `awsCredentialExport`,
+  `gcpAuthRefresh`, `otelHeadersHelper`, `forceLoginMethod`,
+  `forceLoginOrgUUID`), project-scoped MCP servers and plugins, and Codex's
+  top-level keys and other tables.
+- **Plugins**: each enabled plugin you installed at user scope is copied from
+  `~/.claude/plugins/cache` into the profile's cache (a clone on APFS, so it
+  takes no space), with its marketplace when the profile lacks it, and recorded
+  in the profile's `installed_plugins.json`. Nothing is downloaded, and the
+  profile updates them on its own from then on.
+- **Codex hooks** are added after ags's own and trusted in the profile's
+  `config.toml` only when `~/.codex/config.toml` trusts the definition the
+  profile holds. One you never reviewed stays untrusted, and Codex skips it
+  until you do. Codex keys trust by a hook's position, so when a carried hook
+  leaves, the trust of the hooks after it moves with them. `hooks.json` is
+  written only together with a `config.toml` that parses.
+- **The Agents sidebar**: when your `statusLine` is the sidebar's
+  `statusline-bridge.sh`, the profile's status line moves inside the bridge
+  too, and the profile's own line (`ags-statusline`) is kept in
+  `agents-sidebar-status/original-statusline` inside the profile's `.claude`.
+  The bridge draws that line when `CLAUDE_CONFIG_DIR`, or in an encrypted
+  session `CLAUDE_SECURESTORAGE_CONFIG_DIR`, names the profile; a bridge
+  without that check draws the line `~/.claude` displaced instead. The wrap
+  happens once: a status line you give the profile later stays (answer `y`
+  when setup offers ags-statusline, or run `ags -statusline enable`); delete
+  that file to wrap it again.
+
+A rerun adds what is new and changes nothing else: a file whose content would
+not change is not rewritten, and the first change to each profile file leaves a
+copy at `<file>.pre-carry-over`. A link or a carried hook whose entry you
+removed from `~/.claude` or `~/.codex` goes with it. An MCP server, plugin or
+preference you remove or change there stays in the profile as it was; change
+it in the profile by hand.
+
+Remote MCP servers sign in per configuration directory, so one you authorised in
+`~/.claude` or `~/.codex` asks again in the profile: `/mcp` in an ags Claude
+session, or `CODEX_HOME=~/.local/share/agent-sessions/home/.codex codex mcp login <name>`
+for Codex. Run the carry-over with no ags Claude session open: a running
+session can save its own copy of `.claude.json` over the merged servers, and a
+rerun puts them back.
+
+```bash
+bash scripts/ags-carry-over.sh --dry-run   # what it would change; writes nothing
+bash scripts/ags-carry-over.sh             # run it alone, without reinstalling
+sh ./setup.sh --no-carry-over              # install without it; or AGS_CARRY_OVER=0
+```
+
+Before it installs, setup.sh also runs `scripts/ags-carry-over.sh --prune`,
+with or without the opt-out. It removes the carried links that dangle, or that
+a name ags now installs shadows, so the install never copies ags's files
+through a link into your own directories.

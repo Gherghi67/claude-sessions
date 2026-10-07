@@ -138,7 +138,9 @@ Requires Bash, Git, jq, and Python 3 for Codex. Install and authenticate Claude
 Code and Codex CLI separately. Use `--skip-tui-build` to skip compiling the picker.
 Setup exposes only `ags` names in your normal command directory. Its integrations
 and sessions live in a separate experimental profile, which needs its own CLI
-login. Keep using `cs` for existing workspaces; see the getting-started guide.
+login. Setup links or merges your own `~/.claude` and `~/.codex` setup into it
+(`--no-carry-over` skips that). Keep using `cs` for existing workspaces; see the
+getting-started guide.
 
 This rebrand is unpublished. The upstream repository still uses
 `hex/claude-sessions`; its remote installer installs the earlier release.

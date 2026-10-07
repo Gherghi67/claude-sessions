@@ -132,7 +132,7 @@ test_setup_carries_the_users_claude_display_mode_into_the_profile() {
     cp "$HOME/.claude/settings.json" "$TEST_TMPDIR/user-settings"
     run_setup --skip-tui-build || return 1
     assert_eq default "$(jq -r '.tui' "$PROFILE/.claude/settings.json")" || return 1
-    # Only the display mode crosses over; the profile keeps its own config.
+    # The theme stays the profile's own; the carry-over leaves it too.
     assert_eq null "$(jq -r '.theme' "$PROFILE/.claude/settings.json")" || return 1
     jq -e '.hooks.SessionStart | length > 0' "$PROFILE/.claude/settings.json" >/dev/null || return 1
     cmp "$TEST_TMPDIR/user-settings" "$HOME/.claude/settings.json" || return 1
@@ -316,6 +316,37 @@ seed_old_profile_sessions() {
         "$old/ask" "$home/work/linked" > "$PROFILE/.codex/config.toml"
 }
 
+# scripts/ags-carry-over.sh has its own suite; these pin how setup runs it.
+test_setup_carries_the_users_own_setup_unless_opted_out() {
+    stage_checkout
+    mkdir -p "$HOME/.claude/skills/my-skill"
+    printf 'mine\n' > "$HOME/.claude/skills/my-skill/SKILL.md"
+    run_setup --skip-tui-build --no-carry-over || return 1
+    assert_not_exists "$PROFILE/.claude/skills/my-skill" "--no-carry-over" || return 1
+    AGS_CARRY_OVER=0 run_setup --skip-tui-build || return 1
+    assert_not_exists "$PROFILE/.claude/skills/my-skill" "AGS_CARRY_OVER=0" || return 1
+    run_setup --skip-tui-build || return 1
+    assert_eq "$HOME/.claude/skills/my-skill" "$(readlink "$PROFILE/.claude/skills/my-skill")" || return 1
+    assert_file_contains "$TEST_TMPDIR/setup.log" 'linked claude/skills/my-skill'
+}
+
+# A link an earlier carry-over made to a skill of the user's, before ags
+# shipped one of that name: the install must not copy ags's files through it.
+test_setup_never_installs_through_a_carried_link() {
+    stage_checkout
+    mkdir -p "$HOME/.claude/skills/finish"
+    printf 'my own finish\n' > "$HOME/.claude/skills/finish/SKILL.md"
+    run_setup --skip-tui-build || return 1
+    rm -rf "$PROFILE/.claude/skills/finish"
+    ln -s "$HOME/.claude/skills/finish" "$PROFILE/.claude/skills/finish"
+    run_setup --skip-tui-build --no-carry-over || return 1
+    assert_eq 'my own finish' "$(cat "$HOME/.claude/skills/finish/SKILL.md")" || return 1
+    assert_not_exists "$HOME/.claude/skills/finish/agents" || return 1
+    [ -d "$PROFILE/.claude/skills/finish" ] && [ ! -L "$PROFILE/.claude/skills/finish" ] \
+        || { echo "  FAIL: the profile's finish is not its own directory"; return 1; }
+    assert_file_exists "$PROFILE/.claude/skills/finish/agents/openai.yaml"
+}
+
 test_setup_moves_an_existing_profile_sessions_root() {
     stage_checkout
     seed_old_profile_sessions || return 1
@@ -421,6 +452,8 @@ run_test test_setup_respects_a_custom_zsh_startup_directory
 run_test test_setup_reinstall_remembers_a_codex_only_selection
 run_test test_setup_carries_the_users_claude_display_mode_into_the_profile
 run_test test_setup_keeps_a_display_mode_chosen_inside_the_profile
+run_test test_setup_carries_the_users_own_setup_unless_opted_out
+run_test test_setup_never_installs_through_a_carried_link
 run_test test_setup_moves_an_existing_profile_sessions_root
 run_test test_setup_does_not_move_sessions_while_a_profile_command_runs
 run_test test_setup_does_not_merge_two_sessions_roots

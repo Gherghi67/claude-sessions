@@ -36,7 +36,16 @@ vaults and `ags -spawn` tmux server (`tmux -L ags attach -t ags`, where
 `cs -spawn` uses the default server) are separate from your original
 installation. Log in to the selected CLI when first prompted in this profile.
 Normal `cs`, `claude`, and `codex` keep their existing configuration.
-One preference crosses over: setup copies the Claude display mode (`tui`) from
+Setup then carries your own setup into the profile, reading `~/.claude` and
+`~/.codex` without changing them. Your `CLAUDE.md`, `AGENTS.md`, agents, skills,
+commands and workflows are linked one entry at a time, so an edit made there
+reaches ags at once; your hooks, enabled plugins, MCP servers and preferences
+are merged into the profile's own files. Whatever ags installs itself, and any
+entry the profile already has, stays the profile's. Remote MCP servers ask you
+to sign in again inside the profile. [Your own setup in the ags
+profile](configuration.md#your-own-setup-in-the-ags-profile) lists what moves,
+and how to preview it, rerun it alone, or skip it (`sh ./setup.sh --no-carry-over`).
+Setup also copies the Claude display mode (`tui`) from
 your `~/.claude/settings.json` into the profile when the profile has none yet.
 Otherwise a fresh profile would start in Claude Code's fullscreen renderer, which
 captures trackpad gestures such as iTerm2's two-finger tab swipe. Run `/tui`
