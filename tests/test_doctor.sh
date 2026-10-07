@@ -709,6 +709,13 @@ test_doctor_rotate_wrap_keys_row_names_the_state() {
     assert_output_contains "$output" "WARN.*Rotate/wrap keys: ctrl+x r not bound (run cs -update to bind it)" \
         "an older cs's alt+1/alt+2: the next update binds the chords" || return 1
 
+    printf '%s\n' '{"bindings":[{"context":"Chat","bindings":{"ctrl+x 1":"app:redraw"}},{"context":"Global","bindings":{"ctrl+x r":"command:rotate","ctrl+x w":"command:wrap","ctrl+x 2":"strip:jump2","alt+1":"command:rotate","alt+2":"command:wrap"}}]}' > "$kb"
+    output=$(_ok_doctor)
+    assert_output_contains "$output" "WARN.*Rotate/wrap keys: conflict on ctrl+x 1 (bound to app:redraw in $kb)" \
+        "a user binding on a band chord: conflict" || return 1
+    assert_output_contains "$output" "WARN.*Rotate/wrap keys: alt+1, alt+2 still hold cs's earlier bindings in $kb (run cs -update to remove them)" \
+        "with Ctrl+X R and W bound, cs's alt keys are named even beside a band-chord conflict" || return 1
+
     printf '%s\n' '{"bindings": [' > "$kb"
     output=$(_ok_doctor)
     assert_output_contains "$output" "WARN.*Rotate/wrap keys: $kb is unparseable" "bad JSON: unparseable" || return 1

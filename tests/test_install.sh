@@ -1861,6 +1861,20 @@ test_rotate_wrap_keys_read_keys_as_claude_code_does() {
         "$(jq -c . "$kb" 2>&1)" "a null ctrl+x leaves every chord free" || return 1
 }
 
+# 18. Option+1 / Option+2 stand in for Ctrl+X R and Ctrl+X W only: a band
+# chord the user binds elsewhere leaves /rotate and /wrap their chords, so
+# cs's dead Option keys still go, and the other keys are bound.
+test_rotate_wrap_keys_band_chord_conflict_still_retires_option_keys() {
+    local home="$TEST_TMPDIR/home-ok-band" kb
+    kb="$home/.claude/keybindings.json"
+    _install_with_recorded_yes ok-band "$home" '{"bindings":[{"context":"Global","bindings":{"ctrl+x 1":"app:redraw","alt+1":"command:rotate","alt+2":"command:wrap"}}]}' \
+        || { echo "  FAIL: install.sh exited non-zero"; return 1; }
+    assert_eq '{"bindings":[{"context":"Global","bindings":{"ctrl+x 1":"app:redraw","ctrl+x r":"command:rotate","ctrl+x w":"command:wrap","ctrl+x 2":"strip:jump2"}}]}' \
+        "$(jq -c . "$kb" 2>&1)" "the user's ctrl+x 1 stays, the alt keys go, the free chords are bound" || return 1
+    grep -qxF "   · Rotate/wrap keys: bound ctrl+x r, ctrl+x w, ctrl+x 2 in $kb (replacing cs's alt+1, alt+2)" \
+        "$TEST_TMPDIR/ok-band.out" || { echo "  FAIL: the replacement line is missing or reworded"; return 1; }
+}
+
 run_test test_install_survives_an_unwritable_declined_marker_dir
 run_test test_install_previews_the_status_line_before_asking
 run_test test_declining_says_permanence_on_its_own_line
@@ -1907,4 +1921,5 @@ run_test test_rotate_wrap_keys_never_shadow_a_users_ctrl_x
 run_test test_rotate_wrap_keys_take_back_option_keys_beside_bound_chords
 run_test test_rotate_wrap_keys_one_conflict_keeps_option_keys
 run_test test_rotate_wrap_keys_read_keys_as_claude_code_does
+run_test test_rotate_wrap_keys_band_chord_conflict_still_retires_option_keys
 report_results
