@@ -431,12 +431,15 @@ _uninstall_rotate_wrap_keys() {
         return 0
     fi
     ours=$(jq -cn --argjson a "$CS_ROTATE_WRAP_KEYS" --argjson b "$CS_RETIRED_OPTION_KEYS" '$a + $b')
-    held=$(_cs_keybindings_held "$ours" < "$file") \
-        && stripped=$(_cs_keybindings_strip "$ours" < "$file") || {
+    held=$(_cs_keybindings_held "$ours" < "$file") || {
         warn "Could not read $file; its rotate/wrap bindings were left in place"
         return 0
     }
     [ -n "$held" ] || return 0
+    stripped=$(_cs_keybindings_strip "$ours" < "$file") || {
+        warn "Could not read $file; its rotate/wrap bindings were left in place"
+        return 0
+    }
     if [ "$stripped" = '{"bindings":[]}' ] && [ ! -L "$file" ]; then
         rm -f "$file"
         info "Removed $file"

@@ -7,6 +7,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/test_lib.sh"
 
 INSTALL_SH="$SCRIPT_DIR/../install.sh"
+# The installer's rotate/wrap keys question, as an expect -re pattern.
+_ROTATE_WRAP_ASK_RE='Ctrl\+X R.*\[y/n\]'
 
 # Override teardown: also reset HOME if a test set it.
 teardown() {
@@ -41,7 +43,7 @@ spawn env HOME=$fake_home bash $INSTALL_SH
 expect {
     -re {status line.*\[y/N\]} { send "n\r"; exp_continue }
     -re {status line.*\[Y/n\]} { send "n\r"; exp_continue }
-    -re {Ctrl\+X R.*\[y/n\]} { send "n"; exp_continue }
+    -re {$_ROTATE_WRAP_ASK_RE} { send "n"; exp_continue }
     eof
 }
 catch wait result
@@ -78,7 +80,7 @@ log_file -noappend $out
 spawn env HOME=$fake_home bash $INSTALL_SH
 expect {
     -re {status line.*\[y/N\]} { send "n\r"; exp_continue }
-    -re {Ctrl\+X R.*\[y/n\]} { send "n"; exp_continue }
+    -re {$_ROTATE_WRAP_ASK_RE} { send "n"; exp_continue }
     eof
 }
 EXPECT
@@ -116,7 +118,7 @@ spawn env HOME=$fake_home bash $INSTALL_SH
 expect {
     -re {status line.*\[Y/n\]} { send "n\r"; exp_continue }
     -re {Complete|complete} { exp_continue }
-    -re {Ctrl\+X R.*\[y/n\]} { send "n"; exp_continue }
+    -re {$_ROTATE_WRAP_ASK_RE} { send "n"; exp_continue }
     eof
 }
 EXPECT
@@ -204,7 +206,7 @@ set timeout 120
 spawn env HOME=$fake_home bash $INSTALL_SH
 expect {
     -re {status line.*\[y/N\]} { send "$ans\r"; exp_continue }
-    -re {Ctrl\+X R.*\[y/n\]} { send "n"; exp_continue }
+    -re {$_ROTATE_WRAP_ASK_RE} { send "n"; exp_continue }
     -re {Complete|complete} { exp_continue }
     eof
 }
@@ -1546,7 +1548,7 @@ log_file -noappend $TEST_TMPDIR/$label.out
 spawn env -u CLAUDE_CONFIG_DIR -u XDG_CONFIG_HOME HOME=$home $* bash $INSTALL_SH
 expect {
     -re {status line.*\[Y/n\]} { send "n"; exp_continue }
-    -re {Ctrl\+X R.*\[y/n\]} { send "$ans"; exp_continue }
+    -re {$_ROTATE_WRAP_ASK_RE} { send "$ans"; exp_continue }
     eof
 }
 catch wait result
@@ -1758,17 +1760,23 @@ test_rotate_wrap_keys_skip_an_encrypted_sessions_config_dir() {
     assert_file_not_exists "$sess/keybindings.json" "still nothing in the session's config dir" || return 1
 }
 
+# Runs the installer with a recorded yes and no terminal over a given
+# keybindings.json; the transcript lands in $TEST_TMPDIR/<label>.out.
+_install_with_recorded_yes() {  # label, home, keybindings-json
+    mkdir -p "$2/.claude" "$2/.config/cs"
+    printf 'yes\n' > "$2/.config/cs/option-keys"
+    printf '%s\n' "$3" > "$2/.claude/keybindings.json"
+    env -u CLAUDE_CONFIG_DIR -u XDG_CONFIG_HOME HOME="$2" bash "$INSTALL_SH" \
+        < /dev/null > "$TEST_TMPDIR/$1.out" 2>&1
+}
+
 # 12. A machine an older cs bound Option+1 / Option+2 on: its recorded yes is
 # honoured without a terminal, cs's alt+1 and alt+2 make way for the chords,
 # and every other binding stays. The one line says what was replaced.
 test_rotate_wrap_keys_replace_cs_option_keys() {
     local home="$TEST_TMPDIR/home-ok-mig" kb
     kb="$home/.claude/keybindings.json"
-    mkdir -p "$home/.claude" "$home/.config/cs"
-    printf 'yes\n' > "$home/.config/cs/option-keys"
-    printf '%s\n' '{"bindings":[{"context":"Chat","bindings":{"ctrl+e":"chat:externalEditor"}},{"context":"Global","bindings":{"ctrl+t":"app:toggleTodos","alt+1":"command:rotate","alt+2":"command:wrap"}}]}' > "$kb"
-    env -u CLAUDE_CONFIG_DIR -u XDG_CONFIG_HOME HOME="$home" bash "$INSTALL_SH" \
-        < /dev/null > "$TEST_TMPDIR/ok-mig.out" 2>&1 \
+    _install_with_recorded_yes ok-mig "$home" '{"bindings":[{"context":"Chat","bindings":{"ctrl+e":"chat:externalEditor"}},{"context":"Global","bindings":{"ctrl+t":"app:toggleTodos","alt+1":"command:rotate","alt+2":"command:wrap"}}]}' \
         || { echo "  FAIL: install.sh exited non-zero"; return 1; }
     assert_eq '{"bindings":[{"context":"Chat","bindings":{"ctrl+e":"chat:externalEditor"}},{"context":"Global","bindings":{"ctrl+t":"app:toggleTodos","ctrl+x r":"command:rotate","ctrl+x w":"command:wrap"}}]}' \
         "$(jq -c . "$kb" 2>&1)" "alt+1 and alt+2 are gone and the chords are bound" || return 1
@@ -1781,11 +1789,7 @@ test_rotate_wrap_keys_replace_cs_option_keys() {
 test_rotate_wrap_keys_migration_keeps_a_users_alt_key() {
     local home="$TEST_TMPDIR/home-ok-mig2" kb
     kb="$home/.claude/keybindings.json"
-    mkdir -p "$home/.claude" "$home/.config/cs"
-    printf 'yes\n' > "$home/.config/cs/option-keys"
-    printf '%s\n' '{"bindings":[{"context":"Global","bindings":{"alt+1":"chat:submit","alt+2":"command:wrap"}}]}' > "$kb"
-    env -u CLAUDE_CONFIG_DIR -u XDG_CONFIG_HOME HOME="$home" bash "$INSTALL_SH" \
-        < /dev/null > /dev/null 2>&1 \
+    _install_with_recorded_yes ok-mig2 "$home" '{"bindings":[{"context":"Global","bindings":{"alt+1":"chat:submit","alt+2":"command:wrap"}}]}' \
         || { echo "  FAIL: install.sh exited non-zero"; return 1; }
     assert_eq '{"bindings":[{"context":"Global","bindings":{"alt+1":"chat:submit","ctrl+x r":"command:rotate","ctrl+x w":"command:wrap"}}]}' \
         "$(jq -c . "$kb" 2>&1)" "the user's alt+1 stays, cs's alt+2 goes" || return 1
@@ -1796,31 +1800,16 @@ test_rotate_wrap_keys_migration_keeps_a_users_alt_key() {
 # conflict for both chords: the file is left as it is, each is named, and
 # cs's Option+1 / Option+2 stay, as the only rotate and wrap keys there are.
 test_rotate_wrap_keys_never_shadow_a_users_ctrl_x() {
-    local home="$TEST_TMPDIR/home-ok-prefix" kb
+    local home="$TEST_TMPDIR/home-ok-prefix" kb doc chord
     kb="$home/.claude/keybindings.json"
-    mkdir -p "$home/.claude" "$home/.config/cs"
-    printf 'yes\n' > "$home/.config/cs/option-keys"
-    printf '%s\n' '{"bindings":[{"context":"Chat","bindings":{"ctrl+x":"chat:externalEditor"}},{"context":"Global","bindings":{"alt+1":"command:rotate","alt+2":"command:wrap"}}]}' > "$kb"
-    cp "$kb" "$TEST_TMPDIR/prefix.orig"
-    env -u CLAUDE_CONFIG_DIR -u XDG_CONFIG_HOME HOME="$home" bash "$INSTALL_SH" \
-        < /dev/null > "$TEST_TMPDIR/ok-prefix.out" 2>&1 \
+    doc='{"bindings":[{"context":"Chat","bindings":{"ctrl+x":"chat:externalEditor"}},{"context":"Global","bindings":{"alt+1":"command:rotate","alt+2":"command:wrap"}}]}'
+    _install_with_recorded_yes ok-prefix "$home" "$doc" \
         || { echo "  FAIL: install.sh exited non-zero"; return 1; }
-    cmp -s "$TEST_TMPDIR/prefix.orig" "$kb" || { echo "  FAIL: the file was changed"; return 1; }
-    local chord
+    printf '%s\n' "$doc" | cmp -s - "$kb" || { echo "  FAIL: the file was changed"; return 1; }
     for chord in 'ctrl+x r' 'ctrl+x w'; do
         grep -qF "Rotate/wrap keys: $chord would shadow ctrl+x, which is bound to chat:externalEditor in $kb; left unbound." \
             "$TEST_TMPDIR/ok-prefix.out" || { echo "  FAIL: no warning naming $chord and the ctrl+x it would shadow"; return 1; }
     done
-}
-
-# Runs the installer with a recorded yes and no terminal over a given
-# keybindings.json; the transcript lands in $TEST_TMPDIR/<label>.out.
-_install_with_recorded_yes() {  # label, home, keybindings-json
-    mkdir -p "$2/.claude" "$2/.config/cs"
-    printf 'yes\n' > "$2/.config/cs/option-keys"
-    printf '%s\n' "$3" > "$2/.claude/keybindings.json"
-    env -u CLAUDE_CONFIG_DIR -u XDG_CONFIG_HOME HOME="$2" bash "$INSTALL_SH" \
-        < /dev/null > "$TEST_TMPDIR/$1.out" 2>&1
 }
 
 # 15. Chords already bound beside cs's alt+1 / alt+2: the install only takes

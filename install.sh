@@ -226,7 +226,7 @@ CS_ROTATE_WRAP_KEYS='{"ctrl+x r":"command:rotate","ctrl+x w":"command:wrap"}'
 # iTerm2 selects panes with Option+number, so there they never reach Claude
 # Code. Wherever they still hold these values, an install that binds the
 # chords takes them back, and so does cs -uninstall.
-# shellcheck disable=SC2034  # read by install.sh's _bind_rotate_wrap_keys and by cs -uninstall
+# shellcheck disable=SC2034  # read by install.sh's _bind_rotate_wrap_keys, cs -uninstall and cs -doctor
 CS_RETIRED_OPTION_KEYS='{"alt+1":"command:rotate","alt+2":"command:wrap"}'
 
 # The jq definitions shared by the filters below. keynorm follows Claude
@@ -1049,13 +1049,13 @@ else
     # there is none. A key bound to anything else, in any context, is the
     # user's and is reported, never replaced; so is a bare key a chord would
     # shadow. With no conflict, cs's own Option+1 / Option+2 bindings make
-    # way for the chords; a conflict keeps them, as the only rotate and wrap
-    # keys left. A file of a shape cs cannot read is refused before anything
+    # way for the chords; a conflict on either chord keeps both, so the
+    # command whose chord is taken keeps a key. A file of a shape cs cannot read is refused before anything
     # is written. The write is cs_write_atomic's, from the hooks' shared
     # library deployed above: mode kept, and a symlinked file (a dotfiles
     # manager's) rewritten through its link.
     _bind_rotate_wrap_keys() {
-        local file doc status state key action prefix added="" free="" conflicts=0 retired="" add
+        local file doc status state key action prefix added="" conflicts=0 retired="" add
         file="$(_cs_keybindings_file)"
         if [ -e "$file" ]; then
             if ! _cs_keybindings_shape_ok "$file"; then
@@ -1080,7 +1080,6 @@ else
                     ;;
                 free)
                     added="${added:+$added, }$key"
-                    free="$free$key"$'\n'
                     ;;
             esac
         done <<< "$status"
@@ -1093,8 +1092,8 @@ else
             fi
         fi
         [ -n "$added" ] || [ -n "$retired" ] || return 0
-        add=$(jq -cn --argjson cs "$CS_ROTATE_WRAP_KEYS" --arg free "$free" \
-            '$cs | with_entries(select(.key as $k | $free | split("\n") | any(.[]; . == $k)))') \
+        add=$(jq -cn --argjson cs "$CS_ROTATE_WRAP_KEYS" --arg added "$added" \
+            '$cs | with_entries(select(.key as $k | $added | split(", ") | any(.[]; . == $k)))') \
             || { warn "Rotate/wrap keys: could not build the bindings for $file"; return 1; }
         # shellcheck source=hooks/cs-shared.sh
         if ! . "$HOOKS_DIR/cs-shared.sh"; then

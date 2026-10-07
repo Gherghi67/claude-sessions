@@ -133,7 +133,7 @@ CS_ROTATE_WRAP_KEYS='{"ctrl+x r":"command:rotate","ctrl+x w":"command:wrap"}'
 # iTerm2 selects panes with Option+number, so there they never reach Claude
 # Code. Wherever they still hold these values, an install that binds the
 # chords takes them back, and so does cs -uninstall.
-# shellcheck disable=SC2034  # read by install.sh's _bind_rotate_wrap_keys and by cs -uninstall
+# shellcheck disable=SC2034  # read by install.sh's _bind_rotate_wrap_keys, cs -uninstall and cs -doctor
 CS_RETIRED_OPTION_KEYS='{"alt+1":"command:rotate","alt+2":"command:wrap"}'
 
 # The jq definitions shared by the filters below. keynorm follows Claude
