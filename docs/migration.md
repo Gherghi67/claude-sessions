@@ -84,6 +84,54 @@ This branch is unpublished. Existing upstream releases still use their original
 branding and installer behavior; running `ags -update` before publishing these
 changes can replace this local build with the upstream release.
 
+## Going back to cs
+
+`scripts/ags-to-cs.py` copies the profile's work back into the stable `cs`, so
+every ags session opens with `cs <name>` and resumes the same Claude
+conversation. It prints what it would do; `--apply` copies:
+
+```bash
+scripts/ags-to-cs.py              # the plan; nothing is written
+scripts/ags-to-cs.py --apply
+```
+
+- A session ags adopted gets the same link in `~/.claude-sessions`. Its `.cs/`
+  lives in the project, so `cs` and `ags` share it.
+- A session ags created is copied whole, git history and local state included.
+- A feature worktree (`<base>@<task>`) follows its base, under the base's `cs`
+  name. One of a created base becomes a linked worktree of the base's copy, on
+  the same branch with its index, uncommitted changes and per-worktree refs;
+  the original stays a worktree of the original. One of an adopted base is
+  linked like its base: its repository is the project's, shared with ags, and
+  git checks a branch out in one worktree only. `--session <base>@<task>` alone
+  works once the base is in `cs`.
+- Each session's Claude conversations and their file-history snapshots are
+  copied from the profile into `~/.claude`, under the folder Claude Code gives
+  the session's path in `cs`.
+- Secrets go from the profile's encrypted store into the store `cs-secrets`
+  reads, values on stdin.
+- The session protocol in `CLAUDE.local.md` is reworded from `ags` to `cs`. For
+  an adopted session that file is shared, so ags sessions read the `cs` wording
+  too. A directory inside the profile keeps the `ags` wording.
+
+The profile is only read, so ags keeps working. When `cs` already has a
+session of that name, the ags one arrives as `<name>-ags`; `--rename OLD=NEW`
+picks another name and `--session NAME` copies one session. A rerun skips what
+is already there and brings over what grew. A conversation continued in ags
+replaces its `cs` copy only when that copy is an unchanged start of it. One
+continued in both is reported and left alone.
+
+The script leaves these behind and names each one: a session open in ags
+(close it, then rerun), an encrypted session (its vault needs its password and
+links into the profile), a feature worktree whose base is not copied, and
+Codex threads (`cs` has no Codex engine; resume one with
+`CODEX_HOME=~/.local/share/agent-sessions/home/.codex codex resume <id>`).
+A linked session whose directory lives inside the profile, such as a worktree
+under `work/` or a feature of an adopted base, stays where it is and is left
+unchanged; keep the profile while `cs` uses it. Anything left behind makes the run exit 1.
+Paths come from `HOME` and the options, never from `CS_*` variables, which name
+the profile inside an ags session.
+
 ## Remaining compatibility decisions
 
 - The primary executable is now `ags`; `cs` remains as a compatibility alias.
