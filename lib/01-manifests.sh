@@ -123,11 +123,14 @@ _strip_hook_registration() {
     '
 }
 
-# Ctrl+X R and Ctrl+X W: the two Claude Code keybindings cs offers to add,
-# each a "command:<name>" action, which submits /<name>. install.sh asks once
-# per machine and binds them, cs -uninstall takes back only the keys that
-# still hold these values, and cs -doctor reports them.
-CS_ROTATE_WRAP_KEYS='{"ctrl+x r":"command:rotate","ctrl+x w":"command:wrap"}'
+# The Claude Code keybindings cs offers to add. Ctrl+X R and Ctrl+X W are
+# "command:<name>" actions, which submit /<name>. Ctrl+X 1 and Ctrl+X 2 are
+# the engine actions the cs mod's band Buttons answer to, so they press the
+# band's rotate (or /clear) and wrap keys (KEEP IN SYNC with ROTATE_ACTION
+# and WRAP_ACTION in mods/cs/hooks/register.tsx). install.sh asks once per
+# machine and binds them, cs -uninstall takes back only the keys that still
+# hold these values, and cs -doctor reports them.
+CS_ROTATE_WRAP_KEYS='{"ctrl+x r":"command:rotate","ctrl+x w":"command:wrap","ctrl+x 1":"strip:jump1","ctrl+x 2":"strip:jump2"}'
 
 # Option+1 and Option+2 on the same two commands, as cs 2026.10.6 bound them.
 # iTerm2 selects panes with Option+number, so there they never reach Claude

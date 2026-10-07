@@ -410,7 +410,7 @@ adopt_worktrees() {  # [--dry-run]
     [ "$dry_run" = 1 ] || echo -e "${DIM}$adopted adopted; open one with: cs $repo_name.<worktree>${NC}"
 }
 
-# Take back the Ctrl+X R / Ctrl+X W bindings the installer added, and the
+# Take back the Ctrl+X bindings the installer added, and the
 # Option+1 / Option+2 ones an earlier cs added, only where a key still holds
 # cs's value: a key bound to anything else is the user's. A Global block left
 # empty by that goes, and so does a file left as exactly {"bindings":[]},

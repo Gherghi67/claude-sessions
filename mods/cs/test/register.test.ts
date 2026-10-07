@@ -170,22 +170,77 @@ test('a quoted claude_session_id in state still names the lead', async () => {
   expect(findButton(await band())).toBeDefined()
 })
 
-test('at the threshold the band adds the rotate key on hotkey 1, first, beneath what was drawn', async () => {
+test('at the threshold the band adds the rotate key on the strip:jump1 action, first, beneath what was drawn', async () => {
   percent = 40
   const tree = await band()
   expect(tree).not.toBe(DRAWN)
   expect(buttons(tree)).toHaveLength(2)
   const button = findButton(tree)
-  expect(button.props.hotkey).toBe('1')
+  expect(button.props.action).toBe('strip:jump1')
+  // No bare digit: a hotkey fires from an empty composer, where a digit typed
+  // as an answer to a numbered question belongs (measured live).
+  expect(button.props.hotkey).toBeUndefined()
   expect(button.props.plain).toBe(true)
-  // The engine draws the hotkey itself, as "1: label", and it draws that
-  // prefix even for an empty label (measured live), so the wording stays on
-  // the button rather than being spelled beside it.
   expect(button.props.label).toBe('rotate this conversation')
   const json1 = JSON.stringify(tree)
   expect(json1).toContain('"Survey"')
-  expect(json1).not.toContain('"children":["1"]')
   expect(json1).not.toContain('borderStyle')
+})
+
+// The engine draws a Button with no hotkey as its label alone, so the band
+// spells the key itself: the chord the person's keybindings.json gives the
+// Button's action, as written there, and nothing when no chord presses it.
+const KEYS = '/home/.claude/keybindings.json'
+const bindKeys = (bindings: Record<string, string | null>, context = 'Global') => {
+  files[KEYS] = JSON.stringify({ bindings: [{ context, bindings }] })
+}
+const words = (tree: any): string[] => texts(tree).map(textOf)
+
+test('the band spells the chord keybindings.json binds to each Button\'s action', async () => {
+  envVars.HOME = '/home'
+  bindKeys({ 'ctrl+x 1': 'strip:jump1', 'ctrl+x 2': 'strip:jump2', 'ctrl+x r': 'command:rotate' })
+  percent = 40
+  expect(words(await band())).toEqual(expect.arrayContaining(['ctrl+x 1', 'ctrl+x 2']))
+  arm()
+  expect(words(await band())).toEqual(expect.arrayContaining(['ctrl+x 1']))
+  expect(words(await band())).not.toContain('ctrl+x 2')
+})
+
+test('a chord bound elsewhere is spelled as the person wrote it', async () => {
+  envVars.HOME = '/home'
+  bindKeys({ 'Ctrl+K 9': 'strip:jump1' })
+  percent = 40
+  const drawn = words(await band())
+  expect(drawn).toContain('Ctrl+K 9')
+  expect(drawn.join(' ')).not.toContain('ctrl+x')
+})
+
+test('with no chord bound the band draws no key, and the Buttons stay', async () => {
+  envVars.HOME = '/home'
+  percent = 40
+  const cases: (() => void)[] = [
+    () => { delete files[KEYS] },
+    () => { files[KEYS] = '{ not json' },
+    () => { files[KEYS] = '[]' },
+    () => bindKeys({ 'ctrl+x 1': null, 'ctrl+x 2': 'command:wrap' }),
+    () => bindKeys({ 'ctrl+x 1': 'strip:jump1' }, 'Transcript'),
+  ]
+  for (const arrange of cases) {
+    arrange()
+    const tree = await band()
+    expect(buttons(tree)).toHaveLength(2)
+    expect(words(tree).join(' ')).not.toContain('+')
+  }
+})
+
+test('CLAUDE_CONFIG_DIR names the keybindings.json the band reads, as it does for Claude Code', async () => {
+  envVars.HOME = '/home'
+  envVars.CLAUDE_CONFIG_DIR = '/cfg'
+  bindKeys({ 'ctrl+x 1': 'strip:jump1' })
+  percent = 40
+  expect(words(await band()).join(' ')).not.toContain('ctrl+x 1')
+  files['/cfg/keybindings.json'] = files[KEYS]
+  expect(words(await band())).toContain('ctrl+x 1')
 })
 
 test('the band draws no context gauge: the status bar already carries it', async () => {
@@ -208,9 +263,11 @@ test('the band sits a line clear of what is above it, on the bar\'s capsule surf
 
 test('without a measured terminal background the band keeps the spacing and paints no surface', async () => {
   percent = 40
-  const tree = JSON.stringify(await band())
-  expect(tree).toContain('"marginTop":1')
-  expect(tree).not.toContain('backgroundColor')
+  const tree = await band()
+  expect(JSON.stringify(tree)).toContain('"marginTop":1')
+  // the body has no surface to paint; the chip's session colour needs no measurement
+  expect(boxes(tree).find((b: any) => b.props.key === 'cs-rotate-band-body').props.backgroundColor).toBeUndefined()
+  expect(chip(tree).props.backgroundColor).toBe('rgb(220,38,38)')
 })
 
 // KEEP IN SYNC with _bg_shade in bin/cs-statusline (tests/test_mod_rotate.sh
@@ -226,8 +283,8 @@ test('the surface is the shade the status bar shades the terminal background to'
 })
 
 // A bare line: no box to draw, so no border to light up under the pointer and
-// no mark in front of the keys. The key stays: it is the band's identity.
-test('the capsule is a keyed box with no border, no hover and no mark', async () => {
+// no Claude mark in front of the keys. The key stays: it is the band's identity.
+test('the capsule is a keyed box with no border, no hover and no Claude mark', async () => {
   percent = 40
   const tree = JSON.stringify(await band())
   expect(tree).toContain('"key":"cs-rotate-band"')
@@ -236,6 +293,103 @@ test('the capsule is a keyed box with no border, no hover and no mark', async ()
   expect(tree).not.toContain('hover')
   expect(tree).not.toContain('\u2733')
   expect(tree).not.toContain('"claude"')
+})
+
+// The band is the status bar's twin: a `cs` chip on the session's own colour
+// leads the capsule, as the session name leads the bar, and the keys are
+// spelled bold in that colour on the bar's surface. Armed, the chip turns
+// Claude coral, the bar's brand ink, so the armed /clear reads apart; the body
+// keeps the surface so the count's ramp keeps its contrast.
+const boxes = (tree: any): any[] => {
+  if (!tree || typeof tree !== 'object') return []
+  const own = tree.type === 'Box' ? [tree] : []
+  return [...own, ...(tree.children ?? []).flatMap(boxes)]
+}
+const chip = (tree: any) => boxes(tree).find((b: any) => (b.children ?? []).some((c: any) => c?.type === 'Text' && textOf(c) === 'cs'))
+const chipText = (tree: any) => texts(chip(tree)).find((t: any) => textOf(t) === 'cs')
+
+test('a cs chip on the session colour leads the band, the keys bold in that colour', async () => {
+  envVars.HOME = '/home'
+  envVars.CS_TERM_BG_RGB = '252;247;229'
+  bindKeys({ 'ctrl+x 1': 'strip:jump1', 'ctrl+x 2': 'strip:jump2' })
+  percent = 40
+  const tree = await band()
+  expect(chip(tree).props.backgroundColor).toBe('rgb(220,38,38)')
+  expect(chipText(tree).props.bold).toBe(true)
+  expect(chipText(tree).props.color).toBe('rgb(255,255,255)')
+  const key = texts(tree).find((t: any) => textOf(t) === 'ctrl+x 1')
+  expect(key.props.bold).toBe(true)
+  expect(key.props.color).toBe('rgb(220,38,38)')
+  // the chip comes before every key and Button
+  const order = JSON.stringify(tree)
+  expect(order.indexOf('"cs"')).toBeLessThan(order.indexOf('strip:jump1'))
+  expect(order.indexOf('"cs"')).toBeLessThan(order.indexOf('ctrl+x 1'))
+})
+
+test('the chip\'s white softens on a dark terminal, as the bar\'s does', async () => {
+  envVars.CS_TERM_THEME = 'dark'
+  percent = 40
+  expect(chipText(await band()).props.color).toBe('rgb(230,230,230)')
+})
+
+test('a session with no colour in the palette gets the chip on the surface, in the terminal\'s own ink', async () => {
+  envVars.CS_TERM_BG_RGB = '252;247;229'
+  files['/work/.cs/local/state'] = 'claude_session_id: uuid-lead\n'
+  percent = 40
+  const tree = await band()
+  expect(chip(tree).props.backgroundColor).toBe('rgb(226,222,206)')
+  expect(chipText(tree).props.color).toBeUndefined()
+  expect(chipText(tree).props.bold).toBe(true)
+})
+
+test('an armed handoff turns the chip Claude coral and keeps the body on the surface', async () => {
+  envVars.CS_TERM_BG_RGB = '252;247;229'
+  arm(); percent = 90
+  const tree = await band()
+  expect(chip(tree).props.backgroundColor).toBe('rgb(217,119,87)')
+  expect(chipText(tree).props.color).toBe('rgb(255,255,255)')
+  expect(boxes(tree).find((b: any) => b.props.key === 'cs-rotate-band-body').props.backgroundColor).toBe('rgb(226,222,206)')
+})
+
+// The rounded ends are the bar's Powerline caps, U+E0B6 and U+E0B4, drawn in
+// the fill they close on the terminal's own background. They wait on the
+// same consent the bar's do: CS_STATUSLINE_CAPS=1/0, else the per-machine
+// answer file holding `on`. Without a measured background there is no fill
+// to close, so no caps either.
+const CAP_L = ''
+const CAP_R = ''
+const CAPS_FILE = '/home/.config/cs/statusline-caps'
+const caps = async () => {
+  const drawn = texts(await band())
+  return [drawn.find((t: any) => textOf(t) === CAP_L)?.props.color, drawn.find((t: any) => textOf(t) === CAP_R)?.props.color]
+}
+
+test('the band draws the bar\'s rounded caps in the fills they close, where the bar would', async () => {
+  envVars.HOME = '/home'
+  envVars.CS_TERM_BG_RGB = '252;247;229'
+  percent = 40
+  envVars.CS_STATUSLINE_CAPS = '1'
+  expect(await caps()).toEqual(['rgb(220,38,38)', 'rgb(226,222,206)'])
+  envVars.CS_STATUSLINE_CAPS = '0'
+  files[CAPS_FILE] = 'on\n'
+  expect(await caps()).toEqual([undefined, undefined])
+  delete envVars.CS_STATUSLINE_CAPS
+  expect(await caps()).toEqual(['rgb(220,38,38)', 'rgb(226,222,206)'])
+  envVars.XDG_CONFIG_HOME = '/xdg'
+  expect(await caps()).toEqual([undefined, undefined])
+  files['/xdg/cs/statusline-caps'] = 'on\n'
+  expect(await caps()).toEqual(['rgb(220,38,38)', 'rgb(226,222,206)'])
+  files['/xdg/cs/statusline-caps'] = 'off\n'
+  expect(await caps()).toEqual([undefined, undefined])
+  arm()
+  files['/xdg/cs/statusline-caps'] = 'on\n'
+  expect(await caps()).toEqual(['rgb(217,119,87)', 'rgb(226,222,206)'])
+})
+
+test('without a measured background the band draws no caps, whatever the consent', async () => {
+  envVars.CS_STATUSLINE_CAPS = '1'
+  percent = 40
+  expect(await caps()).toEqual([undefined, undefined])
 })
 
 test('while a turn runs the button is hidden', async () => {
@@ -298,7 +452,8 @@ test('an armed handoff turns the button into the clear button, whatever the cont
     const tree = await band()
     expect(buttons(tree)).toHaveLength(1)
     const button = findButton(tree)
-    expect(button.props.hotkey).toBe('1')
+    expect(button.props.action).toBe('strip:jump1')
+    expect(button.props.hotkey).toBeUndefined()
     expect(button.props.plain).toBe(true)
     expect(findButton(tree).props.label).toBe('/clear and continue from the handoff')
     const json = JSON.stringify(tree)
@@ -811,16 +966,17 @@ test('a typed /clear that the engine refuses leaves no birth behind either', asy
   expect(toasts).toEqual([])
 })
 
-// The wrap key: a second button on hotkey 2 that runs /wrap. It draws only
-// where the band draws unarmed; once a handoff is armed the band's one job is
-// the /clear.
-const wrapButton = (tree: any) => buttons(tree).find((b: any) => b.props.hotkey === '2')
-test('at the threshold the band adds a second button on hotkey 2 that reads as the wrap key, after the rotate key', async () => {
+// The wrap key: a second button on the strip:jump2 action that runs /wrap. It
+// draws only where the band draws unarmed; once a handoff is armed the band's
+// one job is the /clear.
+const wrapButton = (tree: any) => buttons(tree).find((b: any) => b.props.action === 'strip:jump2')
+test('at the threshold the band adds a second button on strip:jump2 that reads as the wrap key, after the rotate key', async () => {
   percent = 40
   const tree = await band()
   expect(buttons(tree)).toHaveLength(2)
-  expect(buttons(tree)[0].props.hotkey).toBe('1')
+  expect(buttons(tree)[0].props.action).toBe('strip:jump1')
   const button = wrapButton(tree)
+  expect(button.props.hotkey).toBeUndefined()
   expect(button.props.plain).toBe(true)
   expect(wrapButton(tree).props.label).toBe('wrap up this session')
 })
@@ -871,7 +1027,7 @@ test('a finished wrap hides the wrap key until a turn starts from a prompt', asy
   await turnStart('please wrap up')
   files[WRAPPED] = 'uuid-lead\n'
   expect(wrapButton(await band())).toBeUndefined()
-  expect(findButton(await band()).props.hotkey).toBe('1')
+  expect(findButton(await band()).props.action).toBe('strip:jump1')
 
   await turnStart('')
   expect(wrapButton(await band())).toBeUndefined()

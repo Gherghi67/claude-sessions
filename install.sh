@@ -216,11 +216,14 @@ _strip_hook_registration() {
     '
 }
 
-# Ctrl+X R and Ctrl+X W: the two Claude Code keybindings cs offers to add,
-# each a "command:<name>" action, which submits /<name>. install.sh asks once
-# per machine and binds them, cs -uninstall takes back only the keys that
-# still hold these values, and cs -doctor reports them.
-CS_ROTATE_WRAP_KEYS='{"ctrl+x r":"command:rotate","ctrl+x w":"command:wrap"}'
+# The Claude Code keybindings cs offers to add. Ctrl+X R and Ctrl+X W are
+# "command:<name>" actions, which submit /<name>. Ctrl+X 1 and Ctrl+X 2 are
+# the engine actions the cs mod's band Buttons answer to, so they press the
+# band's rotate (or /clear) and wrap keys (KEEP IN SYNC with ROTATE_ACTION
+# and WRAP_ACTION in mods/cs/hooks/register.tsx). install.sh asks once per
+# machine and binds them, cs -uninstall takes back only the keys that still
+# hold these values, and cs -doctor reports them.
+CS_ROTATE_WRAP_KEYS='{"ctrl+x r":"command:rotate","ctrl+x w":"command:wrap","ctrl+x 1":"strip:jump1","ctrl+x 2":"strip:jump2"}'
 
 # Option+1 and Option+2 on the same two commands, as cs 2026.10.6 bound them.
 # iTerm2 selects panes with Option+number, so there they never reach Claude
@@ -1048,14 +1051,15 @@ else
     # Global block, or a Global block of their own, creating the file when
     # there is none. A key bound to anything else, in any context, is the
     # user's and is reported, never replaced; so is a bare key a chord would
-    # shadow. With no conflict, cs's own Option+1 / Option+2 bindings make
-    # way for the chords; a conflict on either chord keeps both, so the
-    # command whose chord is taken keeps a key. A file of a shape cs cannot read is refused before anything
+    # shadow. cs's own Option+1 / Option+2 bindings stood for /rotate and
+    # /wrap, so they make way unless Ctrl+X R or Ctrl+X W conflicts: then
+    # both stay, so the command whose chord is taken keeps a key. A conflict
+    # on a band chord leaves both commands their chords and keeps nothing. A file of a shape cs cannot read is refused before anything
     # is written. The write is cs_write_atomic's, from the hooks' shared
     # library deployed above: mode kept, and a symlinked file (a dotfiles
     # manager's) rewritten through its link.
     _bind_rotate_wrap_keys() {
-        local file doc status state key action prefix added="" conflicts=0 retired="" add
+        local file doc status state key action prefix added="" command_conflicts=0 retired="" add
         file="$(_cs_keybindings_file)"
         if [ -e "$file" ]; then
             if ! _cs_keybindings_shape_ok "$file"; then
@@ -1071,7 +1075,9 @@ else
         while IFS=$'\t' read -r state key action prefix; do
             case "$state" in
                 conflict)
-                    conflicts=$((conflicts + 1))
+                    case "$key" in
+                        "ctrl+x r"|"ctrl+x w") command_conflicts=$((command_conflicts + 1)) ;;
+                    esac
                     if [ -n "$prefix" ]; then
                         warn "Rotate/wrap keys: $key would shadow $prefix, which is bound to $action in $file; left unbound."
                     else
@@ -1083,7 +1089,7 @@ else
                     ;;
             esac
         done <<< "$status"
-        if [ "$conflicts" = 0 ]; then
+        if [ "$command_conflicts" = 0 ]; then
             retired=$(printf '%s\n' "$doc" | _cs_keybindings_held "$CS_RETIRED_OPTION_KEYS") \
                 || { warn "Rotate/wrap keys: could not read the bindings in $file"; return 1; }
             if [ -n "$retired" ]; then
@@ -1119,8 +1125,8 @@ else
         fi
     }
 
-    # Ctrl+X R runs /rotate and Ctrl+X W runs /wrap, through Claude Code's own
-    # keybindings.json. Keys are the user's keyboard, so they are offered once
+    # Ctrl+X R runs /rotate, Ctrl+X W runs /wrap, and Ctrl+X 1 / Ctrl+X 2 press
+    # the cs band's keys, through Claude Code's own keybindings.json. Keys are the user's keyboard, so they are offered once
     # per machine and the answer is recorded: a yes is honoured on every
     # install (keys already bound are left as they are), a no is never asked
     # again, and with no terminal nothing is written or recorded. Every step
@@ -1139,7 +1145,7 @@ else
                 # one key, so an Enter typed after one of them is still queued
                 # and would answer this one. EOF leaves it unanswered.
                 while :; do
-                    echo -en "   Bind Ctrl+X R to /rotate and Ctrl+X W to /wrap in Claude Code? [y/n] "
+                    echo -en "   Bind Ctrl+X R to /rotate, Ctrl+X W to /wrap and Ctrl+X 1/2 to the cs band in Claude Code? [y/n] "
                     if ! read -n 1 -r; then echo ""; break; fi
                     echo ""
                     case "$REPLY" in
@@ -1156,7 +1162,7 @@ else
                     info "Rotate/wrap keys: not bound. You won't be asked again; to change that, remove $_rotate_wrap_keys_answer_file and run cs -update."
                 fi
             else
-                info "Rotate/wrap keys: not bound. To bind Ctrl+X R to /rotate and Ctrl+X W to /wrap, run cs -update in a terminal."
+                info "Rotate/wrap keys: not bound. To bind Ctrl+X R to /rotate, Ctrl+X W to /wrap and Ctrl+X 1/2 to the cs band, run cs -update in a terminal."
             fi
             ;;
     esac

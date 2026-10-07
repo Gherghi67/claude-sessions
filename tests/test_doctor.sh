@@ -655,7 +655,7 @@ test_doctor_statusline_caps_row_names_the_answer_or_the_ask() {
     assert_output_contains "$output" "caps: rounded" "answered on: doctor says rounded" || return 1
 }
 
-# One row for the Ctrl+X R / Ctrl+X W bindings: the installer's recorded answer
+# One row for cs's Ctrl+X bindings: the installer's recorded answer
 # and what keybindings.json holds. A healthy state is OK; a binding the user
 # holds on cs's key or on its ctrl+x prefix, keys an older cs bound that the
 # next update replaces, or a file Claude Code cannot read, is a WARN.
@@ -674,10 +674,15 @@ test_doctor_rotate_wrap_keys_row_names_the_state() {
     assert_output_contains "$output" "OK.*Rotate/wrap keys: declined" "answered no: declined" || return 1
 
     printf 'yes\n' > "$xdg/cs/option-keys"
+    printf '%s\n' '{"bindings":[{"context":"Global","bindings":{"ctrl+x r":"command:rotate","ctrl+x w":"command:wrap","ctrl+x 1":"strip:jump1","ctrl+x 2":"strip:jump2"}}]}' > "$kb"
+    output=$(_ok_doctor)
+    assert_output_contains "$output" "OK.*Rotate/wrap keys: bound (Ctrl+X R runs /rotate, Ctrl+X W runs /wrap, Ctrl+X 1 and Ctrl+X 2 press the cs band)" \
+        "every key holds cs's values: bound" || return 1
+
     printf '%s\n' '{"bindings":[{"context":"Global","bindings":{"ctrl+x r":"command:rotate","ctrl+x w":"command:wrap"}}]}' > "$kb"
     output=$(_ok_doctor)
-    assert_output_contains "$output" "OK.*Rotate/wrap keys: bound (Ctrl+X R runs /rotate, Ctrl+X W runs /wrap)" \
-        "both keys hold cs's values: bound" || return 1
+    assert_output_contains "$output" "WARN.*Rotate/wrap keys: ctrl+x 1 not bound (run cs -update to bind it)" \
+        "the chords an earlier cs bound, without the band's: the next update binds them" || return 1
 
     printf '%s\n' '{"bindings":[{"context":"Chat","bindings":{"ctrl+x r":"chat:submit"}},{"context":"Global","bindings":{"ctrl+x w":"command:wrap"}}]}' > "$kb"
     output=$(_ok_doctor)
@@ -694,7 +699,7 @@ test_doctor_rotate_wrap_keys_row_names_the_state() {
     assert_output_contains "$output" "WARN.*Rotate/wrap keys: conflict on ctrl+x r (ctrl+x is bound to \"\" in $kb)" \
         "an empty action on the prefix is named as JSON" || return 1
 
-    printf '%s\n' '{"bindings":[{"context":"Global","bindings":{"ctrl+x r":"command:rotate","ctrl+x w":"command:wrap","alt+1":"command:rotate","alt+2":"command:wrap"}}]}' > "$kb"
+    printf '%s\n' '{"bindings":[{"context":"Global","bindings":{"ctrl+x r":"command:rotate","ctrl+x w":"command:wrap","ctrl+x 1":"strip:jump1","ctrl+x 2":"strip:jump2","alt+1":"command:rotate","alt+2":"command:wrap"}}]}' > "$kb"
     output=$(_ok_doctor)
     assert_output_contains "$output" "WARN.*Rotate/wrap keys: alt+1, alt+2 still hold cs's earlier bindings in $kb (run cs -update to remove them)" \
         "chords bound beside cs's alt keys: the alt keys are named" || return 1
@@ -703,6 +708,13 @@ test_doctor_rotate_wrap_keys_row_names_the_state() {
     output=$(_ok_doctor)
     assert_output_contains "$output" "WARN.*Rotate/wrap keys: ctrl+x r not bound (run cs -update to bind it)" \
         "an older cs's alt+1/alt+2: the next update binds the chords" || return 1
+
+    printf '%s\n' '{"bindings":[{"context":"Chat","bindings":{"ctrl+x 1":"app:redraw"}},{"context":"Global","bindings":{"ctrl+x r":"command:rotate","ctrl+x w":"command:wrap","ctrl+x 2":"strip:jump2","alt+1":"command:rotate","alt+2":"command:wrap"}}]}' > "$kb"
+    output=$(_ok_doctor)
+    assert_output_contains "$output" "WARN.*Rotate/wrap keys: conflict on ctrl+x 1 (bound to app:redraw in $kb)" \
+        "a user binding on a band chord: conflict" || return 1
+    assert_output_contains "$output" "WARN.*Rotate/wrap keys: alt+1, alt+2 still hold cs's earlier bindings in $kb (run cs -update to remove them)" \
+        "with Ctrl+X R and W bound, cs's alt keys are named even beside a band-chord conflict" || return 1
 
     printf '%s\n' '{"bindings": [' > "$kb"
     output=$(_ok_doctor)
