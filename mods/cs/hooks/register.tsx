@@ -58,6 +58,16 @@ export const CRIT_AT = 5
 // The pane's bar: one block per second of the grace.
 export const BAR_FULL = '\u2588'
 export const BAR_EMPTY = '\u2591'
+// The band's chip and caps, in the bar's inks. KEEP IN SYNC with _sgr in
+// bin/ags-statusline (tests/test_mod_rotate.sh pins them): brand is the Claude
+// coral the bar's mark wears, and white the chip's ink on a filled chip, softer
+// on a dark terminal as the bar's is.
+export const BRAND = '217,119,87'
+export const WHITE_LIGHT = '255,255,255'
+export const WHITE_DARK = '230,230,230'
+// The bar's rounded capsule ends, Powerline glyphs drawn in the fill they close.
+export const CAP_LEFT = '\ue0b6'
+export const CAP_RIGHT = '\ue0b4'
 
 // The colour the count wears with `left` seconds to go: the session's own
 // colour while there is time (none, so the surrounding ink, when the session
@@ -349,33 +359,58 @@ export function register(on: On) {
     // An armed handoff with a switch pending leaves by /exit, never /clear.
     const target = armed ? await pendingSwitch($) : undefined
     const fill = surfaceColor(await $.env.get("CS_TERM_BG_RGB"))
+    const chords = await boundChords($)
+    const own = paletteColor(await sessionColor($))
+    // The chip is the band's identity, as the session name is the bar's: on
+    // the session colour, Claude coral once a handoff is armed so the /clear
+    // reads apart, and on the surface in the terminal's own ink for a session
+    // with no colour. The body keeps the surface either way, where the count's
+    // ramp keeps its contrast.
+    const chipFill = armed ? `rgb(${BRAND})` : own ?? fill
+    const chipInk = chipFill === fill
+      ? undefined
+      : `rgb(${(await $.env.get("CS_TERM_THEME")) === 'dark' ? WHITE_DARK : WHITE_LIGHT})`
+    // Caps close a fill on the terminal's own background, so they need both a
+    // fill and this machine's consent to the glyph.
+    const caps = fill !== undefined && chipFill !== undefined && (await capsWanted($))
     const { Box, Text, Button } = await $.ui.resolve(e)
-    // One capsule in the status bar's idiom: the keys on the bar's own fill,
-    // a blank line above them so the band reads apart from the transcript.
-    // The context percentage is the bar's to carry; the band does not repeat
-    // it. The keyed box lights coral under the pointer; the engine restyles it
-    // without running the hook.
+    // The Buttons carry no hotkey: a bare digit pressed them from an empty
+    // composer, where a digit typed as the answer to a numbered question
+    // belongs. A chord bound to each Button's action presses it instead, and
+    // the engine draws a Button with no hotkey as its label alone, so the key
+    // is spelled beside it, and only when keybindings.json binds one.
+    const key = (action: string) => chords[action] !== undefined &&
+      <Box marginRight={1}><Text bold color={own}>{chords[action]}</Text></Box>
+    // One capsule in the status bar's idiom: the cs chip, then the keys on the
+    // bar's own fill, a blank line above them so the band reads apart from the
+    // transcript. The context percentage is the bar's to carry; the band does
+    // not repeat it. The keyed box lights coral under the pointer; the engine
+    // restyles it without running the hook. It starts two columns in, where
+    // Claude Code draws the bar and the mode line under the prompt.
     return (
       <Box flexDirection="column">
         {drawn}
         <Box marginTop={1}>
-          <Box key="cs-rotate-band" paddingX={1} backgroundColor={fill}>
-            {/* The engine draws a plain button as "1: label", and it draws
-                that prefix whether or not the label is empty (measured live:
-                a hand-drawn digit beside an empty-label button prints the
-                hotkey twice), so the label stays on the button. */}
+          <Box key="cs-rotate-band" marginLeft={2}>
+            {caps && <Text color={chipFill}>{CAP_LEFT}</Text>}
+            <Box paddingX={1} backgroundColor={chipFill}><Text bold color={chipInk}>ags</Text></Box>
+            <Box key="cs-rotate-band-body" paddingX={1} backgroundColor={fill}>
+            {key(ROTATE_ACTION)}
             {armed
-              ? <Button key="cs-rotate" hotkey="1" plain
+              ? <Button key="cs-rotate" action={ROTATE_ACTION} plain
                         label={target === undefined ? '/clear and continue from the handoff' : `/exit and continue in ${target}`}
                         onPress={() => (target === undefined ? clearAndContinue($) : exitAndContinue($))} />
-              : <Button key="cs-rotate" hotkey="1" plain label="rotate this conversation"
+              : <Button key="cs-rotate" action={ROTATE_ACTION} plain label="rotate this conversation"
                         onPress={() => rotate($)} />}
             {/* a Button is a block: nested in a Text the engine refuses the whole tree (measured), so the separator stands beside it */}
             {!armed && !wrapped && <Text dimColor>{'  \u00b7  '}</Text>}
-            {!armed && !wrapped && <Button key="cs-wrap" hotkey="2" plain label="wrap up this session" onPress={() => askToWrap($)} />}
+            {!armed && !wrapped && key(WRAP_ACTION)}
+            {!armed && !wrapped && <Button key="cs-wrap" action={WRAP_ACTION} plain label="wrap up this session" onPress={() => askToWrap($)} />}
             {/* the forced rotation's grace: the seconds left before the mod runs the /clear (or the switch's /exit) itself */}
             {armed && left !== undefined && <Text dimColor>{'  \u00b7  '}</Text>}
             {armed && left !== undefined && <Text bold color={await rampColor($, left)}>{`${countVerb(target)} in ${left}s`}</Text>}
+            </Box>
+            {caps && <Text color={fill}>{CAP_RIGHT}</Text>}
           </Box>
         </Box>
       </Box>
@@ -693,6 +728,52 @@ async function rampColor($: EngineInterface, secs: number): Promise<string | und
 async function sessionColor($: EngineInterface): Promise<string | undefined> {
   const state = await readState($)
   return state?.match(/^claude_session_color: *"?([^"\s]+)"?[ \t]*$/m)?.[1]
+}
+
+// Whether this machine has said its font has the bar's cap glyphs: the
+// statusline's own rule (_caps_wanted in bin/ags-statusline, KEEP IN SYNC).
+// CS_STATUSLINE_CAPS=1 or 0 decides; otherwise the per-machine answer file
+// holding `on`. Unanswered, or unreadable, means square ends.
+async function capsWanted($: EngineInterface): Promise<boolean> {
+  const forced = await $.env.get("CS_STATUSLINE_CAPS")
+  if (forced === '1') return true
+  if (forced === '0') return false
+  const config = (await $.env.get("XDG_CONFIG_HOME")) || `${await $.env.get("HOME")}/.config`
+  try {
+    return (await $.fs.read(`${config}/cs/statusline-caps`)).split('\n')[0] === 'on'
+  } catch {
+    return false // no answer file: unanswered
+  }
+}
+
+// The engine actions the band's Buttons answer to. They carry no default
+// chord and no engine handler is mounted for them (measured on 2.1.291 and
+// 2.1.292), so the chord a person binds to one presses the Button. KEEP IN
+// SYNC with CS_ROTATE_WRAP_KEYS in lib/01-manifests.sh, which binds them.
+export const ROTATE_ACTION = 'strip:jump1'
+export const WRAP_ACTION = 'strip:jump2'
+
+// The chord keybindings.json binds to each action in the Global context, as
+// the person wrote it. Claude Code reads that file from CLAUDE_CONFIG_DIR, else
+// ~/.claude; an encrypted session's config dir holds a link to the shell's
+// file, so this reads the file Claude Code reads. An unreadable or malformed
+// file, or a key unbound with null, binds nothing.
+async function boundChords($: EngineInterface): Promise<Record<string, string>> {
+  const dir = (await $.env.get("CLAUDE_CONFIG_DIR")) || `${await $.env.get("HOME")}/.claude`
+  let doc: any
+  try {
+    doc = JSON.parse(await $.fs.read(`${dir}/keybindings.json`))
+  } catch {
+    return {} // no file, or not JSON: no chord to spell
+  }
+  const chords: Record<string, string> = {}
+  for (const block of Array.isArray(doc?.bindings) ? doc.bindings : []) {
+    if (block?.context !== 'Global' || typeof block.bindings !== 'object' || block.bindings === null) continue
+    for (const [chord, action] of Object.entries(block.bindings)) {
+      if (typeof action === 'string' && chords[action] === undefined) chords[action] = chord
+    }
+  }
+  return chords
 }
 
 async function readState($: EngineInterface): Promise<string | undefined> {

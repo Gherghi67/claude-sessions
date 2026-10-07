@@ -301,7 +301,7 @@ vault is locked: tell the user to mount it and stop.
 11. End your response with the instruction and nothing after it, on its own
    final line, exactly:
 
-   **Run `/clear` now** (or press `1` on the capsule above the prompt) — this conversation is ready to rotate.
+   **Run `/clear` now** (or press the capsule above the prompt, or Ctrl+X 1 if you bound it) — this conversation is ready to rotate.
 
    Under Codex the line is, exactly:
 
@@ -310,7 +310,7 @@ vault is locked: tell the user to mount it and stop.
    This is the one step you cannot take for the user. A hook cannot submit
    to Claude Code's command queue (it accepts the TUI's own input only); the
    `ags` mod's button can, and once the marker is armed it reads
-   `1: /clear and continue from the handoff`. Forced rotation is on by
+   `/clear and continue from the handoff`. Forced rotation is on by
    default (at 80% context), and while it is on, the mod counts twenty
    seconds down once this turn ends with the handoff armed and runs the
    `/clear` itself, whether or not the rotation was forced. Only

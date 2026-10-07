@@ -137,8 +137,8 @@ vault is committed. `ags -switch` keeps its record there too,
      (Claude's launch prompt, Codex's starting prompt), so there is nothing
      to type, not even `go`.
    - Under Claude (`engine: claude`), the `ags` mod counts twenty seconds
-     down once this turn ends and runs `/exit` itself; its key reads
-     `1: /exit and continue in codex`. A prompt they send stops the count
+     down once this turn ends and runs `/exit` itself; its key on the capsule
+     reads `/exit and continue in codex` (Ctrl+X 1, if they bound it). A prompt they send stops the count
      (it starts again when that turn ends) and keeps this conversation; the
      switch stays pending for a later exit. Launched with
      `CS_ROTATE_FORCE_CTX=off` (or `0`), there is no countdown: the key or a
@@ -160,7 +160,7 @@ vault is committed. `ags -switch` keeps its record there too,
 5. End your response with the instruction and nothing after it, on its own
    final line, exactly. Under Claude the line is:
 
-   **Run `/exit` now** (or press `1` on the capsule above the prompt) — ags reopens this session under Codex.
+   **Run `/exit` now** (or press the capsule above the prompt, or Ctrl+X 1 if you bound it) — ags reopens this session under Codex.
 
    Under Codex the line is, exactly:
 

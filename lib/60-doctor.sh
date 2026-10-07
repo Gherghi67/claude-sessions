@@ -525,51 +525,75 @@ _doctor_check_statusline() {
     esac
 }
 
-# The Option+1 / Option+2 bindings the installer offers: the answer this
+# The Ctrl+X bindings the installer offers: the answer this
 # machine gave, and whether keybindings.json still holds ags's keys. Not asked
-# and declined are healthy; a key the user binds to something else, a yes whose
-# keys are gone, and a file Claude Code cannot read either are warnings.
-_doctor_check_option_keys() {
-    local file answer_file answer status state key action bound=0 total=0
+# and declined are healthy; a key the user binds to something else (or a bare
+# ctrl+x a chord would shadow), a yes whose keys are gone or are still an
+# earlier cs's Option+1 / Option+2, and a file Claude Code cannot read either
+# are warnings.
+_doctor_check_rotate_wrap_keys() {
+    local file answer_file answer status state key action prefix retired bound=0 total=0 commands_bound=0
     file="$(_cs_keybindings_file)"
-    answer_file="$(_cs_option_keys_answer_file)"
+    answer_file="$(_cs_rotate_wrap_keys_answer_file)"
     if ! command -v jq >/dev/null 2>&1; then
-        _doctor_warn "Option keys: jq not installed; $file could not be read"
+        _doctor_warn "Rotate/wrap keys: jq not installed; $file could not be read"
         return
     fi
     if [ -e "$file" ] && ! _cs_keybindings_shape_ok "$file"; then
-        _doctor_warn "Option keys: $file is unparseable (not JSON with a \"bindings\" array)"
+        _doctor_warn "Rotate/wrap keys: $file is unparseable (not JSON with a \"bindings\" array)"
         return
     fi
     if [ -e "$file" ]; then
-        status=$(_cs_option_keys_status < "$file") || status=""
+        status=$(_cs_rotate_wrap_keys_status < "$file") || status=""
     else
-        status=$(printf '{"bindings":[]}\n' | _cs_option_keys_status) || status=""
+        status=$(printf '{"bindings":[]}\n' | _cs_rotate_wrap_keys_status) || status=""
     fi
-    while IFS=$'\t' read -r state key action; do
+    while IFS=$'\t' read -r state key action prefix; do
         [ -n "$state" ] || continue
         total=$((total + 1))
         if [ "$state" = bound ]; then bound=$((bound + 1)); fi
     done <<< "$status"
     if [ "$total" -gt 0 ] && [ "$bound" = "$total" ]; then
-        _doctor_ok "Option keys: bound (Option+1 runs /rotate, Option+2 runs /wrap)"
+        retired=$(_cs_keybindings_held "$CS_RETIRED_OPTION_KEYS" < "$file") || retired=""
+        if [ -n "$retired" ]; then
+            _doctor_warn "Rotate/wrap keys: $retired still hold ags's earlier bindings in $file (run ags -update to remove them)"
+        else
+            _doctor_ok "Rotate/wrap keys: bound (Ctrl+X R runs /rotate, Ctrl+X W runs /wrap, Ctrl+X 1 and Ctrl+X 2 press the ags band)"
+        fi
         return
     fi
     answer=$(cat "$answer_file" 2>/dev/null) || answer=""
     case "$answer" in
         yes)
-            while IFS=$'\t' read -r state key action; do
+            while IFS=$'\t' read -r state key action prefix; do
+                case "$state $key" in
+                    "bound ctrl+x r"|"bound ctrl+x w") commands_bound=$((commands_bound + 1)) ;;
+                esac
                 case "$state" in
-                    conflict) _doctor_warn "Option keys: conflict on $key (bound to $action in $file)" ;;
-                    free) _doctor_warn "Option keys: $key not bound (run ags -update to bind it)" ;;
+                    conflict)
+                        if [ -n "$prefix" ]; then
+                            _doctor_warn "Rotate/wrap keys: conflict on $key ($prefix is bound to $action in $file)"
+                        else
+                            _doctor_warn "Rotate/wrap keys: conflict on $key (bound to $action in $file)"
+                        fi
+                        ;;
+                    free) _doctor_warn "Rotate/wrap keys: $key not bound (run ags -update to bind it)" ;;
                 esac
             done <<< "$status"
+            # With /rotate and /wrap on their chords, the next update takes
+            # ags's Option keys back whatever a band chord holds.
+            if [ "$commands_bound" = 2 ]; then
+                retired=$(_cs_keybindings_held "$CS_RETIRED_OPTION_KEYS" < "$file") || retired=""
+                if [ -n "$retired" ]; then
+                    _doctor_warn "Rotate/wrap keys: $retired still hold ags's earlier bindings in $file (run ags -update to remove them)"
+                fi
+            fi
             ;;
         no)
-            _doctor_ok "Option keys: declined (to be asked again, remove $answer_file and run ags -update in a terminal)"
+            _doctor_ok "Rotate/wrap keys: declined (to be asked again, remove $answer_file and run ags -update in a terminal)"
             ;;
         *)
-            _doctor_ok "Option keys: not asked (run ags -update in a terminal to be asked)"
+            _doctor_ok "Rotate/wrap keys: not asked (run ags -update in a terminal to be asked)"
             ;;
     esac
 }
@@ -851,7 +875,7 @@ run_doctor() {
     _doctor_check_claude_audit
     _doctor_check_statusline
     _doctor_check_subagent_statusline
-    _doctor_check_option_keys
+    _doctor_check_rotate_wrap_keys
     _doctor_check_iterm2
     _doctor_check_spawn
     _doctor_check_hook_authority

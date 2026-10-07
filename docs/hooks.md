@@ -310,28 +310,46 @@ Ships inside the sweep skill (`skills/sweep/scripts/`) and deploys with it, so i
 inside Claude Code's own process rather than a shell script it spawns. It adds
 one key to conversation rotation. Once the context window reaches 40% (the
 status bar's warn band, where the Stop hook gives its headroom notice), the band
-directly above the prompt draws `1: rotate this conversation`.
+directly above the prompt draws `rotate this conversation`, pressed by
+Ctrl+X 1.
 `CS_ROTATE_BUTTON_CTX=<percent>` in the shell that launches cs moves it; unset
 or not a number, the band follows the bar's own warn band
-(`CS_STATUSLINE_CTX_WARN`, 40 by default). The band is a bare line with a
-blank line above it, painted on the status bar's own capsule fill: a shade of
-the terminal background nudged a tenth away from itself, darker on a light
-terminal and lighter on a dark one, so the keys read as one more capsule of the
-bar rather than as the last row of the transcript. cs measures that background
-at launch and exports it (`CS_TERM_BG_RGB`); without the measurement the band
-keeps the spacing and paints no fill, since a guessed surface can leave the
-engine's own text unreadable on it. The percentage itself stays on the status
-bar: the band does not repeat it. Pressing `1` from an
-empty composer runs `/rotate`, as if typed: the `rotate` skill draws the
-purpose from the conversation. Beside it the band draws `2: wrap up this
-session`. That key runs `/wrap`, which distills memory, replaces
-`.cs/summary.md` and rotates the narrative: two Opus passes and a shell
-helper, minutes and real tokens, so the press asks first. `2` opens the
-engine's own AskUserQuestion dialog — `Run /wrap for this session?`, with
-`Yes, wrap up` and `Not now` — and only the yes runs it. A held key repeats,
-and each repeat re-opens the same question rather than answering it; a
-dismissed dialog, and a `-p` run with nobody to ask, run nothing and say
-nothing. A wrap that finished leaves the key nothing to do: `/wrap`'s last
+(`CS_STATUSLINE_CTX_WARN`, 40 by default). The band is one capsule in the
+status bar's idiom, with a blank line above it: a `cs` chip on the session's
+own colour (Claude coral once a handoff is armed; on the surface, in the
+terminal's ink, for a session with no colour), then the keys on the bar's own
+capsule fill, a shade of the terminal background nudged a tenth away from
+itself, darker on a light terminal and lighter on a dark one, so the band reads
+as one more capsule of the bar rather than as the last row of the transcript.
+cs measures that background at launch and exports it (`CS_TERM_BG_RGB`);
+without the measurement the band keeps the spacing and paints no fill behind
+the keys, since a guessed surface can leave the engine's own text unreadable on
+it. The bar's rounded caps close the capsule where this machine agreed to
+them, by the bar's own rule (`CS_STATUSLINE_CAPS`, else the answer in
+`~/.config/cs/statusline-caps`), and only over a measured background. The
+percentage itself stays on the status bar: the band does not repeat it.
+
+The band's keys are chords, never a bare digit: a digit typed to answer a
+numbered question belongs to the prompt and to other mods. Each Button answers
+an engine action, `strip:jump1` for the rotate (or `/clear`) key and
+`strip:jump2` for the wrap key, and the installer binds Ctrl+X 1 and Ctrl+X 2
+to them in `keybindings.json` (see
+[configuration.md](configuration.md#rotate-and-wrap-keys)). The band spells,
+bold in the session's colour, whatever chord that file binds to each action,
+as written there, and nothing where none does; the Buttons still answer a click
+and Ctrl+X Tab. Claude Code re-reads `keybindings.json` while it runs, so a
+chord bound after launch works at once (measured on 2.1.292). An encrypted
+session launched before `keybindings.json` existed gets the file at its next
+launch.
+
+Ctrl+X 1 runs `/rotate`, as if typed: the `rotate` skill draws the purpose from
+the conversation. Beside it the band draws `wrap up this session`. That key
+runs `/wrap`, which distills memory, replaces `.cs/summary.md` and rotates the
+narrative: two Opus passes and a shell helper, minutes and real tokens, so the
+press asks first. Ctrl+X 2 opens the engine's own AskUserQuestion dialog —
+`Run /wrap for this session?`, with `Yes, wrap up` and `Not now` — and only the
+yes runs it; a dismissed dialog, and a `-p` run with nobody to ask, run nothing
+and say nothing. A wrap that finished leaves the key nothing to do: `/wrap`'s last
 pass writes `.cs/local/wrapped` with the id of the conversation it ran in
 (`CLAUDE_CODE_SESSION_ID`, so a teammate's wrap never marks the lead), and
 while it names this one the band draws the rotate key alone. The next turn
@@ -346,10 +364,10 @@ one exception. It never submits a prompt of its own.
 
 The same button has a second state. Once the `rotate` skill has armed a
 handoff (`.cs/local/pending-handoff` names one), the band draws
-`1: /clear and continue from the handoff` whatever the context reads, alone
+`/clear and continue from the handoff` whatever the context reads, alone
 (the wrap key hides: with a handoff armed the conversation has nothing left to
 do but the `/clear`), and
-pressing `1` runs `/clear` itself: the conversation ends, and cs's SessionStart
+Ctrl+X 1 runs `/clear` itself: the conversation ends, and cs's SessionStart
 hook starts the handoff's next step in the new one, as it does after a typed
 `/clear`. The mod does not touch the marker; the hook consumes it. The button
 appears only for a marker the hook accepts: a bare basename, a file in
@@ -360,7 +378,7 @@ rotate button in place.
 The `switch` skill arms the same marker and then records where the session goes
 next with `ags -switch` (`.cs/local/pending-switch`, or `.cs/private/pending-switch`
 in an encrypted session). While that record is there, the armed button reads
-`1: /exit and continue in codex` and pressing it runs `/exit`, not `/clear`: a
+`/exit and continue in codex` and pressing it (or Ctrl+X 1) runs `/exit`, not `/clear`: a
 `/clear` would hand the handoff to Claude again, while the exit lets ags reopen
 the session under Codex from it. The grace below counts the same way and reads
 `/exit in 20s`.
@@ -385,14 +403,14 @@ handoff already armed: an interrupted or errored turn, or a subagent's, starts
 nothing. The run is scheduled from a timer rather than from the turn's own
 hook, which the plugin contract refuses a command from. Once the rotate skill
 has armed its handoff, the next turn's end starts a 20-second grace: the
-band reads `1: /clear and continue from the handoff  ·  /clear in 20s`,
+band reads `/clear and continue from the handoff  ·  /clear in 20s`,
 redrawn once a second. The count wears the session's own colour while there
 is time, the status bar's amber from ten seconds and its crit red under five
 (the bar's inks, pinned against `bin/ags-statusline` by `tests/test_mod_rotate.sh`).
 At zero the mod runs the `/clear` itself, only if
 the band is idle at that moment (no turn running, no survey), the handoff still
 armed and this still the lead; otherwise the count stops and the button waits
-for you. Pressing `1` during the count clears at once. Sending a prompt, from
+for you. Ctrl+X 1 during the count clears at once. Sending a prompt, from
 the composer or anywhere else a prompt enters the session, stops the count;
 the next turn's end starts it again from 20. A `/clear` from anywhere else
 (typed, or another plugin's) ends it too. The count is module state: it does

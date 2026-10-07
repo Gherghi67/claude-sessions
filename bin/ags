@@ -5,7 +5,7 @@
 set -euo pipefail
 
 # Configuration
-VERSION="2026.10.6"
+VERSION="2026.10.7"
 SESSIONS_ROOT="${CS_SESSIONS_ROOT:-$HOME/.claude-sessions}"
 CLAUDE_CODE_BIN="${CLAUDE_CODE_BIN:-claude}"
 CODEX_BIN="${CODEX_BIN:-codex}"
@@ -293,11 +293,43 @@ _codex_hooks_unregister() {  # codex_dir
     _codex_trust_tables_edit "$config" "$file" "$index" "$file:session_start:$index:0"
 }
 
-# Option+1 and Option+2: the two Claude Code keybindings ags offers to add,
-# each a "command:<name>" action, which submits /<name>. install.sh asks once
-# per machine and binds them, ags -uninstall takes back only the keys that
-# still hold these values, and ags -doctor reports them.
-CS_OPTION_KEYS='{"alt+1":"command:rotate","alt+2":"command:wrap"}'
+# The Claude Code keybindings ags offers to add. Ctrl+X R and Ctrl+X W are
+# "command:<name>" actions, which submit /<name>. Ctrl+X 1 and Ctrl+X 2 are
+# the engine actions the ags mod's band Buttons answer to, so they press the
+# band's rotate (or /clear) and wrap keys (KEEP IN SYNC with ROTATE_ACTION
+# and WRAP_ACTION in mods/cs/hooks/register.tsx). install.sh asks once per
+# machine and binds them, ags -uninstall takes back only the keys that still
+# hold these values, and ags -doctor reports them.
+CS_ROTATE_WRAP_KEYS='{"ctrl+x r":"command:rotate","ctrl+x w":"command:wrap","ctrl+x 1":"strip:jump1","ctrl+x 2":"strip:jump2"}'
+
+# Option+1 and Option+2 on the same two commands, as ags 2026.10.6 bound them.
+# iTerm2 selects panes with Option+number, so there they never reach Claude
+# Code. Wherever they still hold these values, an install that binds the
+# chords takes them back, and so does ags -uninstall.
+# shellcheck disable=SC2034  # read by install.sh's _bind_rotate_wrap_keys, ags -uninstall and ags -doctor
+CS_RETIRED_OPTION_KEYS='{"alt+1":"command:rotate","alt+2":"command:wrap"}'
+
+# The jq definitions shared by the filters below. keynorm follows Claude
+# Code's key parser (2.1.291) as far as the keys ags compares need: case
+# ignored, control is ctrl, opt and option are alt, command, super and win
+# are cmd, esc, return and del are escape, enter and delete, modifiers in
+# any order, and a chord's keys split on any run of spaces. It keeps meta
+# apart from alt and leaves space and arrow glyphs as typed, which no ags key
+# uses. ags's own keys are already in that form. ours: whether a to_entries pair from a context block is one of
+# the bindings in $cs, key and value both.
+_CS_KEYBINDING_DEFS='
+    def keynorm:
+        ["alt", "cmd", "ctrl", "meta", "shift"] as $mods
+        | [splits("\\s+") | select(length > 0) | ascii_downcase | split("+")
+            | map({"control": "ctrl", "opt": "alt", "option": "alt", "command": "cmd",
+                   "super": "cmd", "win": "cmd", "esc": "escape", "return": "enter",
+                   "del": "delete"}[.] // .)
+            | ([.[] | select(. as $p | any($mods[]; . == $p))] | unique)
+              + [.[] | select(. as $p | any($mods[]; . == $p) | not)]
+            | join("+")]
+        | join(" ");
+    def ours: . as $e | ($e.key | keynorm) as $k | $cs | has($k) and .[$k] == $e.value;
+'
 
 # Claude Code reads its keybindings from its config dir. Inside an encrypted
 # session that dir is the session's .cs/claude-config, which no other session
@@ -313,8 +345,10 @@ _cs_keybindings_file() {
 }
 
 # This machine's answer to the installer's question, yes or no; absent until
-# it has been asked on a terminal.
-_cs_option_keys_answer_file() {
+# it has been asked on a terminal. The file keeps the name it had when the
+# keys were Option+1 / Option+2, so a machine that said yes then gets the
+# chords on its next install.
+_cs_rotate_wrap_keys_answer_file() {
     printf '%s\n' "${XDG_CONFIG_HOME:-$HOME/.config}/cs/option-keys"
 }
 
@@ -332,18 +366,47 @@ _cs_keybindings_shape_ok() {  # file
 # Reads a keybindings document that passed the shape check on stdin and prints
 # one line per ags key: "bound<TAB>key" when every binding of it, in any
 # context, holds ags's value; "free<TAB>key" when nothing binds it; and
-# "conflict<TAB>key<TAB>action" when something else does. An action that is
-# not a string (a null that unbinds the key) prints as JSON.
-_cs_option_keys_status() {
-    jq -r --argjson cs "$CS_OPTION_KEYS" '
-        [.bindings[] | (.bindings // {}) | to_entries[]] as $all
+# "conflict<TAB>key<TAB>action" when something else does. A chord also
+# conflicts when its first key is bound on its own to an action, which
+# Claude Code would stop reaching once it waits for the chord's second key:
+# "conflict<TAB>key<TAB>action<TAB>prefix". Keys compare as keynorm spells
+# them. An action that is not a non-empty string (a null that unbinds the
+# key, an empty "") prints as JSON, so no field is ever empty; a null on the
+# prefix is no conflict, as it binds nothing.
+_cs_rotate_wrap_keys_status() {
+    jq -r --argjson cs "$CS_ROTATE_WRAP_KEYS" "$_CS_KEYBINDING_DEFS"'
+        def show: if type == "string" and length > 0 then . else tojson end;
+        [.bindings[] | (.bindings // {}) | to_entries[] | .key |= keynorm] as $all
         | $cs | to_entries[] | . as $c
         | [$all[] | select(.key == $c.key) | .value] as $vals
-        | if ($vals | length) == 0 then "free\t\($c.key)"
-          elif all($vals[]; . == $c.value) then "bound\t\($c.key)"
-          else "conflict\t\($c.key)\t\([$vals[] | select(. != $c.value)][0]
-                | if type == "string" then . else tojson end)"
+        | ($c.key | split(" ") | if length > 1 then .[0] else null end) as $prefix
+        | [$all[] | select(.key == $prefix and .value != null) | .value] as $pvals
+        | if any($vals[]; . != $c.value) then
+            "conflict\t\($c.key)\t\([$vals[] | select(. != $c.value)][0] | show)"
+          elif ($pvals | length) > 0 then "conflict\t\($c.key)\t\($pvals[0] | show)\t\($prefix)"
+          elif ($vals | length) == 0 then "free\t\($c.key)"
+          else "bound\t\($c.key)"
           end'
+}
+
+# Prints, comma-separated, the keys of a keybindings document on stdin that
+# hold one of the bindings in the JSON object $1, spelled as the file spells
+# them; empty when none does.
+_cs_keybindings_held() {  # bindings-json
+    jq -r --argjson cs "$1" "$_CS_KEYBINDING_DEFS"'
+        [.bindings[] | (.bindings // {}) | to_entries[] | select(ours) | .key] | unique | join(", ")'
+}
+
+# Prints a keybindings document on stdin, compact, without the bindings in the
+# JSON object $1 (key and value both; a key bound to anything else stays). A
+# Global block left empty goes; another context keeps its block.
+_cs_keybindings_strip() {  # bindings-json
+    jq -c --argjson cs "$1" "$_CS_KEYBINDING_DEFS"'
+        .bindings |= map(
+            if any((.bindings // {}) | to_entries[]; ours) then
+                .bindings |= with_entries(select(ours | not))
+                | select(.bindings != {} or .context != "Global")
+            else . end)'
 }
 # The core session identity is independent of the selected runtime. Keep the
 # aliases while shipped hooks and shared commands still read the older names.
@@ -8061,51 +8124,75 @@ _doctor_check_statusline() {
     esac
 }
 
-# The Option+1 / Option+2 bindings the installer offers: the answer this
+# The Ctrl+X bindings the installer offers: the answer this
 # machine gave, and whether keybindings.json still holds ags's keys. Not asked
-# and declined are healthy; a key the user binds to something else, a yes whose
-# keys are gone, and a file Claude Code cannot read either are warnings.
-_doctor_check_option_keys() {
-    local file answer_file answer status state key action bound=0 total=0
+# and declined are healthy; a key the user binds to something else (or a bare
+# ctrl+x a chord would shadow), a yes whose keys are gone or are still an
+# earlier cs's Option+1 / Option+2, and a file Claude Code cannot read either
+# are warnings.
+_doctor_check_rotate_wrap_keys() {
+    local file answer_file answer status state key action prefix retired bound=0 total=0 commands_bound=0
     file="$(_cs_keybindings_file)"
-    answer_file="$(_cs_option_keys_answer_file)"
+    answer_file="$(_cs_rotate_wrap_keys_answer_file)"
     if ! command -v jq >/dev/null 2>&1; then
-        _doctor_warn "Option keys: jq not installed; $file could not be read"
+        _doctor_warn "Rotate/wrap keys: jq not installed; $file could not be read"
         return
     fi
     if [ -e "$file" ] && ! _cs_keybindings_shape_ok "$file"; then
-        _doctor_warn "Option keys: $file is unparseable (not JSON with a \"bindings\" array)"
+        _doctor_warn "Rotate/wrap keys: $file is unparseable (not JSON with a \"bindings\" array)"
         return
     fi
     if [ -e "$file" ]; then
-        status=$(_cs_option_keys_status < "$file") || status=""
+        status=$(_cs_rotate_wrap_keys_status < "$file") || status=""
     else
-        status=$(printf '{"bindings":[]}\n' | _cs_option_keys_status) || status=""
+        status=$(printf '{"bindings":[]}\n' | _cs_rotate_wrap_keys_status) || status=""
     fi
-    while IFS=$'\t' read -r state key action; do
+    while IFS=$'\t' read -r state key action prefix; do
         [ -n "$state" ] || continue
         total=$((total + 1))
         if [ "$state" = bound ]; then bound=$((bound + 1)); fi
     done <<< "$status"
     if [ "$total" -gt 0 ] && [ "$bound" = "$total" ]; then
-        _doctor_ok "Option keys: bound (Option+1 runs /rotate, Option+2 runs /wrap)"
+        retired=$(_cs_keybindings_held "$CS_RETIRED_OPTION_KEYS" < "$file") || retired=""
+        if [ -n "$retired" ]; then
+            _doctor_warn "Rotate/wrap keys: $retired still hold ags's earlier bindings in $file (run ags -update to remove them)"
+        else
+            _doctor_ok "Rotate/wrap keys: bound (Ctrl+X R runs /rotate, Ctrl+X W runs /wrap, Ctrl+X 1 and Ctrl+X 2 press the ags band)"
+        fi
         return
     fi
     answer=$(cat "$answer_file" 2>/dev/null) || answer=""
     case "$answer" in
         yes)
-            while IFS=$'\t' read -r state key action; do
+            while IFS=$'\t' read -r state key action prefix; do
+                case "$state $key" in
+                    "bound ctrl+x r"|"bound ctrl+x w") commands_bound=$((commands_bound + 1)) ;;
+                esac
                 case "$state" in
-                    conflict) _doctor_warn "Option keys: conflict on $key (bound to $action in $file)" ;;
-                    free) _doctor_warn "Option keys: $key not bound (run ags -update to bind it)" ;;
+                    conflict)
+                        if [ -n "$prefix" ]; then
+                            _doctor_warn "Rotate/wrap keys: conflict on $key ($prefix is bound to $action in $file)"
+                        else
+                            _doctor_warn "Rotate/wrap keys: conflict on $key (bound to $action in $file)"
+                        fi
+                        ;;
+                    free) _doctor_warn "Rotate/wrap keys: $key not bound (run ags -update to bind it)" ;;
                 esac
             done <<< "$status"
+            # With /rotate and /wrap on their chords, the next update takes
+            # ags's Option keys back whatever a band chord holds.
+            if [ "$commands_bound" = 2 ]; then
+                retired=$(_cs_keybindings_held "$CS_RETIRED_OPTION_KEYS" < "$file") || retired=""
+                if [ -n "$retired" ]; then
+                    _doctor_warn "Rotate/wrap keys: $retired still hold ags's earlier bindings in $file (run ags -update to remove them)"
+                fi
+            fi
             ;;
         no)
-            _doctor_ok "Option keys: declined (to be asked again, remove $answer_file and run ags -update in a terminal)"
+            _doctor_ok "Rotate/wrap keys: declined (to be asked again, remove $answer_file and run ags -update in a terminal)"
             ;;
         *)
-            _doctor_ok "Option keys: not asked (run ags -update in a terminal to be asked)"
+            _doctor_ok "Rotate/wrap keys: not asked (run ags -update in a terminal to be asked)"
             ;;
     esac
 }
@@ -8387,7 +8474,7 @@ run_doctor() {
     _doctor_check_claude_audit
     _doctor_check_statusline
     _doctor_check_subagent_statusline
-    _doctor_check_option_keys
+    _doctor_check_rotate_wrap_keys
     _doctor_check_iterm2
     _doctor_check_spawn
     _doctor_check_hook_authority
@@ -12182,45 +12269,43 @@ adopt_worktrees() {  # [--dry-run]
     [ "$dry_run" = 1 ] || echo -e "${DIM}$adopted adopted; open one with: ags $repo_name.<worktree>${NC}"
 }
 
-# Take back the Option+1 / Option+2 bindings the installer added, only where a
-# key still holds ags's value: a key bound to anything else is the user's. A
-# Global block left empty by that goes, and so does a file left as exactly
-# {"bindings":[]}, unless it is a symlink, whose target is written through
-# instead so a dotfiles manager's copy does not keep ags's keys. The recorded
-# answer goes too, so a later install asks again.
-_uninstall_option_keys() {
-    local file stripped
+# Take back the Ctrl+X bindings the installer added, and the
+# Option+1 / Option+2 ones an earlier ags added, only where a key still holds
+# ags's value: a key bound to anything else is the user's. A Global block left
+# empty by that goes, and so does a file left as exactly {"bindings":[]},
+# unless it is a symlink, whose target is written through instead so a
+# dotfiles manager's copy does not keep ags's keys. The recorded answer goes
+# too, so a later install asks again.
+_uninstall_rotate_wrap_keys() {
+    local file ours held stripped
     file="$(_cs_keybindings_file)"
-    rm -f "$(_cs_option_keys_answer_file)"
+    rm -f "$(_cs_rotate_wrap_keys_answer_file)"
     [ -e "$file" ] || return 0
     if ! command -v jq >/dev/null 2>&1; then
-        warn "jq not found - cannot remove ags's Option+1/Option+2 bindings from $file"
+        warn "jq not found - cannot remove ags's rotate/wrap bindings from $file"
         return 0
     fi
     if ! _cs_keybindings_shape_ok "$file"; then
         warn "Left $file as it is: not JSON with a \"bindings\" array"
         return 0
     fi
-    jq -e --argjson cs "$CS_OPTION_KEYS" \
-        'any(.bindings[] | (.bindings // {}) | to_entries[]; . as $e | $cs | has($e.key) and .[$e.key] == $e.value)' \
-        "$file" > /dev/null 2>&1 || return 0
-    stripped=$(jq -c --argjson cs "$CS_OPTION_KEYS" '
-        def ours: . as $e | $cs | has($e.key) and .[$e.key] == $e.value;
-        .bindings |= map(
-            if any((.bindings // {}) | to_entries[]; ours) then
-                .bindings |= with_entries(select(ours | not))
-                | select(.bindings != {} or .context != "Global")
-            else . end)' "$file") || {
-        warn "Could not read $file; its Option+1/Option+2 bindings were left in place"
+    ours=$(jq -cn --argjson a "$CS_ROTATE_WRAP_KEYS" --argjson b "$CS_RETIRED_OPTION_KEYS" '$a + $b')
+    held=$(_cs_keybindings_held "$ours" < "$file") || {
+        warn "Could not read $file; its rotate/wrap bindings were left in place"
+        return 0
+    }
+    [ -n "$held" ] || return 0
+    stripped=$(_cs_keybindings_strip "$ours" < "$file") || {
+        warn "Could not read $file; its rotate/wrap bindings were left in place"
         return 0
     }
     if [ "$stripped" = '{"bindings":[]}' ] && [ ! -L "$file" ]; then
         rm -f "$file"
         info "Removed $file"
     elif cs_write_atomic "$file" jq . <<< "$stripped"; then
-        info "Removed ags's Option+1/Option+2 bindings from $file"
+        info "Removed ags's $held bindings from $file"
     else
-        warn "Could not write $file; its Option+1/Option+2 bindings were left in place"
+        warn "Could not write $file; its rotate/wrap bindings were left in place"
     fi
 }
 
@@ -12261,7 +12346,7 @@ run_uninstall() {
     echo "  - Shell completions"
     echo "  - Update-check cache in $update_cache_dir/"
     echo "  - Hook entries in $settings_file"
-    echo "  - ags's Option+1/Option+2 bindings in $(_cs_keybindings_file)"
+    echo "  - ags's rotate/wrap key bindings in $(_cs_keybindings_file)"
     echo ""
     read -p "Continue with uninstall? [y/N] " -n 1 -r
     echo ""
@@ -12458,7 +12543,7 @@ run_uninstall() {
         warn "Manually remove cs hook entries from $settings_file"
     fi
 
-    _uninstall_option_keys
+    _uninstall_rotate_wrap_keys
     fi
     rm -f "$install_config"
 

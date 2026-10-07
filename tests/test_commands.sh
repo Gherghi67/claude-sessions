@@ -249,7 +249,7 @@ test_switch_step_numbers_match_rotate() {
 # user must act on, so both lines are pinned exactly.
 test_switch_names_both_final_lines() {
     local skill="$SKILLS_DIR/switch/SKILL.md"
-    grep -qxF '   **Run `/exit` now** (or press `1` on the capsule above the prompt) — ags reopens this session under Codex.' "$skill" \
+    grep -qxF '   **Run `/exit` now** (or press the capsule above the prompt, or Ctrl+X 1 if you bound it) — ags reopens this session under Codex.' "$skill" \
         || { echo "  FAIL: switch must end, under Claude, on the exact /exit line"; return 1; }
     grep -qxF '   **Quit Codex now (`/quit`)** — ags reopens this session under Claude.' "$skill" \
         || { echo "  FAIL: switch must end, under Codex, on the exact /quit line"; return 1; }
