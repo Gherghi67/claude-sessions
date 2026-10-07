@@ -250,49 +250,55 @@ export CS_PLATFORM_OVERRIDE="linux"   # macos, wsl, or linux
 
 ## Rotate and wrap keys
 
-The installer offers, once per machine, to bind two keys in Claude Code's
+The installer offers, once per machine, to bind four keys in Claude Code's
 `keybindings.json` (in `$CLAUDE_CONFIG_DIR` when you set it, otherwise
 `~/.claude/keybindings.json`). Run inside an encrypted session, where
 `CLAUDE_CONFIG_DIR` is the session's `.cs/claude-config`, cs writes the shell's
 file instead, the one that session links:
 
 ```json
-{"bindings": [{"context": "Global", "bindings": {"ctrl+x r": "command:rotate", "ctrl+x w": "command:wrap"}}]}
+{"bindings": [{"context": "Global", "bindings": {"ctrl+x r": "command:rotate", "ctrl+x w": "command:wrap", "ctrl+x 1": "strip:jump1", "ctrl+x 2": "strip:jump2"}}]}
 ```
 
-Ctrl+X then R submits `/rotate`, and Ctrl+X then W submits `/wrap`. Text you
-are typing stays in the prompt. Claude Code drops a Ctrl+X that gets no second
+Ctrl+X then R submits `/rotate`, and Ctrl+X then W submits `/wrap`, band or no
+band. Ctrl+X then 1 and Ctrl+X then 2 press the `cs` mod's band above the
+prompt: 1 its rotate key, or its `/clear` once a handoff is armed, and 2 its
+wrap key. The band has no key of its own, so a digit you type to answer a
+question never presses it; without these two chords it answers only a click or
+Ctrl+X Tab. Text you are typing stays in the prompt. Claude Code drops a Ctrl+X that gets no second
 key within 3 seconds. The chords need no terminal setting.
 
-- A yes merges the two keys into the file's first `Global` block (or adds one,
+- A yes merges the four keys into the file's first `Global` block (or adds one,
   creating the file when there is none). cs never replaces a key you already
   bind to something else, in any context: it keeps your action and names the
   key in a warning. A bare `ctrl+x` you bind counts too: Claude Code would
-  wait for a second key and never run yours, so cs binds neither chord. cs
+  wait for a second key and never run yours, so cs binds none of the chords. cs
   refuses a file that is not JSON with a `bindings` array and leaves it
   untouched.
 - cs 2026.10.6 bound Option+1 and Option+2 (`alt+1`, `alt+2`), which iTerm2
   uses to switch panes. On a machine that answered yes, an install removes
   those two where they still hold cs's values and binds the chords, with or
   without a terminal. An `alt+1` or `alt+2` you bound to something else stays.
-  cs's own stay too when either chord conflicts.
+  cs's own stay too when any chord conflicts.
 - The installer records the answer in `~/.config/cs/option-keys` (`yes` or
   `no`; `$XDG_CONFIG_HOME/cs/option-keys` when you set that). After a `no` it
-  never asks again. After a `yes`, every install and `cs -update` adds back
-  either key if nothing binds it.
+  never asks again. After a `yes`, every install and `cs -update` adds any of
+  the keys nothing binds, so a machine that bound Ctrl+X R and Ctrl+X W before
+  gets Ctrl+X 1 and Ctrl+X 2 on its next update. Claude Code picks the file up
+  without a relaunch.
 - With no terminal attached (CI, a pipe) and no recorded answer, the installer
   asks nothing, writes nothing and records nothing; it prints one line saying
   to run `cs -update` in a terminal.
 - To change the answer, remove `~/.config/cs/option-keys` and run `cs -update`
   (or `./install.sh`) in a terminal; it asks again. To drop the keys after a
-  `yes`, answer `no` there and delete the two entries from `keybindings.json`.
+  `yes`, answer `no` there and delete the four entries from `keybindings.json`.
 - `cs -uninstall` removes only the keys that still hold cs's values, the
   chords and an earlier cs's `alt+1` and `alt+2` alike, drops a `Global` block
   that leaves empty, deletes the file when it holds nothing else (a symlinked
   file keeps its link and gets `{"bindings": []}` written through it), and
   removes the recorded answer.
 - `cs -doctor` reports the state: bound, declined, not asked, a conflict on
-  `ctrl+x r` or `ctrl+x w` (or on a bare `ctrl+x`), a key not bound yet (as on
+  one of the chords (or on a bare `ctrl+x`), a key not bound yet (as on
   a machine that still has the Option keys, until its next `cs -update`), cs's
   `alt+1` or `alt+2` still there beside the chords, or an unparseable file.
 - cs reads keys the way Claude Code does: `Ctrl+X`, `control+x` and
