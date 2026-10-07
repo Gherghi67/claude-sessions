@@ -1,6 +1,19 @@
 # ABOUTME: Runtime dependency checks and session-name validation.
 # ABOUTME: Rejects unsafe names before any filesystem work.
 
+# The command word of CLAUDE_CODE_BIN. Every launch site expands the value
+# unquoted, so it splits on IFS (spaces, tabs, newlines); this splits the same
+# way, without expanding globs.
+_claude_bin_word() {
+    local glob_was_off=""
+    case $- in *f*) glob_was_off=1 ;; esac
+    set -f
+    # shellcheck disable=SC2086
+    set -- $CLAUDE_CODE_BIN
+    [ -n "$glob_was_off" ] || set +f
+    printf '%s' "${1:-}"
+}
+
 check_dependencies() {
     local engine="${1:-claude}"
     local missing

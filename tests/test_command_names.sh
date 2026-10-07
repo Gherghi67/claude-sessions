@@ -3,6 +3,8 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/test_lib.sh"
 source "$SCRIPT_DIR/../lib/76-codex.sh"
+# The statusline cleanup rewrites settings through cs_write_atomic.
+source "$SCRIPT_DIR/../lib/02-shared.sh"
 source "$SCRIPT_DIR/../lib/70-statusline.sh"
 
 test_legacy_commands_are_source_compatible_aliases() {

@@ -1,5 +1,5 @@
 // ABOUTME: Unit tests for the cs mod against a fake engine `$`.
-// ABOUTME: Covers the band's gate (crit, working, survey), the three presses and the wrap key's two-press guard, the armed handoff, the heartbeat, and /queue.
+// ABOUTME: Covers the band's gate (crit, working, survey), the three presses and the wrap key's two-press guard, the armed handoff, the heartbeat, /queue, and the /finish toasts and gate band.
 // ABOUTME: And a pending engine switch: the armed key and the count run /exit instead of /clear, only for the record of this run and the armed handoff.
 import { test, expect, beforeEach } from 'bun:test'
 
@@ -7,14 +7,14 @@ import { test, expect, beforeEach } from 'bun:test'
 ;(globalThis as any).h = (type: any, props: any, ...children: any[]) => ({ type, props: props ?? {}, children })
 ;(globalThis as any).Fragment = 'Fragment'
 
-import { register, DEFAULT_PERCENT, GRACE_SECONDS, PREVIEW_PANE, WRAP_QUESTION, WRAP_YES, QUEUE_START, QUEUE_COMPACT, QUEUE_KICK, MARKDOWN_LIMIT, nextStep, surfaceColor, isUnconsumed, switchFields, countVerb } from '../hooks/register.tsx'
+import { register, DEFAULT_PERCENT, GRACE_SECONDS, PREVIEW_PANE, WRAP_QUESTION, WRAP_YES, QUEUE_START, QUEUE_COMPACT, QUEUE_KICK, QUEUE_MODE_QUESTION, QUEUE_HERE, QUEUE_SUBAGENTS, QUEUE_WORKFLOWS, MARKDOWN_LIMIT, nextStep, surfaceColor, isUnconsumed, switchFields, countVerb } from '../hooks/register.tsx'
 
 type Hook = ($: any, e: any, next: (e: any) => Promise<any>) => Promise<any>
 const hooks: Record<string, Hook> = {}
 const on = (event: string, a: any, b?: any) => {
   const matcher = b ? a : undefined
   const fn: Hook = b ?? a
-  const narrowed = matcher?.component ?? matcher?.command
+  const narrowed = matcher?.component ?? matcher?.command ?? matcher?.skill
   hooks[narrowed ? `${event}:${narrowed}` : event] = fn
 }
 
@@ -33,6 +33,8 @@ let asks: { question: string; options: any }[]
 let panes: { op: 'open' | 'close'; args: any }[]
 // What the person does with the next dialog: a label, or a rejection (dismissed, or a `-p` run).
 let answer: string | Error
+// What the person answers to the queue's "how should the tasks run" question.
+let modeAnswer: string | Error
 // What `$.process.run` was asked to run, and what it answers with (or rejects with).
 let runs: { argv: string[]; init: any }[]
 let runResult: { exitCode: number; stdout: string; stderr: string } | Error
@@ -44,6 +46,9 @@ let submitted: any[]
 let compactedAt: number[]
 let compactResult: any
 let commands: any[]
+// The clock `$.clock.now` reads, and the pids `kill -0` finds alive.
+let nowMs: number
+let livePids: Set<string>
 const timer = (kind: 'after' | 'every') => (ms: number, fn: () => void) => {
   const t = { ms, fn, kind, cancelled: false }
   timers.push(t)
@@ -71,6 +76,7 @@ const $ = {
   },
   process: {
     run: async (argv: string[], init: any) => {
+      if (argv[0] === 'kill' && argv[1] === '-0') return { exitCode: livePids.has(argv[2]) ? 0 : 1, stdout: '', stderr: '' }
       runs.push({ argv, init })
       const r = nextRuns.length > 0 ? nextRuns.shift()! : runResult
       if (r instanceof Error) throw r
@@ -85,11 +91,12 @@ const $ = {
     close: async (args: any) => { panes.push({ op: 'close', args }) },
     ask: async (question: string, options: any) => {
       asks.push({ question, options })
-      if (answer instanceof Error) throw answer
-      return answer
+      const reply = question === QUEUE_MODE_QUESTION ? modeAnswer : answer
+      if (reply instanceof Error) throw reply
+      return reply
     },
   },
-  clock: { after: timer('after'), every: timer('every') },
+  clock: { after: timer('after'), every: timer('every'), now: async () => nowMs },
   fs: {
     write: async (path: string, text: string) => { written[path] = text; files[path] = text },
     exists: async (path: string) => existing.has(path) || path in files,
@@ -111,9 +118,10 @@ const findButton = (tree: any) => buttons(tree)[0]
 beforeEach(() => {
   for (const k of Object.keys(hooks)) delete hooks[k]
   percent = undefined; filled = []; ran = []; written = {}; existing = new Set(['/work/.cs/local'])
-  timers = []; invalidated = []; toasts = []; asks = []; answer = WRAP_YES; panes = []
+  timers = []; invalidated = []; toasts = []; asks = []; answer = WRAP_YES; modeAnswer = QUEUE_HERE; panes = []
   runs = []; runResult = { exitCode: 0, stdout: '', stderr: '' }; nextRuns = []; submitted = []; commands = []
   compactedAt = []; compactResult = { messages: [] }
+  nowMs = 1_800_000_000_000; livePids = new Set()
   // The default fixture is the lead conversation of a cs session.
   sessionId = 'uuid-lead'
   envVars = {}
@@ -1380,8 +1388,17 @@ test('/queue with a task runs ags -queue add with the task as one argument and s
   const r = await queue('fix the flaky "rotate" test; then rerun it')
   expect(runs.map(x => x.argv)).toEqual([['/opt/cs/bin/cs', '-queue', 'add', 'fix the flaky "rotate" test; then rerun it']])
   expect(r).toEqual({ text: 'Queued: fix the flaky "rotate" test; then rerun it' })
+  expect(toasts).toEqual(['ags: queued: fix the flaky "rotate" test; then rerun it'])
   await settle()
   expect(asks).toEqual([])
+})
+
+// The toast is one line under the prompt; a long task is cut so it fits.
+test('/queue with a long task confirms it in a toast cut to 60 characters', async () => {
+  envVars.CS_BIN = '/opt/cs/bin/ags'
+  const task = 'a'.repeat(59) + 'bc' + ' tail'
+  await queue(`  ${task}  `)
+  expect(toasts).toEqual([`ags: queued: ${'a'.repeat(59)}b…`])
 })
 
 test('/queue with no task, or only spaces, prints ags -queue list', async () => {
@@ -1390,6 +1407,7 @@ test('/queue with no task, or only spaces, prints ags -queue list', async () => 
   expect(await queue('')).toEqual({ text: 'Pending:\n  1. first\n  2. second' })
   expect(await queue('   ')).toEqual({ text: 'Pending:\n  1. first\n  2. second' })
   expect(runs.map(x => x.argv)).toEqual([['/opt/cs/bin/cs', '-queue', 'list'], ['/opt/cs/bin/cs', '-queue', 'list']])
+  expect(toasts).toEqual([])
 })
 
 // The offer is made after the listing is back on screen, so the person reads
@@ -1403,9 +1421,76 @@ test('/queue with pending tasks offers to start them; Start while idle arms the 
   answer = QUEUE_START
   expect(await queue('')).toEqual({ text: 'Pending (2)\n  1. first\n  2. second\n\nDone (1)\n  - shipped' })
   await settle()
-  expect(asks).toEqual([{ question: 'Start the 2 queued tasks now?', options: { header: 'Queue', options: [QUEUE_START, 'Not yet', QUEUE_COMPACT] } }])
+  expect(asks).toEqual([
+    { question: 'Start the 2 queued tasks now?', options: { header: 'Queue', options: [QUEUE_START, 'Not yet', QUEUE_COMPACT] } },
+    { question: QUEUE_MODE_QUESTION, options: { header: 'Queue', options: [QUEUE_HERE, QUEUE_SUBAGENTS, QUEUE_WORKFLOWS] } },
+  ])
   expect(runs.map(x => x.argv)).toEqual([['/opt/cs/bin/cs', '-queue', 'list'], ['/opt/cs/bin/cs', '-queue', 'start']])
   expect(submitted).toEqual([{ text: QUEUE_KICK }])
+})
+
+// Start also asks how the tasks run: here, each in a subagent, or each as a
+// workflow; the answer rides on ags -queue start.
+test('Start then In subagents or As workflows arms the queue in that mode', async () => {
+  envVars.CS_BIN = '/opt/cs/bin/ags'
+  runResult = LISTED
+  answer = QUEUE_START
+  modeAnswer = QUEUE_SUBAGENTS
+  await queue('')
+  await settle()
+  modeAnswer = QUEUE_WORKFLOWS
+  await queue('')
+  await settle()
+  expect(runs.map(x => x.argv.slice(1))).toEqual([['-queue', 'list'], ['-queue', 'start', 'subagents'], ['-queue', 'list'], ['-queue', 'start', 'workflow']])
+})
+
+test('Not yet asks nothing more', async () => {
+  envVars.CS_BIN = '/opt/cs/bin/ags'
+  runResult = LISTED
+  answer = 'Not yet'
+  await queue('')
+  await settle()
+  expect(asks.map(a => a.question)).toEqual(['Start the 2 queued tasks now?'])
+})
+
+// A dismissed second question starts nothing and compacts nothing, as a
+// dismissed first one does.
+test('a dismissed mode question starts nothing', async () => {
+  envVars.CS_BIN = '/opt/cs/bin/ags'
+  runResult = LISTED
+  modeAnswer = new Error('dismissed')
+  for (const a of [QUEUE_START, QUEUE_COMPACT]) {
+    answer = a
+    await queue('')
+    await settle()
+  }
+  expect(runs.map(x => x.argv[2])).toEqual(['list', 'list'])
+  expect(compactedAt).toEqual([])
+  expect(submitted).toEqual([])
+})
+
+// Free text typed under "Other" names no mode ags knows, so nothing starts.
+test('an answer that is no mode starts nothing and says so', async () => {
+  envVars.CS_BIN = '/opt/cs/bin/ags'
+  runResult = LISTED
+  answer = QUEUE_START
+  modeAnswer = 'in parallel please'
+  await queue('')
+  await settle()
+  expect(runs.map(x => x.argv[2])).toEqual(['list'])
+  expect(toasts).toEqual(["ags: 'in parallel please' is not a way to run the queue; it is not started"])
+})
+
+test('Compact asks the mode before compacting, then starts in it', async () => {
+  envVars.CS_BIN = '/opt/cs/bin/ags'
+  runResult = LISTED
+  answer = QUEUE_COMPACT
+  modeAnswer = QUEUE_WORKFLOWS
+  await queue('')
+  await settle()
+  expect(asks.map(a => a.question)).toEqual(['Start the 2 queued tasks now?', QUEUE_MODE_QUESTION])
+  expect(compactedAt).toEqual([1])
+  expect(runs.map(x => x.argv.slice(1))).toEqual([['-queue', 'list'], ['-queue', 'start', 'workflow']])
 })
 
 // A turn already running reaches a stop on its own, where the Stop hook hands
@@ -1546,6 +1631,7 @@ test('a refused add prints the exit code and cs\'s own stderr, verbatim', async 
   const r = await queue('one\ntwo')
   expect(runs[0].argv).toEqual(['/opt/cs/bin/cs', '-queue', 'add', 'one\ntwo'])
   expect(r).toEqual({ text: "ags -queue add exited 1.\nwarning: an earlier line\nError: task bodies must be a single line (the queue's done log and listing are line-oriented)" })
+  expect(toasts).toEqual([])
 })
 
 test('a run that cannot start says why', async () => {
@@ -1558,4 +1644,142 @@ test('without executable paths /queue says the launch did not say where ags is, 
   const r = await queue('something')
   expect(runs).toHaveLength(0)
   expect(r).toEqual({ text: 'The launch did not say where ags is (AGS_BIN); run `ags -queue add "<task>"` from a shell in this session.' })
+})
+
+// /finish progress: ags writes one record per step while it integrates and
+// retires; the mod reads it on a one-second watch that /finish starts.
+const RECORD = '/work/.cs/local/finish-progress.json'
+const SHA = '1234567' + 'f'.repeat(33)
+const RESULT = '89abcde' + '0'.repeat(33)
+const NOW = 1_800_000_000
+const record = (r: any, path = RECORD) => { files[path] = JSON.stringify(r) }
+const running = (step: string, extra: any = {}) => ({ id: '4242-1799999990', pid: 4242, task: 'fix-auth', sha: SHA, step, ts: NOW, ...extra })
+const startFinish = () => hooks['skill.prompt:finish']($, { skill: 'finish', text: 'land it' }, async (e: any) => ({ text: e.text }))
+const watches = () => timers.filter(t => t.kind === 'every' && t.ms === 1000)
+const watchTick = async () => {
+  const live = watches().filter(t => !t.cancelled)
+  expect(live).toHaveLength(1)
+  await live[0].fn()
+}
+
+test('/finish starts one watch, passes its prompt through, and never toasts the outcome of an earlier run', async () => {
+  record({ id: '100-1', pid: 100, task: 'old-task', sha: SHA, step: 'landed', result: RESULT, ts: 1 })
+  expect(await startFinish()).toEqual({ text: 'land it' })
+  await startFinish()
+  expect(watches()).toHaveLength(1)
+  await watchTick()
+  expect(toasts).toEqual([])
+})
+
+test('a /finish that starts toasts its task once, however many steps follow', async () => {
+  livePids.add('4242')
+  await startFinish()
+  record(running('started'))
+  await watchTick()
+  record(running('merging'))
+  await watchTick()
+  record(running('fast-forward'))
+  await watchTick()
+  expect(toasts).toEqual(['ags: finishing fix-auth'])
+})
+
+test('each outcome toasts once, in its own words, and not again on the next tick', async () => {
+  await startFinish()
+  record(running('landed', { result: RESULT }))
+  await watchTick()
+  await watchTick()
+  record({ id: '5151-1800000001', pid: 5151, task: 'fix-auth', sha: SHA, step: 'refused', reason: 'Base /work moved during the gates (was abc, now def); re-run /finish fix-auth', ts: NOW })
+  await watchTick()
+  await watchTick()
+  record({ id: '6161-1800000002', pid: 6161, task: 'fix-auth', sha: SHA, step: 'retired', ts: NOW })
+  await watchTick()
+  await watchTick()
+  expect(toasts).toEqual([
+    'ags: landed fix-auth 1234567 -> 89abcde',
+    'ags: /finish fix-auth refused: Base /work moved during the gates (was abc, now def); re-run /finish fix-auth',
+    'ags: retired fix-auth',
+  ])
+})
+
+test('a long task is cut in the toast as /queue cuts it', async () => {
+  livePids.add('4242')
+  await startFinish()
+  record(running('started', { task: 'a'.repeat(59) + 'bc tail' }))
+  await watchTick()
+  expect(toasts).toEqual([`ags: finishing ${'a'.repeat(59)}b…`])
+})
+
+test('an encrypted session\'s record is read behind .cs/private', async () => {
+  await startFinish()
+  record({ id: '6161-1800000002', pid: 6161, task: 'fix-auth', sha: SHA, step: 'retired', ts: NOW }, '/work/.cs/private/finish-progress.json')
+  await watchTick()
+  expect(toasts).toEqual(['ags: retired fix-auth'])
+})
+
+test('while a gate runs under a live pid the band shows the task and the time since the gate started, even mid-turn', async () => {
+  livePids.add('4242')
+  nowMs = NOW * 1000
+  await startFinish()
+  record(running('gate', { gate_started: NOW - 75 }))
+  await watchTick()
+  expect(invalidated).toContain('ui.render')
+  const tree = JSON.stringify(await band({ isWorking: true }))
+  expect(tree).toContain('"Survey"')
+  expect(tree).toContain('finishing fix-auth · gate 1m 15s')
+  nowMs += 10_000
+  expect(JSON.stringify(await band({ isWorking: true }))).toContain('finishing fix-auth · gate 1m 25s')
+  nowMs = (NOW - 75 + 42) * 1000
+  expect(JSON.stringify(await band({ isWorking: true }))).toContain('finishing fix-auth · gate 42s')
+})
+
+test('a gate whose pid is dead, or a record past its gate, draws no band', async () => {
+  nowMs = NOW * 1000
+  await startFinish()
+  record(running('gate', { gate_started: NOW - 5 }))
+  await watchTick()
+  expect(await band({ isWorking: true })).toBe(DRAWN)
+  livePids.add('4242')
+  await watchTick()
+  expect(JSON.stringify(await band({ isWorking: true }))).toContain('gate 5s')
+  record(running('fast-forward', { gate_started: NOW - 5 }))
+  invalidated = []
+  await watchTick()
+  expect(invalidated).toContain('ui.render')
+  expect(await band({ isWorking: true })).toBe(DRAWN)
+  record(running('gate', { gate_started: NOW - 5 }))
+  await watchTick()
+  record(running('landed', { gate_started: NOW - 5, result: RESULT }))
+  await watchTick()
+  expect(await band({ isWorking: true })).toBe(DRAWN)
+})
+
+test('with the rotation keys up, the gate band draws above them and both keys stay', async () => {
+  livePids.add('4242')
+  nowMs = NOW * 1000
+  percent = 40
+  await startFinish()
+  record(running('gate', { gate_started: NOW - 3 }))
+  await watchTick()
+  const tree = await band()
+  expect(buttons(tree)).toHaveLength(2)
+  const json = JSON.stringify(tree)
+  expect(json.indexOf('finishing fix-auth · gate 3s')).toBeGreaterThan(json.indexOf('"Survey"'))
+  expect(json.indexOf('finishing fix-auth · gate 3s')).toBeLessThan(json.indexOf('rotate this conversation'))
+})
+
+test('the watch ends once the turn is over and nothing runs, and not while a step still runs', async () => {
+  livePids.add('4242')
+  await startFinish()
+  record(running('gate', { gate_started: NOW }))
+  await watchTick()
+  await hooks['turn.complete']($, { reason: 'answer' }, async () => ({ text: '' }))
+  await watchTick()
+  expect(watches()[0].cancelled).toBe(false)
+  record({ id: '6161-1800000002', pid: 6161, task: 'fix-auth', sha: SHA, step: 'retired', ts: NOW })
+  await watchTick()
+  expect(toasts).toEqual(['ags: finishing fix-auth', 'ags: retired fix-auth'])
+  expect(watches()[0].cancelled).toBe(true)
+  // the next /finish watches afresh
+  await startFinish()
+  expect(watches().filter(t => !t.cancelled)).toHaveLength(1)
 })

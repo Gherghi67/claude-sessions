@@ -5,7 +5,7 @@
 set -euo pipefail
 
 # Configuration
-VERSION="2026.10.5"
+VERSION="2026.10.6"
 SESSIONS_ROOT="${CS_SESSIONS_ROOT:-$HOME/.claude-sessions}"
 CLAUDE_CODE_BIN="${CLAUDE_CODE_BIN:-claude}"
 CODEX_BIN="${CODEX_BIN:-codex}"
@@ -292,6 +292,59 @@ _codex_hooks_unregister() {  # codex_dir
     fi
     _codex_trust_tables_edit "$config" "$file" "$index" "$file:session_start:$index:0"
 }
+
+# Option+1 and Option+2: the two Claude Code keybindings ags offers to add,
+# each a "command:<name>" action, which submits /<name>. install.sh asks once
+# per machine and binds them, ags -uninstall takes back only the keys that
+# still hold these values, and ags -doctor reports them.
+CS_OPTION_KEYS='{"alt+1":"command:rotate","alt+2":"command:wrap"}'
+
+# Claude Code reads its keybindings from its config dir. Inside an encrypted
+# session that dir is the session's .cs/claude-config, which no other session
+# reads; it links the shell's keybindings.json instead, so ags's keys belong in
+# the shell's config dir, which launch records in
+# CLAUDE_SECURESTORAGE_CONFIG_DIR (empty for ~/.claude).
+_cs_keybindings_file() {
+    local dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+    case "$dir" in
+        */.cs/claude-config) dir="${CLAUDE_SECURESTORAGE_CONFIG_DIR:-$HOME/.claude}" ;;
+    esac
+    printf '%s\n' "$dir/keybindings.json"
+}
+
+# This machine's answer to the installer's question, yes or no; absent until
+# it has been asked on a terminal.
+_cs_option_keys_answer_file() {
+    printf '%s\n' "${XDG_CONFIG_HOME:-$HOME/.config}/cs/option-keys"
+}
+
+# Whether a keybindings file has the shape ags reads and merges into: one JSON
+# object whose "bindings" is an array of context blocks, each an object whose
+# own "bindings", when present, is an object. Slurped, so a file holding two
+# documents is refused rather than read as two; -e turns invalid JSON, an
+# empty file and a false answer alike into a non-zero exit.
+_cs_keybindings_shape_ok() {  # file
+    jq -se 'length == 1 and (.[0] | type == "object" and (.bindings | type == "array")
+        and all(.bindings[]; type == "object" and ((.bindings // {}) | type == "object")))' \
+        "$1" > /dev/null 2>&1
+}
+
+# Reads a keybindings document that passed the shape check on stdin and prints
+# one line per ags key: "bound<TAB>key" when every binding of it, in any
+# context, holds ags's value; "free<TAB>key" when nothing binds it; and
+# "conflict<TAB>key<TAB>action" when something else does. An action that is
+# not a string (a null that unbinds the key) prints as JSON.
+_cs_option_keys_status() {
+    jq -r --argjson cs "$CS_OPTION_KEYS" '
+        [.bindings[] | (.bindings // {}) | to_entries[]] as $all
+        | $cs | to_entries[] | . as $c
+        | [$all[] | select(.key == $c.key) | .value] as $vals
+        | if ($vals | length) == 0 then "free\t\($c.key)"
+          elif all($vals[]; . == $c.value) then "bound\t\($c.key)"
+          else "conflict\t\($c.key)\t\([$vals[] | select(. != $c.value)][0]
+                | if type == "string" then . else tojson end)"
+          end'
+}
 # The core session identity is independent of the selected runtime. Keep the
 # aliases while shipped hooks and shared commands still read the older names.
 # Always replace all six values together: a nested launch may inherit a parent.
@@ -571,7 +624,9 @@ _cs_file_mode() {  # path
 
 # Replace a file with a command's stdout, atomically: the output goes to a
 # uniquely named temp file in the same directory, which is renamed over the
-# destination only once the command has succeeded. A symlinked destination is
+# destination only once the command has succeeded. The temp file's name starts
+# with .cs-tmp., the prefix a session's .gitignore names, so one left by a
+# killed writer never reaches an autosave snapshot. A symlinked destination is
 # followed to its target, so a shared or linked file is rewritten in place and
 # the link survives. The destination keeps the
 # permission bits it had, and a new file gets the umask's; the temp file takes
@@ -597,7 +652,7 @@ cs_write_atomic() {  # dest, command [args...]
             exit 1
         fi
         dir=$(dirname "$dest")
-        tmp=$(mktemp "$dir/.$(basename "$dest").XXXXXX") || exit 1
+        tmp=$(mktemp "$dir/.cs-tmp.$(basename "$dest").XXXXXX") || exit 1
         trap 'rm -f "$tmp"' EXIT
         "$@" > "$tmp" || exit $?
         if [ -f "$dest" ]; then
@@ -612,7 +667,7 @@ cs_write_atomic() {  # dest, command [args...]
 # The machine-local state file (.cs/local/state) is rewritten whole from its
 # old contents, by ags and by the SessionStart hook, so two writers can lose an
 # update unless they take turns: the lock is _cs_mkdir_lock on a directory
-# beside the file. Prints the lock directory when it holds it, nothing when it
+# beside the file. The vault holder list takes turns through it too. Prints the lock directory when it holds it, nothing when it
 # does not.
 _cs_local_state_lock() {  # state
     _cs_mkdir_lock "$1.lock" || return 0
@@ -707,6 +762,28 @@ cs_run_with_lease() {  # meta_dir, callback, arguments...
     shift
     cs_run_guarded "$meta" _cs_run_owned_callback "$meta" "$@"
 }
+
+# .cs/local/vault-holders lists the pids whose life keeps an encrypted
+# session's vault mounted, one per line. An add appends; a drop rewrites the
+# list without one pid. Both take the lock beside the file, so a drop never
+# renames its copy over a line another opener added meanwhile.
+cs_vault_holder_add() {  # holders, pid
+    local lock rc=0
+    lock=$(_cs_local_state_lock "$1")
+    { printf '%s\n' "$2" >> "$1"; } 2>/dev/null || rc=$?
+    _cs_mkdir_unlock "$lock"
+    return "$rc"
+}
+
+# A missing list is a no-op. Other lines stay as they are.
+cs_vault_holder_drop() {  # holders, pid
+    [ -f "$1" ] || return 0
+    local lock rc=0
+    lock=$(_cs_local_state_lock "$1")
+    cs_write_atomic "$1" awk -v pid="$2" '$0 != pid' "$1" || rc=$?
+    _cs_mkdir_unlock "$lock"
+    return "$rc"
+}
 # Minisign public key for verifying signed releases
 CS_SIGN_PUBKEY="RWQvs3IVdvrS8PJs0V0gwdJGPw/x5waQ6z6iqPQm90JfpxfcsSy9b9Vo"
 # Colors - Claude warm palette (rust → orange → gold). Theme-aware: the dark
@@ -765,7 +842,11 @@ ICON_LOGO='✳'          # U+2733 eight-spoked asterisk (Claude mark); font-inde
 # in an uncompilable regex the user just typed) truncated itself and swallowed
 # its own newline, and \t became a literal tab. The colour variables stay in the
 # format, which is where their \033 sequences are meant to be read.
+# The message is also kept in _CS_ERROR_MESSAGE, for an EXIT handler that
+# records why the run ended (the /finish progress record's refusal reason).
 error() {
+    # shellcheck disable=SC2034  # read by _finish_progress_exit in lib/30-worktree.sh
+    _CS_ERROR_MESSAGE="$1"
     printf "${RED}Error: %s${NC}\n" "$1" >&2
     exit 1
 }
@@ -1022,6 +1103,7 @@ Commands:
   -queue list         Show pending and completed queued tasks
   -queue rm <n>       Remove pending task n
   -queue clear        Empty the queue and stop draining
+  -queue start [subagents|workflow]  Start draining the queue; each task runs in this conversation, a subagent or a workflow
   -queue log          Show the walk-away run journal (drains, breaker trips)
   -msg <session> "<body>"  Send a message to another session (--kind notify|task|text|result; '-' reads the body from stdin)
   -msg --reply <thread> "<body>"  Reply into a thread; the target comes from the thread
@@ -1336,10 +1418,10 @@ session_is_live() {  # meta_dir
 
 # True when target_pid is this cs process or one of its live ancestors. A cs
 # launched from inside Claude is a descendant of the process recorded in the
-# session lock: fresh launches exec Claude in place, while resume launches keep
-# the lock-owning shell as Claude's parent. The bounded BSD/POSIX ps walk fails
-# closed on malformed output, disappearing processes, or an unexpectedly deep
-# chain. PID 1 can never be a cs lock owner.
+# session lock: Claude runs in place of cs on a fresh launch and on a resume
+# that is sure to land, and as a child of the lock-owning shell otherwise. The
+# bounded BSD/POSIX ps walk fails closed on malformed output, disappearing
+# processes, or an unexpectedly deep chain. PID 1 can never be a cs lock owner.
 _pid_is_self_or_ancestor() {  # target_pid
     local target="$1" current="$$" parent="" depth=0
     case "$target" in
@@ -1931,13 +2013,16 @@ check_update_notify() {
     local now
     now=$(date +%s)
 
-    # Check if cache exists and is fresh
+    # Check if cache exists and is fresh. A fresh cache answers the question
+    # either way, so a launch that is up to date asks GitHub at most hourly.
+    local cache_fresh=""
     if [ -f "$UPDATE_CACHE" ]; then
         local cache_time cached_version
         read -r cache_time cached_version < "$UPDATE_CACHE" 2>/dev/null || true
 
         # If cache is fresh, use it
         if [ -n "$cache_time" ] && [ $((now - cache_time)) -lt $UPDATE_CHECK_INTERVAL ]; then
+            cache_fresh=1
             # Set update available if cached version is newer
             if [ -n "$cached_version" ] && version_greater "$cached_version" "$VERSION"; then
                 UPDATE_AVAILABLE="$cached_version"
@@ -1946,7 +2031,7 @@ check_update_notify() {
     fi
 
     # No fresh cache - do a quick synchronous check
-    if [ -z "$UPDATE_AVAILABLE" ]; then
+    if [ -z "$cache_fresh" ]; then
         local remote_version
         remote_version=$(get_remote_version 2>/dev/null) || remote_version=""
 
@@ -2078,6 +2163,19 @@ cmd_engine() {  # [supports <capability>]
         *) error "Usage: ags -engine [supports <capability>]" ;;
     esac
 }
+# The command word of CLAUDE_CODE_BIN. Every launch site expands the value
+# unquoted, so it splits on IFS (spaces, tabs, newlines); this splits the same
+# way, without expanding globs.
+_claude_bin_word() {
+    local glob_was_off=""
+    case $- in *f*) glob_was_off=1 ;; esac
+    set -f
+    # shellcheck disable=SC2086
+    set -- $CLAUDE_CODE_BIN
+    [ -n "$glob_was_off" ] || set +f
+    printf '%s' "${1:-}"
+}
+
 check_dependencies() {
     local engine="${1:-claude}"
     local missing
@@ -2513,6 +2611,65 @@ create_worktree_session() {
     echo "$wt_dir"
 }
 
+# The /finish progress record: one JSON object, replaced whole at each step of
+# an integrate or a retire, that the ags mod reads to toast a start and an
+# outcome and to draw a band while a gate runs (docs/session-layout.md). It
+# sits with the base's other ags files: behind .cs/private in an encrypted
+# session, in .cs/local otherwise, and nowhere while the vault is locked.
+# Advisory only: a record that cannot be written costs one warning on stderr
+# and the run goes on unrecorded, since landing correctly matters more than
+# saying so. Each run has its own id; pid is this ags process, so a reader can
+# tell a step a killed run left behind from one still running. Globals,
+# because the EXIT handler that records a refusal runs after the locals are
+# gone.
+_finish_progress_begin() {  # base_dir task
+    _FINISH_PROGRESS="" _FINISH_ID="$$-$(date +%s)" _FINISH_TASK="$2"
+    _FINISH_SHA="" _FINISH_GATE_STARTED="" _FINISH_OUTCOME=""
+    local dir
+    if ! dir=$(cs_private_dir "$1/.cs"); then
+        warn "ags: /finish progress not recorded: .cs/private $(cs_private_state "$1/.cs")" >&2
+        return 0
+    fi
+    mkdir -p "$dir" 2>/dev/null || true
+    _FINISH_PROGRESS="$dir/finish-progress.json"
+    trap '_finish_progress_exit "$?"' EXIT
+}
+
+# Replace the record with this run at <step>; an outcome (landed, refused,
+# retired) may carry one more field, the landed commit or the refusal's reason.
+_finish_progress_write() {  # step [key value]
+    [ -n "${_FINISH_PROGRESS:-}" ] || return 0
+    local step="$1" key="${2:-}" value="${3:-}"
+    case "$step" in landed|refused|retired) _FINISH_OUTCOME="$step" ;; esac
+    if ! cs_write_atomic "$_FINISH_PROGRESS" jq -nc \
+            --arg id "$_FINISH_ID" --argjson pid "$$" --arg task "$_FINISH_TASK" \
+            --arg sha "$_FINISH_SHA" --arg step "$step" --argjson ts "$(date +%s)" \
+            --arg gate_started "$_FINISH_GATE_STARTED" --arg key "$key" --arg value "$value" \
+            '{id: $id, pid: $pid, task: $task, sha: $sha, step: $step, ts: $ts}
+             + (if $gate_started == "" then {} else {gate_started: ($gate_started | tonumber)} end)
+             + (if $key == "" then {} else {($key): $value} end)' 2>/dev/null; then
+        warn "ags: /finish progress not recorded: could not write $_FINISH_PROGRESS" >&2
+        _FINISH_PROGRESS=""
+    fi
+    return 0
+}
+
+# The EXIT handler: a run that ends in failure before it wrote an outcome was
+# refused, and the reason is the first line of the error that ended it. Never
+# fails, so a handler chained after it still runs and the exit status stands.
+_finish_progress_exit() {  # exit status
+    if [ "$1" = 0 ] || [ -z "${_FINISH_PROGRESS:-}" ] || [ -n "${_FINISH_OUTCOME:-}" ]; then
+        return 0
+    fi
+    local reason="${_CS_ERROR_MESSAGE:-}"
+    reason="${reason%%$'\n'*}"
+    if [ -z "$reason" ]; then
+        case "$1" in 130|143) reason="interrupted" ;; *) reason="ags exited $1" ;; esac
+    fi
+    _finish_progress_write refused reason "$reason" || true
+    return 0
+}
+
 # Retire an integrated feature worktree: fuse its session records into the
 # base (ignored mode), remove the worktree and delete its branch. Backs the
 # unadvertised `ags <base> -retire-feature <task> <sha> [--force]` that
@@ -2541,6 +2698,7 @@ retire_feature_worktree() {  # base_name task sha [--force]
 
     [ -d "$base_dir" ] || error "Base session not found: $base_name"
     [ -d "$wt_dir" ] || error "No worktree for feature '$task' (expected $wt_dir)"
+    _finish_progress_begin "$base_dir" "$task"
 
     local wt_name="$base_name@$task"
     if [ "${CS_SESSION_NAME:-${CLAUDE_SESSION_NAME:-}}" = "$wt_name" ]; then
@@ -2549,6 +2707,7 @@ retire_feature_worktree() {  # base_name task sha [--force]
 
     sha=$(git -C "$base_dir" rev-parse -q --verify "$sha^{commit}" 2>/dev/null) \
         || error "Commit not found in $base_name: $sha"
+    _FINISH_SHA="$sha"
     local tip
     tip=$(git -C "$wt_dir" rev-parse HEAD 2>/dev/null) || error "Not a git checkout: $wt_dir"
     # Without --force the captured commit must be in the base. With it (a
@@ -2647,6 +2806,7 @@ $remove_err"
            --arg task "$task" \
         '{ts: $ts, event: $event, task: $task}' \
         >> "$base_dir/.cs/timeline.jsonl"; } 2>/dev/null || true
+    _finish_progress_write retired
     printf 'retired %s %s\n' "$task" "$sha"
 }
 
@@ -2707,6 +2867,7 @@ integrate_feature_worktree() {  # base_name task sha [--from-remote [--ci-green]
     branch="cs/$task"
     [ -d "$base_dir" ] || error "Base session not found: $base_name"
     [ -d "$wt_dir" ] || error "No worktree for feature '$task' (expected $wt_dir)"
+    _finish_progress_begin "$base_dir" "$task"
     # Herestring, not a pipe: grep -q's early exit would SIGPIPE the writer
     # and pipefail would read that as "not registered".
     local features
@@ -2723,6 +2884,7 @@ integrate_feature_worktree() {  # base_name task sha [--from-remote [--ci-green]
 
     sha=$(git -C "$base_dir" rev-parse -q --verify "$sha^{commit}" 2>/dev/null) \
         || error "Commit not found in $base_name: $sha"
+    _FINISH_SHA="$sha"
     # Before the split: a detached base has no branch to land on either way,
     # and the ff-only would move a detached HEAD while the branch stays put.
     local base_branch
@@ -2735,10 +2897,13 @@ integrate_feature_worktree() {  # base_name task sha [--from-remote [--ci-green]
         git -C "$base_dir" merge-base --is-ancestor "$sha" "$branch" 2>/dev/null \
             || error "$sha is not reachable from $branch; capture the feature HEAD again"
     fi
+    # Nothing to land: the record gains no step, and the retire that follows
+    # writes the outcome.
     if git -C "$base_dir" merge-base --is-ancestor "$sha" HEAD 2>/dev/null; then
         printf 'already-integrated %s %s\n' "$task" "$sha"
         return 0
     fi
+    _finish_progress_write started
 
     if _tree_is_dirty "$base_dir"; then
         error "Base session has uncommitted changes; commit them in $base_dir first"
@@ -2779,8 +2944,9 @@ integrate_feature_worktree() {  # base_name task sha [--from-remote [--ci-green]
     # EXIT alone is not enough: a TERM/INT'd bash skips the EXIT trap
     # (measured: exit 143, no cleanup), stranding the mutex and the temp.
     # Same shape as lib/75-launch.sh:112-113. Armed before the pid write: a
-    # write that fails under set -e must still release the directory.
-    trap '_integrate_cleanup' EXIT
+    # write that fails under set -e must still release the directory. The
+    # progress handler goes first, while $? is still the exit status.
+    trap '_finish_progress_exit "$?"; _integrate_cleanup' EXIT
     trap '_integrate_cleanup; exit 130' INT TERM
     # The holder's pid, for ags -doctor's liveness check. Inside the lock, so
     # the directory and its evidence are created and removed together; the
@@ -2792,7 +2958,7 @@ integrate_feature_worktree() {  # base_name task sha [--from-remote [--ci-green]
 
 # The mutation half of integrate_feature_worktree, entered with the mutex
 # held and the cleanup trap armed: merge base HEAD + <sha> in a temporary
-# detached worktree under <common>/cs/finish/, run the gate argv there, then
+# detached worktree under $TMPDIR, run the gate argv there, then
 # fast-forward the base onto the result. The fast-forward is the atomic
 # "base has not moved" check; a red gate or a conflict leaves base exactly
 # as it was. No hook of the project fires inside the temp (core.hooksPath
@@ -2804,17 +2970,22 @@ _integrate_in_temp() {  # base_dir wt_dir task sha common from_remote ci_green g
 
     local B
     B=$(git -C "$base_dir" rev-parse HEAD)
-    local tmp="$common/cs/finish/$task.$$"
-    mkdir -p "$common/cs/finish"
+    # Outside any .git directory: tools refuse to serve or read files under
+    # one (Vite's server.fs.deny holds **/.git/**, so a vitest browser run in
+    # the temp never connects and the gate goes red for where it ran). An
+    # empty directory, which git worktree add fills.
+    local tmp
+    tmp=$(mktemp -d "${TMPDIR:-/tmp}/cs-finish-$task.XXXXXX") \
+        || error "Could not create a temporary directory for the integrate under ${TMPDIR:-/tmp}"
+    # Armed as soon as the directory exists, before the add: an add that fails
+    # half-way leaves a directory and a registration behind, and only a
+    # _INTEGRATE_TMP the cleanup can see gets them removed. The cleanup
+    # removes a directory that never became a worktree and prunes either way.
+    _INTEGRATE_TMP="$tmp"
     # /dev/null is not a directory on BSD, so hooks are silenced with a real
     # empty one.
     local no_hooks
     no_hooks=$(mktemp -d "${TMPDIR:-/tmp}/cs-nohooks.XXXXXX")
-    # Armed before the add, not after: an add that fails half-way leaves a
-    # directory and a registration behind, and only a _INTEGRATE_TMP the
-    # cleanup can see gets them removed. The cleanup tolerates a path that
-    # was never created and prunes either way.
-    _INTEGRATE_TMP="$tmp"
     if ! git -C "$base_dir" -c core.hooksPath="$no_hooks" worktree add --detach "$tmp" "$B" >/dev/null 2>&1; then
         rmdir "$no_hooks"
         error "git worktree add failed for $tmp"
@@ -2833,6 +3004,7 @@ _integrate_in_temp() {  # base_dir wt_dir task sha common from_remote ci_green g
     # origin and names the PR, so a fast-forward is the right shape there.
     local sha7 merge_status=0
     sha7=$(printf '%s' "$sha" | cut -c1-7)
+    _finish_progress_write merging
     if [ -n "$from_remote" ]; then
         git -C "$tmp" -c core.hooksPath="$no_hooks" merge --no-edit "$sha" >/dev/null 2>&1 || merge_status=$?
     else
@@ -2906,6 +3078,12 @@ Move or delete these untracked files in $base_dir, then re-run /finish $task"
     fi
     local gate_log
     if [ -z "$gate_skipped" ]; then
+        # `-- true` is how the caller says there is no gate: nothing worth a
+        # band runs, so only a real gate is a step of the record.
+        if [ $# -ne 1 ] || [ "$1" != true ]; then
+            _FINISH_GATE_STARTED=$(date +%s)
+            _finish_progress_write gate
+        fi
         gate_log=$(mktemp "${TMPDIR:-/tmp}/cs-gate.XXXXXX")
         # </dev/null: a gate that reads stdin would otherwise consume whatever
         # cs was given and block a non-interactive run forever.
@@ -2959,6 +3137,7 @@ Commit the generated output on the feature branch, then re-run /finish $task"
     # reachable only from the temp's detached HEAD.
     local R ff_err ff_status=0
     R="$M"
+    _finish_progress_write fast-forward
     ff_err=$(git -C "$base_dir" merge --ff-only "$R" 2>&1 >/dev/null) || ff_status=$?
     if [ "$ff_status" != 0 ]; then
         error "Base $base_dir moved or changed during the gates (was $B); re-run /finish $task
@@ -2990,6 +3169,7 @@ ${ff_err:-(no output from git merge --ff-only)}"
            --arg result "$landed" \
         '{ts: $ts, event: $event, task: $task, sha: $sha, result: $result}' \
         >> "$base_dir/.cs/timeline.jsonl"; } 2>/dev/null || true
+    _finish_progress_write landed result "$landed"
     printf 'integrated %s %s -> %s\n' "$task" "$sha" "$landed"
 }
 
@@ -3108,14 +3288,17 @@ run_features() {  # base_name [--porcelain]
 # The narrative is the looser-bar lab notebook, held as a native memory topic
 # file so it inherits lazy-load and /memory tooling. Idempotent: creates the
 # stub on first run and re-adds the index pointer if a memory write dropped it.
-ensure_narrative_file() {
+# A caller that has already resolved the actor's slug passes it.
+ensure_narrative_file() {  # session_dir, [actor_slug]
     local session_dir="$1"
     local mem_dir="$session_dir/.cs/memory"
     local index="$mem_dir/MEMORY.md"
     mkdir -p "$mem_dir"
 
-    local actor
-    actor=$(cs_actor_slug "$session_dir")
+    local actor="${2:-}"
+    if [ -z "$actor" ]; then
+        actor=$(cs_actor_slug "$session_dir")
+    fi
     local narrative="$mem_dir/narrative.$actor.md"
 
     # One-time migration: a pre-per-actor narrative.md becomes this actor's file.
@@ -3140,7 +3323,7 @@ EOF
     # GNU sed and would abort session resume on Linux under set -e.
     if [ -f "$index" ] && grep -q '(narrative\.md)' "$index" 2>/dev/null; then
         cs_write_atomic "$index" sed '/(narrative\.md)/d' "$index" \
-            || warn "could not rewrite $index; the stale narrative.md pointer stays"
+            || { warn "could not rewrite $index; the stale narrative.md pointer stays"; _CS_MIGRATE_CLEAN=0; }
     fi
 
     if [ ! -f "$index" ] || ! grep -q "(narrative\.$actor\.md)" "$index" 2>/dev/null; then
@@ -3540,17 +3723,25 @@ _is_session_color() {
 # stdout, or empty if absent or unreadable. Never errors. KEEP THE FORMAT IN
 # SYNC WITH bin/cs-statusline's _read_state_key (session name ink, context-pct
 # gating) and hooks/session-start.sh's local_state_set.
+# Shell builtins only: an open reads this file several times, and each read
+# would otherwise fork a process. The first line beginning "key:" wins; the
+# value is what follows the first colon, leading whitespace dropped and every
+# double quote removed. A last line without a newline still counts.
 _read_local_state() {
-    local state="$1" key="$2"
+    local state="$1" key="$2" line value
     [ -f "$state" ] || return 0
-    awk -v key="$key" '
-        index($0, key ":") == 1 {
-            sub(/^[^:]*:[[:space:]]*/, "")
-            gsub(/"/, "")
-            print
-            exit
-        }
-    ' "$state" 2>/dev/null || true
+    {
+        while IFS= read -r line || [ -n "$line" ]; do
+            case "$line" in
+                "$key:"*)
+                    value=${line#*:}
+                    value=${value#"${value%%[![:space:]]*}"}
+                    printf '%s\n' "${value//\"/}"
+                    break
+                    ;;
+            esac
+        done < "$state"
+    } 2>/dev/null || true
 }
 
 # Write 'key: value' into a machine-local state file, replacing any existing
@@ -4088,7 +4279,7 @@ _exec_fresh_rebind() {
 setup_merge_attributes() {
     local dir="$1"
     git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || return 0
-    git -C "$dir" config merge.ours.driver true 2>/dev/null || true
+    git -C "$dir" config merge.ours.driver true 2>/dev/null || _CS_MIGRATE_CLEAN=0
     local ga="$dir/.gitattributes"
     if ! grep -q 'MEMORY\.md merge=ours' "$ga" 2>/dev/null; then
         printf '.cs/memory/MEMORY.md merge=ours\n' >> "$ga"
@@ -4220,9 +4411,9 @@ _refuse_worktree_of_encrypted_base() {  # base_name, base_dir
 # keeps behind .cs/private. The open refuses a plaintext copy of any of them,
 # and ags -encrypt moves each into the vault.
 CS_PRIVATE_LOCAL_FILES="session.log scope-prompt.trace memory-index.snapshot mail
-    queue queue.tmp queue.state queue.done queue.declined queue.migrating
+    queue queue.tmp queue.state queue.mode queue.done queue.declined queue.migrating
     notifications.jsonl notifications.seen failures rewrite.trace pending-handoff
-    pending-switch"
+    pending-switch finish-progress.json"
 
 # Once .cs/private holds a session's ags content files, a copy still in
 # .cs/local is plaintext the vault was meant to hold: an unmigrated log, or one
@@ -4428,13 +4619,16 @@ needs_cs_migration() {
 # CLAUDE.local.md. Only the exact sentences cs emitted are
 # touched — a narrative body or a user's own prose never is. Temp+mv rather than
 # sed -i (BSD/GNU disagree on -i). Idempotent: nothing matches on the second run.
-migrate_narrative_resume_wording() {
-    local session_dir="$1"
+migrate_narrative_resume_wording() {  # session_dir, [actor_slug]
+    local session_dir="$1" actor="${2:-}"
     local mem="$session_dir/.cs/memory" f
+    if [ -z "$actor" ]; then
+        actor=$(cs_actor_slug "$session_dir")
+    fi
     # Only the actor's own narrative: a teammate's file is theirs to migrate on
     # their own resume, and a committed edit to its head would show up in their
     # teammates' digests as growth that is not a tail.
-    f="$mem/narrative.$(cs_actor_slug "$session_dir").md"
+    f="$mem/narrative.$actor.md"
     # Keyed to the description line specifically (not just "somewhere in the
     # first 8 lines"): a cs-written narrative has exactly 7 header lines, so
     # a body line beginning on line 8 sits inside a bare line-range window
@@ -4447,156 +4641,26 @@ migrate_narrative_resume_wording() {
         # sentence appears once, so a typo cannot migrate half the population
         # to a wording no later gate matches.
         cs_write_atomic "$f" sed -E '1,8{/^description: /s/Read (all narrative\.\*\.md on resume\.|the live narrative\.\*\.md on resume; older sections are archived under \.cs\/narrative-archive\/\.)/Its owner reads it in full on resume; anyone else reads only the lines the resume digest names. Older sections are archived under .cs\/narrative-archive\/./;}' "$f" \
-            || warn "could not rewrite $f; its description keeps the old wording"
+            || { warn "could not rewrite $f; its description keeps the old wording"; _CS_MIGRATE_CLEAN=0; }
     fi
     f="$mem/MEMORY.md"
     if [ -f "$f" ] && grep -qE 'read (all|the live) narrative\.\*\.md on resume' "$f"; then
         cs_write_atomic "$f" sed -E 's/read (all narrative\.\*\.md on resume|the live narrative\.\*\.md on resume, older sections under \.cs\/narrative-archive\/)/its owner reads it in full on resume, anyone else only the lines the resume digest names; older sections under .cs\/narrative-archive\//' "$f" \
-            || warn "could not rewrite $f; its narrative pointer keeps the old wording"
+            || { warn "could not rewrite $f; its narrative pointer keeps the old wording"; _CS_MIGRATE_CLEAN=0; }
     fi
-
 }
 
-# Migrate existing session to latest format
-migrate_session() {
-    local session_dir="$1" engine="${2:-claude}"
-
-    # Sessions created before cs set a mode are still world-readable on disk,
-    # and git does not record directory modes, so a fresh clone recreates .cs
-    # under the cloner's umask however it was set on the other machine.
-    _harden_session_meta "$session_dir"
-    # The root only when cs owns it. An adopted session's real directory is the
-    # user's project, living wherever they keep it — re-permissioning that on
-    # every launch would change their directory behind their back. Testing the
-    # PARENT rather than the name: by the time migrate runs, the path has been
-    # resolved through the symlink, so the adopted session no longer looks like
-    # a link and its basename is the project's, not the session's.
-    if _session_root_is_cs_owned "$session_dir"; then
-        chmod 700 "$session_dir" 2>/dev/null || true
-    fi
-
-    # Per-actor local state must never be committed; refuse if it has been.
-    cs_assert_local_untracked "$session_dir"
-    if [ "$(_read_local_state "$session_dir/.cs/local/state" git_bookkeeping)" = "exclude" ]; then
-        local conflict
-        conflict=$(_exclude_session_tracked_conflict "$session_dir")
-        if [ -n "$conflict" ]; then
-            case "$conflict" in
-                *symlink) error "$conflict in $session_dir, and ags writes through it at every open. Replace it with a real file or directory, or ags -rm the session." ;;
-                *) error "$conflict is tracked on the branch in $session_dir, and ags would rewrite it at every open. Stop tracking it, or ags -rm the session." ;;
-            esac
-        fi
-    fi
-
-    # Backfill the merge attributes on existing sessions, and the .cs/local/
-    # ignore rule on older sessions whose .gitignore predates it, so per-actor
-    # local state never gets committed (which would otherwise trip
-    # cs_assert_local_untracked and block the next resume). An adopted Claude
-    # Code worktree keeps cs's files out of git through the repo's common
-    # exclude instead (git_bookkeeping: exclude): nothing of cs's is committed
-    # there for attributes to govern, and an in-tree .gitignore or
-    # .gitattributes would be the one thing dirtying its PR branch.
-    # The same sessions keep their tracked CLAUDE.md as the branch has it: the
-    # two CLAUDE.md migrations further down are skipped for them too.
-    local tracked_tree_is_ours=1
-    if [ "$(_read_local_state "$session_dir/.cs/local/state" git_bookkeeping)" = "exclude" ]; then
-        tracked_tree_is_ours=0
-    fi
-    if [ "$tracked_tree_is_ours" = 1 ]; then
-        setup_merge_attributes "$session_dir"
-        ensure_cs_gitignore_entries "$session_dir"
-    fi
-
-    # Phase 1: Structural migration (flat layout -> .cs/ directory)
-    if needs_cs_migration "$session_dir"; then
-        mkdir -p "$session_dir/.cs"
-
-        # Move directories
-        migrate_if_exists "$session_dir/logs" "$session_dir/.cs/logs"
-        migrate_if_exists "$session_dir/archives" "$session_dir/.cs/archives"
-        migrate_if_exists "$session_dir/age-recipients" "$session_dir/.cs/age-recipients"
-
-        # Move metadata files
-        migrate_if_exists "$session_dir/README.md" "$session_dir/.cs/README.md"
-        migrate_if_exists "$session_dir/discoveries.md" "$session_dir/.cs/discoveries.md"
-        migrate_if_exists "$session_dir/summary.md" "$session_dir/.cs/summary.md"
-        migrate_if_exists "$session_dir/secrets.enc" "$session_dir/.cs/secrets.enc"
-        migrate_if_exists "$session_dir/secrets.age" "$session_dir/.cs/secrets.age"
-
-        # Update .gitignore for new structure
-        create_session_gitignore "$session_dir"
-
-        echo ""
-        echo -e "${ORANGE}Migrated session to .cs/ directory structure${NC}"
-        echo -e "${DIM}Session metadata moved to .cs/ - your workspace root is now clean for project files.${NC}"
-        echo ""
-
-        # Commit the migration if git is initialized
-        if [ -d "$session_dir/.git" ]; then
-            (
-                cd "$session_dir" || exit 0
-                git add -A 2>/dev/null || true
-                if ! git diff --cached --quiet 2>/dev/null; then
-                    git commit -q -m "Migrate session structure to .cs/ metadata directory" 2>/dev/null || true
-                fi
-            )
-        fi
-    fi
-
-    # Phase 2: Ensure .cs/ subdirectories exist (handles partial migrations and edge cases)
-    mkdir -p "$session_dir/.cs/local"
-
-    # Phase 2a: Convert a legacy line-per-message mail inbox to the maildir,
-    # and a legacy line-per-task queue file to the queue directory.
-    migrate_mailbox "$session_dir"
-    _queue_convert_legacy "$session_dir/.cs/local"
-
-    # Phase 2b: Relocate the session log to machine-local state. The audit trail
-    # (bash commands, lifecycle events, autosave notes) is per-checkout, not
-    # shared — keeping it git-synced with merge=union interleaved every machine's
-    # commands into the one shared repo. Move it under .cs/local/ (gitignored) so
-    # it stays with the machine that produced it; the shared structured record
-    # lives in timeline.jsonl. The tracked deletion is left for the next normal
-    # commit, as with the README-frontmatter move below. One-time, idempotent:
-    # once the old file is gone the block is a no-op. During the upgrade window a
-    # peer still on the old cs may keep appending to the tracked log, so a
-    # one-time modify/delete conflict on this low-stakes file is possible — take
-    # either side.
-    # An encrypted session's log belongs behind .cs/private; open has already
-    # refused a locked vault, so cs_private_dir resolves here.
-    if [ -f "$session_dir/.cs/logs/session.log" ]; then
-        local log_dir
-        log_dir=$(cs_private_dir "$session_dir/.cs") \
-            || error "Cannot move .cs/logs/session.log: .cs/private $(cs_private_state "$session_dir/.cs"), and cs cannot write there."
-        cat "$session_dir/.cs/logs/session.log" >> "$log_dir/session.log"
-        rm -f "$session_dir/.cs/logs/session.log"
-        rmdir "$session_dir/.cs/logs" 2>/dev/null || true
-        # Drop the obsolete union rule for the relocated log. awk, not grep -v:
-        # grep exits 1 when that was the only line, and an empty file is the
-        # right result there.
-        local ga="$session_dir/.gitattributes"
-        if [ "$tracked_tree_is_ours" = 1 ] && [ -f "$ga" ] && grep -q 'logs/session\.log merge=union' "$ga"; then
-            cs_write_atomic "$ga" awk '!/logs\/session\.log merge=union/' "$ga" 2>/dev/null || true
-        fi
-        warn "Moved .cs/logs/session.log to ${log_dir#"$session_dir"/}/session.log"
-    fi
-
-    # Remove inert sync/remote metadata left by older versions (the sync
-    # subsystem was removed; nothing reads these files anymore)
-    rm -f "$session_dir/.cs/sync.conf" "$session_dir/.cs/remote.conf"
-
-    # Native memory import must precede creating a portable memory index.
-    cs_engine_call "$engine" prepare_workspace "$session_dir" migrate_storage || return $?
-    mkdir -p "$session_dir/.cs"/{memory,plans}
-
-    # Phase 4b: Fold a legacy discoveries.md into the narrative topic file, then
-    # ensure the narrative file + index pointer exist (idempotent on every resume).
-    migrate_discoveries_to_narrative "$session_dir"
-    ensure_narrative_file "$session_dir"
+# Phases 13, 6 and 12: the text ags manages in every session, whatever its
+# engine: the narrative's description, its MEMORY.md pointer and
+# .cs/README.md. Each phase is a no-op once its file is current. Claude's own
+# documents (Phase 13's CLAUDE.local.md wording, phases 5 and 7) are the Claude
+# adapter's, run from its prepare_workspace migrate.
+_migrate_session_documents() {  # session_dir, actor_slug
+    local session_dir="$1" actor_slug="$2"
 
     # Phase 13: the resume protocol reads live narratives only; rewrite the
     # read-all sentences cs wrote into files that predate rotation.
-    migrate_narrative_resume_wording "$session_dir"
+    migrate_narrative_resume_wording "$session_dir" "$actor_slug"
 
     # Phase 6: Add YAML frontmatter to README.md if missing
     local readme="$session_dir/.cs/README.md"
@@ -4634,6 +4698,8 @@ migrate_session() {
         if cs_write_atomic "$readme" printf -- '---\nstatus: active\ncreated: %s\ntags: []\naliases: ["%s"]\n---\n%s\n' \
             "$created_date" "$session_name" "$existing_content" 2>/dev/null; then
             warn "Added frontmatter to .cs/README.md"
+        else
+            _CS_MIGRATE_CLEAN=0
         fi
     fi
 
@@ -4697,11 +4763,298 @@ migrate_session() {
             warn "Moved machine-local fields from .cs/README.md to .cs/local/state"
         else
             warn "could not rewrite $readme; its machine-local fields stay in it"
+            _CS_MIGRATE_CLEAN=0
+        fi
+    fi
+}
+
+# The session files a completed migration vouches for. Changed after the stamp
+# (newer than it), any of them sends the next open through the full migration.
+# The Codex adapter manages none of a session's files at migrate time, so the
+# list is the same for both engines.
+CS_MIGRATION_PROBES=".gitignore .gitattributes CLAUDE.local.md CLAUDE.md .cs/README.md"
+
+# How far an open can trust the last completed migration, from the stamp
+# .cs/local/migrated. Prints "fresh" when it can skip every one-time phase,
+# "narrative" when only MEMORY.md changed after the stamp (Claude Code writes
+# it, and only the narrative check reads it), or "stale: <reason>" when the
+# open must run them all. The engine is the open's (CS_MIGRATE_ENGINE, which
+# migrate_session sets); outside an open, such as in ags -doctor, it is the
+# engine the next open would pick. A stamp written under another engine is
+# stale: a Codex open runs none of Claude's phases, so its stamp vouches for
+# nothing a Claude open needs, and the reverse.
+_migration_stamp_state() {  # session_dir, actor_raw
+    local stamp="$1/.cs/local/migrated" line1="" line2="" rest p encrypted=0 engine fields
+    if [ ! -f "$stamp" ]; then
+        echo "stale: no stamp"
+        return 0
+    fi
+    if ! { IFS= read -r line1 && IFS= read -r line2; } < "$stamp" 2>/dev/null || [ -z "$line2" ]; then
+        echo "stale: the stamp is unreadable or incomplete"
+        return 0
+    fi
+    case "$line1" in
+        "$VERSION"$'\t'*) ;;
+        *) echo "stale: written by ags ${line1%%$'\t'*}, not $VERSION"; return 0 ;;
+    esac
+    case "$line1" in
+        "$VERSION"$'\t'"$2"$'\t'*) ;;
+        *) echo "stale: written for another actor"; return 0 ;;
+    esac
+    if [ -d "$1/.cs/private" ]; then
+        encrypted=1
+    fi
+    # What follows the actor: the encrypted flag, then the engine.
+    fields=${line1#"$VERSION"$'\t'"$2"$'\t'}
+    case "$fields" in
+        "$encrypted"|"$encrypted"$'\t'*) ;;
+        *) echo "stale: the stamp records another encryption state"; return 0 ;;
+    esac
+    engine="${CS_MIGRATE_ENGINE:-}"
+    if [ -z "$engine" ]; then
+        engine=$(_session_engine "$1" "" 2>/dev/null) || engine=claude
+    fi
+    case "$fields" in
+        "$encrypted"$'\t'"$engine") ;;
+        "$encrypted") echo "stale: the stamp names no engine"; return 0 ;;
+        *) echo "stale: written for another engine"; return 0 ;;
+    esac
+    rest="$line2"
+    while [ -n "$rest" ]; do
+        p=${rest%%$'\t'*}
+        rest=${rest#"$p"}
+        rest=${rest#$'\t'}
+        if [ -n "$p" ] && [ ! -e "$1/$p" ]; then
+            echo "stale: $p is gone"
+            return 0
+        fi
+    done
+    for p in $CS_MIGRATION_PROBES; do
+        if [ "$1/$p" -nt "$stamp" ]; then
+            echo "stale: $p changed after the stamp"
+            return 0
+        fi
+    done
+    # setup_merge_attributes sets merge.ours.driver in a checkout ags commits
+    # into, and the doctor's advice for a missing one is to launch once. Every
+    # `git config` write rewrites .git/config (SessionStart's hideRefs on each
+    # launch among them), so its modification time says nothing: read the value.
+    if [ -e "$1/.git" ] && [ "$(_read_local_state "$1/.cs/local/state" git_bookkeeping)" != "exclude" ] \
+        && [ "$(git -C "$1" config --get merge.ours.driver 2>/dev/null)" != "true" ]; then
+        echo "stale: merge.ours.driver is not set"
+        return 0
+    fi
+    if [ "$1/.cs/memory/MEMORY.md" -nt "$stamp" ]; then
+        echo "narrative"
+        return 0
+    fi
+    echo "fresh"
+}
+
+# Record a completed migration in .cs/local/migrated. Line 1: the ags version,
+# the raw actor, whether the session is encrypted (1) or not (0) and the
+# engine the open ran under, tab separated. Line 2: the probe files that exist
+# now, tab separated, so a later open can tell one was deleted.
+_write_migration_stamp() {  # session_dir, actor_raw, actor_slug, engine
+    local dir="$1" encrypted=0 listed="" p
+    if [ -d "$dir/.cs/private" ]; then
+        encrypted=1
+    fi
+    for p in $CS_MIGRATION_PROBES .cs/memory/MEMORY.md ".cs/memory/narrative.$3.md" .claude/settings.local.json; do
+        if [ -e "$dir/$p" ]; then
+            listed="$listed${listed:+$'\t'}$p"
+        fi
+    done
+    cs_write_atomic "$dir/.cs/local/migrated" printf '%s\t%s\t%s\t%s\n%s\n' "$VERSION" "$2" "$encrypted" "$4" "$listed"
+}
+
+# Migrate existing session to latest format
+migrate_session() {
+    local session_dir="$1" engine="${2:-claude}"
+
+    # Sessions created before cs set a mode are still world-readable on disk,
+    # and git does not record directory modes, so a fresh clone recreates .cs
+    # under the cloner's umask however it was set on the other machine.
+    _harden_session_meta "$session_dir"
+    # The root only when cs owns it. An adopted session's real directory is the
+    # user's project, living wherever they keep it — re-permissioning that on
+    # every launch would change their directory behind their back. Testing the
+    # PARENT rather than the name: by the time migrate runs, the path has been
+    # resolved through the symlink, so the adopted session no longer looks like
+    # a link and its basename is the project's, not the session's.
+    if _session_root_is_cs_owned "$session_dir"; then
+        chmod 700 "$session_dir" 2>/dev/null || true
+    fi
+
+    # Per-actor local state must never be committed; refuse if it has been.
+    cs_assert_local_untracked "$session_dir"
+    if [ "$(_read_local_state "$session_dir/.cs/local/state" git_bookkeeping)" = "exclude" ]; then
+        local conflict
+        conflict=$(_exclude_session_tracked_conflict "$session_dir")
+        if [ -n "$conflict" ]; then
+            case "$conflict" in
+                *symlink) error "$conflict in $session_dir, and ags writes through it at every open. Replace it with a real file or directory, or ags -rm the session." ;;
+                *) error "$conflict is tracked on the branch in $session_dir, and ags would rewrite it at every open. Stop tracking it, or ags -rm the session." ;;
+            esac
         fi
     fi
 
+    # A migration whose writes all succeeded stamps .cs/local/migrated.
+    # While the stamp is fresh the one-time phases below have nothing left to
+    # do, so a reopen skips them ("none"); when MEMORY.md alone changed it runs
+    # only the narrative check and restamps ("narrative"). The refusals above
+    # and the phases that only test for a leftover's existence run on every
+    # open. The stamp sits after cs_assert_local_untracked on purpose: a stamp
+    # committed into git is refused before anything trusts it. A phase that
+    # carries on past a failed write clears _CS_MIGRATE_CLEAN, so the next
+    # open retries it. The stamp names the engine it was written under, so the
+    # first open after ags -switch runs the full migration for the other one.
+    # CS_MIGRATE_ENGINE and CS_MIGRATE_REPAIR are dynamically scoped: the stamp
+    # check reads the first, and the engine adapters' prepare_workspace the
+    # second.
+    # shellcheck disable=SC2034
+    local CS_MIGRATE_ENGINE="$engine"
+    local actor_raw actor_slug="" repair=all
+    actor_raw=$(cs_actor_raw "$session_dir" "$session_dir/.cs")
+    case "$(_migration_stamp_state "$session_dir" "$actor_raw")" in
+        fresh) repair=none ;;
+        narrative) repair=narrative ;;
+    esac
+    # shellcheck disable=SC2034
+    local CS_MIGRATE_REPAIR="$repair"
+    _CS_MIGRATE_CLEAN=1
+
+    # Backfill the merge attributes on existing sessions, and the .cs/local/
+    # ignore rule on older sessions whose .gitignore predates it, so per-actor
+    # local state never gets committed (which would otherwise trip
+    # cs_assert_local_untracked and block the next resume). An adopted Claude
+    # Code worktree keeps cs's files out of git through the repo's common
+    # exclude instead (git_bookkeeping: exclude): nothing of cs's is committed
+    # there for attributes to govern, and an in-tree .gitignore or
+    # .gitattributes would be the one thing dirtying its PR branch.
+    # The same sessions keep their tracked CLAUDE.md as the branch has it: the
+    # two CLAUDE.md migrations further down are skipped for them too.
+    local tracked_tree_is_ours=1
+    if [ "$(_read_local_state "$session_dir/.cs/local/state" git_bookkeeping)" = "exclude" ]; then
+        tracked_tree_is_ours=0
+    fi
+    if [ "$tracked_tree_is_ours" = 1 ] && [ "$repair" = all ]; then
+        setup_merge_attributes "$session_dir"
+        ensure_cs_gitignore_entries "$session_dir"
+    fi
+
+    # Phase 1: Structural migration (flat layout -> .cs/ directory)
+    if needs_cs_migration "$session_dir"; then
+        mkdir -p "$session_dir/.cs"
+
+        # Move directories
+        migrate_if_exists "$session_dir/logs" "$session_dir/.cs/logs"
+        migrate_if_exists "$session_dir/archives" "$session_dir/.cs/archives"
+        migrate_if_exists "$session_dir/age-recipients" "$session_dir/.cs/age-recipients"
+
+        # Move metadata files
+        migrate_if_exists "$session_dir/README.md" "$session_dir/.cs/README.md"
+        migrate_if_exists "$session_dir/discoveries.md" "$session_dir/.cs/discoveries.md"
+        migrate_if_exists "$session_dir/summary.md" "$session_dir/.cs/summary.md"
+        migrate_if_exists "$session_dir/secrets.enc" "$session_dir/.cs/secrets.enc"
+        migrate_if_exists "$session_dir/secrets.age" "$session_dir/.cs/secrets.age"
+
+        # Update .gitignore for new structure
+        create_session_gitignore "$session_dir"
+
+        echo ""
+        echo -e "${ORANGE}Migrated session to .cs/ directory structure${NC}"
+        echo -e "${DIM}Session metadata moved to .cs/ - your workspace root is now clean for project files.${NC}"
+        echo ""
+
+        # Commit the migration if git is initialized
+        if [ -d "$session_dir/.git" ]; then
+            (
+                cd "$session_dir" || exit 0
+                git add -A 2>/dev/null || true
+                if ! git diff --cached --quiet 2>/dev/null; then
+                    git commit -q -m "Migrate session structure to .cs/ metadata directory" 2>/dev/null || true
+                fi
+            )
+        fi
+    fi
+
+    # Phase 2: Ensure .cs/ subdirectories exist (handles partial migrations and edge cases)
+    if [ ! -d "$session_dir/.cs/local" ]; then
+        mkdir -p "$session_dir/.cs/local"
+    fi
+
+    # Phase 2a: Convert a legacy line-per-message mail inbox to the maildir,
+    # and a legacy line-per-task queue file to the queue directory.
+    migrate_mailbox "$session_dir"
+    _queue_convert_legacy "$session_dir/.cs/local"
+
+    # Phase 2b: Relocate the session log to machine-local state. The audit trail
+    # (bash commands, lifecycle events, autosave notes) is per-checkout, not
+    # shared — keeping it git-synced with merge=union interleaved every machine's
+    # commands into the one shared repo. Move it under .cs/local/ (gitignored) so
+    # it stays with the machine that produced it; the shared structured record
+    # lives in timeline.jsonl. The tracked deletion is left for the next normal
+    # commit, as with the README-frontmatter move below. One-time, idempotent:
+    # once the old file is gone the block is a no-op. During the upgrade window a
+    # peer still on the old cs may keep appending to the tracked log, so a
+    # one-time modify/delete conflict on this low-stakes file is possible — take
+    # either side.
+    # An encrypted session's log belongs behind .cs/private; open has already
+    # refused a locked vault, so cs_private_dir resolves here.
+    if [ -f "$session_dir/.cs/logs/session.log" ]; then
+        local log_dir
+        log_dir=$(cs_private_dir "$session_dir/.cs") \
+            || error "Cannot move .cs/logs/session.log: .cs/private $(cs_private_state "$session_dir/.cs"), and cs cannot write there."
+        cat "$session_dir/.cs/logs/session.log" >> "$log_dir/session.log"
+        rm -f "$session_dir/.cs/logs/session.log"
+        rmdir "$session_dir/.cs/logs" 2>/dev/null || true
+        # Drop the obsolete union rule for the relocated log. awk, not grep -v:
+        # grep exits 1 when that was the only line, and an empty file is the
+        # right result there.
+        local ga="$session_dir/.gitattributes"
+        if [ "$tracked_tree_is_ours" = 1 ] && [ -f "$ga" ] && grep -q 'logs/session\.log merge=union' "$ga"; then
+            cs_write_atomic "$ga" awk '!/logs\/session\.log merge=union/' "$ga" 2>/dev/null || true
+        fi
+        warn "Moved .cs/logs/session.log to ${log_dir#"$session_dir"/}/session.log"
+    fi
+
+    # Remove inert sync/remote metadata left by older versions (the sync
+    # subsystem was removed; nothing reads these files anymore)
+    if [ "$repair" = all ]; then
+        rm -f "$session_dir/.cs/sync.conf" "$session_dir/.cs/remote.conf"
+    fi
+
+    # Native memory import must precede creating a portable memory index.
+    cs_engine_call "$engine" prepare_workspace "$session_dir" migrate_storage || return $?
+    if [ ! -d "$session_dir/.cs/memory" ] || [ ! -d "$session_dir/.cs/plans" ]; then
+        mkdir -p "$session_dir/.cs"/{memory,plans}
+    fi
+
+    # Phase 4b: Fold a legacy discoveries.md into the narrative topic file, then
+    # ensure the narrative file + index pointer exist (idempotent; skipped while
+    # the migration stamp is fresh).
+    migrate_discoveries_to_narrative "$session_dir"
+    if [ "$repair" != none ]; then
+        actor_slug=$(_slugify "$actor_raw")
+        ensure_narrative_file "$session_dir" "$actor_slug"
+    fi
+
+    if [ "$repair" = all ]; then
+        _migrate_session_documents "$session_dir" "$actor_slug"
+    fi
+
+    # The engine's own phases. The adapter reads CS_MIGRATE_REPAIR: Claude runs
+    # its one-time phases only when it is "all", and its binding check and
+    # colour backfill on every open. A bare call, so errexit still ends the
+    # open on a failed write inside it, before anything is stamped.
     cs_engine_call "$engine" prepare_workspace "$session_dir" migrate
 
+    # A stamp that cannot be written costs only speed: without it the next
+    # open runs every phase again, which is what it did before the stamp.
+    if [ "$repair" != none ] && [ "$_CS_MIGRATE_CLEAN" = 1 ]; then
+        _write_migration_stamp "$session_dir" "$actor_raw" "$actor_slug" "$engine" 2>/dev/null || true
+    fi
 }
 
 # Cross-platform helpers
@@ -4831,17 +5184,18 @@ prune_commands_artifacts() {
     fi
 }
 
+# Claude's part of migrate_session. CS_MIGRATE_REPAIR, set by migrate_session
+# from its migration stamp, says how much of it this open runs: "all" runs
+# every phase; "narrative" and "none" skip the one-time phases (13, 5, 7, 9,
+# 10 and 14) and keep the two that run on every open, the binding check
+# (Phase 8) and the colour backfill (Phase 11). A call from outside
+# migrate_session runs everything. Each write here either succeeds or ends
+# ags (an error or errexit), so none needs to clear _CS_MIGRATE_CLEAN; a phase
+# added later that warns and carries on past a failed write must clear it.
 _claude_migrate_workspace() {
-    local session_dir="$1" _state="$1/.cs/local/state"
-    _claude_migrate_protocol_wording "$session_dir"
-
-    _claude_ensure_workspace_protocol "$session_dir"
-
-    # Phase 7: prune retired command-tracker artifacts. Not in an adopted
-    # Claude Code worktree, whose tracked tree is the branch's (see
-    # _claude_tracked_tree_is_ours).
-    if _claude_tracked_tree_is_ours "$session_dir"; then
-        prune_commands_artifacts "$session_dir"
+    local session_dir="$1" _state="$1/.cs/local/state" repair="${CS_MIGRATE_REPAIR:-all}"
+    if [ "$repair" = all ]; then
+        _claude_migrate_session_documents "$session_dir"
     fi
 
     # Phase 8: Backfill only an absent binding. A missing native transcript
@@ -4858,6 +5212,42 @@ _claude_migrate_workspace() {
             fi
         fi
     }
+
+    if [ "$repair" = all ]; then
+        _claude_ensure_local_sections "$session_dir"
+    fi
+
+    # Phase 11: Backfill claude_session_color in local state when absent.
+    # Picks one of the 8 colors claude's /color command accepts. Idempotent —
+    # runs only when the field is missing. Legacy sessions (pre-v2026.5.7)
+    # get a randomly-chosen color on next launch and stay on it from then on.
+    if [ -z "$(_read_local_state "$_state" claude_session_color)" ]; then
+        local _new_color
+        _new_color=$(_alloc_random_color)
+        _set_local_state_if_absent "$_state" claude_session_color "$_new_color"
+        warn "Backfilled claude_session_color in .cs/local/state ($_new_color)"
+    fi
+}
+
+# Phases 13, 5 and 7, Claude's share: the protocol wording in CLAUDE.local.md,
+# the protocol moved out of CLAUDE.md, and the retired command-tracker files.
+_claude_migrate_session_documents() {  # session_dir
+    local session_dir="$1"
+    _claude_migrate_protocol_wording "$session_dir"
+
+    _claude_ensure_workspace_protocol "$session_dir"
+
+    # Phase 7: prune retired command-tracker artifacts. Not in an adopted
+    # Claude Code worktree, whose tracked tree is the branch's (see
+    # _claude_tracked_tree_is_ours).
+    if _claude_tracked_tree_is_ours "$session_dir"; then
+        prune_commands_artifacts "$session_dir"
+    fi
+}
+
+# Phases 9, 10 and 14: the ags sections of CLAUDE.local.md.
+_claude_ensure_local_sections() {  # session_dir
+    local session_dir="$1"
 
     # Phase 9: Manage the cs:memory-note section in CLAUDE.md. Four states:
     #
@@ -4956,17 +5346,6 @@ EOF
         && ! grep -q 'cs:encrypted-protocol' "$claude_md_p9"; then
         { echo; _emit_encrypted_protocol_block; } >> "$claude_md_p9"
         warn "Added the encrypted-session protocol to CLAUDE.local.md"
-    fi
-
-    # Phase 11: Backfill claude_session_color in local state when absent.
-    # Picks one of the 8 colors claude's /color command accepts. Idempotent —
-    # runs only when the field is missing. Legacy sessions (pre-v2026.5.7)
-    # get a randomly-chosen color on next launch and stay on it from then on.
-    if [ -z "$(_read_local_state "$_state" claude_session_color)" ]; then
-        local _new_color
-        _new_color=$(_alloc_random_color)
-        _set_local_state_if_absent "$_state" claude_session_color "$_new_color"
-        warn "Backfilled claude_session_color in .cs/local/state ($_new_color)"
     fi
 }
 
@@ -6252,7 +6631,20 @@ _queue_rm() {  # qdir, index
 _queue_clear() {  # qdir
     local qdir="$1"
     rm -rf "$qdir/queue" "$qdir/queue.tmp"
-    rm -f "$qdir/queue.state" "$qdir/queue.declined"
+    rm -f "$qdir/queue.state" "$qdir/queue.declined" "$qdir/queue.mode"
+}
+
+# Arms the queue and records how its tasks run: in the conversation (no mode
+# file), each in a subagent, or each as a workflow. The Stop hook reads the
+# mode when it hands over a task, and forgets it when the run ends.
+_queue_start() {  # qdir, [mode]
+    local qdir="$1" mode="${2:-}"
+    case "$mode" in
+        '') mkdir -p "$qdir"; rm -f "$qdir/queue.mode" ;;
+        subagents|workflow) mkdir -p "$qdir"; cs_write_atomic "$qdir/queue.mode" printf '%s\n' "$mode" ;;
+        *) error "ags -queue start takes subagents or workflow, not '$mode'" ;;
+    esac
+    _queue_set_state "$qdir" armed
 }
 
 _queue_log() {  # qdir
@@ -6295,13 +6687,13 @@ run_queue() {
         list|ls) _queue_list "$qdir" | _scrub_controls;;
         rm)    shift; _queue_rm "$qdir" "${1:-}";;
         clear) _queue_clear "$qdir";;
-        start) _queue_set_state "$qdir" armed;;
+        start) shift; _queue_start "$qdir" "${1:-}";;
         defer) mkdir -p "$qdir"; cs_write_atomic "$qdir/queue.declined" printf '%s\n' "$(date +%s)"
                _terminate_jsonl "$qdir/notifications.jsonl"
                { jq -nc --arg ts "$(date +%s)" '{ts: ($ts|tonumber), event: "gate_declined"}' \
                    >> "$qdir/notifications.jsonl"; } 2>/dev/null || true;;
         log)   _queue_log "$qdir";;
-        *)     error "Usage: ags -queue [add \"<task>\" | list | rm <n> | clear | log]";;
+        *)     error "Usage: ags -queue [add \"<task>\" | list | rm <n> | clear | log | start [subagents|workflow]]";;
     esac
 }
 
@@ -7669,6 +8061,55 @@ _doctor_check_statusline() {
     esac
 }
 
+# The Option+1 / Option+2 bindings the installer offers: the answer this
+# machine gave, and whether keybindings.json still holds ags's keys. Not asked
+# and declined are healthy; a key the user binds to something else, a yes whose
+# keys are gone, and a file Claude Code cannot read either are warnings.
+_doctor_check_option_keys() {
+    local file answer_file answer status state key action bound=0 total=0
+    file="$(_cs_keybindings_file)"
+    answer_file="$(_cs_option_keys_answer_file)"
+    if ! command -v jq >/dev/null 2>&1; then
+        _doctor_warn "Option keys: jq not installed; $file could not be read"
+        return
+    fi
+    if [ -e "$file" ] && ! _cs_keybindings_shape_ok "$file"; then
+        _doctor_warn "Option keys: $file is unparseable (not JSON with a \"bindings\" array)"
+        return
+    fi
+    if [ -e "$file" ]; then
+        status=$(_cs_option_keys_status < "$file") || status=""
+    else
+        status=$(printf '{"bindings":[]}\n' | _cs_option_keys_status) || status=""
+    fi
+    while IFS=$'\t' read -r state key action; do
+        [ -n "$state" ] || continue
+        total=$((total + 1))
+        if [ "$state" = bound ]; then bound=$((bound + 1)); fi
+    done <<< "$status"
+    if [ "$total" -gt 0 ] && [ "$bound" = "$total" ]; then
+        _doctor_ok "Option keys: bound (Option+1 runs /rotate, Option+2 runs /wrap)"
+        return
+    fi
+    answer=$(cat "$answer_file" 2>/dev/null) || answer=""
+    case "$answer" in
+        yes)
+            while IFS=$'\t' read -r state key action; do
+                case "$state" in
+                    conflict) _doctor_warn "Option keys: conflict on $key (bound to $action in $file)" ;;
+                    free) _doctor_warn "Option keys: $key not bound (run ags -update to bind it)" ;;
+                esac
+            done <<< "$status"
+            ;;
+        no)
+            _doctor_ok "Option keys: declined (to be asked again, remove $answer_file and run ags -update in a terminal)"
+            ;;
+        *)
+            _doctor_ok "Option keys: not asked (run ags -update in a terminal to be asked)"
+            ;;
+    esac
+}
+
 _doctor_check_subagent_statusline() {
     local claude_dir="${CS_CLAUDE_DIR:-$HOME/.claude}"
     local settings="$claude_dir/settings.json"
@@ -7799,6 +8240,26 @@ _doctor_check_merge_driver() {
     fi
 }
 
+# The stamp an open trusts to skip the one-time migration phases, judged by
+# the same probe the open runs (_migration_stamp_state). Read-only. A feature
+# worktree never runs the migration, so it has no stamp to report.
+_doctor_check_migration_stamp() {
+    local dir="${CS_SESSION_DIR:-${CLAUDE_SESSION_DIR:-}}" state
+    [ -n "$dir" ] || return 0
+    if [ -n "$(_read_local_state "$dir/.cs/local/state" cs_base)" ]; then
+        return 0
+    fi
+    state=$(_migration_stamp_state "$dir" "$(cs_actor_raw "$dir" "$dir/.cs")")
+    case "$state" in
+        fresh)
+            _doctor_ok "Migration stamp: current for ags $VERSION; opens skip the one-time migration checks. To force them: rm .cs/local/migrated" ;;
+        narrative)
+            _doctor_ok "Migration stamp: current but for MEMORY.md; the next open re-checks the narrative pointer and restamps. To force every check: rm .cs/local/migrated" ;;
+        *)
+            _doctor_ok "Migration stamp: stale (${state#stale: }); the next open runs the full migration and restamps. Reset by hand: rm .cs/local/migrated" ;;
+    esac
+}
+
 # `ags <base> -integrate-feature` takes <git-dir>/cs/integrate.lock for the
 # length of a landing, and the autosave hook skips its snapshot while it
 # exists. A lock left behind by a killed integrate silences this checkout's
@@ -7926,6 +8387,7 @@ run_doctor() {
     _doctor_check_claude_audit
     _doctor_check_statusline
     _doctor_check_subagent_statusline
+    _doctor_check_option_keys
     _doctor_check_iterm2
     _doctor_check_spawn
     _doctor_check_hook_authority
@@ -7933,6 +8395,7 @@ run_doctor() {
     if [ -n "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ] && [ -d "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ]; then
         _doctor_check_shadow_ref
         _doctor_check_merge_driver
+        _doctor_check_migration_stamp
         _doctor_check_integrate_lock
         _doctor_check_worktrees
         _doctor_check_auto_memory
@@ -8144,7 +8607,7 @@ _arm_vault_detach() {  # session_dir
     local meta="$1/.cs"
     [ -f "$meta/local/vault" ] || return 0
     _vault_mountpoint_if_mounted "$meta" >/dev/null || return 0
-    echo "$$" >> "$meta/local/vault-holders"
+    cs_vault_holder_add "$meta/local/vault-holders" "$$"
     CS_OPENED_VAULT_META="$meta"
     trap _detach_opened_vault EXIT
 }
@@ -8152,13 +8615,10 @@ _arm_vault_detach() {  # session_dir
 # An ags that execs something other than claude stops holding the vault: its
 # pid lives on in a process that never opens it. Other lines stay as they are.
 _vault_leave() {
-    local meta="$CS_OPENED_VAULT_META" tmp
+    local meta="$CS_OPENED_VAULT_META"
     [ -n "$meta" ] || return 0
     CS_OPENED_VAULT_META=""
-    [ -f "$meta/local/vault-holders" ] || return 0
-    tmp="$meta/local/vault-holders.$$"
-    grep -vx "$$" "$meta/local/vault-holders" > "$tmp" || true
-    mv -f "$tmp" "$meta/local/vault-holders"
+    cs_vault_holder_drop "$meta/local/vault-holders" "$$"
 }
 
 # The holder list is read, never rewritten, here: dead pids and this one are
@@ -8878,14 +9338,7 @@ _strip_statusline_registration() {
     local settings_file="$1"
     [ -f "$settings_file" ] || return 1
     jq -e '.statusLine.command // "" | test("/(ags|cs)-statusline$")' "$settings_file" >/dev/null 2>&1 || return 1
-    local _tmp
-    _tmp=$(mktemp)
-    if { jq 'del(.statusLine)' "$settings_file" > "$_tmp"; } 2>/dev/null; then
-        mv "$_tmp" "$settings_file"
-        return 0
-    fi
-    rm -f "$_tmp"
-    return 2
+    cs_write_atomic "$settings_file" jq 'del(.statusLine)' "$settings_file" 2>/dev/null || return 2
 }
 
 # test("/(ags|cs)-subagent-statusline$") never matches "/ags-statusline", so this
@@ -8896,14 +9349,7 @@ _strip_subagent_statusline_registration() {
     [ -f "$settings_file" ] || return 1
     jq -e '.subagentStatusLine.command // "" | test("/(ags|cs)-subagent-statusline$")' \
         "$settings_file" >/dev/null 2>&1 || return 1
-    local _tmp
-    _tmp=$(mktemp)
-    if { jq 'del(.subagentStatusLine)' "$settings_file" > "$_tmp"; } 2>/dev/null; then
-        mv "$_tmp" "$settings_file"
-        return 0
-    fi
-    rm -f "$_tmp"
-    return 2
+    cs_write_atomic "$settings_file" jq 'del(.subagentStatusLine)' "$settings_file" 2>/dev/null || return 2
 }
 
 # The installer remembers a declined status-line prompt here so `ags -update`
@@ -8960,23 +9406,19 @@ run_statusline_cmd() {
             [ -x "$subbin" ] || warn "ags-subagent-statusline binary not found at $subbin (run install.sh first)"
             mkdir -p "$(dirname "$settings")"
             [ -f "$settings" ] || echo '{}' > "$settings"
-            local _tmp
-            _tmp=$(mktemp)
             # refreshInterval 60 repaints an idle bar once a minute, which keeps
             # the context-pct heartbeat fresh for a conversation with no lock.
             # Each tick on Claude Code 2.1.286 lists every process with
             # `ps -A`; at 1 s a dozen sessions together hit the process limit.
-            if { jq --arg cmd "$bin" --arg subcmd "$subbin" \
+            if cs_write_atomic "$settings" jq --arg cmd "$bin" --arg subcmd "$subbin" \
                 '.statusLine = {type: "command", command: $cmd, refreshInterval: 60}
                  | .subagentStatusLine = {type: "command", command: $subcmd}' \
-                "$settings" > "$_tmp"; } 2>/dev/null; then
-                mv "$_tmp" "$settings"
+                "$settings" 2>/dev/null; then
                 rm -f "$declined"
                 info "Registered ags-statusline as the Claude Code status line"
                 info "Registered ags-subagent-statusline for the agent panel rows"
                 info "Claude Code reads both at startup: restart it to see them."
             else
-                rm -f "$_tmp"
                 error "Could not update $settings"
             fi
             ;;
@@ -9497,9 +9939,13 @@ _resume_menu_row() {  # key color label consequence
 }
 
 _cs_claude_adapter_dependencies() {
-    # Preserve the existing binary-plus-arguments override.
-    local claude_bin="${CLAUDE_CODE_BIN%% *}"
-    command -v "$claude_bin" >/dev/null 2>&1 || printf '%s\n' claude-code
+    # The binary-plus-arguments override: its first word is the command.
+    local word
+    word=$(_claude_bin_word)
+    case "$word" in
+        ''|-*) error "CLAUDE_CODE_BIN must start with a command: '$CLAUDE_CODE_BIN'" ;;
+    esac
+    command -v "$word" >/dev/null 2>&1 || printf '%s\n' claude-code
     return 0
 }
 
@@ -10176,6 +10622,22 @@ EOF
     fi
 }
 
+# A resume may run in place of ags when it is sure to land and ags has nothing
+# to do after it: claude reads its transcripts from where ags looks (no
+# CLAUDE_CONFIG_DIR set at all, even empty), the transcript holds a whole
+# top-level user record (a torn line, or a user message nested inside
+# another record, does not count), and no vault waits on ags to detach it
+# when claude ends without its hooks. Without jq the resume stays a child.
+_resume_lands_in_place() {  # session_dir, conversation id
+    local file
+    [ -f "$1/.cs/local/vault" ] && return 1
+    [ -z "${CLAUDE_CONFIG_DIR+set}" ] || return 1
+    file="$(_claude_project_dir "$1")/$2.jsonl"
+    [ -f "$file" ] && command -v jq >/dev/null 2>&1 || return 1
+    jq -n -R -e 'first(inputs | fromjson? | objects | select(.type == "user")) | true' \
+        "$file" >/dev/null 2>&1
+}
+
 # Follow a chain of symlinks to the file at its end, portably (BSD readlink
 # has no -f before macOS 12.3). Prints the final path.
 _resolve_symlink_file() {  # path
@@ -10208,9 +10670,9 @@ _resolve_symlink_file() {  # path
 # the version number. A hard link named claude to the same file carries the
 # right name. It lives in a directory per version and goes when the installer
 # removes that version; a launch that cannot make it runs claude as before.
-# Only the default CLAUDE_CODE_BIN is linked, and only when it resolves to a
-# versions/<version> file: a user-chosen binary or another install is run as
-# given.
+# The command word of CLAUDE_CODE_BIN is linked only when it resolves to a
+# versions/<version> file, the native installer's layout; the words after it
+# stay as given. Any other binary or install is run as given.
 _iterm_tab_through_tmux() {
     [ -n "${TMUX:-}" ] && [ "${LC_TERMINAL:-}" = iTerm2 ] && [ -z "${CS_NO_ITERM2:-}" ] || return 0
 
@@ -10225,14 +10687,21 @@ _iterm_tab_through_tmux() {
         esac
     fi
 
-    [ "$CLAUDE_CODE_BIN" = claude ] || return 0
-    local found real link
-    found=$(command -v claude 2>/dev/null) || return 0
+    local word rest found real link version
+    word=$(_claude_bin_word)
+    [ -n "$word" ] || return 0
+    rest="${CLAUDE_CODE_BIN#*"$word"}"
+    found=$(command -v "$word" 2>/dev/null) || return 0
     real=$(_resolve_symlink_file "$found")
     # Only the native installer's versions/<version> file is self-contained;
     # an npm cli.js loads files beside it, which a hard link elsewhere loses.
-    case "$real" in
-        */versions/[0-9]*.[0-9]*.[0-9]*) ;;
+    # The file must sit directly in a versions directory and be named by a
+    # dotted version number alone.
+    version="${real##*/}"
+    [ "${real%/*}" != "$real" ] && [ "$(basename "${real%/*}")" = versions ] || return 0
+    case "$version" in
+        *[!0-9.]*|.*|*.|*..*) return 0 ;;
+        *.*.*) ;;
         *) return 0 ;;
     esac
     # Every launch site expands CLAUDE_CODE_BIN unquoted, since a user value
@@ -10241,7 +10710,7 @@ _iterm_tab_through_tmux() {
     case "$links" in *[[:space:]]*) return 0 ;; esac
     # One directory per version: a launch that resolved this version runs it
     # even if another launch links a newer one before this one execs.
-    link="$links/$(basename "$real")/claude"
+    link="$links/$version/claude"
     if ! [ "$link" -ef "$real" ]; then
         mkdir -p "$(dirname "$link")" 2>/dev/null || return 0
         # Link beside the target name and rename over it, so a concurrent
@@ -10266,7 +10735,7 @@ _iterm_tab_through_tmux() {
         [ -e "$(dirname "$real")/$(basename "$old")" ] && continue
         { rm -f "$old/claude"; rmdir "$old"; } 2>/dev/null || true
     done < <(find "$links" -mindepth 1 -maxdepth 1 -type d -mtime +1 2>/dev/null)
-    CLAUDE_CODE_BIN="$link"
+    CLAUDE_CODE_BIN="$link$rest"
 }
 
 # Run secrets subcommand
@@ -11296,6 +11765,7 @@ create_session_gitignore() {
 *.lock
 *.tmp
 *.bak
+.cs-tmp.*
 
 # Per-actor local state (never shared)
 .cs/local/
@@ -11349,6 +11819,7 @@ ensure_cs_gitignore_entries() {
 .claude/settings.local.json
 CLAUDE.local.md
 .obsidian/
+.cs-tmp.*
 ENTRIES
     )
     local line
@@ -11711,6 +12182,48 @@ adopt_worktrees() {  # [--dry-run]
     [ "$dry_run" = 1 ] || echo -e "${DIM}$adopted adopted; open one with: ags $repo_name.<worktree>${NC}"
 }
 
+# Take back the Option+1 / Option+2 bindings the installer added, only where a
+# key still holds ags's value: a key bound to anything else is the user's. A
+# Global block left empty by that goes, and so does a file left as exactly
+# {"bindings":[]}, unless it is a symlink, whose target is written through
+# instead so a dotfiles manager's copy does not keep ags's keys. The recorded
+# answer goes too, so a later install asks again.
+_uninstall_option_keys() {
+    local file stripped
+    file="$(_cs_keybindings_file)"
+    rm -f "$(_cs_option_keys_answer_file)"
+    [ -e "$file" ] || return 0
+    if ! command -v jq >/dev/null 2>&1; then
+        warn "jq not found - cannot remove ags's Option+1/Option+2 bindings from $file"
+        return 0
+    fi
+    if ! _cs_keybindings_shape_ok "$file"; then
+        warn "Left $file as it is: not JSON with a \"bindings\" array"
+        return 0
+    fi
+    jq -e --argjson cs "$CS_OPTION_KEYS" \
+        'any(.bindings[] | (.bindings // {}) | to_entries[]; . as $e | $cs | has($e.key) and .[$e.key] == $e.value)' \
+        "$file" > /dev/null 2>&1 || return 0
+    stripped=$(jq -c --argjson cs "$CS_OPTION_KEYS" '
+        def ours: . as $e | $cs | has($e.key) and .[$e.key] == $e.value;
+        .bindings |= map(
+            if any((.bindings // {}) | to_entries[]; ours) then
+                .bindings |= with_entries(select(ours | not))
+                | select(.bindings != {} or .context != "Global")
+            else . end)' "$file") || {
+        warn "Could not read $file; its Option+1/Option+2 bindings were left in place"
+        return 0
+    }
+    if [ "$stripped" = '{"bindings":[]}' ] && [ ! -L "$file" ]; then
+        rm -f "$file"
+        info "Removed $file"
+    elif cs_write_atomic "$file" jq . <<< "$stripped"; then
+        info "Removed ags's Option+1/Option+2 bindings from $file"
+    else
+        warn "Could not write $file; its Option+1/Option+2 bindings were left in place"
+    fi
+}
+
 # Uninstall agent-sessions and all components
 run_uninstall() {
     local install_dir="${CS_INSTALL_DIR:-$HOME/.local/bin}"
@@ -11748,6 +12261,7 @@ run_uninstall() {
     echo "  - Shell completions"
     echo "  - Update-check cache in $update_cache_dir/"
     echo "  - Hook entries in $settings_file"
+    echo "  - ags's Option+1/Option+2 bindings in $(_cs_keybindings_file)"
     echo ""
     read -p "Continue with uninstall? [y/N] " -n 1 -r
     echo ""
@@ -11944,6 +12458,7 @@ run_uninstall() {
         warn "Manually remove cs hook entries from $settings_file"
     fi
 
+    _uninstall_option_keys
     fi
     rm -f "$install_config"
 

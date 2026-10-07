@@ -59,7 +59,11 @@ ICON_LOGO='✳'          # U+2733 eight-spoked asterisk (Claude mark); font-inde
 # in an uncompilable regex the user just typed) truncated itself and swallowed
 # its own newline, and \t became a literal tab. The colour variables stay in the
 # format, which is where their \033 sequences are meant to be read.
+# The message is also kept in _CS_ERROR_MESSAGE, for an EXIT handler that
+# records why the run ended (the /finish progress record's refusal reason).
 error() {
+    # shellcheck disable=SC2034  # read by _finish_progress_exit in lib/30-worktree.sh
+    _CS_ERROR_MESSAGE="$1"
     printf "${RED}Error: %s${NC}\n" "$1" >&2
     exit 1
 }

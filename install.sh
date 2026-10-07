@@ -35,12 +35,23 @@ error() {
     exit 1
 }
 
+# Every line sits in the same three-space gutter as the Installed lines and
+# the closing check mark: a dim dot marks a note, an amber triangle a warning.
 info() {
-    echo -e "${GREEN}$1${NC}"
+    echo -e "   ${COMMENT}·${NC} ${GREEN}$1${NC}"
 }
 
 warn() {
-    echo -e "${YELLOW}$1${NC}"
+    echo -e "   ${YELLOW}▲ $1${NC}"
+}
+
+# A follow-on line of the note or warning above it, aligned with its text.
+info_more() {
+    echo -e "     ${GREEN}$1${NC}"
+}
+
+warn_more() {
+    echo -e "     ${YELLOW}$1${NC}"
 }
 
 installed() {
@@ -367,6 +378,59 @@ _codex_hooks_unregister() {  # codex_dir
     fi
     _codex_trust_tables_edit "$config" "$file" "$index" "$file:session_start:$index:0"
 }
+
+# Option+1 and Option+2: the two Claude Code keybindings ags offers to add,
+# each a "command:<name>" action, which submits /<name>. install.sh asks once
+# per machine and binds them, ags -uninstall takes back only the keys that
+# still hold these values, and ags -doctor reports them.
+CS_OPTION_KEYS='{"alt+1":"command:rotate","alt+2":"command:wrap"}'
+
+# Claude Code reads its keybindings from its config dir. Inside an encrypted
+# session that dir is the session's .cs/claude-config, which no other session
+# reads; it links the shell's keybindings.json instead, so ags's keys belong in
+# the shell's config dir, which launch records in
+# CLAUDE_SECURESTORAGE_CONFIG_DIR (empty for ~/.claude).
+_cs_keybindings_file() {
+    local dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+    case "$dir" in
+        */.cs/claude-config) dir="${CLAUDE_SECURESTORAGE_CONFIG_DIR:-$HOME/.claude}" ;;
+    esac
+    printf '%s\n' "$dir/keybindings.json"
+}
+
+# This machine's answer to the installer's question, yes or no; absent until
+# it has been asked on a terminal.
+_cs_option_keys_answer_file() {
+    printf '%s\n' "${XDG_CONFIG_HOME:-$HOME/.config}/cs/option-keys"
+}
+
+# Whether a keybindings file has the shape ags reads and merges into: one JSON
+# object whose "bindings" is an array of context blocks, each an object whose
+# own "bindings", when present, is an object. Slurped, so a file holding two
+# documents is refused rather than read as two; -e turns invalid JSON, an
+# empty file and a false answer alike into a non-zero exit.
+_cs_keybindings_shape_ok() {  # file
+    jq -se 'length == 1 and (.[0] | type == "object" and (.bindings | type == "array")
+        and all(.bindings[]; type == "object" and ((.bindings // {}) | type == "object")))' \
+        "$1" > /dev/null 2>&1
+}
+
+# Reads a keybindings document that passed the shape check on stdin and prints
+# one line per ags key: "bound<TAB>key" when every binding of it, in any
+# context, holds ags's value; "free<TAB>key" when nothing binds it; and
+# "conflict<TAB>key<TAB>action" when something else does. An action that is
+# not a string (a null that unbinds the key) prints as JSON.
+_cs_option_keys_status() {
+    jq -r --argjson cs "$CS_OPTION_KEYS" '
+        [.bindings[] | (.bindings // {}) | to_entries[]] as $all
+        | $cs | to_entries[] | . as $c
+        | [$all[] | select(.key == $c.key) | .value] as $vals
+        | if ($vals | length) == 0 then "free\t\($c.key)"
+          elif all($vals[]; . == $c.value) then "bound\t\($c.key)"
+          else "conflict\t\($c.key)\t\([$vals[] | select(. != $c.value)][0]
+                | if type == "string" then . else tojson end)"
+          end'
+}
 # ---- end lib/01-manifests.sh ----
 
 # Everything that lands in HOOKS_DIR, for the copy and cleanup loops. The
@@ -657,7 +721,7 @@ for retired in "${RETIRED_HOOKS[@]}"; do
     for dir in "$HOOKS_DIR" "$HOOKS_PARENT_DIR"; do
         if [ -f "$dir/$retired" ]; then
             rm "$dir/$retired"
-            info "  Removed retired hook: $dir/$retired"
+            info "Removed retired hook: $dir/$retired"
         fi
     done
 done
@@ -667,7 +731,7 @@ done
 for hook in "${CS_HOOK_FILES[@]}"; do
     if [ -f "$HOOKS_PARENT_DIR/$hook" ]; then
         rm "$HOOKS_PARENT_DIR/$hook"
-        info "  Removed $HOOKS_PARENT_DIR/$hook"
+        info "Removed $HOOKS_PARENT_DIR/$hook"
     fi
 done
 
@@ -713,7 +777,7 @@ installed "skills" "$SKILLS_DIR/"
 for retired in "${RETIRED_SKILLS[@]}"; do
     if [ -d "$SKILLS_DIR/$retired" ]; then
         rm -rf "$SKILLS_DIR/$retired"
-        info "  Removed retired skill: $SKILLS_DIR/$retired/"
+        info "Removed retired skill: $SKILLS_DIR/$retired/"
     fi
 done
 
@@ -729,7 +793,7 @@ _mod_path_real() {
     for p in "${rel%%/*}" "$(dirname "$rel")" "$rel"; do
         if [ -L "$SKILLS_DIR/$p" ]; then
             rm "$SKILLS_DIR/$p"
-            info "  Replaced symlink $SKILLS_DIR/$p with a deployed copy"
+            info "Replaced symlink $SKILLS_DIR/$p with a deployed copy"
         fi
     done
 }
@@ -973,10 +1037,10 @@ else
         if mkdir -p "$(dirname "$_statusline_declined")" 2>/dev/null \
             && touch "$_statusline_declined" 2>/dev/null; then
             info "$1"
-            info "You won't be asked again. $2"
+            info_more "You won't be asked again. $2"
         else
             warn "$1"
-            warn "  (could not record the choice in $_statusline_declined, so ags -update will ask again)"
+            warn_more "(could not record the choice in $_statusline_declined, so ags -update will ask again)"
         fi
     }
 
@@ -1034,7 +1098,7 @@ else
         # so an indented printf produced a bar flush against the margin while
         # every other line sat three spaces in.
         echo ""
-        info "   This is what it looks like:"
+        info "This is what it looks like:"
         printf '%s\n' "$rendered"
         echo ""
     }
@@ -1059,7 +1123,7 @@ else
                     # read -p prints its argument verbatim, so an escape in it
                     # would show as literal characters. Emit the styled prompt
                     # with echo -e and read with no prompt of its own.
-                    echo -en "Register ${BOLD}ags-statusline${NC} as the Claude Code status line? [Y/n] "
+                    echo -en "   Register ${BOLD}ags-statusline${NC} as the Claude Code status line? [Y/n] "
                     read -n 1 -r
                     echo ""
                     if [[ $REPLY =~ ^[Nn]$ ]]; then
@@ -1075,7 +1139,7 @@ else
             else
                 if [ -t 0 ]; then
                     _preview_statusline
-                    echo -en "Replace current status line ($_current_statusline) with ${BOLD}ags-statusline${NC}? [y/N] "
+                    echo -en "   Replace current status line ($_current_statusline) with ${BOLD}ags-statusline${NC}? [y/N] "
                     read -n 1 -r
                     echo ""
                     # Anything but y declines, enter included: the point of the
@@ -1092,7 +1156,7 @@ else
                     fi
                 else
                     warn "Keeping current status line. To switch to ags-statusline:"
-                    warn "  set statusLine.command to $_statusline_cmd in ~/.claude/settings.json"
+                    warn_more "set statusLine.command to $_statusline_cmd in ~/.claude/settings.json"
                 fi
             fi
             ;;
@@ -1106,7 +1170,7 @@ else
     _statusline_caps="${XDG_CONFIG_HOME:-$HOME/.config}/cs/statusline-caps"
     if [ -n "$_register_statusline" ] && [ ! -f "$_statusline_caps" ]; then
         if [ -t 0 ]; then
-            printf '\n  %s\n' "$(printf '\xee\x82\xb6')ags-statusline$(printf '\xee\x82\xb4')"
+            printf '\n   %s\n' "$(printf '\xee\x82\xb6')ags-statusline$(printf '\xee\x82\xb4')"
             # An explicit y or n only: the registration question just above
             # reads one key, so an Enter typed after it is still queued and
             # would answer this one. EOF (Ctrl-D) leaves the question
@@ -1114,7 +1178,7 @@ else
             # non-zero must not trip errexit before settings.json is written.
             _caps_answer=""
             while :; do
-                echo -en "Do the ends of that capsule render as rounded shapes (not boxes)? [y/n] "
+                echo -en "   Do the ends of that capsule render as rounded shapes (not boxes)? [y/n] "
                 if ! read -n 1 -r; then echo ""; break; fi
                 echo ""
                 case "$REPLY" in
@@ -1129,7 +1193,7 @@ else
                 info "Capsule caps: $_caps_answer. Change later with: ags -statusline caps on|off|ask"
             else
                 warn "Capsule caps: $_caps_answer, but the answer could not be recorded in $_statusline_caps"
-                warn "  The bar shows square ends until: ags -statusline caps $_caps_answer"
+                warn_more "The bar shows square ends until: ags -statusline caps $_caps_answer"
             fi
         else
             info "Capsule caps: square ends until you answer once with: ags -statusline caps ask"
@@ -1149,6 +1213,97 @@ else
     fi
 
     echo "$SETTINGS" > "$CLAUDE_SETTINGS"
+
+    # Add ags's keys that nothing binds yet to keybindings.json: into its first
+    # Global block, or a Global block of their own, creating the file when
+    # there is none. A key bound to anything else, in any context, is the
+    # user's and is reported, never replaced. A file of a shape ags cannot read
+    # is refused before anything is written. The write is cs_write_atomic's,
+    # from the hooks' shared library deployed above: mode kept, and a
+    # symlinked file (a dotfiles manager's) rewritten through its link.
+    _bind_option_keys() {
+        local file doc status state key action added=""
+        file="$(_cs_keybindings_file)"
+        if [ -e "$file" ]; then
+            if ! _cs_keybindings_shape_ok "$file"; then
+                warn "Option keys: $file is not JSON with a \"bindings\" array; left as it is. Fix it, then run ags -update."
+                return 1
+            fi
+            doc=$(cat "$file") || { warn "Option keys: could not read $file"; return 1; }
+        else
+            doc='{"bindings":[]}'
+        fi
+        status=$(printf '%s\n' "$doc" | _cs_option_keys_status) \
+            || { warn "Option keys: could not read the bindings in $file"; return 1; }
+        while IFS=$'\t' read -r state key action; do
+            case "$state" in
+                conflict) warn "Option keys: $key is already bound to $action in $file; left as it is." ;;
+                free) added="$added $key" ;;
+            esac
+        done <<< "$status"
+        [ -n "$added" ] || return 0
+        # shellcheck source=hooks/cs-shared.sh
+        if ! . "$HOOKS_DIR/cs-shared.sh"; then
+            warn "Option keys: could not load $HOOKS_DIR/cs-shared.sh; $file left as it is."
+            return 1
+        fi
+        mkdir -p "$(dirname "$file")" 2>/dev/null || true
+        if ! printf '%s\n' "$doc" | cs_write_atomic "$file" jq --argjson cs "$CS_OPTION_KEYS" '
+            [.bindings[] | (.bindings // {}) | keys[]] as $used
+            | ($cs | with_entries(select(.key as $k | any($used[]; . == $k) | not))) as $add
+            | (first(.bindings | to_entries[] | select(.value.context == "Global") | .key) // null) as $i
+            | if $i == null then .bindings += [{context: "Global", bindings: $add}]
+              else .bindings[$i].bindings = ((.bindings[$i].bindings // {}) + $add) end'; then
+            warn "Option keys: could not write $file"
+            return 1
+        fi
+        info "Option keys: bound${added} in $file"
+    }
+
+    # Option+1 runs /rotate and Option+2 runs /wrap, through Claude Code's own
+    # keybindings.json. Keys are the user's keyboard, so they are offered once
+    # per machine and the answer is recorded: a yes is honoured on every
+    # install (keys already bound are left as they are), a no is never asked
+    # again, and with no terminal nothing is written or recorded. Every step
+    # reports and carries on; a keybinding must never take the install down.
+    _option_keys_answer_file="$(_cs_option_keys_answer_file)"
+    _option_keys_answer=$(cat "$_option_keys_answer_file" 2>/dev/null) || _option_keys_answer=""
+    case "$_option_keys_answer" in
+        yes) ;;
+        no)
+            info "Option keys: not bound (declined earlier). To be asked again, remove $_option_keys_answer_file and run ags -update."
+            ;;
+        *)
+            _option_keys_answer=""
+            if [ -t 0 ]; then
+                # An explicit y or n only: the status-line questions above read
+                # one key, so an Enter typed after one of them is still queued
+                # and would answer this one. EOF leaves it unanswered.
+                while :; do
+                    echo -en "   Bind Option+1 to /rotate and Option+2 to /wrap in Claude Code? [y/n] "
+                    if ! read -n 1 -r; then echo ""; break; fi
+                    echo ""
+                    case "$REPLY" in
+                        [Yy]) _option_keys_answer=yes; break ;;
+                        [Nn]) _option_keys_answer=no; break ;;
+                    esac
+                done
+                if [ -z "$_option_keys_answer" ]; then
+                    info "Option keys: left unanswered; the next install asks again."
+                elif ! { mkdir -p "$(dirname "$_option_keys_answer_file")" \
+                        && printf '%s\n' "$_option_keys_answer" > "$_option_keys_answer_file"; } 2>/dev/null; then
+                    warn "Option keys: the answer could not be recorded in $_option_keys_answer_file, so the next install asks again."
+                elif [ "$_option_keys_answer" = no ]; then
+                    info "Option keys: not bound. You won't be asked again; to change that, remove $_option_keys_answer_file and run ags -update."
+                fi
+            else
+                info "Option keys: not bound. To bind Option+1 to /rotate and Option+2 to /wrap, run ags -update in a terminal."
+            fi
+            ;;
+    esac
+    if [ "$_option_keys_answer" = yes ]; then
+        _bind_option_keys || true
+    fi
 fi
 
 fi
@@ -1156,10 +1311,9 @@ fi
 # Check if ~/.local/bin is in PATH
 if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
     echo ""
-    warn "   WARNING: $INSTALL_DIR is not in your PATH"
-    echo ""
-    warn "   Add this line to your ~/.bashrc, ~/.zshrc, or equivalent:"
-    warn "     export PATH=\"\$HOME/.local/bin:\$PATH\""
+    warn "$INSTALL_DIR is not in your PATH"
+    warn_more "Add this line to your ~/.bashrc, ~/.zshrc, or equivalent:"
+    warn_more "  export PATH=\"\$HOME/.local/bin:\$PATH\""
     echo ""
 fi
 
@@ -1193,16 +1347,16 @@ SHELL_NAME=$(basename "$SHELL")
 case "$SHELL_NAME" in
     bash)
         if ! grep -q 'bash_completion.d/ags.bash' "$HOME/.bashrc" 2>/dev/null; then
-            warn "   To enable tab completion, add to ~/.bashrc:"
-            warn "     [[ -f ~/.bash_completion.d/ags.bash ]] && source ~/.bash_completion.d/ags.bash"
+            warn "To enable tab completion, add to ~/.bashrc:"
+            warn_more "  [[ -f ~/.bash_completion.d/ags.bash ]] && source ~/.bash_completion.d/ags.bash"
             echo ""
         fi
         ;;
     zsh)
         if ! grep -qE 'fpath.*zsh/completions?' "$HOME/.zshrc" 2>/dev/null; then
-            warn "   To enable tab completion, add to ~/.zshrc (before compinit):"
-            warn "     fpath=(~/.zsh/completions \$fpath)"
-            warn "     autoload -Uz compinit && compinit"
+            warn "To enable tab completion, add to ~/.zshrc (before compinit):"
+            warn_more "  fpath=(~/.zsh/completions \$fpath)"
+            warn_more "  autoload -Uz compinit && compinit"
             echo ""
         fi
         ;;
@@ -1216,8 +1370,8 @@ echo -e "     ${COMMENT}ags${NC} ${GOLD}server-fix${NC}   ${COMMENT}# Work on se
 echo ""
 
 echo ""
-echo "Getting started:"
-echo "  ags my-first-session --engine ${INSTALL_ENGINES%%,*}    # Create your first session"
-echo "  ags -help               # See all commands"
-echo "  ags -version            # Verify installation"
-echo "  cs remains available as a compatibility alias"
+echo "   Getting started:"
+echo "     ags my-first-session --engine ${INSTALL_ENGINES%%,*}    # Create your first session"
+echo "     ags -help               # See all commands"
+echo "     ags -version            # Verify installation"
+echo "     cs remains available as a compatibility alias"

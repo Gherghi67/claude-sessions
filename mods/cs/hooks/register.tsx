@@ -3,7 +3,7 @@
 /* @jsxFrag Fragment */
 // ABOUTME: agent-sessions mod: keys above the prompt: rotate past the threshold, wrap up, or /clear once a handoff is armed (/exit while `ags -switch` has a move to the other engine pending).
 // ABOUTME: A turn ending past CS_ROTATE_FORCE_CTX (default 80, off disables) runs /rotate itself, then counts down to the /clear or the switch's /exit (session colour, amber, crit); session.start writes a heartbeat for doctor.
-// ABOUTME: /queue adds a task to the session's walk-away queue through `ags -queue add`, at once even mid-turn; bare, it prints `ags -queue list`.
+// ABOUTME: /queue adds a task to the session's walk-away queue through `ags -queue add`, at once even mid-turn; bare, it prints `ags -queue list`. /finish toasts its start and outcome and, while its gate runs, draws a band with the elapsed time.
 import type { On, EngineInterface } from 'claude-code'
 
 declare const h: any
@@ -158,6 +158,39 @@ export const WRAP_YES = 'Yes, wrap up'
 // a turn ends, so an idle session needs one turn to reach that first stop.
 export const QUEUE_START = 'Start'
 export const QUEUE_COMPACT = 'Compact'
+// How much of a task a toast shows: a queued one, or the feature /finish lands.
+const TOAST_TASK_CHARS = 60
+
+function cutTask(task: string): string {
+  return task.length > TOAST_TASK_CHARS ? `${task.slice(0, TOAST_TASK_CHARS)}…` : task
+}
+
+// /finish's progress, as ags records it while `ags <base> -integrate-feature`
+// and `-retire-feature` run (_finish_progress_write in lib/30-worktree.sh):
+// one record, replaced whole at each step, behind .cs/private in an encrypted
+// session and in .cs/local otherwise. pid is the ags process that wrote it.
+export const FINISH_RECORD = 'finish-progress.json'
+// How often the watch /finish starts reads the record.
+export const FINISH_POLL_MS = 1000
+export type FinishRecord = {
+  id: string
+  pid: number
+  task: string
+  sha: string
+  step: string
+  gate_started?: number
+  result?: string
+  reason?: string
+}
+const FINISH_OUTCOMES = new Set(['landed', 'refused', 'retired'])
+
+// Asked after Start or Compact: how the tasks run, as the word ags -queue start
+// takes for each (none runs them in this conversation).
+export const QUEUE_MODE_QUESTION = 'How should the queued tasks run?'
+export const QUEUE_HERE = 'In this conversation'
+export const QUEUE_SUBAGENTS = 'In subagents'
+export const QUEUE_WORKFLOWS = 'As workflows'
+const QUEUE_MODE_WORDS: Record<string, string[]> = { [QUEUE_HERE]: [], [QUEUE_SUBAGENTS]: ['subagents'], [QUEUE_WORKFLOWS]: ['workflow'] }
 export const QUEUE_KICK = 'The agent-sessions walk-away queue is started. Reply with one short line saying so, then stop: the Stop hook hands you each queued task in turn.'
 
 // The countdown: seconds left, its ticker, and what the band last saw. Module
@@ -189,10 +222,20 @@ let startPercent: number | undefined
 // Whether this load has registered /queue: session.start fires at load, and
 // registering the same name again would only replace it.
 let registered = false
+// The /finish watch: its timer, whether the turn that started it has ended,
+// which steps of which runs have been toasted (`<id>:started`,
+// `<id>:<outcome>`), the gate the band shows while one runs under a live pid,
+// and whether a problem reading the record or the pid has been said.
+let finishWatch: { cancel: () => void } | undefined
+let finishTurnOver = false
+let finishShown = new Set<string>()
+let finishGate: { task: string; since: number } | undefined
+let finishProblemShown = false
 
 export function register(on: On) {
   // A (re)load has no countdown: the engine cancelled the old one's timers.
   left = undefined; ticker = undefined; bandIdle = false; turnRunning = false; preview = undefined; previewShown = false; adopted = undefined; clearSeen = false; birth = undefined; startPercent = undefined; registered = false
+  finishWatch = undefined; finishTurnOver = false; finishShown = new Set(); finishGate = undefined; finishProblemShown = false
   on('session.start', async ($, e, next) => {
     if (!registered) {
       registered = true
@@ -228,7 +271,13 @@ export function register(on: On) {
       const tail = result.stderr.split('\n').filter(l => l.trim() !== '').slice(-5).join('\n')
       return { text: tail === '' ? `${what} exited ${result.exitCode}.` : `${what} exited ${result.exitCode}.\n${tail}` }
     }
-    if (task !== '') return { text: `Queued: ${task}` }
+    if (task !== '') {
+      // The command's text lands in the transcript, which a running turn
+      // scrolls past; the toast under the prompt confirms the add where the
+      // person is looking. One line, so a long task is cut.
+      $.ui.toast(`ags: queued: ${cutTask(task)}`)
+      return { text: `Queued: ${task}` }
+    }
     const pending = /^Pending \((\d+)\)$/m.exec(result.stdout)
     if (pending && !(await queueRunning($))) void offerToStart($, bin, Number(pending[1]))
     return { text: result.stdout.trimEnd() }
@@ -238,7 +287,18 @@ export function register(on: On) {
   // person: the answer is in, nothing runs. An aborted or errored turn is no
   // place to start one, and a subagent's turn ends in the same event.
   on('turn.complete', async ($, e, next) => {
+    if (e.agentId === undefined) finishTurnOver = true
     if (e.reason === 'answer' && e.agentId === undefined) await forceRotation($)
+    return next(e)
+  })
+
+  // /finish is a skill: this fires when it is typed, and when `ags <base>
+  // -finish` launches a conversation on it. Its turn runs ags's integrate and
+  // retire, and the watch follows the record ags writes meanwhile, until that
+  // turn is over and nothing runs.
+  on('skill.prompt', { skill: 'finish' }, async ($, e, next) => {
+    finishTurnOver = false
+    if (!finishWatch) await watchFinish($)
     return next(e)
   })
 
@@ -272,7 +332,7 @@ export function register(on: On) {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const drawn = await next(e)
+    const drawn = await withGateBand($, e, await next(e))
     // The band draws in a new conversation before any of its turns end, so
     // the birth is settled here: a later /resume is not mistaken for it.
     noteConversation(await $.session.id())
@@ -731,13 +791,32 @@ async function queueRunning($: EngineInterface): Promise<boolean> {
 // when the question is. Start arms the queue; Not yet defers it the way the
 // Stop hook's own offer does, so that offer does not ask again straight away.
 // Compact compacts the conversation first, then starts as Start does; a
-// compaction that does not happen leaves the queue unarmed.
+// compaction that does not happen leaves the queue unarmed. Start and Compact
+// then ask how the tasks run, before any compaction, so a dismissed second
+// question starts and compacts nothing.
 async function offerToStart($: EngineInterface, bin: string, count: number) {
   let answer: string
   try {
     answer = await $.ui.ask(`Start the ${count} queued ${count === 1 ? 'task' : 'tasks'} now?`, { header: 'Queue', options: [QUEUE_START, 'Not yet', QUEUE_COMPACT] })
   } catch {
     return // dismissed, or a `-p` run with nobody to ask
+  }
+  const starting = answer === QUEUE_START || answer === QUEUE_COMPACT
+  let mode: string[] = []
+  if (starting) {
+    let how: string
+    try {
+      how = await $.ui.ask(QUEUE_MODE_QUESTION, { header: 'Queue', options: [QUEUE_HERE, QUEUE_SUBAGENTS, QUEUE_WORKFLOWS] })
+    } catch {
+      return
+    }
+    const words = QUEUE_MODE_WORDS[how]
+    if (words === undefined) {
+      // Free text typed under "Other" names no mode ags knows.
+      $.ui.toast(`ags: '${how}' is not a way to run the queue; it is not started`)
+      return
+    }
+    mode = words
   }
   if (answer === QUEUE_COMPACT) {
     let reason: string | undefined
@@ -752,10 +831,10 @@ async function offerToStart($: EngineInterface, bin: string, count: number) {
       return
     }
   }
-  const verb = answer === QUEUE_START || answer === QUEUE_COMPACT ? 'start' : 'defer'
+  const verb = starting ? 'start' : 'defer'
   let result: { exitCode: number; stdout: string; stderr: string }
   try {
-    result = await $.process.run([bin, '-queue', verb])
+    result = await $.process.run([bin, '-queue', verb, ...mode])
   } catch (err) {
     $.ui.toast(`ags -queue ${verb} did not run: ${String(err instanceof Error ? err.message : err)}`)
     return
@@ -797,4 +876,140 @@ async function clearAndContinue($: EngineInterface) {
 async function exitAndContinue($: EngineInterface) {
   if (ticker) stopCountdown($)
   await $.command.run({ command: 'exit', args: '' })
+}
+
+// Starts the /finish watch. Whatever the record holds now belongs to an
+// earlier run, so its steps count as shown: only what this /finish writes is
+// toasted.
+async function watchFinish($: EngineInterface) {
+  const before = await readFinish($)
+  if (before !== undefined) {
+    finishShown.add(`${before.id}:started`)
+    finishShown.add(`${before.id}:${before.step}`)
+  }
+  finishWatch = $.clock.every(FINISH_POLL_MS, () => followFinish($))
+}
+
+// One read of the record: toast a run's start and its outcome once each, keep
+// the band's gate while a gate runs under a live pid, and end the watch once
+// the turn is over with nothing running. A step whose pid is gone was left by
+// a run that was killed: it is over, whatever it says.
+async function followFinish($: EngineInterface) {
+  const record = await readFinish($)
+  let live = false
+  let gate: typeof finishGate
+  if (record !== undefined) {
+    const outcome = FINISH_OUTCOMES.has(record.step)
+    const key = `${record.id}:${outcome ? record.step : 'started'}`
+    if (!finishShown.has(key)) {
+      finishShown.add(key)
+      $.ui.toast(finishToast(record))
+    }
+    live = !outcome && (await pidAlive($, record.pid))
+    if (live && record.step === 'gate' && record.gate_started !== undefined) gate = { task: record.task, since: record.gate_started }
+  }
+  // While the band shows, every read redraws it: its elapsed time moves.
+  if (gate !== undefined || finishGate !== undefined) $.ui.invalidate('ui.render')
+  finishGate = gate
+  if (finishTurnOver && !live) {
+    finishWatch?.cancel()
+    finishWatch = undefined
+  }
+}
+
+// The toast for a record: the run starting, or its outcome.
+export function finishToast(record: FinishRecord): string {
+  const task = cutTask(record.task)
+  switch (record.step) {
+    case 'landed': return `ags: landed ${task} ${record.sha.slice(0, 7)} -> ${(record.result ?? '').slice(0, 7)}`
+    case 'refused': return `ags: /finish ${task} refused: ${record.reason ?? ''}`
+    case 'retired': return `ags: retired ${task}`
+    default: return `ags: finishing ${task}`
+  }
+}
+
+// The record as ags wrote it, from the vault's store first, as queueRunning
+// reads; undefined when there is none. One ags did not write (hand-edited, or
+// from another version) is said once and otherwise read as no record, since
+// the watch would only repeat the complaint every second.
+async function readFinish($: EngineInterface): Promise<FinishRecord | undefined> {
+  const cwd = await $.session.cwd()
+  for (const dir of ['private', 'local']) {
+    let text: string
+    try {
+      text = await $.fs.read(`${cwd}/.cs/${dir}/${FINISH_RECORD}`)
+    } catch {
+      continue // absent, or behind a locked vault
+    }
+    const record = parseFinish(text)
+    if (record === undefined) finishProblem($, `.cs/${dir}/${FINISH_RECORD} is not a record ags wrote; /finish progress is not shown`)
+    return record
+  }
+  return undefined
+}
+
+export function parseFinish(text: string): FinishRecord | undefined {
+  let r: unknown
+  try {
+    r = JSON.parse(text)
+  } catch {
+    return undefined
+  }
+  if (typeof r !== 'object' || r === null) return undefined
+  const o = r as Record<string, unknown>
+  if (typeof o.id !== 'string' || typeof o.task !== 'string' || typeof o.sha !== 'string' || typeof o.step !== 'string') return undefined
+  if (typeof o.pid !== 'number' || !Number.isInteger(o.pid) || o.pid <= 0) return undefined
+  if (o.gate_started !== undefined && typeof o.gate_started !== 'number') return undefined
+  if (o.step === 'landed' && typeof o.result !== 'string') return undefined
+  if (o.step === 'refused' && typeof o.reason !== 'string') return undefined
+  return {
+    id: o.id, pid: o.pid, task: o.task, sha: o.sha, step: o.step,
+    gate_started: o.gate_started as number | undefined,
+    result: typeof o.result === 'string' ? o.result : undefined,
+    reason: typeof o.reason === 'string' ? o.reason : undefined,
+  }
+}
+
+// Whether the ags process that wrote a step still runs: `kill -0` sends no
+// signal, it only asks. A check that cannot run is said once and counts as
+// not running, so a band never outlives what it stands for.
+async function pidAlive($: EngineInterface, pid: number): Promise<boolean> {
+  try {
+    return (await $.process.run(['kill', '-0', String(pid)])).exitCode === 0
+  } catch (err) {
+    finishProblem($, `cannot tell whether /finish is still running: ${String(err instanceof Error ? err.message : err)}`)
+    return false
+  }
+}
+
+function finishProblem($: EngineInterface, text: string) {
+  if (finishProblemShown) return
+  finishProblemShown = true
+  $.ui.toast(`ags: ${text}`)
+}
+
+// The time since a gate started, as the band shows it: 42s, 1m 05s.
+export function gateElapsed(secs: number): string {
+  if (secs < 60) return `${secs}s`
+  return `${Math.floor(secs / 60)}m ${String(secs % 60).padStart(2, '0')}s`
+}
+
+// The gate band under what the engine drew, while a /finish gate runs; the
+// drawing itself, untouched, at any other time. It draws mid-turn, since the
+// gate runs inside one, on the status bar's capsule fill as the rotation band.
+async function withGateBand($: EngineInterface, e: Parameters<EngineInterface['ui']['resolve']>[0], drawn: unknown) {
+  if (finishGate === undefined) return drawn
+  const { Box, Text } = await $.ui.resolve(e)
+  const fill = surfaceColor(await $.env.get("CS_TERM_BG_RGB"))
+  const secs = Math.max(0, Math.floor((await $.clock.now()) / 1000) - finishGate.since)
+  return (
+    <Box flexDirection="column">
+      {drawn}
+      <Box marginTop={1}>
+        <Box paddingX={1} backgroundColor={fill}>
+          <Text>{`finishing ${cutTask(finishGate.task)} · gate ${gateElapsed(secs)}`}</Text>
+        </Box>
+      </Box>
+    </Box>
+  )
 }

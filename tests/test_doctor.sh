@@ -676,6 +676,39 @@ test_doctor_statusline_caps_row_names_the_answer_or_the_ask() {
     assert_output_contains "$output" "caps: rounded" "answered on: doctor says rounded" || return 1
 }
 
+# One row for the Option+1 / Option+2 bindings: the installer's recorded answer
+# and what keybindings.json holds. A healthy state is OK; a binding the user
+# holds on ags's key, or a file Claude Code cannot read either, is a WARN.
+test_doctor_option_keys_row_names_the_state() {
+    local cfg="$TEST_TMPDIR/ok-cfg" xdg="$TEST_TMPDIR/ok-xdg" output kb
+    kb="$cfg/keybindings.json"
+    mkdir -p "$cfg" "$xdg/cs"
+    _ok_doctor() { CLAUDE_CONFIG_DIR="$cfg" XDG_CONFIG_HOME="$xdg" "$CS_BIN" -doctor 2>&1 || true; }
+
+    output=$(_ok_doctor)
+    assert_output_contains "$output" "OK.*Option keys: not asked (run ags -update in a terminal to be asked)" \
+        "no answer: not asked" || return 1
+
+    printf 'no\n' > "$xdg/cs/option-keys"
+    output=$(_ok_doctor)
+    assert_output_contains "$output" "OK.*Option keys: declined" "answered no: declined" || return 1
+
+    printf 'yes\n' > "$xdg/cs/option-keys"
+    printf '%s\n' '{"bindings":[{"context":"Global","bindings":{"alt+1":"command:rotate","alt+2":"command:wrap"}}]}' > "$kb"
+    output=$(_ok_doctor)
+    assert_output_contains "$output" "OK.*Option keys: bound (Option+1 runs /rotate, Option+2 runs /wrap)" \
+        "both keys hold ags's values: bound" || return 1
+
+    printf '%s\n' '{"bindings":[{"context":"Chat","bindings":{"alt+1":"chat:submit"}},{"context":"Global","bindings":{"alt+2":"command:wrap"}}]}' > "$kb"
+    output=$(_ok_doctor)
+    assert_output_contains "$output" "WARN.*Option keys: conflict on alt+1 (bound to chat:submit in $kb)" \
+        "a user binding on alt+1: conflict" || return 1
+
+    printf '%s\n' '{"bindings": [' > "$kb"
+    output=$(_ok_doctor)
+    assert_output_contains "$output" "WARN.*Option keys: $kb is unparseable" "bad JSON: unparseable" || return 1
+}
+
 # The cs mod is an opt-in the user links under ~/.claude/skills. Doctor
 # says nothing when it is absent, and once present it reports the mod RUNNING
 # (a heartbeat the mod writes on session.start), never mere presence: the
@@ -981,6 +1014,7 @@ run_test test_doctor_skips_inline_shell_hook_commands
 run_test test_doctor_statusline_ok_when_registered_and_executable
 run_test test_doctor_statusline_fails_when_binary_missing
 run_test test_doctor_statusline_caps_row_names_the_answer_or_the_ask
+run_test test_doctor_option_keys_row_names_the_state
 run_test test_doctor_rotate_mod_row_observes_execution_not_presence
 run_test test_doctor_statusline_no_fail_when_not_registered
 run_test test_doctor_statusline_names_context_gating_when_absent
@@ -1327,6 +1361,41 @@ test_doctor_is_quiet_when_the_session_clone_has_the_merge_driver() {
 
 run_test test_doctor_warns_when_the_session_clone_lacks_the_merge_driver
 run_test test_doctor_is_quiet_when_the_session_clone_has_the_merge_driver
+
+
+# Stamp the setup session the way a clean open would for alice: the merge
+# driver set, the probe files it has (CLAUDE.md, .cs/README.md) at a fixed old
+# time, the stamp a year later. Prints the ags version the stamp names.
+_doctor_stamp_session() {
+    local dir="${CS_SESSION_DIR:-${CLAUDE_SESSION_DIR:-}}" version
+    version=$("$CS_BIN" -version)
+    version=${version#ags }
+    git -C "$dir" config merge.ours.driver true
+    touch -t 202401010000 "$dir/CLAUDE.md" "$dir/.cs/README.md"
+    printf '%s\talice\t0\tclaude\nCLAUDE.md\t.cs/README.md\n' "$version" > "$dir/.cs/local/migrated"
+    touch -t 202501010000 "$dir/.cs/local/migrated"
+    echo "$version"
+}
+
+test_doctor_reports_a_current_migration_stamp() {
+    local version output
+    version=$(_doctor_stamp_session)
+    output=$(CS_ACTOR=alice "$CS_BIN" -doctor 2>&1) || true
+    assert_output_contains "$output" "Migration stamp: current for ags $version; opens skip the one-time migration checks. To force them: rm .cs/local/migrated" \
+        "a fresh stamp reads as current and names the reset" || return 1
+}
+
+test_doctor_reports_a_stale_migration_stamp() {
+    local output
+    _doctor_stamp_session > /dev/null
+    touch -t 202601010000 "${CS_SESSION_DIR:-${CLAUDE_SESSION_DIR:-}}/CLAUDE.md"
+    output=$(CS_ACTOR=alice "$CS_BIN" -doctor 2>&1) || true
+    assert_output_contains "$output" "Migration stamp: stale (CLAUDE.md changed after the stamp); the next open runs the full migration and restamps. Reset by hand: rm .cs/local/migrated" \
+        "a stale stamp names what changed and the reset" || return 1
+}
+
+run_test test_doctor_reports_a_current_migration_stamp
+run_test test_doctor_reports_a_stale_migration_stamp
 
 
 # `cs <base> -integrate-feature` takes <git-dir>/cs/integrate.lock and the

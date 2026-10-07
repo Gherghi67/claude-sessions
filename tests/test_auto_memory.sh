@@ -835,14 +835,16 @@ test_plaintext_mailbox_left_beside_private_refuses_open() {
     assert_file_not_exists "$TEST_TMPDIR/launched" "claude must not launch" || return 1
 }
 
-# The queue, its inbox, the traces and the pending-handoff marker are ags
-# files too: each one left in .cs/local is named the same way.
+# The queue, its run mode, its inbox, the traces, the pending-handoff marker
+# and the /finish progress record are ags files too: each one left in
+# .cs/local is named the same way.
 test_plaintext_queue_files_left_beside_private_refuse_open() {
     _make_vaulted_session vt
     _make_vaulted_private vt
     local meta="$CS_SESSIONS_ROOT/vt/.cs" name out rc
     for name in queue queue.tmp queue.state queue.done queue.declined queue.migrating \
-                notifications.jsonl notifications.seen failures rewrite.trace pending-handoff; do
+                notifications.jsonl notifications.seen failures rewrite.trace pending-handoff \
+                finish-progress.json queue.mode; do
         case "$name" in queue|queue.tmp) mkdir -p "$meta/local/$name" ;; *) printf 'x\n' > "$meta/local/$name" ;; esac
         rc=0
         out=$("$CS_BIN" vt <<< "" 2>&1) || rc=$?
@@ -948,14 +950,14 @@ test_settings_merge_leaves_a_tmp_sibling_alone_and_keeps_the_mode() {
     local settings="$CS_SESSIONS_ROOT/test-session/.claude/settings.local.json"
     assert_exists "$settings" "settings.local.json should exist" || return 1
     printf 'USER-OWNED\n' > "$settings.tmp"
-    chmod 640 "$settings"
+    chmod 750 "$settings"
     # Phase 4 re-runs the merge only when memory, plans or settings is missing.
     rm -rf "$CS_SESSIONS_ROOT/test-session/.cs/plans"
 
     "$CS_BIN" test-session <<< "" 2>&1 || true
 
     assert_eq "USER-OWNED" "$(cat "$settings.tmp")" "the user's .tmp sibling is untouched" || return 1
-    assert_eq "640" "$(_file_mode "$settings")" "the rewritten file keeps its mode" || return 1
+    assert_eq "750" "$(_file_mode "$settings")" "the rewritten file keeps its mode" || return 1
     assert_file_contains "$settings" "autoMemoryDirectory" "the merge still happened" || return 1
 }
 

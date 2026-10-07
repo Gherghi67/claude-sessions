@@ -102,6 +102,8 @@ release_upstream() {
     sed -i.bak 's/echo red/echo blue/' "$UP/lib/40-state.sh"
     printf '\n_is_uuid() {\n    [ -n "$1" ]\n}\n' >> "$UP/lib/40-state.sh"
     printf '\n# <!-- cs:wrap-cues --> stays a sentinel; "cs: %%s" is the command.\n' >> "$UP/lib/53-mail.sh"
+    # A jq variable named cs is not the command.
+    printf '%s\n' '' 'mail_keys() {' '    jq -r --argjson cs "$1" '"'"'$cs | keys[]'"'"' "$2"' '}' >> "$UP/lib/53-mail.sh"
     sed -i.bak -e 's/cs -msg needs a body/cs -msg needs a non-empty body/' \
         -e 's/echo "\$1" >> /printf "%s\\n" "$1" >> /' \
         -e 's/# cs never reads mail twice\./# cs never reads mail twice, nor drops it./' "$UP/lib/53-mail.sh"
@@ -152,6 +154,8 @@ test_start_translates_upstream_into_the_forks_dialect() {
         || { cat "$WT/lib/53-mail.sh"; echo "  FAIL: kept comment renamed"; return 1; }
     grep -Fqx '# <!-- cs:wrap-cues --> stays a sentinel; "ags: %s" is the command.' "$WT/lib/53-mail.sh" \
         || { cat "$WT/lib/53-mail.sh"; echo "  FAIL: sentinel renamed or command not"; return 1; }
+    grep -Fqx "    jq -r --argjson cs \"\$1\" '\$cs | keys[]' \"\$2\"" "$WT/lib/53-mail.sh" \
+        || { cat "$WT/lib/53-mail.sh"; echo "  FAIL: jq variable cs renamed"; return 1; }
     # In a file the fork never touched, upstream's new lines take the renames.
     assert_eq '# A test the fork never touches.
 run_mail_tests

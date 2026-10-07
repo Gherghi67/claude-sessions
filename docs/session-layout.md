@@ -87,6 +87,7 @@ in `.cs/private/` instead.
 | `pending-binding-<engine>.json` | Candidate conversation ID, previous ID, run token, and transition reason awaiting native acknowledgement. Unacknowledged candidates superseded by retries remain in `.abandoned.*` records for diagnosis. |
 | `codex-thread-id` | Independently bound Codex conversation, committed after the persistent startup helper acknowledges its ID. |
 | `identity` | Overrides the actor name for shared memory/narrative attribution (precedence: `$CS_ACTOR` > `local/identity` > git `user.email` > git `user.name`). |
+| `migrated` | The migration stamp, written when every write an open's migration made succeeded. Line 1: the ags version, the actor, `1` or `0` for an encrypted session and the engine it was written under (`claude` or `codex`), tab separated. Line 2: the files it checked that existed then. See [Migration](#migration). |
 | `attention` | Status-line attention marker — raised by the `Stop` hook when Claude finishes, cleared on the next prompt. |
 | `presence` | This session's advertised status (`ags -status`): a single line read by `ags -live`. Falls back to the README objective when unset. |
 | `pending-handoff` | Basename of the `.cs/handoffs/` file to rotate into — armed by the `rotate` skill (for `/clear`) or by the `r` answer at the resume prompt. Consumed and cleared by the next SessionStart whose source is `startup` or `clear`; left armed on any other source; disarmed by any other resume-prompt answer. |
@@ -100,15 +101,17 @@ in `.cs/private/` instead.
 | `disabled` | Opts the directory out of cs's hooks entirely. Present, the hooks decline as if it were not a session, whichever front end opened it. Before hooks resolved a session from the directory, a `claude` started outside `ags` in a session folder was inert; this restores that on request instead of by accident. |
 | `pre-open` | An executable `ags <name>` runs before it opens an existing session, from the session directory on your terminal, so it can prompt (mounting the encrypted volume that `.cs/memory` and `.cs/plans` link into, for example). A non-zero exit aborts the open, and `ags` refuses a file that is not executable rather than skipping it. It lives here because this directory is never committed, so a cloned session cannot make `ags` run code. A session copied by a file sync (rsync, iCloud, Dropbox) carries it along, and `ags` runs it. Afterwards, if `.cs/memory` or `.cs/plans` is still a symlink to something missing, `ags` refuses to open the session and names the link, instead of creating plaintext directories in their place. |
 | `vault` | The path of the container `ags -encrypt` built, written only by `ags -encrypt`. The SessionEnd hook unmounts the vault only when this file exists. |
-| `vault-holders` | Process ids of every `ags` run that mounted or joined this session's vault. The volume unmounts only when none of them and no session lock is alive. |
+| `vault-holders` | Process ids of every `ags` run that mounted or joined this session's vault. The volume unmounts only when none of them and no session lock is alive. An `ags` that adds or drops its line takes turns with the others through `vault-holders.lock`. |
 | `vault-waiter.pid` | The background waiter the SessionEnd hook leaves to unmount the vault once the lead conversation's Claude Code exits. An open that finds the vault mounted with nothing alive behind it stops this waiter first. |
 | `vault-detach.pid` | The `hdiutil detach` that waiter started, so a reopen can stop an unmount in flight. |
 | `queue/` | The walk-away task queue (`ags -queue`): one file per task, staged in `queue.tmp/` and renamed into place so the drain never reads a torn entry. The drain pops the lexically first file by moving it aside — atomic against a second drain. |
 | `queue.state` | Drain state machine for the queue: `idle`, `armed`, or `draining`. |
+| `queue.mode` | How a started run hands over its tasks: `subagents` or `workflow`; absent runs them in the conversation. Written by `ags -queue start`, removed when the run finishes or the queue is cleared. A run the failures breaker stops keeps it until the next `ags -queue start`. |
 | `queue.done` | Log of completed queued tasks, appended as each is drained. |
 | `queue.declined` | Cooldown stamp after declining the queue-drain prompt. |
 | `notifications.jsonl` | Per-machine queue inbox — drain lifecycle events (`drain_started`, `task_done`, `breaker_tripped`, `drain_finished`) and the `gate_declined` event `ags -queue defer` writes, read by `ags -queue log` and the surface-once digest. |
 | `notifications.seen` | Cursor for that digest, so unseen inbox entries surface at most once. |
+| `finish-progress.json` | The progress of the last `/finish` run, one JSON object that `cs <base> -integrate-feature` and `-retire-feature` replace whole at each step: `id` (one per run), `pid` (the cs process), `task`, `sha` (the captured commit), `step` and `ts` (epoch seconds of the write). `step` runs `started`, `merging`, `gate` (only for a real gate, not `-- true` or a `--ci-green` skip; it adds `gate_started`, kept on later steps), `fast-forward`, then ends at an outcome: `landed` (with `result`, the commit the base landed on), `refused` (with `reason`, the first line of the error) or `retired`. The cs mod reads it to toast `/finish`'s start and outcome and to draw the gate band. A step whose `pid` no longer runs belongs to a run a signal ended, and the mod treats it as over. Advisory: a write that fails costs one warning on stderr and nothing else. |
 | `.advisor-nudge-cooldown` | The narrative reminder's cooldown stamp for its council-advisor nudge: at most one nudge per 30 minutes. |
 | `memory-index.snapshot` | Copy of `.cs/memory/MEMORY.md` that `/sweep` takes before it edits the index; the sweep skill's `scripts/memory-index-guard.sh check` compares against it and `restore` copies it back. Overwritten by the next sweep. |
 | `ctx-warned` | Conversation UUID already given the one-time 40% context warning (the tier below the rotation nudge). |
@@ -135,7 +138,7 @@ there.
 | `.cs/memory` | Auto-memory and the narratives. |
 | `.cs/plans` | Plans and specs. |
 | `.cs/claude-config` | Claude Code's config dir for this session. agent-sessions launches Claude Code with `CLAUDE_CONFIG_DIR` pointing here, so transcripts, prompt history, `.claude.json` and its backups never reach `~/.claude`. `CLAUDE_SECURESTORAGE_CONFIG_DIR` keeps the shell's login (empty selects the default keychain entry). On every launch agent-sessions links the shell's `settings.json`, `settings.local.json`, `CLAUDE.md`, `AGENTS.md`, `rules/`, `skills/`, `commands/`, `agents/`, `hooks/`, `plugins/`, `output-styles/`, `keybindings.json` and `vale/` into it, skipping any name the session already has. A setting you change inside the session (`/model`, `/config`) writes through the link into the shell's `settings.json`. The first launch seeds `.claude.json` from the shell's copy with `projects` emptied, since each project entry keeps that project's last prompt. agent-sessions reads the session's transcripts from `projects/` here, and the picker does not rename such a session, because its links and transcripts name its path. |
-| `.cs/private` | agent-sessions' own content files, which a plain session keeps in `.cs/local/`: `session.log`, `scope-prompt.trace`, `memory-index.snapshot`, `mail/`, the queue files (`queue/`, `queue.tmp/`, `queue.state`, `queue.done`, `queue.declined`, `queue.migrating`), `notifications.jsonl`, `notifications.seen`, `failures`, `rewrite.trace`, the rotation handoffs (`handoffs/`), `pending-handoff`, `pending-switch`, checkpoints (`checkpoints/`) and, when `.cs/memory` is a link, the rotated narrative sections (`narrative-archive/`). Numbers the status line writes (`context-pct`, `limits`) and ids (`state`, `spawned-by`, `rotate-nudged`, `ctx-warned`) stay in `.cs/local/`. |
+| `.cs/private` | agent-sessions' own content files, which a plain session keeps in `.cs/local/`: `session.log`, `scope-prompt.trace`, `memory-index.snapshot`, `mail/`, the queue files (`queue/`, `queue.tmp/`, `queue.state`, `queue.mode`, `queue.done`, `queue.declined`, `queue.migrating`), `notifications.jsonl`, `notifications.seen`, `failures`, `rewrite.trace`, `finish-progress.json`, the rotation handoffs (`handoffs/`), `pending-handoff`, `pending-switch`, checkpoints (`checkpoints/`) and, when `.cs/memory` is a link, the rotated narrative sections (`narrative-archive/`). Numbers the status line writes (`context-pct`, `limits`) and ids (`state`, `spawned-by`, `rotate-nudged`, `ctx-warned`) stay in `.cs/local/`. |
 
 ### Encrypting a session with `ags -encrypt`
 
@@ -290,6 +293,20 @@ numbered phases in `migrate_session()`: a flat pre-`.cs/` layout is moved under
 command-tracker files are pruned, and machine-local fields are moved out of
 shared files into `.cs/local/`. Migration is idempotent — a modern session is
 left untouched.
+
+A migration whose writes all succeed writes `.cs/local/migrated`, and
+the next open skips the one-time phases while that stamp still holds: same ags
+version, same actor, same engine, same encrypted state, every file it listed still there,
+and none of `.gitignore`, `.gitattributes`, `CLAUDE.local.md`, `CLAUDE.md` or
+`.cs/README.md` modified after it, and `merge.ours.driver` still set in a
+checkout ags commits into (ags reads the value: git rewrites `.git/config` on
+every `git config` write). When only `.cs/memory/MEMORY.md` changed,
+the open re-checks the narrative pointer and nothing else. The refusals (a
+tracked `.cs/local/`, an unmounted vault), the transcript binding and the checks
+that only look for a leftover from an old layout run on every open. `ags -doctor` reports the
+stamp; `rm .cs/local/migrated` forces a full migration on the next open, for
+an edit the stamp cannot see (a file restored with its old modification time,
+or saved within the same second as the stamp).
 
 ## Engine-local compatibility records
 

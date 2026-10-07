@@ -171,15 +171,15 @@ test_mod_validate_inventories_the_hooks_and_calls() {
         echo "    SKIP: this claude ($(claude --version 2>/dev/null | head -1)) does not inventory function hooks"
         return 77
     fi
-    assert_output_contains "$out" "hooks: session.start, command.run{command=queue}, turn.complete, prompt.submit, command.run{command=clear}, turn.start, ui.render{component=AbovePrompt}, ui.render{component=Pane}" "all eight hooks inventoried" || return 1
+    assert_output_contains "$out" "hooks: session.start, command.run{command=queue}, turn.complete, skill.prompt{skill=finish}, prompt.submit, command.run{command=clear}, turn.start, ui.render{component=AbovePrompt}, ui.render{component=Pane}" "all nine hooks inventoried" || return 1
     assert_output_not_contains "$out" '$.prompt.fill' "nothing fills the composer any more" || return 1
     assert_output_contains "$out" 'env reads: AGS_BIN, CS_BIN, CS_ROTATE_BUTTON_CTX, CS_ROTATE_FORCE_CTX, CS_RUN_ID, CS_STATUSLINE_CTX_WARN, CS_TERM_BG_RGB, CS_TERM_THEME' "the canonical and legacy executable paths, thresholds, the run a pending switch must name, warn band, measured background and theme are read from the environment" || return 1
     assert_output_contains "$out" '$.process.run, $.prompt.submit (via offerToStart), $.session.compact (via offerToStart), $.session.cwd' "/queue runs ags from its own hook and its start offer, which alone submits a prompt and compacts; nothing else runs a process" || return 1
     assert_output_contains "$out" '$.command.run (via askToWrap, clearAndContinue, exitAndContinue, rotate)' "the keys run their commands (a pending switch's /exit among them), and nothing else runs one" || return 1
-    assert_output_contains "$out" '$.clock.after (via forceRotation, startCountdown), $.clock.every (via startCountdown)' "the forced /rotate and the pane's open are one-shot timers and the grace a ticker, nowhere else" || return 1
+    assert_output_contains "$out" '$.clock.after (via forceRotation, startCountdown), $.clock.every (via startCountdown, watchFinish), $.clock.now (via withGateBand)' "the forced /rotate and the pane's open are one-shot timers, the grace and the /finish watch tickers, and the gate band alone reads the time" || return 1
     assert_output_contains "$out" '$.ui.ask (via askToWrap, offerToStart)' "the wrap key and the /queue start offer ask through the engine's own dialog" || return 1
     assert_output_contains "$out" '$.ui.close (via openPreview, stopCountdown)' "the handoff pane closes where the count ends, and where it lands after one" || return 1
-    assert_output_contains "$out" '$.fs.read (via armedHandoff, forceRotation, pendingSwitch, queueRunning, readState, readWrapped)' "the wrap marker, the state, the pending switch and the queue's state are read, never a file's age" || return 1
+    assert_output_contains "$out" '$.fs.read (via armedHandoff, forceRotation, pendingSwitch, queueRunning, readFinish, readState, readWrapped)' "the wrap marker, the state, the pending switch, the queue's state and the /finish record are read, never a file's age" || return 1
     assert_output_not_contains "$out" '$.fs.stat' "no rule hangs on a modification time" || return 1
     assert_output_contains "$out" '$.ui.open (via openPreview)' "and opens in one place" || return 1
 }

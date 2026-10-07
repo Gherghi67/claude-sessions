@@ -90,7 +90,8 @@ def rename(text):
     # The command itself: `cs -list`, "cs: name", (cs), ${COMMENT}cs${NC}. Not
     # .cs/, hooks/cs, cs-shared.sh, cs_helper, CS_KEY or docs, and not a cs:word
     # identifier: <!-- cs:wrap-cues --> and the other sentinels keep their names.
-    text = re.sub(r"(?<![\w./$-])cs(?=$|[\s\"'`).,;]|:(?=\s|$)|\$\{)", "ags", text, flags=re.M)
+    # Nor a jq variable named cs (`--argjson cs "$CS_OPTION_KEYS"`, read as $cs).
+    text = re.sub(r"(?<![\w./$-])(?<!--arg )(?<!--argjson )cs(?=$|[\s\"'`).,;]|:(?=\s|$)|\$\{)", "ags", text, flags=re.M)
     return re.sub(r"\b([Aa]) ags\b", r"\1n ags", text)  # "a cs session" reads "an ags session"
 
 

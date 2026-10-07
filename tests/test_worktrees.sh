@@ -1079,7 +1079,7 @@ test_integrate_lands_a_no_ff_merge_and_keeps_everything() {
     # linked worktree with `+`, so the listing never equals the bare name.
     git -C "$base_dir" rev-parse -q --verify refs/heads/cs/fix-auth >/dev/null 2>&1 \
         || { echo "  FAIL: the branch must remain"; return 1; }
-    assert_output_not_contains "$(git -C "$base_dir" worktree list)" "cs/finish" "no temp worktree left registered" || return 1
+    assert_output_not_contains "$(git -C "$base_dir" worktree list)" "cs-finish-" "no temp worktree left registered" || return 1
     assert_not_exists "$base_dir/.git/cs/integrate.lock" "mutex released" || return 1
     assert_file_contains "$base_dir/.cs/timeline.jsonl" '"event":"feature-integrated"' "timeline records the integrate" || return 1
     assert_file_contains "$base_dir/.cs/timeline.jsonl" "\"sha\":\"$sha\"" "event carries the sha" || return 1
@@ -1145,13 +1145,13 @@ test_integrate_red_gate_leaves_base_untouched() {
     # "leave HEAD unchanged", so location is part of what this proves.
     output=$("$CS_BIN" myproj -integrate-feature fix-auth "$sha" -- sh -c 'pwd > "$0/where"; echo GATE-SAYS-NO; exit 3' "$TEST_TMPDIR" 2>&1) || status=$?
     assert_eq "1" "$status" "a red gate refuses" || return 1
-    assert_output_contains "$(cat "$TEST_TMPDIR/where" 2>/dev/null)" "/.git/cs/finish/fix-auth." "the red gate ran in the temp" || return 1
+    assert_output_contains "$(cat "$TEST_TMPDIR/where" 2>/dev/null)" "/cs-finish-fix-auth." "the red gate ran in the temp" || return 1
     assert_output_contains "$output" "GATE-SAYS-NO" "the gate output is shown" || return 1
     assert_output_contains "$output" "Gate failed" "names the cause" || return 1
     assert_output_contains "$output" "clean checkout" "and says the gate ran without gitignored files" || return 1
     assert_eq "$head" "$(git -C "$base_dir" rev-parse HEAD)" "base HEAD unchanged" || return 1
     assert_file_not_exists "$base_dir/feature.txt" "base tree unchanged" || return 1
-    assert_output_not_contains "$(git -C "$base_dir" worktree list)" "cs/finish" "temp worktree removed" || return 1
+    assert_output_not_contains "$(git -C "$base_dir" worktree list)" "cs-finish-" "temp worktree removed" || return 1
     assert_not_exists "$base_dir/.git/cs/integrate.lock" "mutex released on failure" || return 1
 }
 
@@ -1172,7 +1172,7 @@ test_integrate_refuses_untracked_collision_before_the_gate() {
     assert_file_not_exists "$TEST_TMPDIR/marker" "the gate never ran" || return 1
     assert_eq "$head" "$(git -C "$base_dir" rev-parse HEAD)" "base HEAD unchanged" || return 1
     assert_eq "stale" "$(cat "$base_dir/feature.txt")" "the untracked file survives with its content" || return 1
-    assert_output_not_contains "$(git -C "$base_dir" worktree list)" "cs/finish" "temp worktree removed" || return 1
+    assert_output_not_contains "$(git -C "$base_dir" worktree list)" "cs-finish-" "temp worktree removed" || return 1
     assert_not_exists "$base_dir/.git/cs/integrate.lock" "mutex released" || return 1
 }
 
@@ -1186,7 +1186,10 @@ test_integrate_gates_run_in_the_temp_not_the_live_trees() {
     assert_eq "0" "$status" "gate saw the merged tree: $output" || return 1
     local where
     where=$(cat "$TEST_TMPDIR/where")
-    assert_output_contains "$where" "/.git/cs/finish/fix-auth." "gate ran in the temp worktree" || return 1
+    assert_output_contains "$where" "/cs-finish-fix-auth." "gate ran in the temp worktree" || return 1
+    # Tools refuse paths under a .git directory (Vite's server.fs.deny has
+    # **/.git/**), so a gate run there fails for reasons of its location.
+    assert_output_not_contains "$where" "/.git/" "the temp worktree is outside any .git directory" || return 1
     assert_output_not_contains "$where" "$wt" "gate did not run in the feature worktree" || return 1
     [ "$where" != "$base_dir" ] || { echo "  FAIL: gate ran in the live base"; return 1; }
 }
@@ -1201,7 +1204,7 @@ test_integrate_refuses_when_base_moved_during_gates() {
     assert_output_contains "$output" "moved during the gates" "names the cause" || return 1
     assert_eq "moved" "$(git -C "$base_dir" log -1 --format=%s)" "base keeps only its own new commit" || return 1
     assert_file_not_exists "$base_dir/feature.txt" "nothing landed" || return 1
-    assert_output_not_contains "$(git -C "$base_dir" worktree list)" "cs/finish" "temp worktree removed" || return 1
+    assert_output_not_contains "$(git -C "$base_dir" worktree list)" "cs-finish-" "temp worktree removed" || return 1
     assert_not_exists "$base_dir/.git/cs/integrate.lock" "mutex released" || return 1
 }
 
@@ -1263,7 +1266,7 @@ test_integrate_terminated_mid_gate_leaves_no_lock_or_temp() {
     [ "$status" != 0 ] || { echo "  FAIL: a terminated integrate must not exit 0"; return 1; }
     assert_file_exists "$TEST_TMPDIR/gate-ran" "the gate ran with the mutex held" || return 1
     assert_not_exists "$base_dir/.git/cs/integrate.lock" "mutex released on TERM" || return 1
-    assert_output_not_contains "$(git -C "$base_dir" worktree list)" "cs/finish" "temp worktree removed on TERM" || return 1
+    assert_output_not_contains "$(git -C "$base_dir" worktree list)" "cs-finish-" "temp worktree removed on TERM" || return 1
     assert_file_not_exists "$base_dir/feature.txt" "nothing landed" || return 1
 }
 
@@ -1288,7 +1291,7 @@ test_integrate_conflict_names_the_path_and_leaves_no_merge_head() {
         "the advice names the base's real branch and the worktree to run it in" || return 1
     assert_file_not_exists "$base_dir/.git/MERGE_HEAD" "no MERGE_HEAD in the base" || return 1
     assert_eq "$head" "$(git -C "$base_dir" rev-parse HEAD)" "base HEAD unchanged" || return 1
-    assert_output_not_contains "$(git -C "$base_dir" worktree list)" "cs/finish" "temp worktree removed" || return 1
+    assert_output_not_contains "$(git -C "$base_dir" worktree list)" "cs-finish-" "temp worktree removed" || return 1
 }
 
 test_integrate_ignored_mode_fuses_nothing() {
@@ -1386,7 +1389,7 @@ test_integrate_refuses_a_gate_that_writes_into_the_temp() {
     assert_eq "$head" "$(git -C "$base_dir" rev-parse HEAD)" "base HEAD unchanged" || return 1
     assert_file_not_exists "$base_dir/feature.txt" "nothing landed" || return 1
     assert_output_not_contains "$output" "integrated fix-auth" "no summary line" || return 1
-    assert_output_not_contains "$(git -C "$base_dir" worktree list)" "cs/finish" "temp worktree removed" || return 1
+    assert_output_not_contains "$(git -C "$base_dir" worktree list)" "cs-finish-" "temp worktree removed" || return 1
     assert_not_exists "$base_dir/.git/cs/integrate.lock" "mutex released" || return 1
 }
 
@@ -2229,5 +2232,180 @@ run_test test_integrate_from_remote_runs_the_gate_when_base_diverged
 run_test test_integrate_refuses_ci_green_without_from_remote
 run_test test_integrate_from_remote_refuses_a_commit_origin_does_not_have
 run_test test_integrate_from_remote_squash_leaves_feature_tip_unintegrated
+
+# --- /finish progress: the record the ags mod reads to toast and draw the gate band ---
+
+# One field of the base's progress record, as jq -r prints it.
+progress_field() {  # record_file jq_filter
+    jq -r "$2" "$1" 2>/dev/null
+}
+
+test_finish_progress_records_a_landing() {
+    local sha base_dir record output status=0
+    sha=$(integrate_fixture myproj fix-auth)
+    base_dir="$CS_SESSIONS_ROOT/myproj"
+    record="$base_dir/.cs/local/finish-progress.json"
+    output=$("$CS_BIN" myproj -integrate-feature fix-auth "$sha" -- true 2>&1) || status=$?
+    assert_eq "0" "$status" "integrate succeeds: $output" || return 1
+    assert_file_exists "$record" "the landing leaves a progress record" || return 1
+    assert_eq "landed" "$(progress_field "$record" .step)" "the outcome is landed" || return 1
+    assert_eq "fix-auth" "$(progress_field "$record" .task)" "names the task" || return 1
+    assert_eq "$sha" "$(progress_field "$record" .sha)" "carries the captured sha" || return 1
+    assert_eq "$(git -C "$base_dir" rev-parse HEAD)" "$(progress_field "$record" .result)" "carries the commit the base landed on" || return 1
+    case "$(progress_field "$record" .pid)" in ''|*[!0-9]*) echo "  FAIL: pid is not a number"; return 1 ;; esac
+    case "$(progress_field "$record" .ts)" in ''|*[!0-9]*) echo "  FAIL: ts is not epoch seconds"; return 1 ;; esac
+    [ -n "$(progress_field "$record" '.id // empty')" ] || { echo "  FAIL: the record has no id"; return 1; }
+}
+
+test_finish_progress_records_no_gate_step_for_a_true_gate() {
+    local sha base_dir record status=0
+    sha=$(integrate_fixture myproj fix-auth)
+    base_dir="$CS_SESSIONS_ROOT/myproj"
+    record="$base_dir/.cs/local/finish-progress.json"
+    "$CS_BIN" myproj -integrate-feature fix-auth "$sha" -- true >/dev/null 2>&1 || status=$?
+    assert_eq "0" "$status" "integrate succeeds" || return 1
+    assert_eq "landed" "$(progress_field "$record" .step)" "the outcome is landed" || return 1
+    assert_eq "false" "$(progress_field "$record" 'has("gate_started")')" "-- true runs no gate worth a band" || return 1
+}
+
+test_finish_progress_records_the_gate_step_before_the_gate_runs() {
+    local sha base_dir record before after status=0
+    sha=$(integrate_fixture myproj fix-auth)
+    base_dir="$CS_SESSIONS_ROOT/myproj"
+    record="$base_dir/.cs/local/finish-progress.json"
+    before=$(date +%s)
+    # The gate copies the record as it stands while the gate runs.
+    "$CS_BIN" myproj -integrate-feature fix-auth "$sha" -- sh -c 'cp "$0" "$1"' "$record" "$TEST_TMPDIR/seen" >/dev/null 2>&1 || status=$?
+    after=$(date +%s)
+    assert_eq "0" "$status" "integrate succeeds" || return 1
+    assert_file_exists "$TEST_TMPDIR/seen" "the record existed while the gate ran" || return 1
+    assert_eq "gate" "$(progress_field "$TEST_TMPDIR/seen" .step)" "the step during the gate is gate" || return 1
+    assert_eq "fix-auth" "$(progress_field "$TEST_TMPDIR/seen" .task)" "the gate step names the task" || return 1
+    local started
+    started=$(progress_field "$TEST_TMPDIR/seen" .gate_started)
+    case "$started" in ''|*[!0-9]*) echo "  FAIL: gate_started is not epoch seconds: $started"; return 1 ;; esac
+    [ "$started" -ge "$before" ] && [ "$started" -le "$after" ] \
+        || { echo "  FAIL: gate_started $started is outside the run ($before..$after)"; return 1; }
+    case "$(progress_field "$TEST_TMPDIR/seen" .pid)" in ''|*[!0-9]*) echo "  FAIL: the gate step has no pid"; return 1 ;; esac
+    assert_eq "landed" "$(progress_field "$record" .step)" "the run still lands" || return 1
+    assert_eq "$(progress_field "$TEST_TMPDIR/seen" .id)" "$(progress_field "$record" .id)" "one run, one id" || return 1
+}
+
+test_finish_progress_records_a_red_gate_and_a_moved_base_as_refused() {
+    local sha base_dir record head status=0
+    sha=$(integrate_fixture myproj fix-auth)
+    base_dir="$CS_SESSIONS_ROOT/myproj"
+    record="$base_dir/.cs/local/finish-progress.json"
+    head=$(git -C "$base_dir" rev-parse HEAD)
+    "$CS_BIN" myproj -integrate-feature fix-auth "$sha" -- sh -c 'echo GATE-SAYS-NO; exit 3' >/dev/null 2>&1 || status=$?
+    assert_eq "1" "$status" "a red gate refuses" || return 1
+    assert_eq "$head" "$(git -C "$base_dir" rev-parse HEAD)" "base HEAD unchanged" || return 1
+    assert_eq "refused" "$(progress_field "$record" .step)" "a red gate is refused" || return 1
+    assert_eq "fix-auth" "$(progress_field "$record" .task)" "names the task" || return 1
+    local reason
+    reason=$(progress_field "$record" .reason)
+    case "$reason" in
+        "Gate failed in "*"(output above); base $base_dir untouched at $head") ;;
+        *) echo "  FAIL: the reason is the refusal's first line, got: $reason"; return 1 ;;
+    esac
+
+    status=0
+    "$CS_BIN" myproj -integrate-feature fix-auth "$sha" -- git -C "$base_dir" commit -q --allow-empty -m moved >/dev/null 2>&1 || status=$?
+    assert_eq "1" "$status" "a moved base refuses" || return 1
+    assert_eq "refused" "$(progress_field "$record" .step)" "a moved base is refused" || return 1
+    assert_eq "Base $base_dir moved during the gates (was $head, now $(git -C "$base_dir" rev-parse --short HEAD)); re-run /finish fix-auth" \
+        "$(progress_field "$record" .reason)" "the moved-base reason is one line" || return 1
+}
+
+test_finish_progress_records_a_conflict_as_refused() {
+    local base_dir wt sha record head status=0
+    base_dir=$(create_test_session_with_git "myproj")
+    echo "base line" > "$base_dir/shared.txt"
+    (cd "$base_dir" && git add shared.txt && git commit -q -m "base file")
+    cs_launch "myproj@fix-auth"
+    wt="$CS_SESSIONS_ROOT/myproj@fix-auth"
+    echo "task line" > "$wt/shared.txt"
+    (cd "$wt" && git add shared.txt && git commit -q -m "task edit")
+    sha=$(git -C "$wt" rev-parse HEAD)
+    echo "conflicting base line" > "$base_dir/shared.txt"
+    (cd "$base_dir" && git add shared.txt && git commit -q -m "base edit")
+    head=$(git -C "$base_dir" rev-parse HEAD)
+    record="$base_dir/.cs/local/finish-progress.json"
+    "$CS_BIN" myproj -integrate-feature fix-auth "$sha" -- true >/dev/null 2>&1 || status=$?
+    assert_eq "1" "$status" "a conflict refuses" || return 1
+    assert_eq "$head" "$(git -C "$base_dir" rev-parse HEAD)" "base HEAD unchanged" || return 1
+    assert_eq "refused" "$(progress_field "$record" .step)" "a conflict is refused" || return 1
+    assert_eq "Merge of $sha conflicts with $base_dir at $head; base untouched. Conflicting paths:" \
+        "$(progress_field "$record" .reason)" "the reason is the refusal's first line" || return 1
+}
+
+test_finish_progress_records_a_retirement() {
+    local sha base_dir record landed_id output status=0
+    base_dir=$(create_test_session_with_git "myproj")
+    cs_launch "myproj@fix-auth"
+    echo "fix" > "$CS_SESSIONS_ROOT/myproj@fix-auth/auth.txt"
+    (cd "$CS_SESSIONS_ROOT/myproj@fix-auth" && git add auth.txt && git commit -q -m "task work")
+    sha=$(land_feature myproj fix-auth) || { echo "  FAIL: integrate fixture"; return 1; }
+    record="$base_dir/.cs/local/finish-progress.json"
+    landed_id=$(progress_field "$record" .id)
+    output=$("$CS_BIN" myproj -retire-feature fix-auth "$sha" 2>&1) || status=$?
+    assert_eq "0" "$status" "retire succeeds: $output" || return 1
+    assert_eq "retired" "$(progress_field "$record" .step)" "the outcome is retired" || return 1
+    assert_eq "fix-auth" "$(progress_field "$record" .task)" "names the task" || return 1
+    [ "$(progress_field "$record" .id)" != "$landed_id" ] || { echo "  FAIL: the retire is a run of its own and needs its own id"; return 1; }
+}
+
+# An encrypted session keeps ags's files behind .cs/private, a link into its
+# vault; a locked vault (the link dangles) gets no plaintext record instead.
+test_finish_progress_goes_behind_private_in_an_encrypted_session() {
+    local sha base_dir status=0
+    sha=$(integrate_fixture myproj fix-auth)
+    base_dir="$CS_SESSIONS_ROOT/myproj"
+    mkdir -p "$TEST_TMPDIR/vault/private"
+    ln -s "$TEST_TMPDIR/vault/private" "$base_dir/.cs/private"
+    "$CS_BIN" myproj -integrate-feature fix-auth "$sha" -- true >/dev/null 2>&1 || status=$?
+    assert_eq "0" "$status" "integrate succeeds" || return 1
+    assert_eq "landed" "$(progress_field "$TEST_TMPDIR/vault/private/finish-progress.json" .step)" "the record is in the vault" || return 1
+    assert_not_exists "$base_dir/.cs/local/finish-progress.json" "no plaintext record" || return 1
+}
+
+test_finish_progress_drops_the_record_while_the_vault_is_locked() {
+    local sha base_dir output status=0
+    sha=$(integrate_fixture myproj fix-auth)
+    base_dir="$CS_SESSIONS_ROOT/myproj"
+    ln -s "$TEST_TMPDIR/unmounted/private" "$base_dir/.cs/private"
+    output=$("$CS_BIN" myproj -integrate-feature fix-auth "$sha" -- true 2>/dev/null) || status=$?
+    assert_eq "0" "$status" "a locked vault does not stop the landing" || return 1
+    assert_eq "integrated fix-auth $sha -> $(git -C "$base_dir" rev-parse HEAD)" "$output" "the output is unchanged" || return 1
+    assert_not_exists "$base_dir/.cs/local/finish-progress.json" "no plaintext record" || return 1
+    assert_not_exists "$TEST_TMPDIR/unmounted" "nothing is created where the vault mounts" || return 1
+}
+
+# Progress is advisory: a record that cannot be written costs one warning on
+# stderr, never the landing, its exit status or its output.
+test_finish_progress_write_failure_changes_nothing_but_one_warning() {
+    local sha base_dir output status=0
+    sha=$(integrate_fixture myproj fix-auth)
+    base_dir="$CS_SESSIONS_ROOT/myproj"
+    # A directory where the record goes: cs_write_atomic refuses it on every write.
+    mkdir -p "$base_dir/.cs/local/finish-progress.json"
+    output=$("$CS_BIN" myproj -integrate-feature fix-auth "$sha" -- sh -c 'exit 0' 2>"$TEST_TMPDIR/stderr") || status=$?
+    assert_eq "0" "$status" "the landing still succeeds" || return 1
+    assert_eq "integrated fix-auth $sha -> $(git -C "$base_dir" rev-parse HEAD)" "$output" "stdout is the summary line alone" || return 1
+    assert_file_exists "$base_dir/feature.txt" "the feature landed" || return 1
+    assert_eq "1" "$(wc -l < "$TEST_TMPDIR/stderr" | tr -d ' ')" "exactly one line on stderr: $(cat "$TEST_TMPDIR/stderr")" || return 1
+    assert_file_contains "$TEST_TMPDIR/stderr" "^ags: /finish progress not recorded: could not write $base_dir/.cs/local/finish-progress.json$" \
+        "the one line is the warning" || return 1
+}
+
+run_test test_finish_progress_records_a_landing
+run_test test_finish_progress_records_no_gate_step_for_a_true_gate
+run_test test_finish_progress_records_the_gate_step_before_the_gate_runs
+run_test test_finish_progress_records_a_red_gate_and_a_moved_base_as_refused
+run_test test_finish_progress_records_a_conflict_as_refused
+run_test test_finish_progress_records_a_retirement
+run_test test_finish_progress_goes_behind_private_in_an_encrypted_session
+run_test test_finish_progress_drops_the_record_while_the_vault_is_locked
+run_test test_finish_progress_write_failure_changes_nothing_but_one_warning
 
 report_results

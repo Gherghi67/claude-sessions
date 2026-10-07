@@ -127,17 +127,18 @@ prune_commands_artifacts() {
     fi
 }
 
+# Claude's part of migrate_session. CS_MIGRATE_REPAIR, set by migrate_session
+# from its migration stamp, says how much of it this open runs: "all" runs
+# every phase; "narrative" and "none" skip the one-time phases (13, 5, 7, 9,
+# 10 and 14) and keep the two that run on every open, the binding check
+# (Phase 8) and the colour backfill (Phase 11). A call from outside
+# migrate_session runs everything. Each write here either succeeds or ends
+# ags (an error or errexit), so none needs to clear _CS_MIGRATE_CLEAN; a phase
+# added later that warns and carries on past a failed write must clear it.
 _claude_migrate_workspace() {
-    local session_dir="$1" _state="$1/.cs/local/state"
-    _claude_migrate_protocol_wording "$session_dir"
-
-    _claude_ensure_workspace_protocol "$session_dir"
-
-    # Phase 7: prune retired command-tracker artifacts. Not in an adopted
-    # Claude Code worktree, whose tracked tree is the branch's (see
-    # _claude_tracked_tree_is_ours).
-    if _claude_tracked_tree_is_ours "$session_dir"; then
-        prune_commands_artifacts "$session_dir"
+    local session_dir="$1" _state="$1/.cs/local/state" repair="${CS_MIGRATE_REPAIR:-all}"
+    if [ "$repair" = all ]; then
+        _claude_migrate_session_documents "$session_dir"
     fi
 
     # Phase 8: Backfill only an absent binding. A missing native transcript
@@ -154,6 +155,42 @@ _claude_migrate_workspace() {
             fi
         fi
     }
+
+    if [ "$repair" = all ]; then
+        _claude_ensure_local_sections "$session_dir"
+    fi
+
+    # Phase 11: Backfill claude_session_color in local state when absent.
+    # Picks one of the 8 colors claude's /color command accepts. Idempotent —
+    # runs only when the field is missing. Legacy sessions (pre-v2026.5.7)
+    # get a randomly-chosen color on next launch and stay on it from then on.
+    if [ -z "$(_read_local_state "$_state" claude_session_color)" ]; then
+        local _new_color
+        _new_color=$(_alloc_random_color)
+        _set_local_state_if_absent "$_state" claude_session_color "$_new_color"
+        warn "Backfilled claude_session_color in .cs/local/state ($_new_color)"
+    fi
+}
+
+# Phases 13, 5 and 7, Claude's share: the protocol wording in CLAUDE.local.md,
+# the protocol moved out of CLAUDE.md, and the retired command-tracker files.
+_claude_migrate_session_documents() {  # session_dir
+    local session_dir="$1"
+    _claude_migrate_protocol_wording "$session_dir"
+
+    _claude_ensure_workspace_protocol "$session_dir"
+
+    # Phase 7: prune retired command-tracker artifacts. Not in an adopted
+    # Claude Code worktree, whose tracked tree is the branch's (see
+    # _claude_tracked_tree_is_ours).
+    if _claude_tracked_tree_is_ours "$session_dir"; then
+        prune_commands_artifacts "$session_dir"
+    fi
+}
+
+# Phases 9, 10 and 14: the ags sections of CLAUDE.local.md.
+_claude_ensure_local_sections() {  # session_dir
+    local session_dir="$1"
 
     # Phase 9: Manage the cs:memory-note section in CLAUDE.md. Four states:
     #
@@ -252,17 +289,6 @@ EOF
         && ! grep -q 'cs:encrypted-protocol' "$claude_md_p9"; then
         { echo; _emit_encrypted_protocol_block; } >> "$claude_md_p9"
         warn "Added the encrypted-session protocol to CLAUDE.local.md"
-    fi
-
-    # Phase 11: Backfill claude_session_color in local state when absent.
-    # Picks one of the 8 colors claude's /color command accepts. Idempotent —
-    # runs only when the field is missing. Legacy sessions (pre-v2026.5.7)
-    # get a randomly-chosen color on next launch and stay on it from then on.
-    if [ -z "$(_read_local_state "$_state" claude_session_color)" ]; then
-        local _new_color
-        _new_color=$(_alloc_random_color)
-        _set_local_state_if_absent "$_state" claude_session_color "$_new_color"
-        warn "Backfilled claude_session_color in .cs/local/state ($_new_color)"
     fi
 }
 

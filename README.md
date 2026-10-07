@@ -48,6 +48,7 @@ No git repo required. No project structure needed. Just a name for what you're w
 - **Codex CLI launch and resume** - `ags <name> --engine codex` creates or resumes a Codex thread in the same session workspace. Engine choice follows the explicit option, the session's saved preference, `CS_DEFAULT_ENGINE`, then the sole installed Codex adapter or Claude. Codex shares session files and startup context with Claude, while retaining its own native thread ID. This launch-focused integration does not yet provide Claude's hooks, autosave, queue delivery, usage reporting, handoffs, or terminal UI; see [docs/codex.md](docs/codex.md).
 - **Per-session memory path redirect** - agent-sessions points Claude Code's built-in auto-memory writer at `<session>/.cs/memory/` (via `CLAUDE_COWORK_MEMORY_PATH_OVERRIDE`) so durable facts land in the session instead of the global project store. The harness owns how memory files are written (naming, frontmatter, `MEMORY.md` index); agent-sessions owns only the storage path.
 - **Conversation rotation** - a heavy conversation can hand off to a fresh one without losing context: the `rotate` skill (self-invoked, or nudged once per conversation at 65% context) writes a lineage-stamped handoff to `.cs/handoffs/` and arms it, then `/clear` continues from it without leaving Claude Code — and continues on its own, since the session wakes itself a moment later and starts the handoff's next step with nothing typed (`CS_NO_ROTATION_WAKE=1` to wait for a word instead). Exiting and answering `r` at the next `ags <name>` launch does the same; `d` discards the handoff. `ags -conversations` shows the resulting chain. The `cs` mod, a Claude Code function-hooks plugin the installer deploys and every ags launch enables, puts a `1: rotate this conversation` button above the prompt once context reaches 40% (`CS_ROTATE_BUTTON_CTX` moves it), beside `2: wrap up this session`, which asks first, since a wrap runs two Opus passes and replaces the summary: `2` opens the engine's own dialog — `Run /wrap for this session?`, with `Yes, wrap up` and `Not now` — and only the yes runs it (once a wrap finishes, its last pass writes `.cs/local/wrapped` and the key hides until the next turn that starts from a prompt, so a finished wrap is not offered again); the rotate press runs `/rotate`, and once the handoff is armed the band draws `1: /clear and continue from the handoff` alone and runs the `/clear` itself. The mod presses the button for you once a turn ends past **80% context**: it runs `/rotate`, and once the handoff is armed the capsule counts down 20 seconds to the `/clear` (press `1` to go now, send a prompt to stop it). `CS_ROTATE_FORCE_CTX=<percent>` moves that threshold and `CS_ROTATE_FORCE_CTX=off` turns it off; the first launch on a machine says so once. `CS_NO_FUNCTION_HOOKS=1` withholds the mod; see [docs/hooks.md](docs/hooks.md).
+- **Option-key shortcuts** - the installer asks once per machine whether to bind Option+1 to `/rotate` and Option+2 to `/wrap` in Claude Code's `keybindings.json`, and they work anywhere in Claude Code, band or no band (your terminal has to send Option as Meta, for example iTerm2's Esc+). It never replaces a key you already bind, refuses a file it cannot parse, and `ags -uninstall` takes back only its own two keys; `ags -doctor` shows the state. See [docs/configuration.md](docs/configuration.md#option-key-bindings).
 - **Release notes in the session** - when a launch finds a newer version, the `cs-update` mod (a function-hooks plugin the installer deploys beside the `cs` mod) opens one pane with the full changelog for every version above the installed one, once per load of the mod (a launch, or a plugin reload), in the conversation ags launched: `1` runs `ags -update` in place (the new files take effect on the next launch; the pane keeps the outcome until you close it), `Esc` closes it, and `/ags-update` brings it back; `/cs-update` remains a compatibility alias. `/config` → `cs-update.showReleaseNotes` turns the launch pane off; both slash commands still work. `CS_NO_FUNCTION_HOOKS=1` withholds both mods.
 - **Works outside the `ags` launcher** - a session is any directory containing `.cs/`, so the hooks find it whether `ags <name>` started the conversation or you opened the folder in a front end that cannot export environment into it — Claude Code desktop, an IDE, a plugin. A terminal is the exception, because there a session is entered by running `ags`: `claude` typed in a session directory stays invisible to agent-sessions. `ags` still owns creating sessions and the launch experience (resume prompt, rotation menu, statusline, tmux spawner); what carries over is the documentation, narrative, timeline, autosave, and scope grounding. The session's recorded conversation stays with the `ags` launch, so a conversation opened another way — or a teammate claude working in the same folder — contributes to the session without becoming the one `ags <name>` resumes. When one of those is newer than the recorded conversation, the next launch says so and names it, rather than resuming the older one in silence:
 
@@ -70,7 +71,7 @@ No git repo required. No project structure needed. Just a name for what you're w
 
 - **Agent state** - `ags -live` and the TUI's `state` row show what Claude Code says each session is doing right now — `busy`, `waiting`, `idle` — read from the per-session records Claude Code publishes under `~/.claude/sessions/`. A record outlives a crash, so agent-sessions treats one as live only while its pid is alive and still reports the process start time the record holds; otherwise a recycled pid would keep a dead session looking busy. Hosts that publish no records (Claude Code before 2.1.224, or without `jq` for the shell reader) simply show no state
 - **Cross-session search** - `ags -search <query>` greps across all sessions' narrative, memory, and README
-- **Health checks** - `ags -doctor` reports status of Keychain backend, hook registration, shadow-ref freshness, auto-memory writability, status line registration, Claude Code settings audit (hooks/MCPs/permissions/env vars counts), cumulative token usage for the current project, whether the cs and cs-update mods ran, and an authority section listing every hook that injects into the model's context together with the switch that turns each one off
+- **Health checks** - `ags -doctor` reports status of Keychain backend, hook registration, shadow-ref freshness, auto-memory writability, status line registration, Claude Code settings audit (hooks/MCPs/permissions/env vars counts), cumulative token usage for the current project, whether the cs and cs-update mods ran, whether the session's migration stamp still lets opens skip the one-time migration checks, and an authority section listing every hook that injects into the model's context together with the switch that turns each one off
 - **Usage attribution** - `ags -usage` shows which sessions are consuming the 5-hour and weekly rate-limit windows: per-session input/output token sums (deduplicated by API request, cache-read excluded), anchored at the true reset boundaries when the ags status line is active. `ags -usage <name>` breaks one session down per conversation with a lifetime column. Both views fold in every subagent and workflow-agent transcript beneath a conversation, however deep Claude Code nests them, while the model column stays the conversation's own. A `READS>350L` column counts Read tool results over 350 lines as `untargeted/all ~tokens`: a read is targeted when the model's own Read call carried an offset or a limit, so a bare read the harness capped at its line limit still counts as untargeted, and the token figure is the untargeted characters at four per token, the share a size gate could have intercepted. Subagent transcripts keep the file text in the tool result itself rather than in a file record; the column counts both shapes. Reads made through Bash (`cat`, `head`) carry no file shape in the transcript and are not counted.
 - **Session tags** - `ags -tag add api` tags the current session in its README frontmatter (`tags: [api]` — the same field Obsidian indexes); `ags -list --tag api` filters the listing, and the picker filters live with `#api` in the search query (combining with fuzzy name search). Tags show in the preview card. The `encrypted` tag marks a session that keeps its notes in an encrypted volume (`.cs/memory` linked into the mount): the picker draws a lock beside its name and a `vault` line in the preview reading `locked` or `unlocked`, from whether `.cs/memory` resolves, and the status line draws the same lock after the session name. The lock is a Nerd Font glyph, drawn once this machine has confirmed its font (the status line's `ags -statusline caps` answer); until then both show `enc`.
 - **Encrypted sessions** - A session can keep its notes, Claude Code's config and agent-sessions' own files on an encrypted volume by linking four names under `.cs/` into its mountpoint: `memory`, `plans`, `claude-config` (Claude Code's config dir for the session, so transcripts and prompt history never reach `~/.claude`) and `private` (agent-sessions' own log, mail, queue, traces, rotation handoffs and checkpoints). While the volume is not mounted, agent-sessions refuses to open the session and writes nothing in plaintext in its place. With the volume mounted inside the session, `ags -rm` refuses to remove the session, and neither `/finish` nor `ags -uninstall` deletes through it. On macOS, `ags -encrypt <name>` sets this up for an existing session. Every open then asks for the password, and the volume unmounts when the session's Claude Code exits. Some files stay outside the vault; the docs list them. See [docs/session-layout.md](docs/session-layout.md#encrypted-sessions).
@@ -168,6 +169,7 @@ Within the experimental profile, the installer:
 - Registers one Codex SessionStart hook in the profile's `.codex/hooks.json` and trusts it in `.codex/config.toml`, so a `/clear` in Codex rebinds the session and picks up an armed rotation
 - Installs shell completions for bash and zsh
 - Configures hook entries in `~/.claude/settings.json`
+- Asks once whether to bind Option+1 to `/rotate` and Option+2 to `/wrap` in `~/.claude/keybindings.json` (asks nothing without a terminal)
 
 ### Windows
 
@@ -358,7 +360,7 @@ delete the branch by hand.
 
 The `finish` skill (`/finish <feature>` in the base session) lands a feature
 and retires its worktree: it captures the feature commit, merges base and
-feature in a temporary detached worktree, runs the repo's gates there (skipped, and reported as `gate skipped`, when the PR is already merged, the checks origin recorded on its merge commit passed, and the base carries no commits of its own on top of it; the gate runs in a clean checkout without gitignored dependencies, `.env` or build output, so one that needs them installs them first, for example `-- sh -c 'npm ci && npm test'`),
+feature in a temporary detached worktree, runs no tests there unless you ask with `/finish <feature> --gate` (then it runs the repo's gates, skipped and reported as `gate skipped` when the PR is already merged, the checks origin recorded on its merge commit passed, and the base carries no commits of its own on top of it; the gate runs in a clean checkout without gitignored dependencies, `.env` or build output, so one that needs them installs them first, for example `-- sh -c 'npm ci && npm test'`),
 fast-forwards the base onto the result, reports whether a GitHub PR exists
 for the branch, then fuses the worktree's session records into the base and
 removes the worktree and branch. That last step needs the feature
@@ -366,8 +368,11 @@ conversation closed, because a directory cannot be removed from under a
 running Claude: while it is open, `/finish` lands the work, says so in plain
 words, and you close that session and run `/finish <feature>` again. Nothing
 is ever removed by a keystroke or signal into the other session. Ordinary
-feature branches get the older gated `--no-ff` ritual from the same skill. It
-is user-invoked only (`disable-model-invocation: true`).
+feature branches get the older `--no-ff` ritual from the same skill, gated the same way. It
+is user-invoked only (`disable-model-invocation: true`). With the cs mod
+loaded, `/finish` toasts when it starts and when it lands, retires or refuses,
+and while the gate runs (with `--gate`) the band above the prompt shows the
+task and how long the gate has run.
 
 The `feature` skill (`/feature <name>` in any agent-sessions session) is the other end:
 it writes a brief from the conversation (goal, done-when, constraints, how to
@@ -406,7 +411,10 @@ ags -queue log                         # Walk-away run journal (tasks done, brea
 
 When you finish a turn with tasks queued, the Stop hook asks once (via
 `AskUserQuestion`) whether to work through them — showing the current
-context % and, at 60% or above, offering to compact first. Choosing "Start"
+context % and, at 60% or above, offering to compact first — and how: in
+this conversation, each task in a subagent, or each task as a workflow
+(choosing workflows is your go-ahead for Claude Code's Workflow tool).
+Choosing "Start"
 drains every task in order (FIFO, top to bottom) at each stop boundary with
 no further prompts until the queue is empty; "Not yet" waits and re-asks
 after about 10 minutes, or as soon as the queue changes. There's no
@@ -415,12 +423,16 @@ own auto-compact. As it drains, the queue runner instructs Claude to mirror the 
 into the native task list so progress stays visible, and hands each task
 over with its scope: do what the task asks, leave a pre-existing bug or
 unmentioned behavior as a follow-up in the narrative, and state the reading
-taken of an ambiguous task. (The gate itself
-runs `ags -queue start` / `ags -queue defer` on your behalf — you don't
-need to run those directly.)
+taken of an ambiguous task. In subagent or workflow mode each handed task
+also says to run it that way and to check the result before marking it
+done. (The gate itself runs `ags -queue start` (with `subagents` or
+`workflow`) / `ags -queue defer` on your behalf — you don't need to run
+those directly.)
 
 Inside an agent-sessions session, `/queue <task>` does the same as `ags -queue add` without
-leaving Claude Code, and runs at once even while Claude is mid-turn; `/queue`
+leaving Claude Code, and runs at once even while Claude is mid-turn. A toast
+under the prompt confirms each add (`ags: queued: <task>`, cut at 60
+characters). `/queue`
 alone prints `ags -queue list` and, when tasks are pending and the queue is not
 already running, asks whether to start them. Start arms the queue (and starts
 a turn if Claude is idle, so the first task arrives); Not yet waits, as the

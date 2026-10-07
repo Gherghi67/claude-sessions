@@ -1,6 +1,6 @@
 # ABOUTME: The deploy manifests (hooks, commands, skills, mods, and what past versions
-# ABOUTME: left behind) and the settings-strip filter; build.sh folds this into bin/cs
-# ABOUTME: and splices it into install.sh, so the installer and the tool read one list.
+# ABOUTME: left behind), the settings-strip filter and the Option-key bindings; build.sh
+# ABOUTME: folds this into bin/cs and splices it into install.sh, so both read one list.
 
 # Files a past version deployed into the hooks directory and this one does not:
 # retired hooks, and any support file that went with them. Removed on install
@@ -265,4 +265,57 @@ _codex_hooks_unregister() {  # codex_dir
         printf '%s\n' "$doc" > "$tmp" && chmod 600 "$tmp" && mv "$tmp" "$file" || { rm -f "$tmp"; return 1; }
     fi
     _codex_trust_tables_edit "$config" "$file" "$index" "$file:session_start:$index:0"
+}
+
+# Option+1 and Option+2: the two Claude Code keybindings ags offers to add,
+# each a "command:<name>" action, which submits /<name>. install.sh asks once
+# per machine and binds them, ags -uninstall takes back only the keys that
+# still hold these values, and ags -doctor reports them.
+CS_OPTION_KEYS='{"alt+1":"command:rotate","alt+2":"command:wrap"}'
+
+# Claude Code reads its keybindings from its config dir. Inside an encrypted
+# session that dir is the session's .cs/claude-config, which no other session
+# reads; it links the shell's keybindings.json instead, so ags's keys belong in
+# the shell's config dir, which launch records in
+# CLAUDE_SECURESTORAGE_CONFIG_DIR (empty for ~/.claude).
+_cs_keybindings_file() {
+    local dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+    case "$dir" in
+        */.cs/claude-config) dir="${CLAUDE_SECURESTORAGE_CONFIG_DIR:-$HOME/.claude}" ;;
+    esac
+    printf '%s\n' "$dir/keybindings.json"
+}
+
+# This machine's answer to the installer's question, yes or no; absent until
+# it has been asked on a terminal.
+_cs_option_keys_answer_file() {
+    printf '%s\n' "${XDG_CONFIG_HOME:-$HOME/.config}/cs/option-keys"
+}
+
+# Whether a keybindings file has the shape ags reads and merges into: one JSON
+# object whose "bindings" is an array of context blocks, each an object whose
+# own "bindings", when present, is an object. Slurped, so a file holding two
+# documents is refused rather than read as two; -e turns invalid JSON, an
+# empty file and a false answer alike into a non-zero exit.
+_cs_keybindings_shape_ok() {  # file
+    jq -se 'length == 1 and (.[0] | type == "object" and (.bindings | type == "array")
+        and all(.bindings[]; type == "object" and ((.bindings // {}) | type == "object")))' \
+        "$1" > /dev/null 2>&1
+}
+
+# Reads a keybindings document that passed the shape check on stdin and prints
+# one line per ags key: "bound<TAB>key" when every binding of it, in any
+# context, holds ags's value; "free<TAB>key" when nothing binds it; and
+# "conflict<TAB>key<TAB>action" when something else does. An action that is
+# not a string (a null that unbinds the key) prints as JSON.
+_cs_option_keys_status() {
+    jq -r --argjson cs "$CS_OPTION_KEYS" '
+        [.bindings[] | (.bindings // {}) | to_entries[]] as $all
+        | $cs | to_entries[] | . as $c
+        | [$all[] | select(.key == $c.key) | .value] as $vals
+        | if ($vals | length) == 0 then "free\t\($c.key)"
+          elif all($vals[]; . == $c.value) then "bound\t\($c.key)"
+          else "conflict\t\($c.key)\t\([$vals[] | select(. != $c.value)][0]
+                | if type == "string" then . else tojson end)"
+          end'
 }

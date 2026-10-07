@@ -395,6 +395,29 @@ test_adopt_gitignores_the_vault_mount() {
     assert_file_contains "$owned/.gitignore" "node_modules/" "the project's own entry stays" || return 1
 }
 
+# cs_write_atomic stages each write in a temp file beside its destination; one
+# left by a killed writer must not reach an autosave snapshot, both under the
+# .gitignore ags writes and under a project's own .gitignore that adopt appends to.
+test_adopt_gitignores_atomic_write_temps() {
+    local fresh="$TEST_TMPDIR/fresh" owned="$TEST_TMPDIR/owned" tmp dir
+    mkdir -p "$fresh" "$owned"
+    (cd "$fresh" && git init -q && "$CS_BIN" -adopt fresh-session >/dev/null 2>&1)
+    (cd "$owned" && git init -q && printf 'node_modules/\n' > .gitignore \
+        && "$CS_BIN" -adopt owned-session >/dev/null 2>&1)
+    for dir in "$fresh" "$owned"; do
+        bash -c 'source "$1"; cs_write_atomic "$2/notes.md" ls -A "$2"' _ \
+            "$SCRIPT_DIR/../hooks/cs-shared.sh" "$dir" > /dev/null || { echo "  FAIL: cs_write_atomic failed in $dir"; return 1; }
+        tmp=$(grep 'notes\.md\.' "$dir/notes.md" | head -1)
+        [ -n "$tmp" ] || { echo "  FAIL: no temp name seen while writing notes.md in $dir"; return 1; }
+        : > "$dir/$tmp"
+        git -C "$dir" check-ignore -q "$tmp" \
+            || { echo "  FAIL: $dir/.gitignore does not ignore the atomic-write temp $tmp"; return 1; }
+        if git -C "$dir" check-ignore -q notes.md; then
+            echo "  FAIL: the ignore rule also hides the destination notes.md in $dir"; return 1
+        fi
+    done
+}
+
 # ============================================================================
 # First launch after adopt
 # ============================================================================
@@ -526,8 +549,10 @@ test_adopt_seeds_the_objective_from_the_newest_conversations_first_prompt() {
         "the first substantive prompt becomes the Objective" || return 1
 }
 
-# Seeding the Objective rewrites the README adopt has just created; the file
-# keeps the mode it was created with, here the one umask 022 gives.
+# Seeding the Objective rewrites the README adopt has just created. One adopt
+# creates and seeds it under one umask, so the mode it was created with is the
+# umask's (644 here); the check catches a seed that narrows it to a temp file's
+# 0600. Keeping a mode the umask would not give is test_local_state's to pin.
 test_adopt_objective_seed_keeps_the_readmes_mode() {
     local project_dir="$TEST_TMPDIR/mode-project"
     mkdir -p "$project_dir"
@@ -696,6 +721,7 @@ echo ""
 
 run_test test_adopt_gitignores_cs_local
 run_test test_adopt_gitignores_the_vault_mount
+run_test test_adopt_gitignores_atomic_write_temps
 run_test test_adopt_sets_memory_merge_driver
 
 run_test test_adopt_creates_cs_structure

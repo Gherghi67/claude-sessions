@@ -171,7 +171,20 @@ _queue_rm() {  # qdir, index
 _queue_clear() {  # qdir
     local qdir="$1"
     rm -rf "$qdir/queue" "$qdir/queue.tmp"
-    rm -f "$qdir/queue.state" "$qdir/queue.declined"
+    rm -f "$qdir/queue.state" "$qdir/queue.declined" "$qdir/queue.mode"
+}
+
+# Arms the queue and records how its tasks run: in the conversation (no mode
+# file), each in a subagent, or each as a workflow. The Stop hook reads the
+# mode when it hands over a task, and forgets it when the run ends.
+_queue_start() {  # qdir, [mode]
+    local qdir="$1" mode="${2:-}"
+    case "$mode" in
+        '') mkdir -p "$qdir"; rm -f "$qdir/queue.mode" ;;
+        subagents|workflow) mkdir -p "$qdir"; cs_write_atomic "$qdir/queue.mode" printf '%s\n' "$mode" ;;
+        *) error "ags -queue start takes subagents or workflow, not '$mode'" ;;
+    esac
+    _queue_set_state "$qdir" armed
 }
 
 _queue_log() {  # qdir
@@ -214,13 +227,13 @@ run_queue() {
         list|ls) _queue_list "$qdir" | _scrub_controls;;
         rm)    shift; _queue_rm "$qdir" "${1:-}";;
         clear) _queue_clear "$qdir";;
-        start) _queue_set_state "$qdir" armed;;
+        start) shift; _queue_start "$qdir" "${1:-}";;
         defer) mkdir -p "$qdir"; cs_write_atomic "$qdir/queue.declined" printf '%s\n' "$(date +%s)"
                _terminate_jsonl "$qdir/notifications.jsonl"
                { jq -nc --arg ts "$(date +%s)" '{ts: ($ts|tonumber), event: "gate_declined"}' \
                    >> "$qdir/notifications.jsonl"; } 2>/dev/null || true;;
         log)   _queue_log "$qdir";;
-        *)     error "Usage: ags -queue [add \"<task>\" | list | rm <n> | clear | log]";;
+        *)     error "Usage: ags -queue [add \"<task>\" | list | rm <n> | clear | log | start [subagents|workflow]]";;
     esac
 }
 

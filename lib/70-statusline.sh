@@ -5,14 +5,7 @@ _strip_statusline_registration() {
     local settings_file="$1"
     [ -f "$settings_file" ] || return 1
     jq -e '.statusLine.command // "" | test("/(ags|cs)-statusline$")' "$settings_file" >/dev/null 2>&1 || return 1
-    local _tmp
-    _tmp=$(mktemp)
-    if { jq 'del(.statusLine)' "$settings_file" > "$_tmp"; } 2>/dev/null; then
-        mv "$_tmp" "$settings_file"
-        return 0
-    fi
-    rm -f "$_tmp"
-    return 2
+    cs_write_atomic "$settings_file" jq 'del(.statusLine)' "$settings_file" 2>/dev/null || return 2
 }
 
 # test("/(ags|cs)-subagent-statusline$") never matches "/ags-statusline", so this
@@ -23,14 +16,7 @@ _strip_subagent_statusline_registration() {
     [ -f "$settings_file" ] || return 1
     jq -e '.subagentStatusLine.command // "" | test("/(ags|cs)-subagent-statusline$")' \
         "$settings_file" >/dev/null 2>&1 || return 1
-    local _tmp
-    _tmp=$(mktemp)
-    if { jq 'del(.subagentStatusLine)' "$settings_file" > "$_tmp"; } 2>/dev/null; then
-        mv "$_tmp" "$settings_file"
-        return 0
-    fi
-    rm -f "$_tmp"
-    return 2
+    cs_write_atomic "$settings_file" jq 'del(.subagentStatusLine)' "$settings_file" 2>/dev/null || return 2
 }
 
 # The installer remembers a declined status-line prompt here so `ags -update`
@@ -87,23 +73,19 @@ run_statusline_cmd() {
             [ -x "$subbin" ] || warn "ags-subagent-statusline binary not found at $subbin (run install.sh first)"
             mkdir -p "$(dirname "$settings")"
             [ -f "$settings" ] || echo '{}' > "$settings"
-            local _tmp
-            _tmp=$(mktemp)
             # refreshInterval 60 repaints an idle bar once a minute, which keeps
             # the context-pct heartbeat fresh for a conversation with no lock.
             # Each tick on Claude Code 2.1.286 lists every process with
             # `ps -A`; at 1 s a dozen sessions together hit the process limit.
-            if { jq --arg cmd "$bin" --arg subcmd "$subbin" \
+            if cs_write_atomic "$settings" jq --arg cmd "$bin" --arg subcmd "$subbin" \
                 '.statusLine = {type: "command", command: $cmd, refreshInterval: 60}
                  | .subagentStatusLine = {type: "command", command: $subcmd}' \
-                "$settings" > "$_tmp"; } 2>/dev/null; then
-                mv "$_tmp" "$settings"
+                "$settings" 2>/dev/null; then
                 rm -f "$declined"
                 info "Registered ags-statusline as the Claude Code status line"
                 info "Registered ags-subagent-statusline for the agent panel rows"
                 info "Claude Code reads both at startup: restart it to see them."
             else
-                rm -f "$_tmp"
                 error "Could not update $settings"
             fi
             ;;

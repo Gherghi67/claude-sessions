@@ -127,6 +127,33 @@ test_queue_start_sets_armed() {
     assert_file_contains "$CLAUDE_SESSION_META_DIR/local/queue.state" "armed" "start arms" || return 1
 }
 
+# A run can hand each task to a subagent or run it as a workflow; start records
+# the choice beside the state, and a plain start runs the tasks here again.
+test_queue_start_records_how_the_tasks_run() {
+    "$CS_BIN" -queue start subagents >/dev/null 2>&1 || return 1
+    assert_eq "subagents" "$(cat "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/queue.mode" 2>/dev/null)" "start subagents records the mode" || return 1
+    "$CS_BIN" -queue start workflow >/dev/null 2>&1 || return 1
+    assert_eq "workflow" "$(cat "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/queue.mode" 2>/dev/null)" "start workflow records the mode" || return 1
+    "$CS_BIN" -queue start >/dev/null 2>&1 || return 1
+    assert_file_not_exists "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/queue.mode" "a plain start runs the tasks in the conversation" || return 1
+    assert_file_contains "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/queue.state" "armed" "each start arms" || return 1
+}
+
+test_queue_start_refuses_an_unknown_mode() {
+    local out rc=0
+    out=$("$CS_BIN" -queue start teammates 2>&1) || rc=$?
+    assert_eq "1" "$rc" "an unknown mode fails" || return 1
+    assert_output_contains "$out" "ags -queue start takes subagents or workflow, not 'teammates'" "the error names the value" || return 1
+    assert_file_not_exists "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/queue.state" "a refused start does not arm" || return 1
+}
+
+test_queue_clear_forgets_the_mode() {
+    "$CS_BIN" -queue add "x" >/dev/null 2>&1
+    "$CS_BIN" -queue start workflow >/dev/null 2>&1 || return 1
+    "$CS_BIN" -queue clear >/dev/null 2>&1
+    assert_file_not_exists "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/queue.mode" "clear forgets how the run was to go" || return 1
+}
+
 test_queue_defer_writes_declined_epoch() {
     "$CS_BIN" -queue defer >/dev/null 2>&1
     assert_file_exists "$CLAUDE_SESSION_META_DIR/local/queue.declined" "defer stamps declined" || return 1
@@ -345,6 +372,9 @@ run_test test_queue_rm_removes_by_index
 run_test test_queue_rm_rejects_an_index_past_the_end
 run_test test_queue_clear_empties_and_resets_state
 run_test test_queue_start_sets_armed
+run_test test_queue_start_records_how_the_tasks_run
+run_test test_queue_start_refuses_an_unknown_mode
+run_test test_queue_clear_forgets_the_mode
 run_test test_queue_defer_writes_declined_epoch
 run_test test_queue_start_ignores_a_stale_state_tmp
 run_test test_queue_defer_ignores_a_stale_declined_tmp
@@ -580,6 +610,56 @@ test_drain_scopes_each_task_to_what_it_asks() {
         "next-task message must scope extras to the summary" || return 1
 }
 
+# The gate asks how to run the tasks as well as whether, and names the start
+# command for each answer.
+test_drain_gate_offers_subagents_and_workflows() {
+    qseed "queued"
+    local out; out=$(drain)
+    assert_output_contains "$out" "In this conversation / In subagents / As workflows" "the gate asks how the tasks run" || return 1
+    assert_output_contains "$out" "ags -queue start subagents" "In subagents names its start" || return 1
+    assert_output_contains "$out" "ags -queue start workflow" "As workflows names its start" || return 1
+}
+
+# Every handed task carries the run's mode, the first and each next one.
+test_drain_hands_each_task_to_a_subagent_when_chosen() {
+    qseed "task one" "task two"
+    printf 'armed\n' > "$(QDIR)/queue.state"
+    printf 'subagents\n' > "$(QDIR)/queue.mode"
+    local out; out=$(drain)
+    assert_output_contains "$out" "hand this task to a subagent with the Agent tool" "the first task goes to a subagent" || return 1
+    out=$(drain)
+    assert_output_contains "$out" "task two" "draining injects the next task" || return 1
+    assert_output_contains "$out" "hand this task to a subagent with the Agent tool" "the next task goes to a subagent" || return 1
+}
+
+test_drain_runs_each_task_as_a_workflow_when_chosen() {
+    qseed "task one" "task two"
+    printf 'armed\n' > "$(QDIR)/queue.state"
+    printf 'workflow\n' > "$(QDIR)/queue.mode"
+    local out; out=$(drain)
+    assert_output_contains "$out" "run this task as a workflow with the Workflow tool" "the first task runs as a workflow" || return 1
+    assert_output_contains "$out" "your opt-in to the Workflow tool" "the choice is the user's opt-in" || return 1
+    out=$(drain)
+    assert_output_contains "$out" "run this task as a workflow with the Workflow tool" "the next task runs as a workflow" || return 1
+}
+
+test_drain_without_a_mode_names_none() {
+    qseed "task one" "task two"
+    printf 'armed\n' > "$(QDIR)/queue.state"
+    local out; out=$(drain)
+    assert_output_not_contains "$out" "Run mode" "a plain run names no mode" || return 1
+}
+
+# A finished run forgets its mode, so a queue armed some other way later (a
+# spawn seeds and arms one) runs in the conversation.
+test_drain_completion_forgets_the_mode() {
+    qseed "last task"
+    printf 'draining\n' > "$(QDIR)/queue.state"
+    printf 'subagents\n' > "$(QDIR)/queue.mode"
+    drain >/dev/null
+    assert_file_not_exists "$(QDIR)/queue.mode" "the finished run forgets its mode" || return 1
+}
+
 test_drain_completion_asks_for_debrief() {
     # Popping the last task must close the final native task and prompt a debrief,
     # not merely announce that the queue is empty (which leaves a dangling in-progress).
@@ -632,6 +712,11 @@ run_test test_drain_ignores_subagents
 run_test test_drain_gate_mentions_high_context
 run_test test_drain_armed_states_stop_mechanic
 run_test test_drain_scopes_each_task_to_what_it_asks
+run_test test_drain_gate_offers_subagents_and_workflows
+run_test test_drain_hands_each_task_to_a_subagent_when_chosen
+run_test test_drain_runs_each_task_as_a_workflow_when_chosen
+run_test test_drain_without_a_mode_names_none
+run_test test_drain_completion_forgets_the_mode
 run_test test_drain_completion_asks_for_debrief
 run_test test_drain_high_context_defines_compact_action
 run_test test_drain_narrative_reminder_scopes_to_own

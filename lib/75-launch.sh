@@ -267,9 +267,13 @@ _resume_menu_row() {  # key color label consequence
 }
 
 _cs_claude_adapter_dependencies() {
-    # Preserve the existing binary-plus-arguments override.
-    local claude_bin="${CLAUDE_CODE_BIN%% *}"
-    command -v "$claude_bin" >/dev/null 2>&1 || printf '%s\n' claude-code
+    # The binary-plus-arguments override: its first word is the command.
+    local word
+    word=$(_claude_bin_word)
+    case "$word" in
+        ''|-*) error "CLAUDE_CODE_BIN must start with a command: '$CLAUDE_CODE_BIN'" ;;
+    esac
+    command -v "$word" >/dev/null 2>&1 || printf '%s\n' claude-code
     return 0
 }
 
@@ -946,6 +950,22 @@ EOF
     fi
 }
 
+# A resume may run in place of ags when it is sure to land and ags has nothing
+# to do after it: claude reads its transcripts from where ags looks (no
+# CLAUDE_CONFIG_DIR set at all, even empty), the transcript holds a whole
+# top-level user record (a torn line, or a user message nested inside
+# another record, does not count), and no vault waits on ags to detach it
+# when claude ends without its hooks. Without jq the resume stays a child.
+_resume_lands_in_place() {  # session_dir, conversation id
+    local file
+    [ -f "$1/.cs/local/vault" ] && return 1
+    [ -z "${CLAUDE_CONFIG_DIR+set}" ] || return 1
+    file="$(_claude_project_dir "$1")/$2.jsonl"
+    [ -f "$file" ] && command -v jq >/dev/null 2>&1 || return 1
+    jq -n -R -e 'first(inputs | fromjson? | objects | select(.type == "user")) | true' \
+        "$file" >/dev/null 2>&1
+}
+
 # Follow a chain of symlinks to the file at its end, portably (BSD readlink
 # has no -f before macOS 12.3). Prints the final path.
 _resolve_symlink_file() {  # path
@@ -978,9 +998,9 @@ _resolve_symlink_file() {  # path
 # the version number. A hard link named claude to the same file carries the
 # right name. It lives in a directory per version and goes when the installer
 # removes that version; a launch that cannot make it runs claude as before.
-# Only the default CLAUDE_CODE_BIN is linked, and only when it resolves to a
-# versions/<version> file: a user-chosen binary or another install is run as
-# given.
+# The command word of CLAUDE_CODE_BIN is linked only when it resolves to a
+# versions/<version> file, the native installer's layout; the words after it
+# stay as given. Any other binary or install is run as given.
 _iterm_tab_through_tmux() {
     [ -n "${TMUX:-}" ] && [ "${LC_TERMINAL:-}" = iTerm2 ] && [ -z "${CS_NO_ITERM2:-}" ] || return 0
 
@@ -995,14 +1015,21 @@ _iterm_tab_through_tmux() {
         esac
     fi
 
-    [ "$CLAUDE_CODE_BIN" = claude ] || return 0
-    local found real link
-    found=$(command -v claude 2>/dev/null) || return 0
+    local word rest found real link version
+    word=$(_claude_bin_word)
+    [ -n "$word" ] || return 0
+    rest="${CLAUDE_CODE_BIN#*"$word"}"
+    found=$(command -v "$word" 2>/dev/null) || return 0
     real=$(_resolve_symlink_file "$found")
     # Only the native installer's versions/<version> file is self-contained;
     # an npm cli.js loads files beside it, which a hard link elsewhere loses.
-    case "$real" in
-        */versions/[0-9]*.[0-9]*.[0-9]*) ;;
+    # The file must sit directly in a versions directory and be named by a
+    # dotted version number alone.
+    version="${real##*/}"
+    [ "${real%/*}" != "$real" ] && [ "$(basename "${real%/*}")" = versions ] || return 0
+    case "$version" in
+        *[!0-9.]*|.*|*.|*..*) return 0 ;;
+        *.*.*) ;;
         *) return 0 ;;
     esac
     # Every launch site expands CLAUDE_CODE_BIN unquoted, since a user value
@@ -1011,7 +1038,7 @@ _iterm_tab_through_tmux() {
     case "$links" in *[[:space:]]*) return 0 ;; esac
     # One directory per version: a launch that resolved this version runs it
     # even if another launch links a newer one before this one execs.
-    link="$links/$(basename "$real")/claude"
+    link="$links/$version/claude"
     if ! [ "$link" -ef "$real" ]; then
         mkdir -p "$(dirname "$link")" 2>/dev/null || return 0
         # Link beside the target name and rename over it, so a concurrent
@@ -1036,7 +1063,7 @@ _iterm_tab_through_tmux() {
         [ -e "$(dirname "$real")/$(basename "$old")" ] && continue
         { rm -f "$old/claude"; rmdir "$old"; } 2>/dev/null || true
     done < <(find "$links" -mindepth 1 -maxdepth 1 -type d -mtime +1 2>/dev/null)
-    CLAUDE_CODE_BIN="$link"
+    CLAUDE_CODE_BIN="$link$rest"
 }
 
 # Run secrets subcommand
