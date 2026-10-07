@@ -338,7 +338,9 @@ to them in `keybindings.json` (see
 bold in the session's colour, whatever chord that file binds to each action,
 as written there, and nothing where none does; the Buttons still answer a click
 and Ctrl+X Tab. Claude Code re-reads `keybindings.json` while it runs, so a
-chord bound after launch works at once (measured on 2.1.292).
+chord bound after launch works at once (measured on 2.1.292). An encrypted
+session launched before `keybindings.json` existed gets the file at its next
+launch.
 
 Ctrl+X 1 runs `/rotate`, as if typed: the `rotate` skill draws the purpose from
 the conversation. Beside it the band draws `wrap up this session`. That key
