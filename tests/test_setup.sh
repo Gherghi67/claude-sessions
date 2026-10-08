@@ -224,6 +224,29 @@ EOF
     assert_eq 1 "$status"
 }
 
+# A project cs-to-ags.py moved over keeps its .cs/, and ags has it by a link in
+# its sessions root: the directory commands work there, nested folders too.
+test_launcher_runs_directory_commands_in_a_project_ags_has() {
+    stage_checkout
+    seed_stable_install
+    run_setup --skip-tui-build || return 1
+    printf '#!/bin/sh\necho "profile ags $*"\n' > "$PROFILE/.local/bin/ags"
+    chmod +x "$PROFILE/.local/bin/ags"
+    local project="$TEST_TMPDIR/moved-project"
+    mkdir -p "$project/.cs" "$project/src" "$TEST_TMPDIR/other-project/.cs" "$PROFILE/sessions"
+    ln -s "$project" "$PROFILE/sessions/moved"
+    ln -s "$TEST_TMPDIR/elsewhere" "$PROFILE/sessions/dangling"
+    local output
+    output=$(cd "$project/src" && "$HOME/.local/bin/ags" -checkpoint list) || return 1
+    assert_eq 'profile ags -checkpoint list' "$output" || return 1
+    output=$(cd "$project" && "$HOME/.local/bin/ags" .) || return 1
+    assert_eq 'profile ags .' "$output" || return 1
+    local status=0
+    (cd "$TEST_TMPDIR/other-project" && "$HOME/.local/bin/ags" .) > "$TEST_TMPDIR/refusal" 2>&1 || status=$?
+    assert_eq 1 "$status" || return 1
+    assert_file_contains "$TEST_TMPDIR/refusal" 'scripts/cs-to-ags.py'
+}
+
 test_setup_registers_profile_hooks_by_absolute_path() {
     stage_checkout
     seed_stable_install
@@ -461,6 +484,7 @@ run_test test_setup_missing_dependency_stops_before_install_or_shell_changes
 run_test test_setup_failed_picker_build_stops_before_deployment
 run_test test_setup_and_reinstall_preserve_the_entire_stable_install
 run_test test_public_launchers_keep_the_users_home_and_point_tools_at_the_profile
+run_test test_launcher_runs_directory_commands_in_a_project_ags_has
 run_test test_setup_registers_profile_hooks_by_absolute_path
 run_test test_direct_installer_refuses_to_replace_original_cs
 run_test test_public_launcher_creates_a_first_session_in_the_private_profile

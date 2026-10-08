@@ -60,7 +60,8 @@ Keep using `cs` in existing workspaces. For testing `ags`, create a new workspac
 or adopt a separate project; `ags .` and adoption refuse an existing `cs` workspace.
 The profile starts empty. Run bare `ags`, press `n`, and enter a name to create
 your first session. Existing `cs` sessions stay in their original registry.
-To take ags sessions back to `cs`, see [Going back to cs](migration.md#going-back-to-cs).
+To move one into ags, see [Moving a cs session into ags](migration.md#moving-a-cs-session-into-ags);
+to take ags sessions back to `cs`, see [Going back to cs](migration.md#going-back-to-cs).
 
 ## Adopt a project or create a workspace
 

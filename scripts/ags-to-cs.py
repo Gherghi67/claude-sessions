@@ -50,7 +50,6 @@ import os
 import re
 import shlex
 import shutil
-import stat
 import subprocess
 import sys
 import tempfile
@@ -59,226 +58,11 @@ NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 VAULT_LINKS = ("memory", "plans", "claude-config", "private")
 MARKER = os.path.join(".cs", "local", "ags-origin")
 
-# ags's session protocol says ags where the stable cs's says cs; nothing else
-# in the template differs. Only lines from the first cs sentinel on are
-# reworded, so text the user wrote above the protocol stays as it is.
-PROTOCOL_WORDING = (
-    ("managed by agent-sessions (ags).", "managed by the cs tool."),
-    ("`ags -", "`cs -"),
-    ("$(ags -", "$(cs -"),
-    ("the ags session store", "the cs session store"),
-    ("(ags redirects via", "(cs redirects via"),
-    ("tombstone — ags treats", "tombstone — cs treats"),
-    ("ags does not copy your first prompt", "cs does not copy your first prompt"),
+from session_transfer import (
+    AGS_TO_CS_WORDING, SecretsError, claude_project_key, copy_secret, merge_tree, read_text,
+    reword_protocol, scrubbed_env, secret_names, session_is_open, special_files, state_value,
+    tilde, write_atomic,
 )
-
-
-def tilde(path):
-    home = os.path.expanduser("~")
-    if path == home or path.startswith(home + os.sep):
-        return "~" + path[len(home):]
-    return path
-
-
-def claude_project_key(path):
-    """Claude Code names a transcript folder after the path, every other character a '-'."""
-    return re.sub(r"[^A-Za-z0-9]", "-", path)
-
-
-def pid_alive(value):
-    try:
-        pid = int(str(value).strip())
-    except ValueError:
-        return False
-    if pid <= 1:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
-def session_is_open(meta):
-    """True when a lock or run lease in .cs names a live process."""
-    try:
-        with open(os.path.join(meta, "session.lock")) as f:
-            if pid_alive(f.read()):
-                return True
-    except OSError:
-        pass
-    try:
-        with open(os.path.join(meta, "local", "run-lease.json")) as f:
-            lease = json.load(f)
-    except (OSError, ValueError):
-        return False
-    return isinstance(lease, dict) and any(
-        pid_alive(lease.get(key, "")) for key in ("owner_pid", "native_pid"))
-
-
-def read_text(path):
-    try:
-        with open(path) as f:
-            return f.read()
-    except OSError:
-        return None
-
-
-def state_value(meta, key):
-    text = read_text(os.path.join(meta, "local", "state")) or ""
-    for line in text.splitlines():
-        if line.startswith(key + ":"):
-            return line[len(key) + 1:].strip()
-    return ""
-
-
-def write_atomic(path, data, like=None):
-    """Replace path with data (bytes), keeping the mode of like or of path itself."""
-    directory = os.path.dirname(path)
-    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".ags-to-cs.")
-    try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(data)
-        source = like if like is not None else path
-        if os.path.exists(source):
-            shutil.copystat(source, tmp)
-        os.replace(tmp, path)
-    except BaseException:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
-        raise
-
-
-def files_equal_prefix(shorter, longer, length):
-    """True when the first length bytes of longer equal the file shorter."""
-    with open(shorter, "rb") as a, open(longer, "rb") as b:
-        remaining = length
-        while remaining > 0:
-            chunk = a.read(min(1 << 20, remaining))
-            if not chunk or b.read(len(chunk)) != chunk:
-                return False
-            remaining -= len(chunk)
-    return True
-
-
-class Tally:
-    def __init__(self):
-        self.new = 0
-        self.grown = 0
-        self.same = 0
-        self.ahead = 0
-        self.diverged = []
-
-    def add(self, other):
-        self.new += other.new
-        self.grown += other.grown
-        self.same += other.same
-        self.ahead += other.ahead
-        self.diverged += other.diverged
-
-    def pending(self):
-        return self.new + self.grown
-
-
-def merge_tree(src, dst, apply):
-    """Copy files of src missing from dst, and replace those that only grew.
-
-    Claude Code appends to a transcript and never rewrites it, so a cs copy
-    that is an unchanged start of the profile's file is safe to replace. A cs
-    copy that holds more than the profile's is a conversation continued in
-    cs; one that differs inside is a conversation continued on both sides.
-    Both are left alone.
-    """
-    tally = Tally()
-    if not os.path.isdir(src):
-        return tally
-    for root, dirs, files in os.walk(src):
-        dirs.sort()
-        rel = os.path.relpath(root, src)
-        target_dir = dst if rel == "." else os.path.join(dst, rel)
-        for name in sorted(files):
-            s = os.path.join(root, name)
-            d = os.path.join(target_dir, name)
-            if os.path.islink(s) or not os.path.isfile(s):
-                continue
-            if not os.path.lexists(d):
-                tally.new += 1
-                if apply:
-                    if not os.path.isdir(target_dir):
-                        os.makedirs(target_dir)
-                        shutil.copystat(root, target_dir)
-                    tmp = d + ".ags-to-cs.tmp"
-                    shutil.copy2(s, tmp)
-                    os.replace(tmp, d)
-                continue
-            if os.path.islink(d) or not os.path.isfile(d):
-                tally.diverged.append(d)
-                continue
-            s_size, d_size = os.path.getsize(s), os.path.getsize(d)
-            if d_size < s_size and files_equal_prefix(d, s, d_size):
-                tally.grown += 1
-                if apply:
-                    tmp = d + ".ags-to-cs.tmp"
-                    shutil.copy2(s, tmp)
-                    os.replace(tmp, d)
-            elif d_size == s_size and files_equal_prefix(d, s, d_size):
-                tally.same += 1
-            elif d_size > s_size and files_equal_prefix(s, d, s_size):
-                tally.ahead += 1
-            else:
-                tally.diverged.append(d)
-    return tally
-
-
-def special_files(directory, names):
-    """copytree's ignore: sockets and pipes belong to a running process, and copying one blocks."""
-    out = []
-    for name in names:
-        mode = os.lstat(os.path.join(directory, name)).st_mode
-        if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode) or stat.S_ISLNK(mode)):
-            out.append(name)
-    return out
-
-
-def reword_protocol(text):
-    lines = text.split("\n")
-    start = next((i for i, line in enumerate(lines) if "<!-- cs:" in line), None)
-    if start is None:
-        return text
-    for i in range(start, len(lines)):
-        for old, new in PROTOCOL_WORDING:
-            lines[i] = lines[i].replace(old, new)
-    return "\n".join(lines)
-
-
-def scrubbed_env():
-    """The caller's environment without what an ags or cs session exports."""
-    env = {}
-    for key, value in os.environ.items():
-        if key.startswith(("CS_", "AGS_", "CLAUDE_SESSION_")):
-            continue
-        if key in ("CLAUDE_CONFIG_DIR", "CODEX_HOME", "CLAUDE_SECURESTORAGE_CONFIG_DIR"):
-            continue
-        env[key] = value
-    return env
-
-
-class SecretsError(Exception):
-    pass
-
-
-def secret_names(command, env, session):
-    try:
-        result = subprocess.run(command + ["--session", session, "list"], env=env,
-                                stdin=subprocess.DEVNULL, capture_output=True, text=True)
-    except OSError as error:
-        raise SecretsError("could not run %s: %s" % (tilde(command[0]), error.strerror))
-    if result.returncode != 0:
-        detail = (result.stderr.strip().splitlines() or ["exit %d" % result.returncode])[-1]
-        raise SecretsError("%s could not list %s: %s" % (os.path.basename(command[0]), session, detail))
-    return [line[4:] for line in result.stdout.splitlines() if line.startswith("  - ")]
 
 
 class Plan:
@@ -482,7 +266,7 @@ class Copier:
         """The tally of the session's Claude files, and how many conversations they hold."""
         src = os.path.join(self.ags_projects, claude_project_key(plan.source))
         dst = os.path.join(self.claude_dir, "projects", claude_project_key(self.cs_physical(plan)))
-        tally = merge_tree(src, dst, self.apply)
+        tally = merge_tree(src, dst, self.apply, ".ags-to-cs.tmp")
         count = 0
         if os.path.isdir(src):
             for name in sorted(os.listdir(src)):
@@ -491,7 +275,7 @@ class Copier:
                     conversation = name[:-len(".jsonl")]
                     tally.add(merge_tree(os.path.join(self.ags_history, conversation),
                                          os.path.join(self.claude_dir, "file-history", conversation),
-                                         self.apply))
+                                         self.apply, ".ags-to-cs.tmp"))
         return tally, count
 
     def secrets(self, plan):
@@ -518,21 +302,9 @@ class Copier:
         ags_env = scrubbed_env()
         ags_env.update(CS_SECRETS_BACKEND="encrypted", CS_SECRETS_DIR=self.ags_secrets_dir)
         cs_env = scrubbed_env()
-        failed = []
-        for name in names:
-            got = subprocess.run([self.ags_secrets, "--session", plan.name, "get", name], env=ags_env,
-                                 stdin=subprocess.DEVNULL, capture_output=True)
-            if got.returncode != 0:
-                failed.append(name)
-                continue
-            value = got.stdout[:-1] if got.stdout.endswith(b"\n") else got.stdout
-            # cs-secrets reads the value from stdin. Its output is never shown:
-            # a refusal quotes the value it refused.
-            stored = subprocess.run([self.cs_secrets, "--session", plan.cs_name, "set", name],
-                                    env=cs_env, input=value, capture_output=True)
-            if stored.returncode != 0:
-                failed.append(name)
-        return failed
+        return [name for name in names
+                if not copy_secret([self.ags_secrets, "--session", plan.name, "get", name], ags_env,
+                                   [self.cs_secrets, "--session", plan.cs_name, "set", name], cs_env)]
 
     def reword_file(self, root, apply):
         """True when root's CLAUDE.local.md needs (or got) the cs wording."""
@@ -540,11 +312,11 @@ class Copier:
         text = read_text(path)
         if text is None:
             return False
-        reworded = reword_protocol(text)
+        reworded = reword_protocol(text, AGS_TO_CS_WORDING)
         if reworded == text:
             return False
         if apply:
-            write_atomic(path, reworded.encode())
+            write_atomic(path, reworded.encode(), prefix=".ags-to-cs.")
         return True
 
     def copy_directory(self, plan):
@@ -619,7 +391,7 @@ class Copier:
             if plan.base_plan is not None and re.search(r"^cs_base:", changed, re.M):
                 changed = re.sub(r"^cs_base:.*$", "cs_base: " + plan.base_plan.cs_name, changed, flags=re.M)
             if changed != text:
-                write_atomic(state, changed.encode())
+                write_atomic(state, changed.encode(), prefix=".ags-to-cs.")
         settings = os.path.join(root, ".claude", "settings.local.json")
         raw = read_text(settings)
         if raw is not None:
@@ -630,7 +402,7 @@ class Copier:
             memory = os.path.join(self.cs_dir(plan), ".cs", "memory")
             if isinstance(data, dict) and "autoMemoryDirectory" in data and data["autoMemoryDirectory"] != memory:
                 data["autoMemoryDirectory"] = memory
-                write_atomic(settings, (json.dumps(data, indent=2) + "\n").encode())
+                write_atomic(settings, (json.dumps(data, indent=2) + "\n").encode(), prefix=".ags-to-cs.")
         self.reword_file(root, True)
         os.makedirs(os.path.dirname(os.path.join(root, MARKER)), exist_ok=True)
         with open(os.path.join(root, MARKER), "w") as f:

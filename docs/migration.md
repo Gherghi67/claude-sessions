@@ -87,6 +87,58 @@ This branch is unpublished. Existing upstream releases still use their original
 branding and installer behavior; running `ags -update` before publishing these
 changes can replace this local build with the upstream release.
 
+## Moving a cs session into ags
+
+`ags -adopt` refuses a folder that already has `.cs/`: `cs` and `ags` would
+share its `.cs/local/state`, and each would resume a conversation the other
+cannot see. `scripts/cs-to-ags.py` hands such a session over instead, so
+`ags <name>` opens it on the conversations `cs` left off with. It moves a
+project `cs` adopted (a link in `~/.claude-sessions`) and its feature
+worktrees. It prints what it would do; `--apply` moves:
+
+```bash
+scripts/cs-to-ags.py --session wap            # the plan; nothing is written
+scripts/cs-to-ags.py --session wap --apply
+```
+
+- The profile's sessions root gets the same link to the project. Its `.cs/`
+  lives in the project, so notes, handoffs and the conversation binding come
+  along as they are.
+- Each feature worktree (`<name>@<task>`) moves with `git worktree move` into
+  the profile's sessions root, where ags looks for features: same branch,
+  index, uncommitted and untracked files, ignored files such as `node_modules`,
+  and per-worktree refs. A `/branch-out` registry entry for it is pointed at the
+  new path and at ags.
+- Each session's Claude conversations are copied from `~/.claude/projects` into
+  the profile's, under the folder Claude Code gives the session's path in ags,
+  whole: subagents, workflows, tool results. Their `file-history`,
+  `session-env` and task list come too, and the session's lines of
+  `history.jsonl` (the prompt history). On APFS each copy is a clone.
+- Conversations of the session's retired features and of its scratch folders
+  belong to no session any more. They are copied under their own folder names
+  as history; `--no-history` leaves them out.
+- Trust and per-project settings in `~/.claude.json` and `~/.codex/config.toml`
+  follow each path, without overwriting what the profile has. While an ags
+  session runs, these two files are left and a rerun brings them.
+- Secrets go from the stable store into the profile's encrypted store, values
+  on stdin.
+- The session protocol in `CLAUDE.local.md` is reworded from `cs` to `ags`.
+- Last, `cs`'s link is removed, so the session opens from ags only. It stays
+  when anything of the session did not come over.
+
+`~/.claude`, `~/.claude.json`, `~/.codex` and the keychain are only read. Every
+change is recorded in the profile's `.cs-to-ags/log.jsonl`. A rerun skips what
+is already there and brings over what grew. The script leaves these behind and
+names each one: a session or feature open right now (close it, then rerun), an
+encrypted session, a session `cs` created in its own folder, a feature git
+cannot move (locked, or with submodules) and a name ags already uses for
+something else. Anything left behind makes the run exit 1. The first `ags`
+open runs one full migration, because the stable `cs` stamp names no engine.
+`scripts/ags-to-cs.py --session <name>` is the way back.
+
+Afterwards the directory commands (`ags .`, `-checkpoint`, `-narrative`,
+`-adopt`) work inside the project, since ags has it.
+
 ## Going back to cs
 
 `scripts/ags-to-cs.py` copies the profile's work back into the stable `cs`, so
