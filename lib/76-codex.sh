@@ -16,7 +16,9 @@ _cs_codex_adapter_dependencies() {
 _cs_codex_adapter_capabilities() {
     # rotation: `cs -codex-hook session-start` rebinds after /clear and loads
     # the armed handoff; the launch prompt's r starts a thread from it.
-    printf '%s\n' launch exact_resume startup_context rotation
+    # feature_finish: -finish starts the thread on `$finish <task>`, as
+    # Claude's starts on /finish <task>.
+    printf '%s\n' launch exact_resume startup_context feature_finish rotation
 }
 
 _cs_codex_adapter_prepare_workspace() {  # session_dir, mode
@@ -157,10 +159,6 @@ _launch_codex_bound() {
     local context_file="$local_dir/codex-instructions.md"
     local codex_bin="${CODEX_BIN:-codex}" helper thread_id recorded_id
 
-    [ -z "$merge_feature" ] || {
-        _codex_launch_error "-finish is available only for Claude sessions; Codex feature merge is not supported yet."
-        return 1
-    }
     [ -d "$session_dir" ] || {
         _codex_launch_error "Session directory does not exist: $session_dir"
         return 1
@@ -382,8 +380,15 @@ _launch_codex_bound() {
         rm -f "$local_dir/pending-handoff" 2>/dev/null || true
         kick="Continue from the pending rotation handoff: read .cs/handoffs/$rotation_handoff first."
         printf "${DIM}Continuing from handoff:${NC} %s%b\n" "$rotation_handoff" "$rotation_origin"
+        # r is the user choosing the handoff over the merge armed moments
+        # earlier, as on Claude; the merge waits for its own launch.
+        [ -z "$merge_feature" ] \
+            || warn "Rotation handoff takes this launch; re-run: cs $session_name -finish $merge_feature"
     elif [ "$intent" = resume ] && [ -n "${_cs_switch_resume:-}" ]; then
         _switch_resume_handoff "$session_dir" "$thread_id" kick
+    elif [ -n "$merge_feature" ]; then
+        # The finish skill, named the way Codex takes a skill from the user.
+        kick="\$finish $merge_feature"
     fi
 
     printf '%s\n' 'Codex via cs: session context, exact resume and rotation are enabled; Claude hooks, autosave, and task queue integration are unavailable.'

@@ -205,24 +205,25 @@ test_public_launchers_keep_the_users_home_and_point_tools_at_the_profile() {
 printf '%s\n' "$HOME" "$CLAUDE_CONFIG_DIR" "$CODEX_HOME" "$CS_SESSIONS_ROOT" "$CS_INSTALL_DIR" \
     "$CS_CONFIG_DIR" "$CS_CACHE_DIR" "$CS_DATA_DIR" "$CS_SECRETS_DIR" "${XDG_CONFIG_HOME:-unset}" \
     "${CS_TMUX_SOCKET:-unset}" "${CS_TMUX_SESSION:-unset}" "${CS_SECRETS_BACKEND:-unset}" \
-    "${CODE_SESSIONS_HOME:-unset}" "$CS_BIN" "$(command -v cs)"
+    "${CS_SECRETS_KEYCHAIN_PREFIX:-unset}" "${CODE_SESSIONS_HOME:-unset}" "$CS_BIN" "$(command -v cs)"
 mkdir -p "$CS_CACHE_DIR"
 printf 'experimental cache\n' > "$CS_CACHE_DIR/update-check"
 EOF
     chmod +x "$PROFILE/.local/bin/cs"
     local output
     output=$(CS_SESSIONS_ROOT="$HOME/.claude-sessions" CLAUDE_CONFIG_DIR="$HOME/.claude" \
-        CODEX_HOME="$HOME/.codex" CS_SECRETS_BACKEND=keychain PATH="$HOME/.local/bin:$PATH" \
+        CODEX_HOME="$HOME/.codex" CS_SECRETS_BACKEND=encrypted PATH="$HOME/.local/bin:$PATH" \
         "$HOME/.local/bin/ccs" -version)
     # HOME stays the user's: macOS finds the login keychain through it, and ~/.ssh
     # and the rest of the user's credentials stay visible to the session. Every
     # tool is pointed at the profile through its own directory variable, and the
     # generic XDG roots are left alone so gh, git and friends keep their config.
-    # cs -spawn opens its windows on a tmux server of its own, and secrets stay
-    # in the profile's encrypted store, out of the keychain's shared cs:<session>
-    # namespace, whatever the caller's shell says. Inside, cs is code-sessions:
-    # CODE_SESSIONS_HOME says so, and the profile's bin comes first on PATH.
-    assert_eq "$HOME"$'\n'"$PROFILE/.claude"$'\n'"$PROFILE/.codex"$'\n'"$PROFILE/sessions"$'\n'"$PROFILE/.local/bin"$'\n'"$PROFILE/.config/cs"$'\n'"$PROFILE/.cache/cs"$'\n'"$PROFILE/.local/share/cs"$'\n'"$PROFILE/.cs-secrets"$'\n'unset$'\n'code-sessions$'\n'code-sessions$'\n'encrypted$'\n'"$PROFILE"$'\n'"$PROFILE/.local/bin/cs"$'\n'"$PROFILE/.local/bin/cs" "$output" || return 1
+    # cs -spawn opens its windows on a tmux server of its own. Secrets go to the
+    # keychain detection picks, whatever backend the caller's shell names, under
+    # code-sessions:<session>, apart from the original's cs:<session>. Inside, cs
+    # is code-sessions: CODE_SESSIONS_HOME says so, and the profile's bin comes
+    # first on PATH.
+    assert_eq "$HOME"$'\n'"$PROFILE/.claude"$'\n'"$PROFILE/.codex"$'\n'"$PROFILE/sessions"$'\n'"$PROFILE/.local/bin"$'\n'"$PROFILE/.config/cs"$'\n'"$PROFILE/.cache/cs"$'\n'"$PROFILE/.local/share/cs"$'\n'"$PROFILE/.cs-secrets"$'\n'unset$'\n'code-sessions$'\n'code-sessions$'\n'unset$'\n'code-sessions$'\n'"$PROFILE"$'\n'"$PROFILE/.local/bin/cs"$'\n'"$PROFILE/.local/bin/cs" "$output" || return 1
     assert_eq 'stable cache' "$(cat "$HOME/.cache/cs/update-check")" || return 1
     assert_eq 'experimental cache' "$(cat "$PROFILE/.cache/cs/update-check")" || return 1
     local status=0
@@ -233,6 +234,64 @@ EOF
     status=0
     "$HOME/.local/bin/ccs" -update > "$TEST_TMPDIR/refusal" 2>&1 || status=$?
     assert_eq 1 "$status"
+}
+
+# The profile kept its secrets in an encrypted file per session until the
+# launcher gave it the keychain. setup moves each file into the keychain as
+# code-sessions:<session>:<name> and removes it. It leaves a session's file
+# while the session or a feature of it is open, never writes over an item the
+# keychain has, and never touches the original cs's cs:<session> items.
+test_setup_moves_the_profiles_secrets_into_the_keychain() {
+    stage_checkout
+    use_fake_keychain
+    local secrets="$REPO/bin/cs-secrets" store="$PROFILE/.cs-secrets" dead
+    enc_set() {  # session name value
+        printf '%s' "$3" | CS_SECRETS_BACKEND=encrypted CS_SECRETS_DIR="$store" \
+            "$secrets" --session "$1" set "$2" >/dev/null
+    }
+    kc_set() {  # prefix session name value
+        printf '%s' "$4" | CS_SECRETS_BACKEND=keychain CS_SECRETS_KEYCHAIN_PREFIX="$1" \
+            "$secrets" --session "$2" set "$3" >/dev/null
+    }
+    kc_get() {  # prefix session name
+        CS_SECRETS_BACKEND=keychain CS_SECRETS_KEYCHAIN_PREFIX="$1" "$secrets" --session "$2" get "$3"
+    }
+    enc_set ask API_KEY 'ask key' && enc_set ask TOKEN 'ask token' || return 1
+    enc_set gone OLD 'no session folder' || return 1
+    enc_set busy API_KEY 'busy key' || return 1
+    enc_set clash API_KEY 'from the file' || return 1
+    kc_set code-sessions clash API_KEY 'already in the keychain' || return 1
+    kc_set cs ask API_KEY 'the original cs' || return 1
+    # busy's feature is open: its lock names a live process, this shell.
+    mkdir -p "$PROFILE/sessions/ask/.cs" "$PROFILE/sessions/busy@feature/.cs"
+    printf '%s\n' "$$" > "$PROFILE/sessions/busy@feature/.cs/session.lock"
+
+    run_setup --skip-tui-build || return 1
+    assert_eq "code-sessions:ask:API_KEY"$'\n'"code-sessions:ask:TOKEN"$'\n'"code-sessions:clash:API_KEY"$'\n'"code-sessions:gone:OLD"$'\n'"cs:ask:API_KEY" \
+        "$(fake_keychain_items)" || return 1
+    assert_eq 'ask key' "$(kc_get code-sessions ask API_KEY)" || return 1
+    assert_eq 'ask token' "$(kc_get code-sessions ask TOKEN)" || return 1
+    assert_eq 'no session folder' "$(kc_get code-sessions gone OLD)" || return 1
+    assert_eq 'already in the keychain' "$(kc_get code-sessions clash API_KEY)" "setup wrote over a keychain item" || return 1
+    assert_eq 'the original cs' "$(kc_get cs ask API_KEY)" "setup touched the original's item" || return 1
+    assert_not_exists "$store/ask.enc" || return 1
+    assert_not_exists "$store/gone.enc" || return 1
+    assert_file_exists "$store/busy.enc" || return 1
+    assert_file_exists "$store/clash.enc" || return 1
+    assert_file_contains "$TEST_TMPDIR/setup.log" 'Moved the secrets of ask into the keychain' || return 1
+    assert_file_contains "$TEST_TMPDIR/setup.log" 'Left the secrets of busy .* the session is open' || return 1
+    assert_file_contains "$TEST_TMPDIR/setup.log" 'Left the secrets of clash .* already has API_KEY' || return 1
+    assert_file_not_contains "$TEST_TMPDIR/setup.log" 'ask key' "a value reached the output" || return 1
+
+    # Once the feature has closed, a rerun moves busy's; clash's stays.
+    sh -c 'exit 0' & dead=$!
+    wait "$dead" || true
+    printf '%s\n' "$dead" > "$PROFILE/sessions/busy@feature/.cs/session.lock"
+    run_setup --skip-tui-build || return 1
+    assert_eq 'busy key' "$(kc_get code-sessions busy API_KEY)" || return 1
+    assert_not_exists "$store/busy.enc" || return 1
+    assert_file_exists "$store/clash.enc" || return 1
+    assert_file_not_contains "$TEST_TMPDIR/setup.log" 'Moved the secrets of ask' "a moved file came back" || return 1
 }
 
 # A project the profile has by a link in its sessions root keeps its .cs/: the
@@ -675,4 +734,5 @@ run_test test_launcher_runs_directory_commands_in_a_project_the_profile_has
 run_test test_setup_registers_profile_hooks_by_absolute_path
 run_test test_direct_installer_refuses_to_replace_original_cs
 run_test test_public_launcher_creates_a_first_session_in_the_private_profile
+run_test test_setup_moves_the_profiles_secrets_into_the_keychain
 report_results

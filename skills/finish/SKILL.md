@@ -41,6 +41,20 @@ to this skill's directory, the folder this SKILL.md was loaded from.
 5. Otherwise (default branch, nothing named) say there is nothing to finish
    and stop.
 
+## Under Codex
+
+- The user types `$finish <task>` (and `$checkpoint`), not `/finish`: write
+  it that way in everything you show them. The `handoff:` and `retire:`
+  lines and cs's refusals already name the right one.
+- Run `scripts/finish.sh`, `cs <base> -integrate-feature` and
+  `cs <base> -retire-feature` with escalated permissions from the start,
+  asking the user to approve each: `finish.sh` asks GitHub for the PR state,
+  and the two entries write the base's `.git` and remove the feature
+  worktree beside this folder. Codex's sandbox refuses all three, and a
+  refused `finish.sh` reads as a PR state it could not learn.
+- Where this skill says AskUserQuestion, ask in plain text and wait for the
+  answer.
+
 ## Gates are opt-in
 
 `/finish` runs no tests unless the invocation asks for them:

@@ -497,6 +497,26 @@ test_retire_refuses_a_live_feature_session_and_says_what_to_do() {
     rm -f "$wt/.cs/session.lock"
 }
 
+# A base and feature that last ran under Codex: the user leaves Codex with
+# /quit and asks for the finish skill as $finish.
+test_retire_refusal_names_codex_commands_for_codex_sessions() {
+    local base_dir state
+    base_dir=$(create_test_session_with_git "myproj")
+    cs_launch "myproj@fix-auth"
+    local wt="$CS_SESSIONS_ROOT/myproj@fix-auth"
+    local sha output
+    sha=$(land_feature myproj fix-auth) || { echo "  FAIL: integrate fixture"; return 1; }
+    for state in "$base_dir/.cs/local/state" "$wt/.cs/local/state"; do
+        { grep -v '^engine:' "$state" 2>/dev/null || true; echo 'engine: codex'; } > "$state.new" && mv "$state.new" "$state"
+    done
+    echo "$$" > "$wt/.cs/session.lock"   # this test process is alive
+    output=$("$CS_BIN" "myproj" -retire-feature "fix-auth" "$sha" 2>&1 || true)
+    assert_output_contains "$output" "can't be removed from under a running Codex. Close that session yourself (/quit there), then run \$finish fix-auth here again" \
+        "Codex's own commands" || return 1
+    assert_dir "$wt" "worktree preserved" || return 1
+    rm -f "$wt/.cs/session.lock"
+}
+
 test_retire_from_live_base_session_succeeds() {
     local base_dir
     base_dir=$(create_test_session_with_git "myproj")
@@ -838,6 +858,7 @@ run_test test_launch_enables_function_hooks_unless_opted_out
 run_test test_retire_after_integrate_removes_worktree_and_branch
 run_test test_retire_refuses_dirty_worktree
 run_test test_retire_refuses_a_live_feature_session_and_says_what_to_do
+run_test test_retire_refusal_names_codex_commands_for_codex_sessions
 run_test test_retire_refuses_a_volume_mounted_inside_the_worktree
 run_test test_retire_refuses_when_the_mount_table_cannot_be_read
 run_test test_retire_from_live_base_session_succeeds

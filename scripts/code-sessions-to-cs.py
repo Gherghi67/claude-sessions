@@ -17,8 +17,9 @@ Claude conversation. The two never share a folder:
 - Each session's Claude conversations are copied from the profile's
   .claude/projects into ~/.claude/projects, under the folder name Claude Code
   gives the copy's path, with their file-history snapshots.
-- Each session's secrets go from the profile's encrypted store into the store
-  cs reads, through cs-secrets, values on stdin only.
+- Each session's secrets go from the profile's store (the keychain, as
+  code-sessions:<session>:<name>) into the store cs reads, through cs-secrets,
+  values on stdin only.
 
 The profile is only read, and git runs there only to read, so code-sessions keeps
 working. When cs already has a session of that name, the code-sessions one arrives as
@@ -58,8 +59,8 @@ MARKER = os.path.join(".cs", "local", "code-sessions-origin")
 
 from session_transfer import (
     STATE, Record, SecretsError, Syncer, admin_dir_for, branch_heads, claude_project_key,
-    clone_tree, copy_admin_dir, copy_blocker, copy_index, copy_secret, mark_copied, mark_now, merge_tree, read_text,
-    reap, relinker, scrubbed_env, secret_names,
+    clone_tree, copy_admin_dir, copy_blocker, copy_index, copy_secret, mark_copied, mark_now, merge_tree,
+    profile_secrets_env, read_text, reap, relinker, scrubbed_env, secret_names,
     secret_differs, session_is_open, state_value, tilde, write_atomic,
 )
 
@@ -294,13 +295,11 @@ class Copier:
 
     def secrets(self, plan):
         """Names to copy, names cs already has, and any problem reading either."""
-        store = os.path.join(self.ccs_secrets_dir, plan.name + ".enc")
-        if not os.path.isfile(store):
-            return [], [], None
-        ccs_env = scrubbed_env()
-        ccs_env.update(CS_SECRETS_BACKEND="encrypted", CS_SECRETS_DIR=self.ccs_secrets_dir)
+        ccs_env = profile_secrets_env(self.ccs_secrets_dir)
         cs_env = scrubbed_env()
         try:
+            if not os.access(self.ccs_secrets, os.X_OK):
+                raise SecretsError("%s is missing; run setup.sh" % tilde(self.ccs_secrets))
             names = secret_names([self.ccs_secrets], ccs_env, plan.name)
             if not names:
                 return [], [], None
@@ -313,8 +312,7 @@ class Copier:
         return [n for n in names if n not in have], [n for n in names if n in have], None
 
     def copy_secrets(self, plan, names):
-        ccs_env = scrubbed_env()
-        ccs_env.update(CS_SECRETS_BACKEND="encrypted", CS_SECRETS_DIR=self.ccs_secrets_dir)
+        ccs_env = profile_secrets_env(self.ccs_secrets_dir)
         cs_env = scrubbed_env()
         return [name for name in names
                 if not copy_secret([self.ccs_secrets, "--session", plan.name, "get", name], ccs_env,
@@ -560,8 +558,7 @@ class Copier:
         missing, present, error = self.secrets(plan)
         if error:
             self.problem("secrets: %s" % error)
-        ccs_env = scrubbed_env()
-        ccs_env.update(CS_SECRETS_BACKEND="encrypted", CS_SECRETS_DIR=self.ccs_secrets_dir)
+        ccs_env = profile_secrets_env(self.ccs_secrets_dir)
         differs = [n for n in present
                    if secret_differs([self.ccs_secrets, "--session", plan.name, "get", n], ccs_env,
                                      [self.cs_secrets, "--session", plan.cs_name, "get", n], scrubbed_env())]

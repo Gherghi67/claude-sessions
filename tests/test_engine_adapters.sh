@@ -178,10 +178,7 @@ test_capabilities_are_exact_and_runtime_independent() {
     cs_engine_supports claude exact_resume || { echo '  FAIL: Claude exact resume capability missing'; return 1; }
     cs_engine_supports claude feature_finish || { echo '  FAIL: Claude feature finish capability missing'; return 1; }
     cs_engine_supports codex startup_context || { echo '  FAIL: Codex startup context capability missing'; return 1; }
-    if cs_engine_supports codex feature_finish; then
-        echo '  FAIL: Codex must not claim unsupported feature finish'
-        return 1
-    fi
+    cs_engine_supports codex feature_finish || { echo '  FAIL: Codex feature finish capability missing'; return 1; }
     # The session-manager features skills check before relying on an adapter.
     # Claude hosts all four through its hooks and launch path. Codex hosts
     # rotation (its SessionStart hook and the launch prompt's r); the rest it

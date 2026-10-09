@@ -318,6 +318,89 @@ move_profile() {
     rm -rf "$profile_home/.cache/cs/git" "$profile_home/.cache/cs/org"
 }
 
+# ---- the profile's secrets into the keychain ---------------------------------
+# The profile kept its secrets in an encrypted file per session, <session>.enc,
+# until the launcher gave it the keychain as the original cs has, with items
+# named code-sessions:<session>:<name>. Each file moves over once, through the
+# profile's own cs-secrets: never onto a keychain item of the same name, and
+# not while the session or one of its features is open, since an agent there
+# still reads the file. A file is removed once it holds nothing.
+profile_secrets() {  # backend ('' lets cs-secrets pick), cs-secrets arguments...
+    secrets_backend=$1
+    shift
+    env -u CS_SECRETS_BACKEND -u CS_SECRETS_KEYCHAIN_PREFIX -u CS_SESSION_NAME -u CLAUDE_SESSION_NAME \
+        ${secrets_backend:+CS_SECRETS_BACKEND=$secrets_backend} \
+        CS_SECRETS_KEYCHAIN_PREFIX=code-sessions CS_SECRETS_DIR="$profile_home/.cs-secrets" \
+        "$profile_home/.local/bin/cs-secrets" "$@"
+}
+
+profile_secret_names() {  # backend, session
+    listing=$(profile_secrets "$1" --session "$2" list 2>/dev/null) || return 1
+    printf '%s\n' "$listing" | sed -n 's/^  - //p'
+}
+
+# A session holds .cs/session.lock with the pid of its running agent.
+secrets_session_open() {  # session
+    for lock in "$profile_home/sessions/$1/.cs/session.lock" "$profile_home/sessions/$1"@*/.cs/session.lock; do
+        [ -f "$lock" ] || continue
+        lock_pid=$(head -n 1 "$lock" | tr -cd '0-9')
+        if [ -n "$lock_pid" ] && kill -0 "$lock_pid" 2>/dev/null; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+move_secrets_to_keychain() {
+    for store in "$profile_home/.cs-secrets"/*.enc; do
+        [ -f "$store" ] || continue
+        # Only where cs-secrets picks the keychain; elsewhere the files are the store.
+        profile_secrets '' backend 2>/dev/null | grep -q '^Storage backend: keychain$' || return 0
+        secrets_session=${store##*/}
+        secrets_session=${secrets_session%.enc}
+        if secrets_session_open "$secrets_session"; then
+            printf 'Left the secrets of %s in %s: the session is open. Close it, then rerun setup.sh.\n' \
+                "$secrets_session" "$store"
+            continue
+        fi
+        if ! old_names=$(profile_secret_names encrypted "$secrets_session") \
+            || ! keychain_names=$(profile_secret_names keychain "$secrets_session"); then
+            printf 'Warning: could not read the secrets of %s; they stay in %s.\n' "$secrets_session" "$store" >&2
+            continue
+        fi
+        # Secret names are letters, digits, '_' and '-', so they split on spaces.
+        clash=''
+        for name in $old_names; do
+            if printf '%s\n' "$keychain_names" | grep -Fqx -- "$name"; then
+                clash="$clash $name"
+            fi
+        done
+        if [ -n "$clash" ]; then
+            printf 'Left the secrets of %s in %s: the keychain already has%s under code-sessions:%s.\n' \
+                "$secrets_session" "$store" "$clash" "$secrets_session"
+            continue
+        fi
+        # migrate-backend deletes from the file only what it stored, and only
+        # when it stored them all; what is left is read back below.
+        if [ -n "$old_names" ]; then
+            profile_secrets keychain --session "$secrets_session" \
+                migrate-backend keychain --from encrypted --delete-source >/dev/null 2>&1 || true
+        fi
+        if ! left=$(profile_secret_names encrypted "$secrets_session"); then
+            printf 'Warning: could not read %s back; check it, then rerun setup.sh.\n' "$store" >&2
+        elif [ -n "$left" ]; then
+            printf 'Warning: these secrets of %s did not reach the keychain and stay in %s: %s. Rerun setup.sh.\n' \
+                "$secrets_session" "$store" "$(printf '%s' "$left" | tr '\n' ' ')" >&2
+        else
+            rm -f "$store"
+            if [ -n "$old_names" ]; then
+                printf 'Moved the secrets of %s into the keychain, as code-sessions:%s:<name>.\n' \
+                    "$secrets_session" "$secrets_session"
+            fi
+        fi
+    done
+}
+
 # Refuse before the build; the moves themselves happen after the build.
 if profile_move_pending; then
     check_profile_move
@@ -399,6 +482,8 @@ fi
 if sessions_move_pending; then
     move_sessions_root
 fi
+
+move_secrets_to_keychain
 
 # The launchers are code-sessions and its short name ccs; cs on PATH stays the
 # original's. Replace each atomically rather than copying through a possible

@@ -54,10 +54,10 @@ Otherwise a fresh profile would start in Claude Code's fullscreen renderer, whic
 captures trackpad gestures such as iTerm2's two-finger tab swipe. Run `/tui`
 inside the profile to change it; later setups keep that choice.
 Your HOME stays your own, so the macOS keychain, `~/.ssh`, your Git identity and
-other credentials work as usual inside a session. Secrets use encrypted files
-within the profile, with their own master password, so `ccs -list` and the
-picker show no secret counts (they count keychain secrets only, which here are
-the original installation's). `ccs <name> -secrets list` lists a session's own.
+other credentials work as usual inside a session. Secrets go to the macOS
+keychain as they do with the original cs, named `code-sessions:<session>:<name>`
+instead of `cs:<session>:<name>`, so a session both have keeps its secrets
+apart, and `ccs -list` and the picker count the profile's own.
 
 Keep using `cs` in existing workspaces. For code-sessions, create a new
 workspace or adopt a separate project; `ccs .` and adoption refuse a workspace
@@ -185,9 +185,13 @@ ccs my-project -features
 
 The base project should have a clean, committed starting point before you
 create a worktree. The worktree has its own session metadata and shares the
-base repository's Git history. Claude currently supports the `/finish`
-integration workflow; Codex worktrees can be managed with Git directly while
-Codex integration support is developed.
+base repository's Git history. When the feature is done, finish it from the
+base: `ccs my-project -finish fix-auth` opens the base on the `finish` skill
+(`/finish fix-auth` in Claude, `$finish fix-auth` in Codex, which you can also
+type in an open base session). It lands the feature on the base and removes
+the worktree once the feature's conversation is closed. Under Codex it asks
+you to approve its steps outside the sandbox: asking GitHub for the PR,
+writing the base's `.git`, and removing the worktree beside it.
 
 ## Save a manual checkpoint
 
@@ -206,7 +210,8 @@ separately when you want to preserve the contents of the changes themselves.
 ## Current Codex limits
 
 Codex currently supports engine selection, launch, exact thread resume,
-shared startup context, rotation, and the `switch` skill in both directions.
+shared startup context, rotation, the `switch` skill in both directions, and
+finishing a feature (`-finish`, `$finish`).
 Claude's hooks and mods do not run inside Codex. Codex does not yet provide
 cs's autosave and crash recovery, automatic queue or mailbox
 delivery, runtime usage reporting, rotation in an encrypted session, or native

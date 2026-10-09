@@ -157,7 +157,14 @@ The Codex integration currently covers engine selection, launch and exact
 thread resume, shared-context bootstrap, packaging of the adapter, and the
 shipped skills. The installer copies the skills into `$CODEX_HOME/skills/`,
 where Codex lists them by name and a message starts one with `$<name>` (for
-example `$checkpoint`); `finish` runs only when asked that way. A skill that
+example `$checkpoint`); `finish` runs only when asked that way. `cs <base>
+--engine codex -finish <feature>` opens the base on `$finish <feature>`, as
+Claude's opens on `/finish <feature>`. The skill's steps outside the session
+folder (`finish.sh` asking GitHub for the PR state, `cs -integrate-feature`
+writing the base's `.git`, `cs -retire-feature` removing the worktree beside
+it) are ones Codex's sandbox refuses, so it asks you to approve each. Its
+refusals name Codex's commands (`/quit`, `$finish`) for a session that last
+ran under Codex. A skill that
 needs an adapter feature Codex lacks says so and stops: `feature` refuses under
 Codex for now.
 

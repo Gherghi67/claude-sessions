@@ -25,8 +25,9 @@ and the two never share a folder:
 - Trust and per-project settings in ~/.claude.json and ~/.codex/config.toml
   are copied into the profile's under the copy's paths, while no code-sessions session
   is running.
-- Secrets are copied from the stable cs store into the profile's encrypted
-  store, through each side's cs-secrets, values on stdin only.
+- Secrets are copied from the stable cs store into the profile's (the
+  keychain, as code-sessions:<session>:<name>), through each side's
+  cs-secrets, values on stdin only.
 
 A rerun brings over what cs changed since the last one, wherever code-sessions left
 the same thing alone: branches cs moved (fetched into the copy, also as
@@ -63,8 +64,8 @@ import tempfile
 
 from session_transfer import (
     STATE, Record, SecretsError, Syncer, admin_dir_for, branch_heads, claude_project_key, clone_tree, copy_admin_dir,
-    copy_blocker, copy_index, copy_secret, git, mark_copied, mark_now, merge_tree, read_text, reap, relinker,
-    scrubbed_env, secret_names, session_is_open,
+    copy_blocker, copy_index, copy_secret, git, mark_copied, mark_now, merge_tree, profile_secrets_env, read_text,
+    reap, relinker, scrubbed_env, secret_names, session_is_open,
     secret_differs, state_value, tilde, write_atomic,
 )
 
@@ -510,9 +511,7 @@ class Importer:
         return added
 
     def secret_envs(self):
-        ccs_env = scrubbed_env()
-        ccs_env.update(CS_SECRETS_BACKEND="encrypted", CS_SECRETS_DIR=self.ccs_secrets_dir)
-        return scrubbed_env(), ccs_env
+        return scrubbed_env(), profile_secrets_env(self.ccs_secrets_dir)
 
     def secrets(self, session):
         """Names to copy, names code-sessions already has, and any problem reading either."""

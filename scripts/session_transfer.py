@@ -235,6 +235,19 @@ def scrubbed_env():
     return env
 
 
+def profile_secrets_env(secrets_dir):
+    """The environment the code-sessions launcher gives cs-secrets.
+
+    The keychain, as in the original cs, with the profile's items filed as
+    code-sessions:<session>:<name>; where there is no keychain, the profile's
+    encrypted store. A backend the caller's shell names is dropped with the
+    rest of CS_*, as the launcher drops it.
+    """
+    env = scrubbed_env()
+    env.update(CS_SECRETS_KEYCHAIN_PREFIX="code-sessions", CS_SECRETS_DIR=secrets_dir)
+    return env
+
+
 class SecretsError(Exception):
     pass
 

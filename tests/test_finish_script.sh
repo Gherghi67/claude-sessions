@@ -43,6 +43,16 @@ key() {  # output key
     printf '%s\n' "$1" | sed -n "s/^$2: //p" | head -1
 }
 
+# A base that last ran under Codex takes the skill as $finish.
+test_prepare_hands_off_in_the_bases_engine_words() {
+    finish_fixture myproj fix-auth > /dev/null
+    local state="$CS_SESSIONS_ROOT/myproj/.cs/local/state" out
+    { grep -v '^engine:' "$state" 2>/dev/null || true; echo 'engine: codex'; } > "$state.new" && mv "$state.new" "$state"
+    out=$(CLAUDE_SESSION_DIR="$CS_SESSIONS_ROOT/myproj@fix-auth" CLAUDE_SESSION_NAME="myproj@fix-auth" \
+        bash "$FINISH" prepare 2>&1)
+    assert_output_contains "$out" 'handoff: run $finish fix-auth in session myproj' "Codex hand-off line" || return 1
+}
+
 test_prepare_in_feature_session_hands_off() {
     finish_fixture myproj fix-auth > /dev/null
     local out
@@ -328,6 +338,7 @@ test_report_after_a_squash_landing_gives_the_squash_notice() {
 }
 
 run_test test_prepare_in_feature_session_hands_off
+run_test test_prepare_hands_off_in_the_bases_engine_words
 run_test test_prepare_in_base_captures_sha_branch_and_dirt
 run_test test_prepare_in_a_plain_checkout_says_so
 run_test test_prepare_refuses_a_worktree_off_its_branch

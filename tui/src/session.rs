@@ -1328,15 +1328,8 @@ fn count_secrets_from_keychain() -> HashMap<String, u32> {
         .output();
 
     if let Ok(output) = output {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        for line in stdout.lines() {
-            // Match: "svce"<blob>="cs:session_name:secret_name"
-            if let Some(rest) = line.strip_prefix("    \"svce\"<blob>=\"cs:") {
-                if let Some(session) = rest.split(':').next() {
-                    *counts.entry(session.to_string()).or_insert(0) += 1;
-                }
-            }
-        }
+        let prefix = keychain_prefix(std::env::var("CS_SECRETS_KEYCHAIN_PREFIX").ok());
+        counts = count_keychain_items(&String::from_utf8_lossy(&output.stdout), &prefix);
     }
 
     counts
@@ -1358,6 +1351,35 @@ fn count_secrets_from_keychain() -> HashMap<String, u32> {
 #[cfg(any(target_os = "macos", test))]
 fn keychain_is_secrets_store(backend: Option<&str>) -> bool {
     matches!(backend, None | Some("") | Some("keychain"))
+}
+
+/// cs-secrets names a keychain item <prefix>:<session>:<name>. code-sessions
+/// sets CS_SECRETS_KEYCHAIN_PREFIX to a prefix of its own, so a session it
+/// shares a name with in the original cs keeps its secrets apart; empty reads
+/// as unset, as in bash.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn keychain_prefix(var: Option<String>) -> String {
+    match var {
+        Some(prefix) if !prefix.is_empty() => prefix,
+        _ => "cs".to_string(),
+    }
+}
+
+/// Per-session item counts from a `security dump-keychain` listing, for the
+/// items filed under `prefix`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn count_keychain_items(dump: &str, prefix: &str) -> HashMap<String, u32> {
+    let mut counts = HashMap::new();
+    // Match: "svce"<blob>="<prefix>:session_name:secret_name"
+    let marker = format!("    \"svce\"<blob>=\"{}:", prefix);
+    for line in dump.lines() {
+        if let Some(rest) = line.strip_prefix(marker.as_str()) {
+            if let Some(session) = rest.split(':').next() {
+                *counts.entry(session.to_string()).or_insert(0) += 1;
+            }
+        }
+    }
+    counts
 }
 
 #[cfg(test)]
@@ -2578,16 +2600,38 @@ mod tests {
         assert_eq!(cs_dir_or(None, default.clone()), default);
     }
 
-    // The code-sessions profile runs the encrypted backend, and the keychain beside it
-    // holds the stable install's cs:<session>:* items. Counted, they showed
-    // against any profile session of the same name.
+    // Under CS_SECRETS_BACKEND=encrypted the keychain holds another store's
+    // items. Counted, they showed against any session of the same name.
     #[test]
     fn keychain_counts_only_when_the_keychain_is_the_secrets_store() {
         assert!(keychain_is_secrets_store(None), "unset picks the keychain");
         assert!(keychain_is_secrets_store(Some("")), "detect_backend reads empty as unset");
         assert!(keychain_is_secrets_store(Some("keychain")));
-        assert!(!keychain_is_secrets_store(Some("encrypted")), "the profile's backend");
+        assert!(!keychain_is_secrets_store(Some("encrypted")));
         assert!(!keychain_is_secrets_store(Some("bogus")), "cs-secrets refuses it; no keychain count either");
+    }
+
+    // The code-sessions profile files its keychain items as
+    // code-sessions:<session>:*, beside the original cs's cs:<session>:*.
+    // Each install counts only its own, also for a session both have.
+    #[test]
+    fn keychain_counts_only_the_items_under_this_installs_prefix() {
+        let dump = concat!(
+            "keychain: \"/Users/u/Library/Keychains/login.keychain-db\"\n",
+            "    \"svce\"<blob>=\"cs:wap:API_KEY\"\n",
+            "    \"svce\"<blob>=\"cs:wap:DB_PASS\"\n",
+            "    \"svce\"<blob>=\"code-sessions:wap:API_KEY\"\n",
+            "    \"svce\"<blob>=\"code-sessions:ask:TOKEN\"\n",
+            "    \"svce\"<blob>=\"Claude Code-credentials\"\n",
+        );
+        let ours = count_keychain_items(dump, &keychain_prefix(Some("code-sessions".to_string())));
+        assert_eq!(ours.get("wap"), Some(&1));
+        assert_eq!(ours.get("ask"), Some(&1));
+        assert_eq!(ours.len(), 2);
+        let original = count_keychain_items(dump, &keychain_prefix(None));
+        assert_eq!(original.get("wap"), Some(&2));
+        assert_eq!(original.len(), 1);
+        assert_eq!(keychain_prefix(Some(String::new())), "cs", "empty reads as unset, as in bash");
     }
 
     #[test]

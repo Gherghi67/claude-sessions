@@ -45,6 +45,14 @@ test_finish_registered_and_merge_retired_in_both_manifests() {
     [ -x "$REPO/skills/finish/scripts/finish.sh" ] || { echo "  FAIL: finish.sh must ship executable"; return 1; }
 }
 
+# Codex takes the skill as $finish, and its sandbox refuses the steps that ask
+# GitHub, write .git or remove the worktree; the skill asks for approval first.
+test_finish_skill_runs_under_codex() {
+    assert_file_contains "$SKILL" '^## Under Codex' "a Codex section" || return 1
+    assert_file_contains "$SKILL" 'types `\$finish <task>`' "Codex's spelling" || return 1
+    assert_file_contains "$SKILL" 'with escalated permissions from the start' "approval before the sandbox refuses" || return 1
+}
+
 test_finish_skill_teaches_the_ritual() {
     assert_file_contains "$SKILL" "scripts/finish.sh prepare" "runs the capture script" || return 1
     assert_file_contains "$SKILL" "scripts/finish.sh report" "runs the report script" || return 1
@@ -99,5 +107,6 @@ run_test test_finish_skill_runs_no_gate_unless_asked
 run_test test_finish_skill_keeps_the_plain_branch_context
 run_test test_finish_skill_never_list
 run_test test_finish_kick_arms_the_new_skill
+run_test test_finish_skill_runs_under_codex
 
 report_results

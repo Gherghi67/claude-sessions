@@ -31,7 +31,8 @@ The capability check `cs_engine_supports <engine> <capability>` performs an
 exact line match against `capabilities` output. The initial capabilities
 describe the checked-in integration: Claude supports `launch`, `exact_resume`,
 `startup_context`, `feature_finish`, `rotation`, `spawn_brief`,
-`memory_index`, and `mail_delivery`; Codex supports the first three. These
+`memory_index`, and `mail_delivery`; Codex supports `launch`, `exact_resume`,
+`startup_context`, `feature_finish` and `rotation`. These
 names describe the integration's behavior, not a guarantee about every
 installed runtime version. Shared commands should check a capability before
 performing any side effect that depends on it. In particular, feature finish

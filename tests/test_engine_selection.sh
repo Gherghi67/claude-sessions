@@ -154,14 +154,28 @@ test_explicit_codex_works_without_claude_and_claude_without_codex() {
     assert_not_exists "$(_engine_session_dir only-claude)/.cs/local/codex-thread-id" "Claude launch must not bind Codex" || return 1
 }
 
-test_codex_finish_is_rejected_before_mutation() {
+# -finish opens the base under Codex on the finish skill, named the way Codex
+# takes a skill from the user, as Claude's opens on /finish <task>.
+test_codex_finish_starts_the_thread_on_the_finish_skill() {
     local output status=0
-    export CS_DEFAULT_ENGINE=codex
-    output=$("$CS_BIN" base -finish feature 2>&1) || status=$?
-    [ "$status" -ne 0 ] || { echo '  FAIL: Codex must reject -finish'; return 1; }
-    assert_output_contains "$output" '-finish requires Claude' "clear unsupported-feature error" || return 1
-    assert_not_exists "$(_engine_session_dir base)" "unsupported finish must not create a session" || return 1
-    assert_file_not_exists "$CS_HELPER_LOG" "unsupported finish must not start the Codex helper" || return 1
+    create_test_session_with_git base >/dev/null
+    "$CS_BIN" base@feature --engine claude < /dev/null > /dev/null 2>&1 || true
+    [ -d "$(_engine_session_dir base@feature)" ] || { echo '  FAIL: feature fixture'; return 1; }
+    output=$("$CS_BIN" base --engine codex -finish feature < /dev/null 2>&1) || status=$?
+    assert_eq 0 "$status" "Codex -finish launches: $output" || return 1
+    assert_file_contains "$CS_CODEX_LOG" 'resume 12345678-1234-1234-1234-123456789abc -C .* \$finish feature$' \
+        "the thread starts on \$finish feature" || return 1
+}
+
+# The feature check runs before anything starts, under Codex as under Claude.
+test_codex_finish_of_an_unknown_feature_starts_nothing() {
+    local output status=0
+    create_test_session_with_git base >/dev/null
+    output=$("$CS_BIN" base --engine codex -finish nope < /dev/null 2>&1) || status=$?
+    [ "$status" -ne 0 ] || { echo '  FAIL: an unknown feature was accepted'; return 1; }
+    assert_output_contains "$output" "No feature worktree 'nope' of 'base'" || return 1
+    assert_file_not_exists "$CS_HELPER_LOG" "no Codex thread for an unknown feature" || return 1
+    assert_file_not_exists "$CS_CODEX_LOG" "Codex never started" || return 1
 }
 
 _assert_codex_only_workspace() {
@@ -324,7 +338,8 @@ run_test test_default_launch_remains_claude
 run_test test_environment_default_selects_codex
 run_test test_stored_engine_wins_and_explicit_claude_keeps_codex_binding
 run_test test_explicit_codex_works_without_claude_and_claude_without_codex
-run_test test_codex_finish_is_rejected_before_mutation
+run_test test_codex_finish_starts_the_thread_on_the_finish_skill
+run_test test_codex_finish_of_an_unknown_feature_starts_nothing
 run_test test_codex_create_and_resume_do_not_prepare_claude
 run_test test_codex_adopt_preserves_user_instructions_and_configuration
 run_test test_codex_worktree_then_claude_prepares_only_on_switch

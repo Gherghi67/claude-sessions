@@ -457,7 +457,7 @@ main() {
     local engine
     engine=$(_session_engine "$session_dir" "$explicit_engine")
     if [ -n "$merge_feature" ] && ! cs_engine_supports "$engine" feature_finish; then
-        error "-finish requires Claude. Use: cs $session_name --engine claude -finish $merge_feature"
+        error "-finish is not supported under $engine. Use: cs $session_name --engine claude -finish $merge_feature"
     fi
     # The handoff lives in the session; a session that does not exist yet has
     # none, and creating one here would only refuse later.

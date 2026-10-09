@@ -26,7 +26,7 @@ is not code-sessions' own build; use `setup.sh`.
 | Public executable | Launchers: `code-sessions` and `ccs` in `~/.local/bin`; inside the profile the command is `cs`. The global original `cs` stays independent. |
 | Companion executables/package | Upstream's names, inside the profile only: `cs-secrets`, `cs-codex-thread`, `cs-statusline`, `cs-subagent-statusline`, and `cs-tui`. |
 | Workspace records | Keep `.cs/`, machine-local `.cs/local/`, and tracked-versus-local rules. |
-| Default discovery root | The source default remains `~/.claude-sessions/`. Setup's launcher keeps HOME as the user's own (macOS finds the login keychain through it, and `~/.ssh` and the other credentials stay visible) and points each tool at the profile through its own directory variable: `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `CS_SESSIONS_ROOT`, `CS_INSTALL_DIR`, `CS_CONFIG_DIR`, `CS_CACHE_DIR`, `CS_DATA_DIR` (where `cs -encrypt` makes its containers; the original install's stay in `~/.local/share/cs/vaults`, and so do any the profile made before it had its own, which keep opening from there because each session records its container's path) and `CS_SECRETS_DIR`. For the same reason the profile's `settings.json` registers hook commands by absolute path (`CS_HOOK_PATHS=absolute` at install time) rather than `~/.claude/hooks/cs/...`, which would resolve to the original install's hooks. The launcher also sets `CS_TMUX_SOCKET=code-sessions` and `CS_TMUX_SESSION=code-sessions`, so `cs -spawn` opens its windows in session `code-sessions` on a tmux server of its own (`tmux -L code-sessions attach -t code-sessions`). A tmux window runs with its server's environment, not the spawner's: on the default server a spawned window would run with the original install's directories, and a server the fork started would hand the profile's variables to the original's `cs -spawn` windows. The launcher's `CS_SECRETS_BACKEND=encrypted` keeps secrets out of the shared keychain, and `cs -list` and the picker then show no secret counts rather than the original install's keychain counts for a session of the same name. The profile's sessions root is `sessions/`, since it holds Claude and Codex sessions alike; rerunning setup.sh moves an earlier profile's `.claude-sessions/` there once. The move renames the Claude transcript folders, the Claude and Codex trusted-folder entries and the git worktree links of the session directories that moved (a symlinked session keeps its paths), and it waits until no profile command is running. |
+| Default discovery root | The source default remains `~/.claude-sessions/`. Setup's launcher keeps HOME as the user's own (macOS finds the login keychain through it, and `~/.ssh` and the other credentials stay visible) and points each tool at the profile through its own directory variable: `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `CS_SESSIONS_ROOT`, `CS_INSTALL_DIR`, `CS_CONFIG_DIR`, `CS_CACHE_DIR`, `CS_DATA_DIR` (where `cs -encrypt` makes its containers; the original install's stay in `~/.local/share/cs/vaults`, and so do any the profile made before it had its own, which keep opening from there because each session records its container's path) and `CS_SECRETS_DIR`. For the same reason the profile's `settings.json` registers hook commands by absolute path (`CS_HOOK_PATHS=absolute` at install time) rather than `~/.claude/hooks/cs/...`, which would resolve to the original install's hooks. The launcher also sets `CS_TMUX_SOCKET=code-sessions` and `CS_TMUX_SESSION=code-sessions`, so `cs -spawn` opens its windows in session `code-sessions` on a tmux server of its own (`tmux -L code-sessions attach -t code-sessions`). A tmux window runs with its server's environment, not the spawner's: on the default server a spawned window would run with the original install's directories, and a server the fork started would hand the profile's variables to the original's `cs -spawn` windows. Secrets go to the macOS keychain, as in the original install, but the launcher's `CS_SECRETS_KEYCHAIN_PREFIX=code-sessions` names the profile's items `code-sessions:<session>:<name>` beside the original's `cs:<session>:<name>`, so a session both installs have keeps two separate sets, and `cs -list` and the picker count each install's own. The launcher drops a `CS_SECRETS_BACKEND` inherited from the calling shell; where there is no keychain, the encrypted store lives in the profile's `.cs-secrets/`. Setup moves secrets an earlier profile kept in `.cs-secrets/<session>.enc` into the keychain, once per file: never onto an item the keychain already has, and not while that session or one of its features is open (rerun setup.sh after closing it). The profile's sessions root is `sessions/`, since it holds Claude and Codex sessions alike; rerunning setup.sh moves an earlier profile's `.claude-sessions/` there once. The move renames the Claude transcript folders, the Claude and Codex trusted-folder entries and the git worktree links of the session directories that moved (a symlinked session keeps its paths), and it waits until no profile command is running. |
 | Engine choice | Explicit `--engine`, saved session choice, `CS_DEFAULT_ENGINE`, sole installed Codex adapter, then Claude. Legacy and dual-adapter installs retain Claude by default. |
 | Session environment | `CS_SESSION_NAME`, `CS_SESSION_DIR`, `CS_SESSION_META_DIR` are canonical. Shared commands and secrets accept legacy `CLAUDE_SESSION_*` callers. Launches refresh both sets together. |
 | Fork marker | The launcher exports `CODE_SESSIONS_HOME`, the profile's path. With it set, `cs -update` and `cs -uninstall` refuse, since the fork's release address is the original cs's; tools such as branch-out read it to tell the fork from the original. `CS_BIN` is the launch-time path of the profile's `cs`. |
@@ -151,12 +151,14 @@ scripts/cs-to-code-sessions.py --session wap --apply    # rerun later to bring o
   are copied into the profile's under the copy's paths, without overwriting
   what the profile has. While a code-sessions session runs, these two files are
   left and a rerun brings them.
-- Secrets are copied from the original's store into the profile's encrypted
-  store, values on stdin.
+- Secrets are copied from the original's store into the profile's, values on
+  stdin: from the keychain's `cs:<session>:<name>` items to its
+  `code-sessions:<session>:<name>` ones.
 
 Nothing outside the profile is written: `~/.claude-sessions`, the project and
-its feature folders, `~/.claude`, `~/.claude.json`, `~/.codex` and the keychain
-are only read, and git runs there only to read. The session protocol in
+its feature folders, `~/.claude`, `~/.claude.json`, `~/.codex` and the
+original's keychain items are only read, and git runs there only to read. The
+keychain gains only the profile's own `code-sessions:` items. The session protocol in
 `CLAUDE.local.md` comes over as it is: both sides word it for cs. A session or
 feature open in the original cs while the script runs is named: what it writes
 afterwards comes over on a rerun.
@@ -226,9 +228,9 @@ scripts/code-sessions-to-cs.py --apply
 - Each session's Claude conversations and their file-history snapshots are
   copied from the profile into `~/.claude`, under the folder Claude Code gives
   the copy's path.
-- Secrets go from the profile's encrypted store into the store `cs-secrets`
-  reads, values on stdin. One whose value differs is reported, never
-  overwritten.
+- Secrets go from the profile's keychain items (`code-sessions:<session>:<name>`)
+  into the store `cs-secrets` reads, values on stdin. One whose value differs
+  is reported, never overwritten.
 
 The profile is only read, and git runs there only to read, so code-sessions
 keeps working. When cs already has a session of that name, the code-sessions

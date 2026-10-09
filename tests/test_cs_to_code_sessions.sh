@@ -66,6 +66,7 @@ make_fixture() {
     mkdir -p "$PROFILE/sessions" "$PROFILE/.local/bin" "$PROFILE/.claude" "$PROFILE/.codex" \
         "$CSROOT" "$HOME/.local/bin" "$HOME/.codex" "$STUB_STORE/wap" "$CLAUDE/projects"
     cp "$SCRIPT_DIR/../bin/cs-secrets" "$PROFILE/.local/bin/cs-secrets"
+    use_fake_keychain
 
     PROJECT="$TEST_TMPDIR/projects/wap"
     mkdir -p "$PROJECT/.cs/local" "$PROJECT/.claude"
@@ -148,7 +149,7 @@ make_fixture() {
 set -eu
 session=""
 if [ "$1" = --session ]; then session=$2; shift 2; fi
-echo "$* backend=${CS_SECRETS_BACKEND:-unset} dir=${CS_SECRETS_DIR:-unset}" >> "$STUB_STORE/argv.log"
+echo "$* backend=${CS_SECRETS_BACKEND:-unset} prefix=${CS_SECRETS_KEYCHAIN_PREFIX:-unset} dir=${CS_SECRETS_DIR:-unset}" >> "$STUB_STORE/argv.log"
 case "$1" in
     list)
         if [ -d "$STUB_STORE/$session" ] && [ -n "$(ls "$STUB_STORE/$session")" ]; then
@@ -165,7 +166,7 @@ EOF
 }
 
 ccs_secret() {  # session name
-    CS_SECRETS_BACKEND=encrypted CS_SECRETS_DIR="$PROFILE/.cs-secrets" \
+    CS_SECRETS_KEYCHAIN_PREFIX=code-sessions CS_SECRETS_DIR="$PROFILE/.cs-secrets" \
         "$PROFILE/.local/bin/cs-secrets" --session "$1" get "$2"
 }
 
@@ -298,9 +299,12 @@ test_apply_copies_the_session_and_leaves_cs_as_it_is() {
     assert_file_not_contains "$PROFILE/.codex/config.toml" 'elsewhere' || return 1
 
     # Secrets reach the profile's cs-secrets on stdin; argv never carries a value.
+    # They land in the keychain under code-sessions:<session>, never under the
+    # original's cs:<session>, which the stable cs-secrets reads.
     assert_eq "s3cret-value" "$(ccs_secret wap TOKEN)" || return 1
     assert_file_not_contains "$STUB_STORE/argv.log" 's3cret' "the value reached argv" || return 1
-    assert_file_not_contains "$STUB_STORE/argv.log" 'backend=encrypted' "cs-secrets got the code-sessions backend" || return 1
+    assert_file_not_contains "$STUB_STORE/argv.log" 'prefix=code-sessions' "cs-secrets got the code-sessions prefix" || return 1
+    assert_eq "code-sessions:wap:TOKEN" "$(fake_keychain_items)" || return 1
 
     jq -e 'select(.action == "copied-feature" and .session == "wap@feat")' "$PROFILE/.cs-to-code-sessions/log.jsonl" >/dev/null \
         || { echo "  FAIL: the copy is not in the log"; return 1; }

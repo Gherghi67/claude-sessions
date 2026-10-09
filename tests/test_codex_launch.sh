@@ -164,13 +164,16 @@ test_claude_runtime_binding_isolation() {
     assert_not_exists "$CS_TEST_SESSION_DIR/.cs/local/claude_session_id" || return 1
 }
 
-test_unsupported_finish_before_helper() {
+# -finish starts the thread on the finish skill, named the way Codex takes a
+# skill from the user: one argument, after the exact resume and its cwd.
+test_finish_starts_the_thread_on_the_finish_skill() {
     local output status=0
     output=$(launch_codex demo "$CS_TEST_SESSION_DIR" false false feature 2>&1) || status=$?
-    assert_eq 1 "$status" "finish unsupported" || return 1
-    assert_output_contains "$output" 'only for Claude sessions' "clear diagnostic" || return 1
-    assert_not_exists "$CS_HELPER_COUNT" "no helper call" || return 1
-    assert_not_exists "$CS_TEST_SESSION_DIR/.cs/session.lock" || return 1
+    assert_eq 0 "$status" "launch failed: $output" || return 1
+    assert_eq "resume" "$(sed -n '2p' "$CS_CODEX_LOG")" "CLI resumes exact thread" || return 1
+    assert_eq "$CS_TEST_SESSION_DIR" "$(sed -n '5p' "$CS_CODEX_LOG")" "CLI cwd" || return 1
+    assert_eq '$finish feature' "$(sed -n '6p' "$CS_CODEX_LOG")" "the first prompt names the skill" || return 1
+    assert_eq 6 "$(wc -l < "$CS_CODEX_LOG" | tr -d ' ')" "nothing after the prompt" || return 1
 }
 
 test_live_lock_blocks_launch() {
@@ -408,7 +411,7 @@ run_test test_missing_codex_home_is_named_before_the_helper
 run_test test_mismatched_refresh_rejected
 run_test test_cli_status_and_lock_cleanup
 run_test test_claude_runtime_binding_isolation
-run_test test_unsupported_finish_before_helper
+run_test test_finish_starts_the_thread_on_the_finish_skill
 run_test test_live_lock_blocks_launch
 run_test test_helper_resolved_beside_cs
 run_test test_unarchive_and_actor_override

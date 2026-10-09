@@ -54,9 +54,15 @@ export CS_DATA_DIR="$profile_home/.local/share/cs"
 # user's tmux start too, a spawned code-sessions window ran as the original cs,
 # and a server code-sessions started handed this profile to the original's.
 export CS_TMUX_SOCKET=code-sessions CS_TMUX_SESSION=code-sessions
-# The default macOS keychain backend shares cs:<session>:<name> keys globally.
-# Use the profile's encrypted-file backend instead of that shared namespace.
-export CS_SECRETS_BACKEND=encrypted CS_SECRETS_DIR="$profile_home/.cs-secrets" CS_NO_UPDATE_CHECK=1
+# Secrets go to the macOS keychain as they do in the original cs, filed as
+# code-sessions:<session>:<name>: the keychain is one per user, and under the
+# original's cs: prefix a session both have would share its secrets. Where
+# there is no keychain, the encrypted-file store lives in the profile. A
+# backend inherited from the calling shell is dropped: a code-sessions session
+# opened before the profile used the keychain exports the encrypted one, and a
+# session started from it would look for its secrets where they no longer are.
+unset CS_SECRETS_BACKEND
+export CS_SECRETS_KEYCHAIN_PREFIX=code-sessions CS_SECRETS_DIR="$profile_home/.cs-secrets" CS_NO_UPDATE_CHECK=1
 unset CS_SESSION_NAME CS_SESSION_DIR CS_SESSION_META_DIR CS_ACTOR
 unset CLAUDE_SESSION_NAME CLAUDE_SESSION_DIR CLAUDE_SESSION_META_DIR
 # Inside the profile `cs` is code-sessions: its bin comes first on PATH, and

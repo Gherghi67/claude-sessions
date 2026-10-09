@@ -56,6 +56,10 @@ export CS_SECRETS_PASSWORD="your-secure-password"
 # count secrets from the keychain, so under any other backend they show none.
 export CS_SECRETS_BACKEND="keychain"
 
+# Keychain items are named <prefix>:<session>:<name> (default prefix: cs).
+# The code-sessions launcher sets code-sessions, apart from the original cs.
+export CS_SECRETS_KEYCHAIN_PREFIX="cs"
+
 # Override Claude Code binary (default: claude)
 export CLAUDE_CODE_BIN="claude"
 

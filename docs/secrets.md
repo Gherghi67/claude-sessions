@@ -13,6 +13,8 @@ The `cs -secrets` command auto-detects the best available backend for the platfo
 
 Override the choice with `CS_SECRETS_BACKEND=keychain|encrypted`. `CS_SECRETS_DIR` moves the encrypted store from `~/.cs-secrets`; the code-sessions launcher points it at the profile's own directory.
 
+Keychain items are named `<prefix>:<session>:<name>`, with the prefix `cs` unless `CS_SECRETS_KEYCHAIN_PREFIX` names another (letters, digits, `_` and `-`). The code-sessions launcher sets `code-sessions`, so the fork and the original cs share the login keychain without sharing items, even for a session both have.
+
 `cs -list` and the session picker show how many secrets each session holds only while the keychain is the active backend. They read the counts from one keychain dump; the encrypted store would take a decrypt per session, so under it they show no count. `cs <name> -secrets list` names a session's secrets under either backend.
 
 **Encrypted File Backend:**
@@ -239,5 +241,6 @@ cs -secrets age remove <name>
 - `CLAUDE_SESSION_NAME` - Current session (set automatically by `cs`)
 - `CS_SECRETS_SESSION` - Overrides the session namespace; worktree feature sessions export it so their secrets land in the base session's store, and `cs <name> -secrets` sets it so an explicit target outranks ambient env
 - `CS_SECRETS_BACKEND` - Force a specific backend (`keychain` or `encrypted`)
+- `CS_SECRETS_KEYCHAIN_PREFIX` - Prefix of the keychain items' names, `<prefix>:<session>:<name>` (default `cs`; the code-sessions launcher sets `code-sessions`)
 - `CS_SECRETS_PASSWORD` - Master password for legacy sync (only needed if not using age)
 - `CS_SECRETS_LOCK_TIMEOUT` - Seconds to wait for the store lock before giving up (default 10)

@@ -308,6 +308,66 @@ teardown() {
         rm -rf "$TEST_TMPDIR"
     fi
     unset CS_SESSIONS_ROOT CLAUDE_CODE_BIN CS_TRANSCRIPTS_DIR CS_NO_UPDATE_CHECK CS_NO_ITERM2
+    # A fake keychain's directory is gone with TEST_TMPDIR; left on PATH, the
+    # next test's `security` would be the machine's own again.
+    if [[ -n "${FAKE_KEYCHAIN_SAVED_PATH:-}" ]]; then
+        export PATH="$FAKE_KEYCHAIN_SAVED_PATH"
+        unset FAKE_KEYCHAIN_SAVED_PATH FAKE_KEYCHAIN
+    fi
+}
+
+# A keychain for the test: a `security` first on PATH that keeps each item in
+# a file under $FAKE_KEYCHAIN, so nothing a test stores reaches the login
+# keychain of the machine running it. It answers the calls cs-secrets makes:
+# add, find and delete one item by its service name, and dump them all.
+use_fake_keychain() {
+    local bindir="$TEST_TMPDIR/fake-keychain-bin"
+    FAKE_KEYCHAIN="$TEST_TMPDIR/fake-keychain"
+    export FAKE_KEYCHAIN
+    mkdir -p "$bindir" "$FAKE_KEYCHAIN"
+    cat > "$bindir/security" <<'FAKE'
+#!/usr/bin/env bash
+set -u
+sub="${1:-}"
+[ $# -gt 0 ] && shift
+service=""; value=""; have_value=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -s) service="${2:-}"; shift 2 ;;
+        -a) shift 2 ;;
+        -w) if [ $# -ge 2 ] && [ "${2#-}" = "$2" ]; then value="$2"; have_value=1; shift 2; else shift; fi ;;
+        *) shift ;;
+    esac
+done
+slot="$FAKE_KEYCHAIN/$(printf '%s' "$service" | od -An -tx1 | tr -d ' \n')"
+case "$sub" in
+    dump-keychain)
+        for item in "$FAKE_KEYCHAIN"/*; do
+            [ -f "$item" ] || continue
+            printf '    "svce"<blob>="%s"\n' "$(head -n 1 "$item")"
+        done ;;
+    find-generic-password)
+        [ -f "$slot" ] || exit 44
+        tail -n +2 "$slot"; echo ;;
+    add-generic-password)
+        { printf '%s\n' "$service"; [ "$have_value" -eq 0 ] || printf '%s' "$value"; } > "$slot" ;;
+    delete-generic-password)
+        [ -f "$slot" ] || exit 44
+        rm -f "$slot" ;;
+esac
+exit 0
+FAKE
+    chmod +x "$bindir/security"
+    : "${FAKE_KEYCHAIN_SAVED_PATH:=$PATH}"
+    export FAKE_KEYCHAIN_SAVED_PATH PATH="$bindir:$PATH"
+}
+
+# The service names the fake keychain holds, one per line, sorted.
+fake_keychain_items() {
+    local item
+    for item in "$FAKE_KEYCHAIN"/*; do
+        [ -f "$item" ] && head -n 1 "$item"
+    done | LC_ALL=C sort
 }
 
 # --- Test Runner ---

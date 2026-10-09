@@ -367,8 +367,10 @@ fast-forwards the base onto the result, reports whether a GitHub PR exists
 for the branch, then fuses the worktree's session records into the base and
 removes the worktree and branch. That last step needs the feature
 conversation closed, because a directory cannot be removed from under a
-running Claude: while it is open, `/finish` lands the work, says so in plain
-words, and you close that session and run `/finish <feature>` again. Nothing
+running Claude or Codex: while it is open, `/finish` lands the work, says so in plain
+words, and you close that session and run `/finish <feature>` again. Under
+Codex the skill is `$finish <feature>`, and `cs <base> --engine codex -finish
+<feature>` opens the base on it. Nothing
 is ever removed by a keystroke or signal into the other session. Ordinary
 feature branches get the older `--no-ff` ritual from the same skill, gated the same way. It
 is user-invoked only (`disable-model-invocation: true`). With the cs mod

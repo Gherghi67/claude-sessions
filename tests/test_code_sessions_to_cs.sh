@@ -37,7 +37,8 @@ EOF
 # defaults find it. alpha is a session code-sessions created (its own repository, with a
 # linked worktree); beta is a project code-sessions adopted. A different session named
 # alpha already lives in cs. cs-secrets is a stub that keeps each value in a
-# file and logs its arguments and the backend variables it was given.
+# file and logs its arguments and the backend variables it was given; the
+# profile's real cs-secrets files beta's secret in a fake keychain.
 make_fixture() {
     PROFILE="$HOME/.local/share/code-sessions/home"
     CSROOT="$HOME/.claude-sessions"
@@ -46,6 +47,7 @@ make_fixture() {
     export STUB_STORE
     mkdir -p "$PROFILE/sessions" "$PROFILE/.local/bin" "$CSROOT/alpha/.cs" "$HOME/.local/bin" "$STUB_STORE"
     cp "$SCRIPT_DIR/../bin/cs-secrets" "$PROFILE/.local/bin/cs-secrets"
+    use_fake_keychain
 
     ALPHA="$PROFILE/sessions/alpha"
     mkdir -p "$ALPHA/.cs/local" "$ALPHA/.claude"
@@ -78,7 +80,7 @@ make_fixture() {
     printf 'before the edit\n' > "$PROFILE/.claude/file-history/$ALPHA_ID/snap@v1"
 
     printf 's3cret-value' > "$TEST_TMPDIR/value"
-    CS_SECRETS_BACKEND=encrypted CS_SECRETS_DIR="$PROFILE/.cs-secrets" \
+    CS_SECRETS_KEYCHAIN_PREFIX=code-sessions CS_SECRETS_DIR="$PROFILE/.cs-secrets" \
         "$PROFILE/.local/bin/cs-secrets" --session beta set TOKEN < "$TEST_TMPDIR/value" >/dev/null
 
     STUB="$HOME/.local/bin/cs-secrets"
@@ -87,7 +89,7 @@ make_fixture() {
 set -eu
 session=""
 if [ "$1" = --session ]; then session=$2; shift 2; fi
-echo "$* backend=${CS_SECRETS_BACKEND:-unset} dir=${CS_SECRETS_DIR:-unset}" >> "$STUB_STORE/argv.log"
+echo "$* backend=${CS_SECRETS_BACKEND:-unset} prefix=${CS_SECRETS_KEYCHAIN_PREFIX:-unset} dir=${CS_SECRETS_DIR:-unset}" >> "$STUB_STORE/argv.log"
 case "$1" in
     list)
         if [ -d "$STUB_STORE/$session" ] && [ -n "$(ls "$STUB_STORE/$session")" ]; then
@@ -222,11 +224,13 @@ test_apply_copies_sessions_conversations_and_secrets() {
     assert_file_exists "$CLAUDE/projects/$BETA_CS_KEY/$BETA_ID/subagents/agent-1.jsonl" || return 1
     assert_file_exists "$CLAUDE/file-history/$ALPHA_ID/snap@v1" || return 1
 
-    # Secrets reach cs-secrets on stdin, under the cs name, without the code-sessions backend.
+    # Secrets come out of the profile's keychain items (code-sessions:<session>)
+    # and reach cs-secrets on stdin, under the cs name, without the profile's prefix.
     assert_eq 12 "$(wc -c < "$STUB_STORE/beta/TOKEN" | tr -d ' ')" || return 1
     assert_eq "s3cret-value" "$(cat "$STUB_STORE/beta/TOKEN")" || return 1
     assert_file_not_contains "$STUB_STORE/argv.log" 's3cret' "the value reached argv" || return 1
-    assert_file_not_contains "$STUB_STORE/argv.log" 'backend=encrypted' "cs-secrets got the code-sessions backend" || return 1
+    assert_file_not_contains "$STUB_STORE/argv.log" 'prefix=code-sessions' "cs-secrets got the code-sessions prefix" || return 1
+    assert_eq "code-sessions:beta:TOKEN" "$(fake_keychain_items)" "the profile's keychain items changed" || return 1
 
     assert_output_contains "$OUT" "cs alpha-ccs resumes conversation $ALPHA_ID" || return 1
     assert_eq "$before" "$(profile_fingerprint)" "the profile changed"
@@ -442,12 +446,13 @@ test_a_code_sessions_environment_does_not_redirect_the_copy() {
     make_fixture
     env CODE_SESSIONS_HOME="$PROFILE" CS_SESSIONS_ROOT="$PROFILE/sessions" CS_TRANSCRIPTS_DIR="$PROFILE/.claude/projects" \
         CLAUDE_CONFIG_DIR="$PROFILE/.claude" CS_SECRETS_BACKEND=encrypted \
-        CS_SECRETS_DIR="$PROFILE/.cs-secrets" CS_SESSION_NAME=alpha \
+        CS_SECRETS_KEYCHAIN_PREFIX=code-sessions CS_SECRETS_DIR="$PROFILE/.cs-secrets" CS_SESSION_NAME=alpha \
         python3 "$COPY" --apply > "$TEST_TMPDIR/out.log" 2>&1 || { cat "$TEST_TMPDIR/out.log"; return 1; }
     assert_dir "$CSROOT/beta" || return 1
     assert_file_exists "$CLAUDE/projects/$BETA_CS_KEY/$BETA_ID.jsonl" || return 1
     assert_file_exists "$STUB_STORE/beta/TOKEN" || return 1
     assert_file_not_contains "$STUB_STORE/argv.log" 'backend=encrypted' || return 1
+    assert_file_not_contains "$STUB_STORE/argv.log" 'prefix=code-sessions' || return 1
     assert_file_not_contains "$STUB_STORE/argv.log" 'dir=/' || return 1
 }
 
