@@ -33,3 +33,4 @@ tests/.run_all.lock/
 .skillopt-sleep/
 .cs/vault-mnt/
 __pycache__/
+.cs-tmp.*
