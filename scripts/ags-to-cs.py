@@ -1,36 +1,34 @@
 #!/usr/bin/env python3
-# ABOUTME: Copies the ags profile's sessions, Claude conversations and secrets back into the stable cs.
-# ABOUTME: The way back from ags: the profile is only read, and a rerun copies only what is new.
-"""Copy what ags holds back into the stable cs.
+# ABOUTME: Gives the stable cs its own copy of the ags profile's sessions, Claude conversations and secrets.
+# ABOUTME: The way back from ags: the profile is only read; a rerun brings over what ags changed since.
+"""Copy what ags holds back into the stable cs, and bring the copies up to date later.
 
 ags runs from a private profile with its own sessions root, Claude config dir
-and secrets store, so the stable cs sees none of its work. This script makes
-every ags session open with `cs <name>`, resuming the same Claude
-conversation:
+and secrets store, so the stable cs sees none of its work. This script gives
+cs a copy of every ags session, which opens with `cs <name>` on the same
+Claude conversation. The two never share a folder:
 
-- A session ags adopted (a link in the profile's sessions/) gets the same link
-  in cs's sessions root. Its .cs/ lives in the project, so cs and ags share it.
-- A session ags created (a directory in sessions/) is copied whole: git
-  history, notes and local state.
-- A feature worktree (<base>@<task>) follows its base. One of a created base
-  becomes a linked worktree of the base's cs copy: the same branch, index,
-  uncommitted changes and per-worktree refs. One of an adopted base is linked
-  like its base, since git checks a branch out in one worktree only and the
-  project's repository is the one cs and ags share.
+- A session is copied whole into cs's sessions root, wherever ags keeps it (a
+  project ags adopted included): git history, notes, local state, ignored
+  and untracked files. On APFS the copy is a clone, which costs no space until
+  either side writes.
+- A feature worktree (<base>@<task>) becomes a linked worktree of its base's
+  cs copy: the same branch, index, uncommitted changes and per-worktree refs.
 - Each session's Claude conversations are copied from the profile's
   .claude/projects into ~/.claude/projects, under the folder name Claude Code
-  gives the session's path in cs, with their file-history snapshots.
+  gives the copy's path, with their file-history snapshots.
 - Each session's secrets go from the profile's encrypted store into the store
   cs reads, through cs-secrets, values on stdin only.
-- The session protocol in CLAUDE.local.md is reworded from ags to cs, except
-  in a directory inside the profile.
+- The session protocol in CLAUDE.local.md is reworded from ags to cs.
 
-The profile is only read, so ags keeps working. When cs already has a session
-of that name, the ags one arrives as <name>-ags, or under the name --rename
-gives it. A rerun skips what is already there and brings over what grew: a
-conversation continued in ags replaces its cs copy only when that copy is an
-unchanged start of it, and one continued on both sides is reported and left
-alone.
+The profile is only read, and git runs there only to read, so ags keeps
+working. When cs already has a session of that name, the ags one arrives as
+<name>-ags, or under the name --rename gives it. A rerun brings over what ags
+changed since, wherever cs left the same thing alone: branches (fetched into
+the copy, also as refs/remotes/ags/*), a worktree's HEAD and index, files and
+conversations. What cs changed in its copy is kept; something changed on both
+sides keeps cs's and is reported, once. The record of the last sync lives in
+cs's sessions root, under .ags-to-cs/.
 
 Left behind, and said so: a session open in ags (close it, then rerun), an
 encrypted session (its vault opens only with its password and links into the
@@ -45,6 +43,7 @@ an ags session those name the profile itself.
 """
 
 import argparse
+import datetime
 import json
 import os
 import re
@@ -59,10 +58,16 @@ VAULT_LINKS = ("memory", "plans", "claude-config", "private")
 MARKER = os.path.join(".cs", "local", "ags-origin")
 
 from session_transfer import (
-    AGS_TO_CS_WORDING, SecretsError, claude_project_key, copy_secret, merge_tree, read_text,
-    reword_protocol, scrubbed_env, secret_names, session_is_open, special_files, state_value,
-    tilde, write_atomic,
+    AGS_TO_CS_WORDING, STATE, Record, SecretsError, Syncer, admin_dir_for, branch_heads, claude_project_key,
+    clone_tree, copy_admin_dir, copy_blocker, copy_index, copy_secret, mark_copied, mark_now, merge_tree, read_text,
+    reap, relinker, reword_protocol, scrubbed_env, secret_names,
+    secret_differs, session_is_open, state_value, tilde, write_atomic,
 )
+
+TMP_SUFFIX = ".ags-to-cs.tmp"
+SETTINGS = os.path.join(".claude", "settings.local.json")
+# A copy keeps cs's names for itself and its base, whatever ags calls them.
+PINNED = ("session_name", "cs_base")
 
 
 class Plan:
@@ -71,7 +76,6 @@ class Plan:
     def __init__(self, name, path):
         self.name = name
         self.path = path
-        self.is_link = os.path.islink(path)
         self.source = os.path.realpath(path)
         self.meta = os.path.join(self.source, ".cs")
         self.skip = None
@@ -79,19 +83,15 @@ class Plan:
         self.cs_state = None
         self.renamed_because = None
         self.notes = []
-        # link and copy for a base; worktree-link and worktree-copy for a
-        # feature, decided by its base's kind.
-        self.kind = "link" if self.is_link else "copy"
+        self.kind = "copy"      # worktree-copy for a feature
         self.base, _, self.task = name.partition("@") if "@" in name else (None, "", None)
         self.base_plan = None
         self.selected = True
         self.failed = False
         self.admin = None
-
-    @property
-    def shared(self):
-        """True when cs gets a link to the directory ags uses, not a copy of it."""
-        return self.kind in ("link", "worktree-link")
+        self.is_repo = os.path.isdir(os.path.join(self.source, ".git"))
+        self.gone = False       # cs removed the copy an earlier run made
+        self.branches = None    # a base's branch sync this run
 
 
 class Copier:
@@ -117,13 +117,16 @@ class Copier:
                 self.sessions_root = legacy
             else:
                 raise SystemExit("No ags sessions at %s; pass --profile." % self.sessions_root)
-        self.profile_real = os.path.realpath(self.profile)
         self.ags_projects = os.path.join(self.profile, ".claude", "projects")
         self.ags_history = os.path.join(self.profile, ".claude", "file-history")
         self.ags_secrets = os.path.join(self.profile, ".local", "bin", "ags-secrets")
         self.ags_secrets_dir = os.path.join(self.profile, ".cs-secrets")
         self.cs_root_real = os.path.realpath(self.cs_root)
+        self.record_root = os.path.join(self.cs_root, ".ags-to-cs")
+        self.log_path = os.path.join(self.record_root, "log.jsonl")
+        self.records = {}
         self.failed = False
+        self.syncer = Syncer("ags", "cs", self.apply, self.say, self.problem, self.log, self.log_path, TMP_SUFFIX)
 
     # --- planning -------------------------------------------------------
 
@@ -171,20 +174,17 @@ class Copier:
         if not base.selected and base.cs_state != "ours":
             plan.skip = "its base %s is not in cs yet; copy it too (--session %s)" % (plan.base, plan.base)
             return
-        if base.shared:
-            plan.kind = "worktree-link"
-        else:
-            plan.kind = "worktree-copy"
-            # The worktree's .git file names its administrative directory in
-            # the base repository, which the base's copy must get as well.
-            pointer = read_text(os.path.join(plan.source, ".git")) or ""
-            admin = pointer[len("gitdir:"):].strip() if pointer.startswith("gitdir:") else ""
-            admin = os.path.realpath(os.path.join(plan.source, admin)) if admin else ""
-            repo = os.path.join(base.source, ".git", "worktrees") + os.sep
-            if not admin.startswith(repo) or not os.path.isdir(admin):
-                plan.skip = "not a linked worktree of %s's repository" % plan.base
-                return
-            plan.admin = admin
+        plan.kind = "worktree-copy"
+        # The worktree's .git file names its administrative directory in the
+        # base repository, which the base's copy must get as well.
+        pointer = read_text(os.path.join(plan.source, ".git")) or ""
+        admin = pointer[len("gitdir:"):].strip() if pointer.startswith("gitdir:") else ""
+        admin = os.path.realpath(os.path.join(plan.source, admin)) if admin else ""
+        repo = os.path.join(base.source, ".git", "worktrees") + os.sep
+        if not admin.startswith(repo) or not os.path.isdir(admin):
+            plan.skip = "not a linked worktree of %s's repository" % plan.base
+            return
+        plan.admin = admin
         plan.cs_name = "%s@%s" % (base.cs_name, plan.task)
         plan.cs_state = self.entry_state(plan, plan.cs_name)
         if plan.cs_state == "taken":
@@ -207,13 +207,13 @@ class Copier:
             self.pick_name(plan)
         if plan.cs_name is None:
             return
-        if plan.shared and self.inside_profile(plan.source):
-            plan.notes.append("its directory %s lives inside the ags profile, which this script leaves "
-                              "as it is (CLAUDE.local.md there keeps the ags wording); keep the profile "
-                              "while cs uses it" % tilde(plan.source))
-        if plan.kind == "worktree-link" and plan.base_plan.cs_name != plan.base:
-            plan.notes.append("its state names its base %s, which cs calls %s; it shares that state "
-                              "with ags, so this script leaves it" % (plan.base, plan.base_plan.cs_name))
+        if plan.cs_state == "free" and plan.cs_name in self.record(plan).data["sessions"]:
+            plan.gone = True
+        git_dir = os.path.join(plan.source, ".git")
+        if not plan.base and os.path.lexists(git_dir) and not plan.is_repo:
+            plan.skip = "its repository lives elsewhere (.git is not a folder), so a copy would still share it"
+            plan.cs_name = None
+            return
         thread = (read_text(os.path.join(local, "codex-thread-id")) or "").strip()
         if thread:
             plan.notes.append("Codex thread %s stays in the profile (cs has no Codex engine): "
@@ -226,12 +226,6 @@ class Copier:
         entry = os.path.join(self.cs_root, name)
         if not os.path.lexists(entry):
             return "free"
-        if plan.shared:
-            # cs's own folder, which the ags link points at (scripts/cs-to-ags.py
-            # leaves cs as it is), is the same session as much as a link to it.
-            if os.path.realpath(entry) == plan.source:
-                return "ours"
-            return "taken"
         if os.path.isdir(entry) and not os.path.islink(entry):
             origin = (read_text(os.path.join(entry, MARKER)) or "").strip()
             if origin == plan.source:
@@ -257,12 +251,31 @@ class Copier:
         return os.path.join(self.cs_root, plan.cs_name)
 
     def cs_physical(self, plan):
-        if plan.shared:
-            return plan.source
         return os.path.join(self.cs_root_real, plan.cs_name)
 
-    def inside_profile(self, path):
-        return (path + os.sep).startswith(self.profile_real + os.sep)
+    def record(self, plan):
+        """The record of the last sync of plan's family, under its base's cs name."""
+        base = plan.base_plan if plan.base else plan
+        if base.cs_name not in self.records:
+            self.records[base.cs_name] = Record(os.path.join(self.record_root, base.cs_name))
+        return self.records[base.cs_name]
+
+    def relink(self, plan):
+        """Absolute links into ags's folders of the family, pointed at cs's copies of them."""
+        base = plan.base_plan if plan.base else plan
+        roots = {}
+        for other in self.plans:
+            if other.cs_name and (other is base or other.base_plan is base):
+                roots[other.path] = roots[other.source] = self.cs_dir(other)
+        return relinker(roots)
+
+    def log(self, action, **fields):
+        if not self.apply:
+            return
+        os.makedirs(self.record_root, exist_ok=True)
+        fields.update(action=action, at=datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+        with open(self.log_path, "a") as f:
+            f.write(json.dumps(fields, sort_keys=True) + "\n")
 
     def conversations(self, plan):
         """The tally of the session's Claude files, and how many conversations they hold."""
@@ -325,20 +338,33 @@ class Copier:
         """Copies the session directory beside its final name, adjusts it, then renames it in."""
         os.makedirs(self.cs_root, exist_ok=True)
         final = self.cs_dir(plan)
+        reap(self.cs_root, ".%s.ags-to-cs." % plan.cs_name)
         tmp = tempfile.mkdtemp(dir=self.cs_root, prefix=".%s.ags-to-cs." % plan.cs_name)
         os.rmdir(tmp)
+        since = mark_now()
         try:
-            shutil.copytree(plan.source, tmp, symlinks=True, ignore=special_files)
+            paths = clone_tree(plan.source, tmp, self.relink(plan))
             # The original repository's linked worktrees are not this copy's;
             # each feature worktree copied after it gets its own entry back.
             worktrees = os.path.join(tmp, ".git", "worktrees")
             if os.path.isdir(worktrees) and not os.path.islink(worktrees):
                 shutil.rmtree(worktrees)
+            state = read_text(os.path.join(tmp, STATE))
             self.adjust_copy(plan, tmp)
             os.rename(tmp, final)
         except BaseException:
             shutil.rmtree(tmp, ignore_errors=True)
             raise
+        record = self.record(plan)
+        # A copy starts a new family: whatever an earlier copy of this name left is history.
+        for old in list(record.data["sessions"]):
+            record.forget(old)
+        record.data = {"sessions": {}, "source": plan.source, "heads": {}}
+        if plan.is_repo:
+            record.data["heads"] = branch_heads(self.cs_physical(plan))
+        mark_copied(record, plan.cs_name, plan.source, since, state, self.cs_physical(plan), plan.is_repo, paths)
+        record.save()
+        self.log("copied", session=plan.name, cs=plan.cs_name, source=plan.source)
 
     def copy_worktree(self, plan):
         """Copies a feature worktree as a linked worktree of its base's cs copy.
@@ -357,33 +383,69 @@ class Copier:
         back_link = os.path.join(self.cs_physical(plan), ".git") + "\n"
         worktrees = os.path.join(base_git, "worktrees")
         os.makedirs(worktrees, exist_ok=True)
-        admin_id, n = plan.cs_name, 1
-        while os.path.lexists(os.path.join(worktrees, admin_id)):
-            if read_text(os.path.join(worktrees, admin_id, "gitdir")) == back_link:
-                # Left by a copy that stopped before its rename.
-                shutil.rmtree(os.path.join(worktrees, admin_id))
-                break
-            n += 1
-            admin_id = "%s%d" % (plan.cs_name, n)
-        admin = os.path.join(worktrees, admin_id)
+        admin = admin_dir_for(worktrees, plan.cs_name, back_link)
+        reap(self.cs_root, ".%s.ags-to-cs." % plan.cs_name)
         tmp = tempfile.mkdtemp(dir=self.cs_root, prefix=".%s.ags-to-cs." % plan.cs_name)
         os.rmdir(tmp)
+        since = mark_now()
         try:
-            shutil.copytree(plan.source, tmp, symlinks=True, ignore=special_files)
+            paths = clone_tree(plan.source, tmp, self.relink(plan))
+            state = read_text(os.path.join(tmp, STATE))
             self.adjust_copy(plan, tmp)
-            shutil.copytree(plan.admin, admin, symlinks=True, ignore=special_files)
+            copy_admin_dir(plan.admin, admin)
             with open(os.path.join(admin, "gitdir"), "w") as f:
                 f.write(back_link)
             with open(os.path.join(tmp, ".git"), "w") as f:
                 f.write("gitdir: %s\n" % admin)
+            # Staged changes may hold blobs the base's copy has not got yet.
+            copy_index(plan.source, tmp)
             os.rename(tmp, final)
         except BaseException:
             shutil.rmtree(tmp, ignore_errors=True)
             shutil.rmtree(admin, ignore_errors=True)
             raise
+        record = self.record(plan)
+        mark_copied(record, plan.cs_name, plan.source, since, state, self.cs_physical(plan), True, paths)
+        record.save()
+        self.log("copied-feature", session=plan.name, cs=plan.cs_name, source=plan.source)
+
+    def rewrites(self, plan):
+        """What a file from ags becomes in cs's copy: the protocol in cs's words, the memory folder at cs's path."""
+        def reword(data):
+            text = data.decode("utf-8", "surrogateescape")
+            reworded = reword_protocol(text, AGS_TO_CS_WORDING)
+            return reworded.encode("utf-8", "surrogateescape") if reworded != text else None
+        return {"CLAUDE.local.md": reword, SETTINGS: lambda data: self.rekey_settings(data, plan)}
+
+    def rekey_settings(self, data, plan):
+        try:
+            settings = json.loads(data)
+        except ValueError:
+            return None
+        memory = os.path.join(self.cs_dir(plan), ".cs", "memory")
+        if not isinstance(settings, dict) or settings.get("autoMemoryDirectory") in (None, memory):
+            return None
+        settings["autoMemoryDirectory"] = memory
+        return (json.dumps(settings, indent=2) + "\n").encode()
+
+    def sync_copy(self, plan):
+        """Bring what ags changed since the last run into cs's copy, where cs left the same thing alone."""
+        record = self.record(plan)
+        mark = record.data["sessions"].get(plan.cs_name)
+        if not mark:
+            self.problem("%s was copied by an earlier version of this script, which kept no record of the copy, "
+                         "so nothing is brought over; move it aside and rerun to copy it afresh" % tilde(self.cs_dir(plan)))
+            return
+        base = plan.base_plan if plan.base else plan
+        base_copy = self.cs_physical(base)
+        if not plan.base and plan.is_repo:
+            plan.branches = self.syncer.repo(plan.cs_name, plan.source, base_copy, record)
+        self.syncer.session(plan.cs_name, plan.source, self.cs_physical(plan), base.source, base_copy, record,
+                            rewrites=self.rewrites(plan), relink=self.relink(plan), pinned=PINNED,
+                            is_repo=base.is_repo)
 
     def adjust_copy(self, plan, root):
-        state = os.path.join(root, ".cs", "local", "state")
+        state = os.path.join(root, STATE)
         text = read_text(state)
         if text is not None:
             changed = text
@@ -394,31 +456,20 @@ class Copier:
                 changed = re.sub(r"^cs_base:.*$", "cs_base: " + plan.base_plan.cs_name, changed, flags=re.M)
             if changed != text:
                 write_atomic(state, changed.encode(), prefix=".ags-to-cs.")
-        settings = os.path.join(root, ".claude", "settings.local.json")
+        settings = os.path.join(root, SETTINGS)
         raw = read_text(settings)
-        if raw is not None:
-            try:
-                data = json.loads(raw)
-            except ValueError:
-                data = None
-            memory = os.path.join(self.cs_dir(plan), ".cs", "memory")
-            if isinstance(data, dict) and "autoMemoryDirectory" in data and data["autoMemoryDirectory"] != memory:
-                data["autoMemoryDirectory"] = memory
-                write_atomic(settings, (json.dumps(data, indent=2) + "\n").encode(), prefix=".ags-to-cs.")
+        changed = raw is not None and self.rekey_settings(raw, plan)
+        if changed:
+            write_atomic(settings, changed, prefix=".ags-to-cs.")
         self.reword_file(root, True)
         os.makedirs(os.path.dirname(os.path.join(root, MARKER)), exist_ok=True)
         with open(os.path.join(root, MARKER), "w") as f:
             f.write(plan.source + "\n")
 
-    def git_head(self, path):
-        result = subprocess.run(["git", "-C", path, "rev-parse", "-q", "--verify", "HEAD"],
-                                stdin=subprocess.DEVNULL, capture_output=True, text=True)
-        return result.stdout.strip() if result.returncode == 0 else ""
-
     # --- running ---------------------------------------------------------
 
     def run(self):
-        plans = self.sessions()
+        plans = self.plans = self.sessions()
         print("ags profile: %s" % tilde(self.profile))
         print("cs sessions: %s   Claude: %s" % (tilde(self.cs_root), tilde(self.claude_dir)))
         if not plans:
@@ -440,6 +491,12 @@ class Copier:
                 # others to copy; a copy is renamed into place only when whole.
                 plan.failed = True
                 self.problem("stopped: %s" % error)
+            finally:
+                # After each session, so a run stopped midway leaves a record
+                # of every copy it made.
+                if self.apply:
+                    for record in self.records.values():
+                        record.save()
         print()
         if not self.apply:
             print("Dry run: nothing changed. Run again with --apply to copy.")
@@ -469,36 +526,22 @@ class Copier:
         print(heading)
         will = "" if self.apply else "would "
         final = self.cs_dir(plan)
+        if plan.gone:
+            self.say("cs removed its copy %s after an earlier run; not copied again" % tilde(final))
+            return
 
-        # 1. The session itself, with its protocol reworded for cs. A copy is
-        # reworded before it is renamed into place; a link's project is shared
-        # with ags, which reads the cs wording just as well. A directory inside
-        # the profile is left as it is.
-        if plan.shared:
-            reword_root = None if self.inside_profile(plan.source) else plan.source
-            check_root = reword_root
-        elif plan.cs_state == "ours":
-            reword_root = check_root = final
-        else:
-            reword_root, check_root = None, plan.source
-        reworded = check_root is not None and self.reword_file(check_root, self.apply and reword_root is not None)
+        # 1. The session itself, with its protocol reworded for cs.
         if plan.cs_state == "ours":
-            self.say("already in cs at %s" % tilde(final))
-            if not plan.shared:
-                ags_head, cs_head = self.git_head(plan.source), self.git_head(final)
-                if ags_head and ags_head != cs_head:
-                    self.say("its work moved on in ags since the copy; bring it over with: "
-                             "git -C %s pull %s" % (shlex.quote(tilde(final)), shlex.quote(tilde(plan.source))))
-        elif plan.shared:
-            target = os.readlink(plan.path) if plan.is_link else plan.source
-            if not os.path.isabs(target):
-                target = plan.source
-            what = " (a worktree of %s's repository, shared with ags)" % plan.base if plan.base else ""
-            self.say("%slink %s -> %s%s" % (will, tilde(final), tilde(target), what))
-            if self.apply:
-                os.makedirs(self.cs_root, exist_ok=True)
-                os.symlink(target, final)
+            self.say("in cs at %s since an earlier run; bringing over what ags changed since" % tilde(final))
+            self.sync_copy(plan)
         elif plan.kind == "worktree-copy":
+            base = plan.base_plan
+            if base.cs_state == "ours":
+                due = base.branches.created + base.branches.moved if base.branches else ()
+                blocker = copy_blocker(plan.source, self.cs_physical(base), due)
+                if blocker:
+                    self.problem("not copied: %s" % blocker)
+                    return
             branch = subprocess.run(["git", "-C", plan.source, "branch", "--show-current"],
                                     stdin=subprocess.DEVNULL, capture_output=True, text=True).stdout.strip()
             self.say("%scopy the feature worktree to %s, a worktree of cs %s on %s"
@@ -509,11 +552,9 @@ class Copier:
             self.say("%scopy the session directory to %s" % (will, tilde(final)))
             if self.apply:
                 self.copy_directory(plan)
-
-        if reworded:
-            where = " (shared with ags)" if plan.shared else ""
-            done = "reworded" if self.apply else "would reword"
-            self.say("%s the session protocol in CLAUDE.local.md from ags to cs%s" % (done, where))
+        if plan.cs_state != "ours" and self.reword_file(plan.source, False):
+            self.say("%s the session protocol in CLAUDE.local.md from ags to cs"
+                     % ("reworded" if self.apply else "would reword"))
 
         # 2. Claude conversations.
         tally, count = self.conversations(plan)
@@ -541,8 +582,15 @@ class Copier:
         missing, present, error = self.secrets(plan)
         if error:
             self.problem("secrets: %s" % error)
-        if present:
-            self.say("secrets cs already has, kept: %s" % ", ".join(present))
+        ags_env = scrubbed_env()
+        ags_env.update(CS_SECRETS_BACKEND="encrypted", CS_SECRETS_DIR=self.ags_secrets_dir)
+        differs = [n for n in present
+                   if secret_differs([self.ags_secrets, "--session", plan.name, "get", n], ags_env,
+                                     [self.cs_secrets, "--session", plan.cs_name, "get", n], scrubbed_env())]
+        if len(differs) < len(present):
+            self.say("secrets cs already has: %s" % ", ".join(n for n in present if n not in differs))
+        for name in differs:
+            self.problem("secret %s differs between ags and cs; cs's is kept" % name)
         if missing:
             self.say("secrets %s: %s" % (verb, ", ".join(missing)))
             if self.apply:

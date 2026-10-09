@@ -69,6 +69,7 @@ make_fixture() {
 
     ALPHA_KEY=$(project_key "$(physical "$ALPHA")")
     BETA_KEY=$(project_key "$(physical "$BETA_PROJECT")")
+    BETA_CS_KEY=$(project_key "$(physical "$CSROOT")/beta")
     mkdir -p "$PROFILE/.claude/projects/$ALPHA_KEY" "$PROFILE/.claude/projects/$BETA_KEY/$BETA_ID/subagents" \
         "$PROFILE/.claude/file-history/$ALPHA_ID"
     printf '{"n":1}\n{"n":2}\n' > "$PROFILE/.claude/projects/$ALPHA_KEY/$ALPHA_ID.jsonl"
@@ -95,6 +96,7 @@ case "$1" in
         else
             echo "No secrets stored for session: $session"
         fi ;;
+    get) cat "$STUB_STORE/$session/$2"; echo ;;
     set)
         mkdir -p "$STUB_STORE/$session"
         cat > "$STUB_STORE/$session/$2"
@@ -146,11 +148,15 @@ add_features() {
     printf '{"x":1}\n' > "$PROFILE/.claude/projects/$FIX_KEY/$FIX_ID.jsonl"
 }
 
-# Every file and link in the profile, hashed, so a test can prove it was only read.
-profile_fingerprint() {
-    (cd "$PROFILE" && find . \( -type f -o -type l \) -print | sort | while IFS= read -r f; do
+# Every file and link under a directory, hashed, so a test can prove it was only read.
+fingerprint() {
+    (cd "$1" && find . \( -type f -o -type l \) -print | sort | while IFS= read -r f; do
         if [ -L "$f" ]; then printf '%s -> %s\n' "$f" "$(readlink "$f")"; else printf '%s %s\n' "$f" "$(shasum < "$f")"; fi
     done) | shasum
+}
+
+profile_fingerprint() {
+    fingerprint "$PROFILE"
 }
 
 run_copy() {
@@ -166,8 +172,9 @@ test_dry_run_changes_nothing() {
     before=$(profile_fingerprint)
     run_copy || { echo "$OUT"; return 1; }
     assert_output_contains "$OUT" 'alpha -> cs alpha-ags (cs already has a different alpha)' || return 1
-    assert_output_contains "$OUT" 'would copy the session directory' || return 1
-    assert_output_contains "$OUT" 'would link' || return 1
+    assert_output_contains "$OUT" 'would copy the session directory to .*claude-sessions/alpha-ags' || return 1
+    assert_output_contains "$OUT" 'would copy the session directory to .*claude-sessions/beta' || return 1
+    assert_output_not_contains "$OUT" 'link' || return 1
     assert_output_contains "$OUT" 'secrets to copy: TOKEN' || return 1
     assert_output_contains "$OUT" 'Dry run: nothing changed' || return 1
     assert_eq "alpha" "$(ls "$CSROOT")" "cs gained a session on a dry run" || return 1
@@ -179,8 +186,9 @@ test_dry_run_changes_nothing() {
 
 test_apply_copies_sessions_conversations_and_secrets() {
     make_fixture
-    local before copy
+    local before copy beta_before
     before=$(profile_fingerprint)
+    beta_before=$(fingerprint "$BETA_PROJECT")
     run_copy --apply || { echo "$OUT"; return 1; }
     copy="$CSROOT/alpha-ags"
 
@@ -203,18 +211,20 @@ test_apply_copies_sessions_conversations_and_secrets() {
     # The cs session that already had the name is untouched.
     assert_eq "" "$(ls -A "$CSROOT/alpha/.cs")" || return 1
 
-    # The adopted session is linked, and its shared protocol reworded.
-    assert_symlink "$CSROOT/beta" || return 1
-    assert_eq "$BETA_PROJECT" "$(readlink "$CSROOT/beta")" || return 1
-    assert_file_contains "$BETA_PROJECT/CLAUDE.local.md" 'cs treats the sentinel' || return 1
+    # The adopted session is copied too: cs gets a folder of its own, and the
+    # project ags adopted is left as it is.
+    [ -d "$CSROOT/beta" ] && [ ! -L "$CSROOT/beta" ] || { echo "  FAIL: beta is not a copy of its own"; return 1; }
+    assert_file_contains "$CSROOT/beta/CLAUDE.local.md" 'cs treats the sentinel' || return 1
+    assert_file_contains "$BETA_PROJECT/CLAUDE.local.md" 'ags treats the sentinel' || return 1
+    assert_eq "$beta_before" "$(fingerprint "$BETA_PROJECT")" "the project ags adopted changed" || return 1
 
     # Conversations land under the folder Claude Code gives each cs path.
     local alpha_dst
     alpha_dst="$CLAUDE/projects/$(project_key "$(physical "$copy")")"
     cmp -s "$PROFILE/.claude/projects/$ALPHA_KEY/$ALPHA_ID.jsonl" "$alpha_dst/$ALPHA_ID.jsonl" \
         || { echo "  FAIL: alpha's conversation was not copied to $alpha_dst"; return 1; }
-    assert_file_exists "$CLAUDE/projects/$BETA_KEY/$BETA_ID.jsonl" || return 1
-    assert_file_exists "$CLAUDE/projects/$BETA_KEY/$BETA_ID/subagents/agent-1.jsonl" || return 1
+    assert_file_exists "$CLAUDE/projects/$BETA_CS_KEY/$BETA_ID.jsonl" || return 1
+    assert_file_exists "$CLAUDE/projects/$BETA_CS_KEY/$BETA_ID/subagents/agent-1.jsonl" || return 1
     assert_file_exists "$CLAUDE/file-history/$ALPHA_ID/snap@v1" || return 1
 
     # Secrets reach cs-secrets on stdin, under the cs name, without the ags backend.
@@ -232,19 +242,39 @@ test_rerun_brings_over_only_what_grew() {
     run_copy --apply || { echo "$OUT"; return 1; }
     local alpha_dst beta_dst
     alpha_dst="$CLAUDE/projects/$(project_key "$(physical "$CSROOT/alpha-ags")")"
-    beta_dst="$CLAUDE/projects/$BETA_KEY"
+    beta_dst="$CLAUDE/projects/$BETA_CS_KEY"
     # alpha went on in ags; beta went on in both; beta's subagent went on in cs only.
     printf '{"n":3}\n' >> "$PROFILE/.claude/projects/$ALPHA_KEY/$ALPHA_ID.jsonl"
     printf '{"b":"ags"}\n' >> "$PROFILE/.claude/projects/$BETA_KEY/$BETA_ID.jsonl"
     printf '{"b":"cs"}\n' >> "$beta_dst/$BETA_ID.jsonl"
     printf '{"agent":2}\n' >> "$beta_dst/$BETA_ID/subagents/agent-1.jsonl"
     git -C "$ALPHA" commit -q --allow-empty -m 'later work in ags'
+    printf 'ags note\n' > "$ALPHA/.cs/note.md"
+    printf 'Run `ags -secrets list` here.\n' >> "$ALPHA/CLAUDE.local.md"
+    printf 'cs note\n' > "$CSROOT/beta/.cs/cs-note.md"
+    # Both sides: the session README.
+    printf 'ags readme\n' >> "$ALPHA/.cs/README.md"
+    printf 'cs readme\n' >> "$CSROOT/alpha-ags/.cs/README.md"
+    # A stat-dirty index: a git status in ags's folder would rewrite its index.
+    touch "$ALPHA/.gitignore"
+    # Past the marks' 2 s margin, as between real runs: a change inside it is looked at again next time.
+    sleep 2.1
 
-    local status=0
+    local status=0 before
+    before=$(profile_fingerprint)
     run_copy --apply || status=$?
     assert_eq 1 "$status" "a conversation continued on both sides must fail the run" || { echo "$OUT"; return 1; }
-    assert_output_contains "$OUT" 'already in cs at' || return 1
-    assert_output_contains "$OUT" 'git -C ' || return 1
+    assert_eq "$before" "$(profile_fingerprint)" "the rerun changed the profile" || return 1
+    assert_output_contains "$OUT" 'in cs at .*alpha-ags since an earlier run' || return 1
+    assert_output_contains "$OUT" "alpha-ags: took ags's HEAD and index: main at " || return 1
+    assert_file_contains "$CSROOT/alpha-ags/.cs/note.md" 'ags note' || return 1
+    assert_file_contains "$CSROOT/alpha-ags/CLAUDE.local.md" 'Run .cs -secrets list. here' \
+        "a protocol line ags added came over in ags's words" || return 1
+    assert_file_contains "$CSROOT/beta/.cs/cs-note.md" 'cs note' || return 1
+    assert_output_contains "$OUT" "alpha-ags: kept cs's .cs/README.md (changed on both sides)" || return 1
+    assert_file_contains "$CSROOT/alpha-ags/.cs/README.md" 'cs readme' || return 1
+    assert_eq "$(git -C "$ALPHA" status --porcelain)" "$(git -C "$CSROOT/alpha-ags" status --porcelain)" \
+        "the copy's working state differs from ags's" || return 1
     assert_output_contains "$OUT" '1 grown since the last copy' || return 1
     assert_output_contains "$OUT" 'continued in both ags and cs' || return 1
     assert_output_contains "$OUT" 'went on past the ags copy' || return 1
@@ -254,15 +284,26 @@ test_rerun_brings_over_only_what_grew() {
     assert_file_not_contains "$beta_dst/$BETA_ID.jsonl" '"ags"' || return 1
     assert_file_contains "$beta_dst/$BETA_ID/subagents/agent-1.jsonl" '"agent":2' || return 1
     assert_eq "alpha alpha-ags" "$(cd "$CSROOT" && echo alpha*)" "a rerun made another copy" || return 1
-    assert_eq 1 "$(git -C "$CSROOT/alpha-ags" rev-list --count HEAD)" "a rerun recopied the session"
+    assert_eq "$(git -C "$ALPHA" rev-parse HEAD)" "$(git -C "$CSROOT/alpha-ags" rev-parse HEAD)" || return 1
+    assert_eq "$(git -C "$ALPHA" rev-parse HEAD)" "$(git -C "$CSROOT/alpha-ags" rev-parse refs/remotes/ags/main)" || return 1
+    # Said once: the next run does not report the README again.
+    run_copy --apply || true
+    assert_output_not_contains "$OUT" 'README.md' "a file kept on both sides was reported twice"
 }
 
 test_a_secret_cs_already_has_is_kept() {
     make_fixture
     mkdir -p "$STUB_STORE/beta"
-    printf 'old' > "$STUB_STORE/beta/TOKEN"
+    printf 's3cret-value' > "$STUB_STORE/beta/TOKEN"
     run_copy --apply || { echo "$OUT"; return 1; }
-    assert_output_contains "$OUT" 'secrets cs already has, kept: TOKEN' || return 1
+    assert_output_contains "$OUT" 'secrets cs already has: TOKEN' || return 1
+    # One whose value differs is said, never overwritten, and never shown.
+    printf 'old' > "$STUB_STORE/beta/TOKEN"
+    local status=0
+    run_copy --apply || status=$?
+    assert_eq 1 "$status" || { echo "$OUT"; return 1; }
+    assert_output_contains "$OUT" "secret TOKEN differs between ags and cs; cs's is kept" || return 1
+    assert_output_not_contains "$OUT" 's3cret' || return 1
     assert_eq "old" "$(cat "$STUB_STORE/beta/TOKEN")"
 }
 
@@ -284,7 +325,7 @@ test_open_encrypted_and_orphaned_sessions_stay_behind_with_a_reason() {
     assert_not_exists "$CSROOT/delta" || return 1
     assert_not_exists "$CSROOT/zeta@x" || return 1
     # The rest is still copied.
-    assert_symlink "$CSROOT/beta" || return 1
+    assert_dir "$CSROOT/beta" || return 1
     assert_output_contains "$OUT" 'Copied what could be copied'
 }
 
@@ -300,8 +341,8 @@ test_a_failure_in_one_session_leaves_the_others_to_copy() {
     assert_eq 1 "$status" || { echo "$OUT"; return 1; }
     assert_output_contains "$OUT" 'stopped:' || return 1
     assert_output_not_contains "$OUT" 'Traceback' || return 1
-    assert_symlink "$CSROOT/beta" || return 1
-    assert_file_exists "$CLAUDE/projects/$BETA_KEY/$BETA_ID.jsonl" || return 1
+    assert_dir "$CSROOT/beta" || return 1
+    assert_file_exists "$CLAUDE/projects/$BETA_CS_KEY/$BETA_ID.jsonl" || return 1
     assert_file_exists "$STUB_STORE/beta/TOKEN"
 }
 
@@ -314,7 +355,7 @@ test_feature_worktrees_follow_their_base() {
     list_before=$(git -C "$ALPHA" worktree list --porcelain)
     run_copy || { echo "$OUT"; return 1; }
     assert_output_contains "$OUT" 'would copy the feature worktree to .*alpha-ags@feat, a worktree of cs alpha-ags on cs/feat' || return 1
-    assert_output_contains "$OUT" "would link .*beta@fix -> .*a worktree of beta's repository, shared with ags" || return 1
+    assert_output_contains "$OUT" 'would copy the feature worktree to .*beta@fix, a worktree of cs beta on cs/fix' || return 1
     run_copy --apply || { echo "$OUT"; return 1; }
     copy="$CSROOT/alpha-ags@feat"
 
@@ -342,19 +383,29 @@ test_feature_worktrees_follow_their_base() {
     git -C "$copy" commit -q -m 'continued in cs'
     assert_eq "$tip" "$(git -C "$ALPHA" rev-parse cs/feat)" "a commit in cs moved the ags branch" || return 1
 
-    # The adopted base's feature is linked; its directory is in the profile, so untouched.
-    assert_symlink "$CSROOT/beta@fix" || return 1
-    assert_eq "$(physical "$FIX")" "$(physical "$CSROOT/beta@fix")" || return 1
+    # The adopted base's feature is copied the same way, into the cs copy of beta.
+    [ -d "$CSROOT/beta@fix" ] && [ ! -L "$CSROOT/beta@fix" ] || { echo "  FAIL: beta@fix is not a copy"; return 1; }
+    assert_eq "$(physical "$CSROOT/beta")/.git" \
+        "$(cd "$CSROOT/beta@fix" && cd -P "$(git rev-parse --git-common-dir)" && pwd)" || return 1
+    assert_eq "cs/fix" "$(git -C "$CSROOT/beta@fix" branch --show-current)" || return 1
     assert_file_contains "$FIX/CLAUDE.local.md" 'managed by agent-sessions' || return 1
-    assert_file_exists "$CLAUDE/projects/$FIX_KEY/$FIX_ID.jsonl" || return 1
-    assert_output_contains "$OUT" 'lives inside the ags profile' || return 1
+    assert_file_contains "$CSROOT/beta@fix/CLAUDE.local.md" 'managed by the cs tool' || return 1
+    assert_file_exists "$CLAUDE/projects/$(project_key "$(physical "$CSROOT/beta@fix")")/$FIX_ID.jsonl" || return 1
     assert_eq "$before" "$(profile_fingerprint)" "the profile changed" || return 1
 
-    # A rerun finds both and adds no second worktree entry.
+    # A rerun finds both and adds no second worktree entry; cs's commit in its copy is kept.
     run_copy --apply || { echo "$OUT"; return 1; }
-    assert_output_contains "$OUT" "already in cs at .*alpha-ags@feat" || return 1
+    assert_output_contains "$OUT" "in cs at .*alpha-ags@feat since an earlier run" || return 1
+    assert_output_contains "$OUT" "alpha-ags@feat: HEAD and index moved on in cs only, kept" || return 1
     assert_eq 2 "$(git -C "$CSROOT/alpha-ags" worktree list --porcelain | grep -c '^worktree ')" || return 1
-    assert_eq "alpha-ags@feat" "$(ls "$CSROOT/alpha-ags/.git/worktrees")"
+    assert_eq "alpha-ags@feat" "$(ls "$CSROOT/alpha-ags/.git/worktrees")" || return 1
+
+    # A copy cs removed stays removed.
+    rm -rf "$CSROOT/alpha-ags@feat"
+    git -C "$CSROOT/alpha-ags" worktree prune
+    run_copy --apply || { echo "$OUT"; return 1; }
+    assert_output_contains "$OUT" 'cs removed its copy .*alpha-ags@feat after an earlier run; not copied again' || return 1
+    assert_not_exists "$CSROOT/alpha-ags@feat"
 }
 
 test_a_feature_comes_only_with_its_base() {
@@ -399,8 +450,8 @@ test_an_ags_environment_does_not_redirect_the_copy() {
         CLAUDE_CONFIG_DIR="$PROFILE/.claude" CS_SECRETS_BACKEND=encrypted \
         CS_SECRETS_DIR="$PROFILE/.cs-secrets" CS_SESSION_NAME=alpha \
         python3 "$COPY" --apply > "$TEST_TMPDIR/out.log" 2>&1 || { cat "$TEST_TMPDIR/out.log"; return 1; }
-    assert_symlink "$CSROOT/beta" || return 1
-    assert_file_exists "$CLAUDE/projects/$BETA_KEY/$BETA_ID.jsonl" || return 1
+    assert_dir "$CSROOT/beta" || return 1
+    assert_file_exists "$CLAUDE/projects/$BETA_CS_KEY/$BETA_ID.jsonl" || return 1
     assert_file_exists "$STUB_STORE/beta/TOKEN" || return 1
     assert_file_not_contains "$STUB_STORE/argv.log" 'backend=encrypted' || return 1
     assert_file_not_contains "$STUB_STORE/argv.log" 'dir=/' || return 1

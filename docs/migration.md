@@ -91,61 +91,91 @@ changes can replace this local build with the upstream release.
 
 `ags -adopt` refuses a folder that already has `.cs/`, so a project the
 stable `cs` adopted cannot simply be adopted again. `scripts/cs-to-ags.py`
-hands it to ags instead, so `ags <name>` opens it on the conversations `cs`
-left off with, and leaves `cs` as it is. It prints what it would do;
+gives ags a copy of it instead, so `ags <name>` opens it on the conversations
+`cs` left off with. The two never share a folder. It prints what it would do;
 `--apply` does it:
 
 ```bash
 scripts/cs-to-ags.py --session wap            # the plan; nothing is written
-scripts/cs-to-ags.py --session wap --apply
+scripts/cs-to-ags.py --session wap --apply    # rerun later to bring over what cs did since
 ```
 
-- The profile's sessions root gets the same link to the project. Its `.cs/`
-  lives in the project, so notes, handoffs and the conversation binding are
-  shared.
-- Each feature worktree (`<name>@<task>`) gets a link in the profile's
-  sessions root to its folder in `~/.claude-sessions`, where ags looks for
-  features. It stays one worktree, which both can open: git checks a branch out
-  in one worktree only.
+- The project is copied whole into the profile's sessions root: its
+  repository, `.cs/`, `node_modules`, ignored and untracked files. On APFS the
+  copy is a clone, which costs no space until either side writes. From then on
+  it is ags's own repository.
+- Each feature worktree (`<name>@<task>`) is copied beside it as a linked
+  worktree of the copy's repository, on the same branch, with its index,
+  uncommitted changes and per-worktree refs. A link that points into `cs`'s
+  folders by an absolute path (a `node_modules` or `.env` shared with the
+  project) is pointed at ags's copy instead, so nothing writes through it.
 - Each session's Claude conversations are copied from `~/.claude/projects` into
-  the profile's, under the same folder names, whole: subagents, workflows, tool
-  results. Their `file-history`, `session-env` and task list come too, and the
-  session's lines of `history.jsonl` (the prompt history). On APFS each copy is
-  a clone.
+  the profile's, under the folder name of the copy's path, whole: subagents,
+  workflows, tool results. Their `file-history`, `session-env` and task list
+  come too, and the session's lines of `history.jsonl` (the prompt history),
+  pointed at the copy.
 - Conversations of the session's retired features and of its scratch folders
   belong to no session any more. They come too, as history; `--no-history`
   leaves them out.
 - Trust and per-project settings in `~/.claude.json` and `~/.codex/config.toml`
-  are copied into the profile's, without overwriting what the profile has.
-  While an ags session runs, these two files are left and a rerun brings them.
+  are copied into the profile's under the copy's paths, without overwriting
+  what the profile has. While an ags session runs, these two files are left and
+  a rerun brings them.
 - Secrets are copied from the stable store into the profile's encrypted store,
   values on stdin.
 
 Nothing outside the profile is written: `~/.claude-sessions`, the project and
 its feature folders, `~/.claude`, `~/.claude.json`, `~/.codex` and the keychain
-are only read. The session protocol in `CLAUDE.local.md` keeps the `cs`
-wording, which works inside ags too, since the profile ships `cs` as `ags`.
-Every change is recorded in the profile's `.cs-to-ags/log.jsonl`. A rerun skips
-what is already there and brings over what grew.
+are only read, and git runs there only to read. The session protocol in
+`CLAUDE.local.md` keeps the `cs` wording, which works inside ags too, since the
+profile ships `cs` as `ags`. A session or feature open in `cs` while the script
+runs is named: what it writes afterwards comes over on a rerun.
 
-Afterwards both managers can open the session, and they share its
-`.cs/local/state` while each resumes conversations only it has. Open it from
-ags. To go back to `cs`, run `scripts/ags-to-cs.py --session <name>` first: it
-copies the conversations ags went on with into `~/.claude`. A session or
-feature open in `cs` while the script runs is named, since what it writes
-afterwards needs a rerun. Finishing or retiring a linked feature in ags removes
-its one worktree, so it is gone for `cs` too.
+A rerun brings over what `cs` changed since the last run, wherever ags left the
+same thing alone, and keeps what ags changed:
+
+- Branches: `cs`'s are fetched into the copy as `refs/remotes/cs/*`. A branch
+  ags did not move since is moved to `cs`'s commit, and one ags moved too is
+  fast-forwarded when it is strictly behind; otherwise ags's is kept and the
+  branch is reported.
+- A worktree's HEAD and index: taken from `cs` when ags's did not change,
+  staged blobs included. When both changed, git is left as ags has it and only
+  that worktree's `.cs/` is brought over until git agrees again (for example
+  after ags resets onto `refs/remotes/cs/<branch>`); `cs`'s other changes stay
+  pending meanwhile, not dropped. That is reported once per change on the `cs`
+  side.
+- Files: one `cs` changed is copied where ags did not change it, and a file
+  `cs` deleted is deleted in the copy. A file changed on both sides keeps ags's
+  and is reported once. `.cs/local/state` is merged key by key.
+- Features `cs` started since are copied, unless their branch is checked out
+  in ags already or their commit is on no branch ags's repository has; one
+  `cs` finished stays in ags, and one whose copy ags removed is not copied
+  again.
+- Conversations that grew in `cs` are brought over when the ags copy is an
+  unchanged start of them; one continued on both sides is reported.
+- A secret whose value differs is reported and never overwritten, and its
+  value is never shown.
+
+Which files changed is told by their inode change time (ctime), which only the
+kernel sets: the profile's `.cs-to-ags/<name>/` keeps a mark per side, taken
+before that side is read, the ctimes of the script's own writes, and the paths
+both sides had at the last sync, so a deletion is told from an addition. A
+file ags changes while the script runs is left as ags has it. Should that
+record lose its path list, the script stops rather than bring back files ags
+deleted. Every change goes to `.cs-to-ags/log.jsonl`, with up to 1000 of the
+files kept on both sides.
 
 The script leaves these behind and names each one: an encrypted session, a
-session `cs` created in its own folder, a feature folder git does not list as a
-worktree, and a name ags already uses for something else. Anything left behind
-makes the run exit 1. The first `ags` open runs one full migration, because the
-stable `cs` stamp names no engine. Once ags has the project, the directory
-commands (`ags .`, `-checkpoint`, `-narrative`, `-adopt`) work inside it.
+session `cs` created in its own folder, a project whose `.git` is not a folder,
+a feature folder git does not list as a worktree, and a name ags already uses
+for something else. Anything left behind or kept on both sides makes the run
+exit 1. The first `ags` open runs one full migration, because the stable `cs`
+stamp names no engine. The copy lives under the profile, so the directory
+commands (`ags .`, `-checkpoint`, `-narrative`) work inside it.
 
 ## Going back to cs
 
-`scripts/ags-to-cs.py` copies the profile's work back into the stable `cs`, so
+`scripts/ags-to-cs.py` gives the stable `cs` a copy of the profile's work, so
 every ags session opens with `cs <name>` and resumes the same Claude
 conversation. It prints what it would do; `--apply` copies:
 
@@ -154,42 +184,39 @@ scripts/ags-to-cs.py              # the plan; nothing is written
 scripts/ags-to-cs.py --apply
 ```
 
-- A session ags adopted gets the same link in `~/.claude-sessions`. Its `.cs/`
-  lives in the project, so `cs` and `ags` share it.
-- A session ags created is copied whole, git history and local state included.
-- A feature worktree (`<base>@<task>`) follows its base, under the base's `cs`
-  name. One of a created base becomes a linked worktree of the base's copy, on
-  the same branch with its index, uncommitted changes and per-worktree refs;
-  the original stays a worktree of the original. One of an adopted base is
-  linked like its base: its repository is the project's, shared with ags, and
-  git checks a branch out in one worktree only. `--session <base>@<task>` alone
-  works once the base is in `cs`.
+- Every session is copied whole into `~/.claude-sessions`, wherever ags keeps
+  it, a project ags adopted included, git history and local state with it.
+- A feature worktree (`<base>@<task>`) becomes a linked worktree of its base's
+  copy, under the base's `cs` name, on the same branch with its index,
+  uncommitted changes and per-worktree refs; the original stays a worktree of
+  the original. `--session <base>@<task>` alone works once the base is in `cs`.
 - Each session's Claude conversations and their file-history snapshots are
   copied from the profile into `~/.claude`, under the folder Claude Code gives
-  the session's path in `cs`.
+  the copy's path.
 - Secrets go from the profile's encrypted store into the store `cs-secrets`
-  reads, values on stdin.
-- The session protocol in `CLAUDE.local.md` is reworded from `ags` to `cs`. For
-  an adopted session that file is shared, so ags sessions read the `cs` wording
-  too. A directory inside the profile keeps the `ags` wording.
+  reads, values on stdin. One whose value differs is reported, never
+  overwritten.
+- The session protocol in `CLAUDE.local.md` is reworded from `ags` to `cs` in
+  the copy.
 
-The profile is only read, so ags keeps working. When `cs` already has a
-session of that name, the ags one arrives as `<name>-ags`; `--rename OLD=NEW`
-picks another name and `--session NAME` copies one session. A rerun skips what
-is already there and brings over what grew. A conversation continued in ags
-replaces its `cs` copy only when that copy is an unchanged start of it. One
-continued in both is reported and left alone.
+The profile is only read, and git runs there only to read, so ags keeps
+working. When `cs` already has a session of that name, the ags one arrives as
+`<name>-ags`; `--rename OLD=NEW` picks another name and `--session NAME`
+copies one session. A rerun brings over what ags changed since, by the same
+rules as above with the sides swapped: what `cs` changed in its copy is kept,
+and something changed on both sides keeps `cs`'s and is reported once. A copy
+`cs` removed is not made again. The record of the last sync lives in
+`~/.claude-sessions/.ags-to-cs/`. A copy made before this record existed is
+named and left; move it aside and rerun.
 
 The script leaves these behind and names each one: a session open in ags
 (close it, then rerun), an encrypted session (its vault needs its password and
 links into the profile), a feature worktree whose base is not copied, and
 Codex threads (`cs` has no Codex engine; resume one with
 `CODEX_HOME=~/.local/share/agent-sessions/home/.codex codex resume <id>`).
-A linked session whose directory lives inside the profile, such as a worktree
-under `work/` or a feature of an adopted base, stays where it is and is left
-unchanged; keep the profile while `cs` uses it. Anything left behind makes the run exit 1.
-Paths come from `HOME` and the options, never from `CS_*` variables, which name
-the profile inside an ags session.
+Anything left behind makes the run exit 1. Paths come from `HOME` and the
+options, never from `CS_*` variables, which name the profile inside an ags
+session.
 
 ## Remaining compatibility decisions
 
