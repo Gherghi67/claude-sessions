@@ -1,48 +1,49 @@
 #!/usr/bin/env python3
-# ABOUTME: Moves a project the stable cs adopted, with its feature worktrees, Claude history and secrets, into ags.
-# ABOUTME: After it, the session opens with `ags <name>` only; scripts/ags-to-cs.py stays the way back.
-"""Move a cs session into the ags profile.
+# ABOUTME: Gives ags a project the stable cs adopted, its feature worktrees, Claude history and secrets.
+# ABOUTME: The stable cs is left as it is: ags links to the same folders and gets copies of the rest.
+"""Open a cs session in ags, leaving the stable cs as it is.
 
-ags refuses to adopt a folder that already has .cs/, because the stable cs
-and ags would then share .cs/local/state while each resumes a conversation
-the other cannot see. This script hands such a session over instead, so ags
-opens it on the conversations cs left off with:
+ags refuses to adopt a folder that already has .cs/, so a project the stable
+cs adopted cannot simply be adopted again. This script hands it to ags
+instead, so `ags <name>` opens it on the conversations cs left off with,
+while everything cs has stays where it is and as it is:
 
-- The session (a project cs adopted, so a link in ~/.claude-sessions) gets the
-  same link in the profile's sessions root. Its .cs/ lives in the project, so
-  its notes, handoffs and conversation binding come along as they are.
-- Each feature worktree (<name>@<task>) moves with `git worktree move` into
-  the profile's sessions root, where ags looks for features: the same branch,
-  index, uncommitted and untracked files, per-worktree refs and ignored files
-  such as node_modules. A branch-out registry entry for it follows it.
+- The session (a project cs adopted, so a link in ~/.claude-sessions) gets
+  the same link in the profile's sessions root. Its .cs/ lives in the
+  project, so notes, handoffs and the conversation binding are shared.
+- Each feature worktree (<name>@<task>) gets a link in the profile's sessions
+  root to its folder in ~/.claude-sessions, where ags looks for features: one
+  worktree, which both can open. git checks a branch out in one worktree only.
 - Each session's Claude conversations are copied from ~/.claude/projects into
-  the profile's, under the folder name Claude Code gives the session's path in
-  ags, whole: subagents, workflows, tool results. Their file-history,
-  session-env and task list come too, and the session's prompt history in
-  history.jsonl. On APFS a copy is a clone and costs no space.
+  the profile's, under the same folder names (the paths do not change), whole:
+  subagents, workflows, tool results. Their file-history, session-env and task
+  list come too, and the session's prompt history from history.jsonl. On APFS
+  a copy is a clone and costs no space.
 - Conversations of the session's retired features and of its scratch folders
-  belong to no session any more; they are copied under their own folder names
-  as history (--no-history leaves them out).
+  belong to no session any more; they come too, as history (--no-history
+  leaves them out).
 - Trust and per-project settings in ~/.claude.json and ~/.codex/config.toml
-  follow each path, while no ags session is running.
-- Secrets go from the stable cs store into the profile's encrypted store,
-  through cs-secrets and ags-secrets, values on stdin only.
-- The session protocol in CLAUDE.local.md is reworded from cs to ags.
-- Last, cs's own link is removed, once everything else of that session came
-  over, so the session is opened from ags only.
+  are copied into the profile's, while no ags session is running.
+- Secrets are copied from the stable cs store into the profile's encrypted
+  store, through cs-secrets and ags-secrets, values on stdin only.
 
-~/.claude, ~/.claude.json and ~/.codex are only read, and the keychain's
-secrets stay where they are. Every change is recorded in the profile's
-.cs-to-ags/log.jsonl. A rerun skips what is already there and brings over what
-grew.
+Nothing outside the profile is written: ~/.claude-sessions, the project and
+its feature folders, ~/.claude, ~/.claude.json, ~/.codex and the keychain are
+only read. Every change is recorded in the profile's .cs-to-ags/log.jsonl.
+A rerun skips what is already there and brings over what grew.
 
-Left behind, and said so: a session open right now (close it and its features,
-then rerun), an encrypted session, a session cs created in its own folder, a
-feature worktree git cannot move (locked, or with submodules) and anything
-whose name ags already uses for something else.
+Both managers can open the session afterwards, and they share its
+.cs/local/state, while each resumes conversations only it has. Open it from
+ags; to go back to cs, run scripts/ags-to-cs.py first, which copies what ags
+added. A session open in cs while this runs is named: what it writes later
+comes over on a rerun.
+
+Left behind, and said so: an encrypted session, a session cs created in its
+own folder, a feature worktree git does not list, and anything whose name ags
+already uses for something else.
 
     scripts/cs-to-ags.py --session wap            # print what would happen; change nothing
-    scripts/cs-to-ags.py --session wap --apply    # move it
+    scripts/cs-to-ags.py --session wap --apply    # do it
 
 Paths come from HOME and the options below, never from CS_* variables: inside
 a session those name the session manager running it.
@@ -57,79 +58,44 @@ import subprocess
 import sys
 
 from session_transfer import (
-    CS_TO_AGS_WORDING, SecretsError, claude_project_key, copy_secret, merge_tree, read_text,
-    reword_protocol, scrubbed_env, secret_names, session_is_open, state_value, tilde, write_atomic,
+    SecretsError, claude_project_key, copy_secret, merge_tree, read_text, scrubbed_env,
+    secret_names, session_is_open, state_value, tilde, write_atomic,
 )
 
 TMP_SUFFIX = ".cs-to-ags.tmp"
 TMP_PREFIX = ".cs-to-ags."
-MARKER = os.path.join(".cs", "local", "cs-origin")
 VAULT_LINKS = ("memory", "plans", "claude-config", "private")
+# What keeps a conversation open in a folder: an engine, or the session manager running one.
+ENGINES = {"claude", "codex", "cs", "ags"}
 # Fields of a .claude.json project entry that describe its last run, not its settings.
 VOLATILE = re.compile(r"^(last|exampleFiles)")
-# What keeps a conversation open in a project: an engine, or the session manager running one.
-ENGINES = {"claude", "codex", "cs", "ags"}
 SCRATCH = re.compile(r"^-private-tmp-claude-\d+-")
 # A conversation's scratch folder: <project>/<conversation id>/scratchpad[/...].
 SCRATCHPAD = r"-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}-scratchpad(?:-|$)"
 
 
-def physical_join(root, name):
-    return os.path.join(os.path.realpath(root), name)
+class Session:
+    """The base or one of its feature worktrees, as cs has it and as ags will."""
 
-
-class Feature:
-    def __init__(self, base, task, cs_path):
-        self.base = base
-        self.task = task
-        self.name = "%s@%s" % (base.name, task)
-        self.cs_path = cs_path
-        self.source = os.path.realpath(cs_path) if cs_path else None
-        self.skip = None
-        self.failed = False
-        self.state = None   # free, moved (by an earlier run) or linked-back (ags-to-cs left a link)
-        self.registry = []
-
-    @property
-    def ags_path(self):
-        return os.path.join(self.base.importer.ags_root, self.name)
-
-    @property
-    def ags_physical(self):
-        return physical_join(self.base.importer.ags_root, self.name)
-
-    @property
-    def old_physical(self):
-        """Where the feature lived in cs, which names its Claude folder there."""
-        if self.state == "moved":
-            return (read_text(os.path.join(self.ags_physical, MARKER)) or "").strip()
-        return self.source
-
-
-class Base:
-    def __init__(self, importer, name):
-        self.importer = importer
+    def __init__(self, importer, name, cs_path):
         self.name = name
-        self.cs_path = os.path.join(importer.cs_root, name)
+        self.cs_path = cs_path
         self.target = None
         self.source = None
         self.skip = None
-        self.blocker = None
-        self.failed = False
-        self.state = None   # free, ours (the ags link exists) or moved (cs's link is gone already)
-        self.features = []
-        self.notes = []
-
-    @property
-    def ags_path(self):
-        return os.path.join(self.importer.ags_root, self.name)
+        self.state = None   # free, or ours (ags already links to it)
+        self.ags_path = os.path.join(importer.ags_root, name)
 
     @property
     def meta(self):
         return os.path.join(self.source, ".cs")
 
-    def family_failed(self):
-        return self.failed or any(f.skip or f.failed for f in self.features)
+    def ags_state(self):
+        if not os.path.lexists(self.ags_path):
+            return "free"
+        if os.path.islink(self.ags_path) and os.path.realpath(self.ags_path) == self.source:
+            return "ours"
+        return None
 
 
 class Importer:
@@ -143,7 +109,6 @@ class Importer:
         self.claude_json = expand(args.claude_json)
         self.codex_home = expand(args.codex_home)
         self.cs_secrets = expand(args.cs_secrets)
-        self.registry_root = expand(args.registry)
         self.names = args.session
         self.ags_root = os.path.join(self.profile, "sessions")
         if not os.path.isdir(self.ags_root):
@@ -157,124 +122,47 @@ class Importer:
     # --- planning -------------------------------------------------------
 
     def plan(self, name):
-        base = Base(self, name)
-        if os.path.lexists(base.cs_path):
-            if not os.path.islink(base.cs_path):
-                base.skip = ("cs created this session in its own folder; this script moves projects cs "
-                             "adopted (a link in %s)" % tilde(self.cs_root))
-                return base
-            base.target = os.readlink(base.cs_path)
-            base.source = os.path.realpath(base.cs_path)
-            if not os.path.isdir(base.source):
-                base.skip = "its directory %s no longer exists" % tilde(base.target)
-                return base
-        elif os.path.islink(base.ags_path):
-            base.source = os.path.realpath(base.ags_path)
-            base.target = os.readlink(base.ags_path)
-            origin = (read_text(os.path.join(base.source, MARKER)) or "").strip()
-            if origin != base.cs_path:
-                raise SystemExit("No cs session named %s in %s." % (name, tilde(self.cs_root)))
-            base.state = "moved"
-        else:
+        base = Session(self, name, os.path.join(self.cs_root, name))
+        base.features = []
+        base.open_now = []
+        if not os.path.lexists(base.cs_path):
             raise SystemExit("No cs session named %s in %s." % (name, tilde(self.cs_root)))
+        if not os.path.islink(base.cs_path):
+            base.skip = ("cs created this session in its own folder; this script hands over projects cs "
+                         "adopted (a link in %s)" % tilde(self.cs_root))
+            return base
+        base.target = os.readlink(base.cs_path)
+        base.source = os.path.realpath(base.cs_path)
         if not os.path.isabs(base.target):
             base.target = base.source
+        if not os.path.isdir(base.source):
+            base.skip = "its directory %s no longer exists" % tilde(base.target)
+            return base
         if not os.path.isdir(base.meta):
             base.skip = "%s has no .cs folder" % tilde(base.source)
             return base
-        local = os.path.join(base.meta, "local")
-        if os.path.lexists(os.path.join(local, "pre-open")) or any(
+        if os.path.lexists(os.path.join(base.meta, "local", "pre-open")) or any(
                 os.path.islink(os.path.join(base.meta, sub)) for sub in VAULT_LINKS):
-            base.skip = "encrypted: its vault opens only with its password, so this script does not move it"
+            base.skip = "encrypted: its vault opens only with its password, so this script leaves it"
             return base
+        base.state = base.ags_state()
         if base.state is None:
-            if not os.path.lexists(base.ags_path):
-                base.state = "free"
-            elif os.path.islink(base.ags_path) and os.path.realpath(base.ags_path) == base.source:
-                base.state = "ours"
-            else:
-                base.skip = "ags already has a different %s; remove that one, then rerun" % name
-                return base
+            base.skip = "ags already has a different %s; remove that one, then rerun" % name
+            return base
         self.plan_features(base)
-        open_now = [base.name] if session_is_open(base.meta) else []
-        open_now += [f.name for f in base.features
-                     if f.state == "free" and session_is_open(os.path.join(f.source, ".cs"))]
-        held = self.processes_holding(base)
-        open_now = [name for name in open_now if not any(h.startswith(name + " (") for h in held)] + held
-        if open_now:
-            base.blocker = "open right now: %s; close %s, then rerun" % (
-                ", ".join(open_now), "it" if len(open_now) == 1 else "them")
+        base.open_now = self.open_sessions(base)
         return base
-
-    def processes_holding(self, base):
-        """Live processes that keep the session: an engine or session manager in the project, anything in a feature that moves.
-
-        A lock is not enough: cs execs claude in its place, and the lock goes with it.
-        """
-        try:
-            listing = subprocess.run(["lsof", "-a", "-d", "cwd", "-F", "pn"], stdin=subprocess.DEVNULL,
-                                     capture_output=True, text=True).stdout
-            table = subprocess.run(["ps", "-A", "-o", "pid=", "-o", "command="], stdin=subprocess.DEVNULL,
-                                   capture_output=True, text=True).stdout
-        except OSError as error:
-            return ["(could not list processes: %s)" % error.strerror]
-        commands = {}
-        for line in table.splitlines():
-            pid, _, command = line.strip().partition(" ")
-            commands[pid] = command.strip()
-        moving = [(f.name, f.source) for f in base.features if f.state == "free"]
-        inside = lambda cwd, root: cwd == root or cwd.startswith(root + os.sep)
-        is_engine = lambda command: bool({os.path.basename(w) for w in command.split()[:2]} & ENGINES)
-        by_session, pid, own = {}, None, str(os.getpid())
-        for line in listing.splitlines():
-            if line.startswith("p"):
-                pid = line[1:]
-                continue
-            command = commands.get(pid, "")
-            # A process ps no longer lists has ended since lsof saw it.
-            if not line.startswith("n") or pid is None or pid == own or not command:
-                continue
-            cwd = line[1:]
-            where = next((name for name, source in moving if inside(cwd, source)), None)
-            # A shell or an editor in the project is no matter: the project stays.
-            if where is None and inside(cwd, base.source) and is_engine(command):
-                where = base.name
-            if where:
-                by_session.setdefault(where, []).append((pid, command))
-        held = []
-        for name in sorted(by_session):
-            found = sorted(by_session[name], key=lambda p: not is_engine(p[1]))
-            pid, command = found[0]
-            more = ", and %d more" % (len(found) - 1) if len(found) > 1 else ""
-            held.append("%s (pid %s: %s%s)" % (name, pid, command[:50], more))
-        return held
 
     def plan_features(self, base):
         registered = self.git(base.source, "worktree", "list", "--porcelain").stdout
         registered = {line[len("worktree "):] for line in registered.splitlines() if line.startswith("worktree ")}
-        tasks = {}
         prefix = base.name + "@"
-        for entry in sorted(os.listdir(self.cs_root)) if os.path.isdir(self.cs_root) else []:
-            if entry.startswith(prefix) and len(entry) > len(prefix):
-                tasks[entry[len(prefix):]] = os.path.join(self.cs_root, entry)
-        for entry in sorted(os.listdir(self.ags_root)):
-            if entry.startswith(prefix) and len(entry) > len(prefix):
-                task = entry[len(prefix):]
-                origin = (read_text(os.path.join(self.ags_root, entry, MARKER)) or "").strip()
-                if task not in tasks and origin:
-                    tasks[task] = None
-        for task in sorted(tasks):
-            feature = Feature(base, task, tasks[task])
+        for entry in sorted(os.listdir(self.cs_root)):
+            if not entry.startswith(prefix) or len(entry) == len(prefix):
+                continue
+            feature = Session(self, entry, os.path.join(self.cs_root, entry))
             base.features.append(feature)
-            if feature.cs_path is None:
-                feature.state = "moved"
-                continue
-            if os.path.islink(feature.cs_path):
-                if os.path.realpath(feature.cs_path) == os.path.realpath(feature.ags_path):
-                    feature.state = "linked-back"
-                else:
-                    feature.skip = "a link, not a worktree folder; ags-to-cs.py did not make it"
-                continue
+            feature.source = os.path.realpath(feature.cs_path)
             if not os.path.isdir(os.path.join(feature.source, ".cs")):
                 feature.skip = "not a cs session (no .cs folder)"
                 continue
@@ -283,33 +171,53 @@ class Importer:
                 feature.skip = ("not a registered worktree of %s's repository (pruned or made by hand?)"
                                 % base.name)
                 continue
-            if os.path.lexists(feature.ags_path):
-                feature.skip = "ags already has a %s; remove that one, then rerun" % feature.name
-                continue
-            feature.state = "free"
-            feature.registry = self.registry_entries(feature)
+            feature.state = feature.ags_state()
+            if feature.state is None:
+                feature.skip = "ags already has a different %s; remove that one, then rerun" % entry
 
-    def registry_entries(self, feature):
-        """branch-out's records of this worktree, by the path it recorded."""
-        found = []
-        if not os.path.isdir(self.registry_root):
-            return found
-        wanted = {feature.cs_path, feature.source}
-        for repo in sorted(os.listdir(self.registry_root)):
-            directory = os.path.join(self.registry_root, repo)
-            if not os.path.isdir(directory):
+    def open_sessions(self, base):
+        """Which of the session's folders an engine or a session manager runs in right now.
+
+        A lock is not enough: cs execs claude in its place, and the lock goes with it.
+        """
+        sessions = [base] + [f for f in base.features if not f.skip]
+        found = {s.name: [] for s in sessions if session_is_open(s.meta)}
+        try:
+            listing = subprocess.run(["lsof", "-a", "-d", "cwd", "-F", "pn"], stdin=subprocess.DEVNULL,
+                                     capture_output=True, text=True).stdout
+            table = subprocess.run(["ps", "-A", "-o", "pid=", "-o", "command="], stdin=subprocess.DEVNULL,
+                                   capture_output=True, text=True).stdout
+        except OSError:
+            listing = table = ""
+        commands = {}
+        for line in table.splitlines():
+            pid, _, command = line.strip().partition(" ")
+            commands[pid] = command.strip()
+        inside = lambda cwd, root: cwd == root or cwd.startswith(root + os.sep)
+        # The deepest folder first: a feature may live inside the project.
+        by_depth = sorted(sessions, key=lambda s: len(s.source), reverse=True)
+        pid = None
+        for line in listing.splitlines():
+            if line.startswith("p"):
+                pid = line[1:]
                 continue
-            for name in sorted(os.listdir(directory)):
-                path = os.path.join(directory, name)
-                if not name.endswith(".json"):
-                    continue
-                try:
-                    data = json.loads(read_text(path) or "")
-                except ValueError:
-                    continue
-                if isinstance(data, dict) and data.get("worktreePath") in wanted:
-                    found.append(path)
-        return found
+            command = commands.get(pid, "")
+            if not line.startswith("n") or not command or pid == str(os.getpid()):
+                continue
+            if not {os.path.basename(w) for w in command.split()[:2]} & ENGINES:
+                continue
+            where = next((s.name for s in by_depth if inside(line[1:], s.source)), None)
+            if where:
+                found.setdefault(where, []).append((pid, command))
+        out = []
+        for name in sorted(found):
+            if found[name]:
+                pid, command = found[name][0]
+                more = ", and %d more" % (len(found[name]) - 1) if len(found[name]) > 1 else ""
+                out.append("%s (pid %s: %s%s)" % (name, pid, command[:50], more))
+            else:
+                out.append(name)
+        return out
 
     def git(self, cwd, *args):
         return subprocess.run(["git", "-C", cwd] + list(args), stdin=subprocess.DEVNULL,
@@ -335,53 +243,10 @@ class Importer:
         with open(self.log_path, "a") as f:
             f.write(json.dumps(fields, sort_keys=True) + "\n")
 
-    def move_feature(self, feature):
-        moved = self.git(feature.base.source, "worktree", "move", feature.source, feature.ags_physical)
-        if moved.returncode != 0:
-            detail = (moved.stderr.strip().splitlines() or ["exit %d" % moved.returncode])[-1]
-            raise OSError("git worktree move refused: %s" % detail)
-        self.log("moved-worktree", session=feature.name, old=feature.source, new=feature.ags_physical)
-        os.makedirs(os.path.dirname(os.path.join(feature.ags_physical, MARKER)), exist_ok=True)
-        with open(os.path.join(feature.ags_physical, MARKER), "w") as f:
-            f.write(feature.source + "\n")
-        settings = os.path.join(feature.ags_physical, ".claude", "settings.local.json")
-        raw = read_text(settings)
-        if raw is not None:
-            try:
-                data = json.loads(raw)
-            except ValueError:
-                data = None
-            memory = os.path.join(feature.ags_path, ".cs", "memory")
-            if isinstance(data, dict) and "autoMemoryDirectory" in data and data["autoMemoryDirectory"] != memory:
-                data["autoMemoryDirectory"] = memory
-                write_atomic(settings, (json.dumps(data, indent=2) + "\n").encode(), prefix=TMP_PREFIX)
-        for path in feature.registry:
-            data = json.loads(read_text(path))
-            old = {"worktreePath": data.get("worktreePath"), "sessionManager": data.get("sessionManager")}
-            data["worktreePath"] = feature.ags_path
-            if "sessionManager" in data:
-                data["sessionManager"] = "ags"
-            write_atomic(path, (json.dumps(data, indent=2) + "\n").encode(), prefix=TMP_PREFIX)
-            self.log("rewrote-branch-out-registry", path=path, old=old)
-
-    def reword(self, root):
-        """True when root's CLAUDE.local.md needs (or got) the ags wording."""
-        path = os.path.join(root, "CLAUDE.local.md")
-        text = read_text(path)
-        if text is None:
-            return False
-        reworded = reword_protocol(text, CS_TO_AGS_WORDING)
-        if reworded == text:
-            return False
-        if self.apply:
-            write_atomic(path, reworded.encode(), prefix=TMP_PREFIX)
-            self.log("reworded", path=path)
-        return True
-
-    def conversations(self, old_key, new_key):
+    def conversations(self, key):
         """Merge one Claude folder and each conversation's side files; the tally and conversation count."""
-        src = os.path.join(self.claude_dir, "projects", old_key)
-        tally = merge_tree(src, os.path.join(self.ags_claude, "projects", new_key), self.apply, TMP_SUFFIX)
+        src = os.path.join(self.claude_dir, "projects", key)
+        tally = merge_tree(src, os.path.join(self.ags_claude, "projects", key), self.apply, TMP_SUFFIX)
         count = 0
         if os.path.isdir(src):
             for name in sorted(os.listdir(src)):
@@ -402,16 +267,16 @@ class Importer:
         family = claude_project_key(os.path.join(os.path.realpath(self.cs_root), base.name + "@"))
         main = claude_project_key(base.source)
         owned = {main}
-        owned.update(claude_project_key(f.old_physical) for f in base.features if f.old_physical)
+        owned.update(claude_project_key(f.source) for f in base.features if f.source)
         # Every other cs session, by its real and its link path: a key is lossy,
         # so wap@foo and a session called wap-foo share a folder name.
         others = set()
-        for entry in os.listdir(self.cs_root) if os.path.isdir(self.cs_root) else []:
+        for entry in os.listdir(self.cs_root):
             if entry == base.name or entry.startswith(base.name + "@"):
                 continue
             path = os.path.join(self.cs_root, entry)
             others.add(claude_project_key(os.path.realpath(path)))
-            others.add(claude_project_key(physical_join(self.cs_root, entry)))
+            others.add(claude_project_key(os.path.join(os.path.realpath(self.cs_root), entry)))
         keys = []
         for key in sorted(os.listdir(projects)):
             if key in owned or not os.path.isdir(os.path.join(projects, key)):
@@ -428,7 +293,7 @@ class Importer:
         return keys
 
     def prompt_history(self, base, paths):
-        """Lines of history.jsonl for the session's paths, rewritten for ags, that the profile lacks."""
+        """Lines of history.jsonl for the session's paths that the profile's lacks."""
         src = os.path.join(self.claude_dir, "history.jsonl")
         dst = os.path.join(self.ags_claude, "history.jsonl")
         text = read_text(src)
@@ -445,11 +310,7 @@ class Importer:
             project = record.get("project") if isinstance(record, dict) else None
             if not isinstance(project, str):
                 continue
-            if project in paths:
-                if paths[project] != project:
-                    record["project"] = paths[project]
-                    line = json.dumps(record, ensure_ascii=False, separators=(",", ":"))
-            elif not (self.history and project.startswith(family)):
+            if project not in paths and not (self.history and project.startswith(family)):
                 continue
             if line not in have:
                 have.add(line)
@@ -463,23 +324,23 @@ class Importer:
         return len(out)
 
     def project_settings(self, paths):
-        """Copy each path's settings from ~/.claude.json to the profile's, under its ags path."""
+        """Copy each path's settings from ~/.claude.json into the profile's, keeping what the profile has."""
         stable = json.loads(read_text(self.claude_json) or "{}")
         target = os.path.join(self.ags_claude, ".claude.json")
         raw = read_text(target)
         profile = json.loads(raw) if raw else {}
         projects = profile.setdefault("projects", {})
         changed = []
-        for old, new in sorted(paths.items()):
-            entry = (stable.get("projects") or {}).get(old)
+        for path in sorted(paths):
+            entry = (stable.get("projects") or {}).get(path)
             if not isinstance(entry, dict):
                 continue
-            mine = projects.setdefault(new, {})
+            mine = projects.setdefault(path, {})
             added = [k for k in sorted(entry) if not VOLATILE.match(k) and k not in mine]
             for key in added:
                 mine[key] = entry[key]
             if added:
-                changed.append(new)
+                changed.append(path)
         if changed and self.apply:
             write_atomic(target, (json.dumps(profile, indent=2, ensure_ascii=False) + "\n").encode(),
                          prefix=TMP_PREFIX)
@@ -487,29 +348,26 @@ class Importer:
         return changed
 
     def codex_trust(self, paths):
-        """Append the profile's Codex config a project table for each path stable Codex trusts."""
-        stable = read_text(os.path.join(self.codex_home, "config.toml")) or ""
+        """Append to the profile's Codex config each path's project table from the Codex config outside ags."""
+        stable = (read_text(os.path.join(self.codex_home, "config.toml")) or "").splitlines()
         target = os.path.join(self.profile, ".codex", "config.toml")
         mine = read_text(target)
         if mine is None:
             return []
-        added = []
-        blocks = []
-        for old, new in sorted(paths.items()):
-            header = '[projects."%s"]' % old
-            if header not in stable.splitlines() or ('[projects."%s"]' % new) in mine.splitlines():
+        added, blocks = [], []
+        for path in sorted(paths):
+            header = '[projects."%s"]' % path
+            if header not in stable or header in mine.splitlines():
                 continue
-            lines = stable.splitlines()
-            start = lines.index(header) + 1
             body = []
-            for line in lines[start:]:
+            for line in stable[stable.index(header) + 1:]:
                 if line.startswith("["):
                     break
                 body.append(line)
             while body and not body[-1].strip():
                 body.pop()
-            blocks.append('[projects."%s"]\n%s\n' % (new, "\n".join(body)))
-            added.append(new)
+            blocks.append("%s\n%s\n" % (header, "\n".join(body)))
+            added.append(path)
         if blocks and self.apply:
             text = mine if mine.endswith("\n") or not mine else mine + "\n"
             write_atomic(target, (text + "\n" + "\n".join(blocks)).encode(), prefix=TMP_PREFIX)
@@ -556,13 +414,12 @@ class Importer:
             try:
                 self.handle(base)
             except OSError as error:
-                base.failed = True
                 self.problem("stopped: %s" % error)
         print()
         if not self.apply:
-            print("Dry run: nothing changed. Run again with --apply to move.")
+            print("Dry run: nothing changed. Run again with --apply to hand it over.")
         elif self.failed:
-            print("Moved what could be moved; the items marked ! above were not.")
+            print("Handed over what could be; the items marked ! above were not.")
         else:
             print("Done. Open it with: ags %s" % " / ags ".join(self.names))
         return 1 if self.failed else 0
@@ -590,87 +447,56 @@ class Importer:
         for path in tally.diverged:
             self.problem("continued in both cs and ags, left as it is: %s" % tilde(path))
 
+    def link(self, session, what):
+        will = "" if self.apply else "would "
+        if session.state == "ours":
+            self.say("%s: already in ags at %s" % (session.name, tilde(session.ags_path)))
+            return
+        self.say("%s: %slink %s -> %s%s" % (session.name, will, tilde(session.ags_path), tilde(session.target), what))
+        if self.apply:
+            os.symlink(session.target, session.ags_path)
+            self.log("linked", session=session.name, path=session.ags_path, target=session.target)
+
     def handle(self, base):
         if base.skip:
-            print("%s: not moved" % base.name)
+            print("%s: not handed over" % base.name)
             self.problem(base.skip)
             return
         print(base.name)
-        if base.blocker:
-            self.problem(base.blocker)
-            if self.apply:
-                return
-        will = "" if self.apply else "would "
+        if base.open_now:
+            self.say("note: open in cs right now: %s. What it writes from here on comes over on a rerun, "
+                     "once it is closed" % ", ".join(base.open_now))
 
-        # 1. The session: ags gets cs's link to the project.
-        if base.state == "free":
-            self.say("%slink %s -> %s" % (will, tilde(base.ags_path), tilde(base.target)))
-            if self.apply:
-                os.symlink(base.target, base.ags_path)
-                self.log("linked", session=base.name, path=base.ags_path, target=base.target)
-        else:
-            self.say("already in ags at %s" % tilde(base.ags_path))
-        if self.apply and base.state != "moved":
-            # How a rerun knows the project came from cs, once cs's link is gone.
-            os.makedirs(os.path.join(base.meta, "local"), exist_ok=True)
-            with open(os.path.join(base.source, MARKER), "w") as f:
-                f.write(base.cs_path + "\n")
-        if self.reword(base.source):
-            self.say("%s the session protocol in CLAUDE.local.md from cs to ags"
-                     % ("reworded" if self.apply else "would reword"))
-
-        # 2. Feature worktrees.
+        # 1. Links: ags opens the same folders cs does.
+        self.link(base, "")
         for feature in base.features:
             if feature.skip:
-                self.problem("%s: not moved: %s" % (feature.name, feature.skip))
+                self.problem("%s: not linked: %s" % (feature.name, feature.skip))
                 continue
-            if feature.state == "moved":
-                self.say("%s: already in ags at %s" % (feature.name, tilde(feature.ags_path)))
-            elif feature.state == "linked-back":
-                self.say("%s: lives in ags already; %sremove cs's link to it" % (feature.name, will))
-            else:
-                branch = self.git(feature.source, "branch", "--show-current").stdout.strip()
-                self.say("%s: %smove the worktree to %s (on %s)"
-                         % (feature.name, will, tilde(feature.ags_path), branch or "a detached HEAD"))
-                for path in feature.registry:
-                    self.say("%s: %spoint branch-out's %s at it" % (feature.name, will, tilde(path)))
-                if self.apply:
-                    try:
-                        self.move_feature(feature)
-                    except OSError as error:
-                        feature.failed = True
-                        self.problem("%s: stopped: %s" % (feature.name, error))
-                        continue
-            root = feature.ags_physical if (self.apply or feature.state != "free") else feature.source
-            if self.reword(root):
-                self.say("%s: %s the session protocol from cs to ags"
-                         % (feature.name, "reworded" if self.apply else "would reword"))
+            feature.target = feature.source
+            branch = self.git(feature.source, "branch", "--show-current").stdout.strip()
+            self.link(feature, " (on %s)" % (branch or "a detached HEAD"))
+        sessions = [base] + [f for f in base.features if not f.skip]
 
-        # 3. Claude conversations, under the folder name of each path in ags.
-        paths = {base.source: base.source}
-        tally, count = self.conversations(claude_project_key(base.source), claude_project_key(base.source))
-        self.report_tally("Claude history of %s" % base.name, tally, count)
-        for feature in base.features:
-            if feature.skip or feature.failed or not feature.old_physical:
-                continue
-            paths[feature.old_physical] = feature.ags_physical
-            tally, count = self.conversations(claude_project_key(feature.old_physical),
-                                              claude_project_key(feature.ags_physical))
-            self.report_tally("Claude history of %s" % feature.name, tally, count)
+        # 2. Claude conversations, under the same folder names: the paths do not change.
+        for session in sessions:
+            tally, count = self.conversations(claude_project_key(session.source))
+            self.report_tally("Claude history of %s" % session.name, tally, count)
         claude_id = state_value(base.meta, "claude_session_id")
         if claude_id and os.path.isfile(os.path.join(self.claude_dir, "projects", claude_project_key(base.source),
                                                      claude_id + ".jsonl")):
             self.say("ags %s resumes conversation %s" % (base.name, claude_id))
-        for name in [base.name] + [f.name for f in base.features if not f.skip]:
-            tally = merge_tree(os.path.join(self.claude_dir, "tasks", name),
-                               os.path.join(self.ags_claude, "tasks", name), self.apply, TMP_SUFFIX)
+        for session in sessions:
+            tally = merge_tree(os.path.join(self.claude_dir, "tasks", session.name),
+                               os.path.join(self.ags_claude, "tasks", session.name), self.apply, TMP_SUFFIX)
             if tally.pending():
-                self.say("task list of %s: %d file(s) %s" % (name, tally.pending(), "copied" if self.apply else "to copy"))
+                self.say("task list of %s: %d file(s) %s"
+                         % (session.name, tally.pending(), "copied" if self.apply else "to copy"))
         if self.history:
             keys = self.history_keys(base)
             total, conversations = None, 0
             for key in keys:
-                tally, count = self.conversations(key, key)
+                tally, count = self.conversations(key)
                 conversations += count
                 if total is None:
                     total = tally
@@ -679,11 +505,12 @@ class Importer:
             if keys:
                 self.report_tally("history of %d retired feature and scratch folder(s), no session"
                                   % len(keys), total, conversations)
+        paths = {s.source for s in sessions}
         lines = self.prompt_history(base, paths)
         if lines:
             self.say("prompt history: %d line(s) %s" % (lines, "appended" if self.apply else "to append"))
 
-        # 4. Trust and per-project settings, which a running ags may rewrite under us.
+        # 3. Trust and per-project settings, which a running ags may rewrite under us.
         running = self.ags_running()
         if running:
             self.say("note: an ags session is running (%s), so .claude.json and the Codex config are left; "
@@ -698,51 +525,32 @@ class Importer:
                 self.say("Codex trust %s for %s" % ("added" if self.apply else "to add",
                                                     ", ".join(tilde(p) for p in added)))
 
-        # 5. Secrets. A feature's go through its base, but one may hold its own.
-        for session in [base.name] + [f.name for f in base.features if not f.skip]:
-            missing, present, error = self.secrets(session)
+        # 4. Secrets. A feature's go through its base, but one may hold its own.
+        for session in sessions:
+            missing, present, error = self.secrets(session.name)
             if error:
-                self.problem("secrets of %s: %s" % (session, error))
+                self.problem("secrets of %s: %s" % (session.name, error))
             if present:
-                self.say("secrets of %s ags already has, kept: %s" % (session, ", ".join(present)))
+                self.say("secrets of %s ags already has, kept: %s" % (session.name, ", ".join(present)))
             if missing:
-                self.say("secrets of %s %s: %s" % (session, "copied" if self.apply else "to copy",
+                self.say("secrets of %s %s: %s" % (session.name, "copied" if self.apply else "to copy",
                                                     ", ".join(missing)))
                 if self.apply:
-                    for name in self.copy_secrets(session, missing):
-                        base.failed = True
-                        self.problem("secret %s of %s was not copied" % (name, session))
-
-        # 6. cs lets go, once all of it is in ags.
-        links = [f for f in base.features if f.state == "linked-back"]
-        if base.state == "moved" and not links:
-            return
-        if base.family_failed():
-            self.problem("kept cs's link %s, since not all of %s came over; rerun once the items above are fixed"
-                         % (tilde(base.cs_path), base.name))
-            return
-        for feature in links:
-            self.say("%sremove cs's link %s" % (will, tilde(feature.cs_path)))
-            if self.apply:
-                os.unlink(feature.cs_path)
-                self.log("removed-cs-link", path=feature.cs_path)
-        if base.state != "moved":
-            self.say("%sremove cs's link %s, so %s opens from ags only" % (will, tilde(base.cs_path), base.name))
-            if self.apply:
-                os.unlink(base.cs_path)
-                self.log("removed-cs-link", path=base.cs_path, target=base.target)
+                    for name in self.copy_secrets(session.name, missing):
+                        self.problem("secret %s of %s was not copied" % (name, session.name))
         if self.apply:
-            self.say("the way back: scripts/ags-to-cs.py --session %s" % base.name)
+            self.say("cs keeps %s as it was. Open it from ags; to go back to cs, run "
+                     "scripts/ags-to-cs.py --session %s first" % (base.name, base.name))
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description="Move a session the stable cs adopted, with its feature worktrees, Claude history and "
-                    "secrets, into the ags profile.",
-        epilog="Prints what it would do unless --apply is given.")
+        description="Give ags a session the stable cs adopted, with its feature worktrees, Claude history and "
+                    "secrets, leaving cs as it is.",
+        epilog="Prints what it would do unless --apply is given. Nothing outside the ags profile is written.")
     parser.add_argument("--session", action="append", required=True, metavar="NAME",
-                        help="the cs session to move (repeatable); its features come with it")
-    parser.add_argument("--apply", action="store_true", help="move; without it nothing is written")
+                        help="the cs session to hand over (repeatable); its features come with it")
+    parser.add_argument("--apply", action="store_true", help="hand it over; without it nothing is written")
     parser.add_argument("--no-history", action="store_true",
                         help="leave out the conversations of retired features and scratch folders")
     parser.add_argument("--profile", default="~/.local/share/agent-sessions/home",
@@ -757,8 +565,6 @@ def main(argv=None):
                         help="the Codex home outside ags (default: %(default)s)")
     parser.add_argument("--cs-secrets", default="~/.local/bin/cs-secrets",
                         help="the stable cs secrets command (default: %(default)s)")
-    parser.add_argument("--registry", default="~/.agent-worktrees/registry",
-                        help="branch-out's registry (default: %(default)s)")
     args = parser.parse_args(argv)
     for name in args.session:
         if "@" in name or "/" in name or name.startswith("."):

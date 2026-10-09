@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# ABOUTME: Tests for scripts/cs-to-ags.py, which moves a project the stable cs adopted into the ags profile.
-# ABOUTME: A fixture cs with an adopted project, two feature worktrees, history and secrets, moved into a fixture profile.
+# ABOUTME: Tests for scripts/cs-to-ags.py, which gives ags a project the stable cs adopted and leaves cs as it is.
+# ABOUTME: A fixture cs with an adopted project, two feature worktrees, history and secrets, handed to a fixture profile.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=tests/test_lib.sh
 source "$SCRIPT_DIR/test_lib.sh"
@@ -177,89 +177,78 @@ run_move() {
     return "$status"
 }
 
-test_dry_run_changes_nothing() {
-    make_fixture
-    local cs_before claude_before profile_before project_before worktrees_before
-    cs_before=$(fingerprint "$CSROOT")
-    claude_before=$(fingerprint "$CLAUDE")
-    profile_before=$(fingerprint "$PROFILE")
-    project_before=$(fingerprint "$PROJECT")
-    worktrees_before=$(git -C "$PROJECT" worktree list --porcelain)
-    run_move --session wap || { echo "$OUT"; return 1; }
-    assert_output_contains "$OUT" 'would link .*sessions/wap -> ' || return 1
-    assert_output_contains "$OUT" 'wap@feat: would move the worktree to .*sessions/wap@feat (on cs/feat)' || return 1
-    assert_output_contains "$OUT" "wap@fix: would point branch-out's .*wap@fix.json at it" || return 1
-    assert_output_contains "$OUT" 'would reword the session protocol in CLAUDE.local.md from cs to ags' || return 1
-    assert_output_contains "$OUT" 'secrets of wap to copy: TOKEN' || return 1
-    assert_output_contains "$OUT" "ags wap resumes conversation $WAP_ID" || return 1
-    assert_output_contains "$OUT" "would remove cs's link .*claude-sessions/wap, so wap opens from ags only" || return 1
-    assert_output_contains "$OUT" 'Dry run: nothing changed' || return 1
-    assert_eq "$cs_before" "$(fingerprint "$CSROOT")" "cs's sessions changed" || return 1
-    assert_eq "$claude_before" "$(fingerprint "$CLAUDE")" "~/.claude changed" || return 1
-    assert_eq "$profile_before" "$(fingerprint "$PROFILE")" "the profile changed" || return 1
-    assert_eq "$project_before" "$(fingerprint "$PROJECT")" "the project changed" || return 1
-    assert_eq "$worktrees_before" "$(git -C "$PROJECT" worktree list --porcelain)"
+# Everything the stable side has, so a test can prove the hand-over only read it.
+cs_side_fingerprint() {
+    {
+        fingerprint "$CSROOT"
+        fingerprint "$PROJECT"
+        fingerprint "$CLAUDE"
+        fingerprint "$HOME/.codex"
+        shasum < "$HOME/.claude.json"
+        shasum < "$REGISTRY"
+        git -C "$PROJECT" worktree list --porcelain
+        fingerprint "$STUB_STORE/wap"
+    } | shasum
 }
 
-test_apply_moves_the_session_and_its_features_into_ags() {
+test_dry_run_changes_nothing() {
     make_fixture
-    local status_before ref_before claude_before codex_before claude_json_before new
-    status_before=$(git -C "$FEAT" status --porcelain)
-    ref_before=$(git -C "$FEAT" rev-parse refs/worktree/cs/session/autosave)
-    claude_before=$(fingerprint "$CLAUDE")
-    codex_before=$(fingerprint "$HOME/.codex")
-    claude_json_before=$(shasum < "$HOME/.claude.json")
-    run_move --session wap --apply || { echo "$OUT"; return 1; }
-    new="$(physical "$PROFILE/sessions")/wap@feat"
+    local cs_before profile_before
+    cs_before=$(cs_side_fingerprint)
+    profile_before=$(fingerprint "$PROFILE")
+    run_move --session wap || { echo "$OUT"; return 1; }
+    assert_output_contains "$OUT" 'wap: would link .*sessions/wap -> ' || return 1
+    assert_output_contains "$OUT" 'wap@feat: would link .*sessions/wap@feat -> .*claude-sessions/wap@feat (on cs/feat)' || return 1
+    assert_output_contains "$OUT" 'wap@fix: would link .*sessions/wap@fix -> ' || return 1
+    assert_output_contains "$OUT" 'secrets of wap to copy: TOKEN' || return 1
+    assert_output_contains "$OUT" "ags wap resumes conversation $WAP_ID" || return 1
+    assert_output_contains "$OUT" 'Dry run: nothing changed' || return 1
+    assert_output_not_contains "$OUT" 'remove' || return 1
+    assert_output_not_contains "$OUT" 'move the worktree' || return 1
+    assert_output_not_contains "$OUT" 'reword' || return 1
+    assert_eq "$cs_before" "$(cs_side_fingerprint)" "the cs side changed" || return 1
+    assert_eq "$profile_before" "$(fingerprint "$PROFILE")" "the profile changed"
+}
 
-    # ags has the project by the same link; cs has let go of it and its features.
+test_apply_hands_the_session_over_and_leaves_cs_as_it_is() {
+    make_fixture
+    local cs_before
+    cs_before=$(cs_side_fingerprint)
+    run_move --session wap --apply || { echo "$OUT"; return 1; }
+
+    # Not one byte of the cs side changed: links, folders, worktrees, history, settings, secrets.
+    assert_eq "$cs_before" "$(cs_side_fingerprint)" "the cs side changed" || return 1
+    assert_symlink "$CSROOT/wap" || return 1
+    assert_dir "$FEAT" || return 1
+    assert_file_contains "$PROJECT/CLAUDE.local.md" 'managed by the cs tool' || return 1
+
+    # ags links to the same folders.
     assert_symlink "$PROFILE/sessions/wap" || return 1
     assert_eq "$PROJECT" "$(readlink "$PROFILE/sessions/wap")" || return 1
-    assert_not_exists "$CSROOT/wap" || return 1
-    assert_not_exists "$FEAT" || return 1
-    assert_not_exists "$CSROOT/wap@fix" || return 1
-    assert_dir "$CSROOT/wap-other" "another session was touched" || return 1
-    assert_eq "$CSROOT/wap" "$(cat "$PROJECT/.cs/local/cs-origin")" || return 1
+    assert_symlink "$PROFILE/sessions/wap@feat" || return 1
+    assert_eq "$FEAT_OLD" "$(physical "$PROFILE/sessions/wap@feat")" || return 1
+    assert_eq "$FIX_OLD" "$(physical "$PROFILE/sessions/wap@fix")" || return 1
+    assert_eq "cs/feat" "$(git -C "$PROFILE/sessions/wap@feat" branch --show-current)" || return 1
 
-    # The feature moved whole: branch, index, changes, ignored files, per-worktree refs.
-    assert_dir "$new" || return 1
-    assert_eq "cs/feat" "$(git -C "$new" branch --show-current)" || return 1
-    assert_eq "$status_before" "$(git -C "$new" status --porcelain)" "the uncommitted changes differ" || return 1
-    assert_file_exists "$new/node_modules/dep/index.js" || return 1
-    assert_eq "$ref_before" "$(git -C "$new" rev-parse refs/worktree/cs/session/autosave)" || return 1
-    git -C "$PROJECT" worktree list --porcelain | grep -qxF "worktree $new" \
-        || { echo "  FAIL: the project does not list the moved feature"; return 1; }
-    assert_eq "$FEAT_OLD" "$(cat "$new/.cs/local/cs-origin")" || return 1
-    assert_eq "$PROFILE/sessions/wap@feat/.cs/memory" "$(jq -r .autoMemoryDirectory "$new/.claude/settings.local.json")" || return 1
-    assert_eq ".cs/plans" "$(jq -r .plansDirectory "$new/.claude/settings.local.json")" "another setting was lost" || return 1
-    assert_eq "$PROFILE/sessions/wap@fix" "$(jq -r .worktreePath "$REGISTRY")" || return 1
-    assert_eq "ags" "$(jq -r .sessionManager "$REGISTRY")" || return 1
-    assert_eq "wap-fix" "$(jq -r .branch "$REGISTRY")" || return 1
-
-    # The protocol says ags, below the first sentinel only.
-    assert_file_contains "$PROJECT/CLAUDE.local.md" 'managed by agent-sessions (ags)' || return 1
-    assert_file_contains "$PROJECT/CLAUDE.local.md" 'ags treats the sentinel' || return 1
-    assert_file_contains "$PROJECT/CLAUDE.local.md" 'A note of my own about .cs -list' || return 1
-    assert_file_contains "$new/CLAUDE.local.md" 'the ags session store' || return 1
-
-    # Conversations under each path's folder name in ags, with their side files.
+    # Conversations under the same folder names, with their side files.
     local projects="$PROFILE/.claude/projects"
     cmp -s "$CLAUDE/projects/$PROJECT_KEY/$WAP_ID.jsonl" "$projects/$PROJECT_KEY/$WAP_ID.jsonl" \
         || { echo "  FAIL: wap's conversation was not copied"; return 1; }
     assert_file_exists "$projects/$PROJECT_KEY/$WAP_ID/subagents/agent-1.jsonl" || return 1
-    assert_file_exists "$projects/$(project_key "$new")/$FEAT_ID.jsonl" || return 1
+    assert_file_exists "$projects/$(project_key "$FEAT_OLD")/$FEAT_ID.jsonl" || return 1
+    assert_file_exists "$projects/$(project_key "$FIX_OLD")/$FIX_ID.jsonl" || return 1
     assert_file_exists "$PROFILE/.claude/file-history/$WAP_ID/snap@v1" || return 1
     assert_file_exists "$PROFILE/.claude/session-env/$WAP_ID/hook-1.sh" || return 1
     assert_file_exists "$PROFILE/.claude/tasks/wap/1.json" || return 1
-    # History with no session keeps its folder name; another session's stays out.
+    # History with no session comes too; another session's stays out.
     assert_file_exists "$projects/$OLD_KEY/$OLD_ID.jsonl" || return 1
     assert_file_exists "$projects/$SCRATCH_KEY/$SCRATCH_ID.jsonl" || return 1
     assert_not_exists "$projects/$OTHER_KEY" "wap-other's conversations came along" || return 1
 
-    # Prompt history: the feature's lines name its new path; other sessions' stay out.
+    # Prompt history for the session's paths, as cs wrote it; other sessions' stay out.
     local prompts="$PROFILE/.claude/history.jsonl"
     assert_file_contains "$prompts" 'main prompt' || return 1
-    assert_eq "$new" "$(jq -r 'select(.display == "feature prompt") | .project' "$prompts")" || return 1
+    assert_eq "$FEAT_OLD" "$(jq -r 'select(.display == "feature prompt") | .project' "$prompts")" || return 1
     assert_file_contains "$prompts" 'retired prompt' || return 1
     assert_file_not_contains "$prompts" 'other prompt' || return 1
 
@@ -269,9 +258,9 @@ test_apply_moves_the_session_and_its_features_into_ags() {
     assert_eq false "$(jq --arg p "$(physical "$PROJECT")" '.projects[$p].hasTrustDialogAccepted' "$state")" \
         "a profile setting was overwritten" || return 1
     assert_eq null "$(jq --arg p "$(physical "$PROJECT")" '.projects[$p].lastCost' "$state")" || return 1
-    assert_eq true "$(jq --arg p "$new" '.projects[$p].hasTrustDialogAccepted' "$state")" || return 1
+    assert_eq true "$(jq --arg p "$FEAT_OLD" '.projects[$p].hasTrustDialogAccepted' "$state")" || return 1
     assert_eq dark "$(jq -r .theme "$state")" || return 1
-    assert_file_contains "$PROFILE/.codex/config.toml" "^\[projects.\"$new\"\]" || return 1
+    assert_file_contains "$PROFILE/.codex/config.toml" "^\[projects.\"$FEAT_OLD\"\]" || return 1
     assert_file_contains "$PROFILE/.codex/config.toml" '^model = "y"' || return 1
     assert_file_not_contains "$PROFILE/.codex/config.toml" 'elsewhere' || return 1
 
@@ -279,17 +268,10 @@ test_apply_moves_the_session_and_its_features_into_ags() {
     assert_eq "s3cret-value" "$(ags_secret wap TOKEN)" || return 1
     assert_file_not_contains "$STUB_STORE/argv.log" 's3cret' "the value reached argv" || return 1
     assert_file_not_contains "$STUB_STORE/argv.log" 'backend=encrypted' "cs-secrets got the ags backend" || return 1
-    assert_file_exists "$STUB_STORE/wap/TOKEN" "the cs secret was removed" || return 1
 
-    # The stable side's Claude, Codex and state files were only read.
-    assert_eq "$claude_before" "$(fingerprint "$CLAUDE")" "~/.claude changed" || return 1
-    assert_eq "$codex_before" "$(fingerprint "$HOME/.codex")" "~/.codex changed" || return 1
-    assert_eq "$claude_json_before" "$(shasum < "$HOME/.claude.json")" "~/.claude.json changed" || return 1
-
-    jq -e 'select(.action == "moved-worktree" and .session == "wap@feat")' "$PROFILE/.cs-to-ags/log.jsonl" >/dev/null \
-        || { echo "  FAIL: the move is not in the log"; return 1; }
-    jq -e 'select(.action == "removed-cs-link")' "$PROFILE/.cs-to-ags/log.jsonl" >/dev/null || return 1
-    assert_output_contains "$OUT" 'the way back: scripts/ags-to-cs.py --session wap'
+    jq -e 'select(.action == "linked" and .session == "wap@feat")' "$PROFILE/.cs-to-ags/log.jsonl" >/dev/null \
+        || { echo "  FAIL: the link is not in the log"; return 1; }
+    assert_output_contains "$OUT" 'cs keeps wap as it was'
 }
 
 test_rerun_brings_over_only_what_grew() {
@@ -297,7 +279,7 @@ test_rerun_brings_over_only_what_grew() {
     run_move --session wap --apply || { echo "$OUT"; return 1; }
     printf '{"n":3}\n' >> "$CLAUDE/projects/$PROJECT_KEY/$WAP_ID.jsonl"
     run_move --session wap --apply || { echo "$OUT"; return 1; }
-    assert_output_contains "$OUT" 'already in ags at .*sessions/wap$' || return 1
+    assert_output_contains "$OUT" 'wap: already in ags at .*sessions/wap$' || return 1
     assert_output_contains "$OUT" 'wap@feat: already in ags' || return 1
     assert_output_contains "$OUT" 'Claude history of wap, 1 conversation(s), files copied: 1 grown since the last copy' || return 1
     assert_output_contains "$OUT" 'Claude history of wap@feat, 1 conversation(s): nothing new' || return 1
@@ -305,78 +287,30 @@ test_rerun_brings_over_only_what_grew() {
     assert_output_not_contains "$OUT" 'prompt history' || return 1
     cmp -s "$CLAUDE/projects/$PROJECT_KEY/$WAP_ID.jsonl" "$PROFILE/.claude/projects/$PROJECT_KEY/$WAP_ID.jsonl" \
         || { echo "  FAIL: the grown conversation was not brought over"; return 1; }
-    assert_eq 3 "$(wc -l < "$PROFILE/.claude/history.jsonl" | tr -d ' ')" "a rerun duplicated the prompt history" || return 1
-    assert_eq 3 "$(git -C "$PROJECT" worktree list --porcelain | grep -c '^worktree ')"
+    assert_eq 3 "$(wc -l < "$PROFILE/.claude/history.jsonl" | tr -d ' ')" "a rerun duplicated the prompt history"
 }
 
-test_an_open_session_or_feature_blocks_the_move() {
+# cs execs claude in its place, which takes the lock with it: an engine or a
+# session manager running in a folder shows the session is open. It is named,
+# since what it writes later needs a rerun; nothing moves, so nothing waits.
+test_a_session_open_in_cs_is_named_and_still_handed_over() {
     make_fixture
     echo $$ > "$FEAT/.cs/session.lock"
-    run_move --session wap || true
-    assert_output_contains "$OUT" 'open right now: wap@feat; close it, then rerun' || return 1
-    assert_output_contains "$OUT" 'wap@feat: would move the worktree' "the dry run stopped listing" || return 1
-    local status=0
-    run_move --session wap --apply || status=$?
-    assert_eq 1 "$status" || { echo "$OUT"; return 1; }
-    assert_symlink "$CSROOT/wap" || return 1
-    assert_dir "$FEAT" || return 1
-    assert_not_exists "$PROFILE/sessions/wap" || return 1
-    assert_not_exists "$PROFILE/.claude/projects" || return 1
-    echo $$ > "$PROJECT/.cs/session.lock"
-    rm "$FEAT/.cs/session.lock"
-    run_move --session wap --apply || true
-    assert_output_contains "$OUT" 'open right now: wap; close it'
-}
-
-# cs execs claude in its place, which takes the lock with it: a process is what
-# shows a session is open. Anything at all in a feature that moves holds it; in
-# the project, which stays, only an engine or a session manager does.
-test_a_process_in_a_feature_or_an_engine_in_the_project_blocks_the_move() {
-    make_fixture
-    local pid status=0
-    (cd "$FEAT" && exec sleep 30) &
-    pid=$!
-    sleep 0.3
-    run_move --session wap --apply || status=$?
-    kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
-    assert_eq 1 "$status" || { echo "$OUT"; return 1; }
-    assert_output_contains "$OUT" "open right now: wap@feat .pid $pid: sleep 30." || return 1
-    assert_dir "$FEAT" || return 1
-    assert_symlink "$CSROOT/wap" || return 1
-    (cd "$PROJECT" && exec sleep 30) &
-    pid=$!
-    sleep 0.3
-    run_move --session wap || true
-    kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
-    assert_output_not_contains "$OUT" 'open right now' "a plain process in the project blocked it" || return 1
+    local claude_pid shell_pid
     (cd "$PROJECT" && exec -a claude sleep 30) &
-    pid=$!
+    claude_pid=$!
+    (cd "$CSROOT/wap@fix" && exec sleep 30) &
+    shell_pid=$!
     sleep 0.3
-    run_move --session wap || true
-    kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
-    assert_output_contains "$OUT" "open right now: wap .pid $pid: claude 30."
+    run_move --session wap --apply || { kill "$claude_pid" "$shell_pid"; echo "$OUT"; return 1; }
+    kill "$claude_pid" "$shell_pid" 2>/dev/null; wait "$claude_pid" "$shell_pid" 2>/dev/null
+    assert_output_contains "$OUT" "note: open in cs right now: wap .pid $claude_pid: claude 30., wap@feat\. What it writes" || return 1
+    assert_output_not_contains "$OUT" 'wap@fix .pid' "a plain process counted as an open session" || return 1
+    assert_symlink "$PROFILE/sessions/wap@feat" || return 1
+    assert_file_exists "$PROFILE/.claude/projects/$PROJECT_KEY/$WAP_ID.jsonl"
 }
 
-test_a_feature_git_cannot_move_keeps_cs_s_link_until_a_rerun() {
-    make_fixture
-    git -C "$PROJECT" worktree lock "$FEAT"
-    local status=0
-    run_move --session wap --apply || status=$?
-    assert_eq 1 "$status" || { echo "$OUT"; return 1; }
-    assert_output_contains "$OUT" 'wap@feat: stopped: git worktree move refused' || return 1
-    assert_output_contains "$OUT" "kept cs's link .*claude-sessions/wap, since not all of wap came over" || return 1
-    assert_symlink "$CSROOT/wap" || return 1
-    assert_dir "$FEAT" || return 1
-    assert_dir "$PROFILE/sessions/wap@fix" "the other feature should still move" || return 1
-    git -C "$PROJECT" worktree unlock "$FEAT"
-    run_move --session wap --apply || { echo "$OUT"; return 1; }
-    assert_output_contains "$OUT" 'already in ags at .*sessions/wap$' || return 1
-    assert_output_contains "$OUT" 'wap@fix: already in ags' || return 1
-    assert_dir "$PROFILE/sessions/wap@feat" || return 1
-    assert_not_exists "$CSROOT/wap"
-}
-
-test_sessions_the_script_does_not_move_say_why() {
+test_sessions_the_script_does_not_hand_over_say_why() {
     make_fixture
     local status=0
     run_move --session wap-other || status=$?
@@ -390,13 +324,24 @@ test_sessions_the_script_does_not_move_say_why() {
     run_move --session wap@feat || status=$?
     assert_eq 2 "$status" || return 1
     assert_output_contains "$OUT" 'name a base session' || return 1
+
+    # A feature ags already has under that name, and a folder git does not list, stay out; the rest comes.
+    mkdir -p "$PROFILE/sessions/wap@feat" "$CSROOT/wap@gone/.cs"
+    status=0
+    run_move --session wap --apply || status=$?
+    assert_eq 1 "$status" || { echo "$OUT"; return 1; }
+    assert_output_contains "$OUT" 'wap@feat: not linked: ags already has a different wap@feat' || return 1
+    assert_output_contains "$OUT" "wap@gone: not linked: not a registered worktree of wap's repository" || return 1
+    assert_symlink "$PROFILE/sessions/wap@fix" || return 1
+    assert_not_exists "$PROFILE/sessions/wap@gone" || return 1
+
+    rm -rf "$PROFILE/sessions"/*
     ln -s "$TEST_TMPDIR/somewhere-else" "$PROFILE/sessions/wap"
     status=0
     run_move --session wap --apply || status=$?
     assert_eq 1 "$status" || return 1
     assert_output_contains "$OUT" 'ags already has a different wap' || return 1
-    assert_symlink "$CSROOT/wap" || return 1
-    assert_dir "$FEAT"
+    assert_not_exists "$PROFILE/sessions/wap@fix"
 }
 
 test_an_ags_session_running_leaves_the_shared_config_files() {
@@ -416,28 +361,27 @@ test_an_ags_session_running_leaves_the_shared_config_files() {
     assert_output_contains "$OUT" 'Codex trust added'
 }
 
-# The way back and forth again: ags-to-cs.py gives cs links to what now lives in
-# ags, and a second move takes them away again without moving anything.
+# The way back: ags-to-cs.py finds cs already has every folder, and brings the
+# conversations ags went on with into ~/.claude.
 test_round_trip_with_ags_to_cs() {
     make_fixture
     run_move --session wap --apply || { echo "$OUT"; return 1; }
+    printf '{"n":"ags"}\n' >> "$PROFILE/.claude/projects/$PROJECT_KEY/$WAP_ID.jsonl"
+    local cs_root_before
+    cs_root_before=$(fingerprint "$CSROOT")
     python3 "$BACK" --apply --session wap --session wap@feat --session wap@fix > "$TEST_TMPDIR/back.log" 2>&1 \
         || { cat "$TEST_TMPDIR/back.log"; return 1; }
-    assert_symlink "$CSROOT/wap" || return 1
-    assert_eq "$(physical "$PROFILE/sessions/wap@feat")" "$(physical "$CSROOT/wap@feat")" || return 1
-    assert_file_contains "$PROJECT/CLAUDE.local.md" 'managed by the cs tool' || return 1
+    assert_file_contains "$TEST_TMPDIR/back.log" 'already in cs at .*claude-sessions/wap@feat' || return 1
+    assert_eq "$cs_root_before" "$(fingerprint "$CSROOT")" "the way back changed cs's sessions" || return 1
+    cmp -s "$PROFILE/.claude/projects/$PROJECT_KEY/$WAP_ID.jsonl" "$CLAUDE/projects/$PROJECT_KEY/$WAP_ID.jsonl" \
+        || { echo "  FAIL: the conversation ags went on with did not come back"; return 1; }
     run_move --session wap --apply || { echo "$OUT"; return 1; }
-    assert_output_contains "$OUT" 'wap@feat: lives in ags already; remove cs.s link to it' || return 1
-    assert_not_exists "$CSROOT/wap" || return 1
-    assert_not_exists "$CSROOT/wap@feat" || return 1
-    assert_dir "$PROFILE/sessions/wap@feat" || return 1
-    assert_eq "cs/feat" "$(git -C "$PROFILE/sessions/wap@feat" branch --show-current)" || return 1
-    assert_file_contains "$PROJECT/CLAUDE.local.md" 'managed by agent-sessions (ags)'
+    assert_output_contains "$OUT" 'Claude history of wap, 1 conversation(s): nothing new'
 }
 
 # What ags itself makes of the result: it lists both features and resumes each
 # session's conversation from the profile's copy.
-test_ags_opens_the_moved_session_and_its_features() {
+test_ags_opens_the_handed_over_session_and_its_features() {
     make_fixture
     run_move --session wap --apply || { echo "$OUT"; return 1; }
     printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s"\n' "$TEST_TMPDIR/claude-argv" > "$TEST_TMPDIR/claude"
@@ -457,13 +401,11 @@ test_ags_opens_the_moved_session_and_its_features() {
 }
 
 run_test test_dry_run_changes_nothing
-run_test test_apply_moves_the_session_and_its_features_into_ags
+run_test test_apply_hands_the_session_over_and_leaves_cs_as_it_is
 run_test test_rerun_brings_over_only_what_grew
-run_test test_an_open_session_or_feature_blocks_the_move
-run_test test_a_process_in_a_feature_or_an_engine_in_the_project_blocks_the_move
-run_test test_a_feature_git_cannot_move_keeps_cs_s_link_until_a_rerun
-run_test test_sessions_the_script_does_not_move_say_why
+run_test test_a_session_open_in_cs_is_named_and_still_handed_over
+run_test test_sessions_the_script_does_not_hand_over_say_why
 run_test test_an_ags_session_running_leaves_the_shared_config_files
 run_test test_round_trip_with_ags_to_cs
-run_test test_ags_opens_the_moved_session_and_its_features
+run_test test_ags_opens_the_handed_over_session_and_its_features
 report_results

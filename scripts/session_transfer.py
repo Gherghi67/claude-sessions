@@ -29,7 +29,6 @@ AGS_TO_CS_WORDING = (
     ("tombstone — ags treats", "tombstone — cs treats"),
     ("ags does not copy your first prompt", "cs does not copy your first prompt"),
 )
-CS_TO_AGS_WORDING = tuple((new, old) for old, new in AGS_TO_CS_WORDING)
 
 
 def tilde(path):

@@ -227,7 +227,9 @@ class Copier:
         if not os.path.lexists(entry):
             return "free"
         if plan.shared:
-            if os.path.islink(entry) and os.path.realpath(entry) == plan.source:
+            # cs's own folder, which the ags link points at (scripts/cs-to-ags.py
+            # leaves cs as it is), is the same session as much as a link to it.
+            if os.path.realpath(entry) == plan.source:
                 return "ours"
             return "taken"
         if os.path.isdir(entry) and not os.path.islink(entry):

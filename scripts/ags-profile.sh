@@ -13,7 +13,7 @@ if [ "$command_name" = ags ]; then
         .|-adopt|-checkpoint|-narrative)
             # These operations use the current directory. Keep old cs projects
             # out of the experimental profile, including nested directories,
-            # except one ags has itself (scripts/cs-to-ags.py moves one over).
+            # except one ags has itself (scripts/cs-to-ags.py hands one over).
             probe=$(pwd -P)
             case "$probe/" in
                 "$profile_home/"*) ;;
@@ -29,7 +29,7 @@ if [ "$command_name" = ags ]; then
                                 fi
                             done
                             [ -z "$ags_has" ] || break
-                            printf 'This is an existing cs workspace. Use cs here, or move it into ags with scripts/cs-to-ags.py.\n' >&2
+                            printf 'This is an existing cs workspace. Use cs here, or hand it to ags with scripts/cs-to-ags.py.\n' >&2
                             exit 1
                         fi
                         probe=${probe%/*}
