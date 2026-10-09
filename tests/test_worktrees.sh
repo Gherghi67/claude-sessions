@@ -112,11 +112,11 @@ test_worktree_create_refuses_a_locked_base_vault() {
     assert_eq "" "$(git -C "$base_dir" branch --list cs/fix-auth)" "no task branch on refusal" || return 1
 }
 
-# ags -encrypt links the four names relative to .cs/ ("vault-mnt/<name>"), so a
+# cs -encrypt links the four names relative to .cs/ ("vault-mnt/<name>"), so a
 # checkout of them resolves inside the worktree, where nothing is mounted; and
 # a base whose .cs/ is ignored gives the worktree plaintext files of its own.
 # Until worktrees of an encrypted session are designed, both refuse by name.
-_encrypt_base_links() {  # base_dir; links shaped as ags -encrypt writes them, vault mounted
+_encrypt_base_links() {  # base_dir; links shaped as cs -encrypt writes them, vault mounted
     local base="$1" sub
     rm -rf "$base/.cs/memory"
     for sub in memory plans claude-config private; do
@@ -475,7 +475,7 @@ test_retire_refuses_when_the_mount_table_cannot_be_read() {
     output=$(PATH="$d:$PATH" "$CS_BIN" "myproj" -retire-feature "fix-auth" "$sha" 2>&1) || status=$?
     assert_eq "1" "$status" "retirement refuses" || return 1
     # The stub's own stderr line comes first; the refusal is the last line.
-    assert_eq "Error: ags could not read the mount table, so it cannot tell whether a volume is mounted inside $wt; refusing to remove the worktree." \
+    assert_eq "Error: cs could not read the mount table, so it cannot tell whether a volume is mounted inside $wt; refusing to remove the worktree." \
         "$(printf '%s\n' "$output" | tail -n 1)" "says why" || return 1
     assert_dir "$wt" "worktree preserved" || return 1
 }
@@ -1014,7 +1014,7 @@ test_integrate_requires_a_gate_command() {
     sha=$(integrate_fixture myproj fix-auth)
     output=$("$CS_BIN" myproj -integrate-feature fix-auth "$sha" 2>&1) || status=$?
     assert_eq "1" "$status" "missing gate argv refuses" || return 1
-    assert_output_contains "$output" "Usage: ags <base> -integrate-feature" "prints usage" || return 1
+    assert_output_contains "$output" "Usage: cs <base> -integrate-feature" "prints usage" || return 1
 }
 
 test_integrate_requires_a_sha() {
@@ -1024,7 +1024,7 @@ test_integrate_requires_a_sha() {
     local output status=0
     output=$("$CS_BIN" myproj -integrate-feature fix-auth 2>&1) || status=$?
     assert_eq "1" "$status" "missing sha refuses" || return 1
-    assert_output_contains "$output" "Usage: ags <base> -integrate-feature" "prints usage, not a shell error" || return 1
+    assert_output_contains "$output" "Usage: cs <base> -integrate-feature" "prints usage, not a shell error" || return 1
     assert_output_not_contains "$output" "unbound variable" "no set -u crash" || return 1
 }
 
@@ -2045,7 +2045,7 @@ EOF
     # asking, so declare the terminal the way the suite's other prompts do.
     local output
     output=$(CS_ASSUME_TTY=1 "$CS_BIN" "myproj" -finish "fix-auth" <<< "r" 2>&1 || true)
-    assert_output_contains "$output" "Rotation handoff takes this launch; re-run: ags myproj -finish fix-auth" \
+    assert_output_contains "$output" "Rotation handoff takes this launch; re-run: cs myproj -finish fix-auth" \
         "the displaced merge must be announced" || return 1
     assert_output_not_contains "$output" "/finish fix-auth" "the explicit r choice must not be overridden" || return 1
     assert_output_contains "$output" ".cs/handoffs/2026-07-16-test.md" "the handoff prompt must run instead" || return 1
@@ -2233,7 +2233,7 @@ run_test test_integrate_refuses_ci_green_without_from_remote
 run_test test_integrate_from_remote_refuses_a_commit_origin_does_not_have
 run_test test_integrate_from_remote_squash_leaves_feature_tip_unintegrated
 
-# --- /finish progress: the record the ags mod reads to toast and draw the gate band ---
+# --- /finish progress: the record the cs mod reads to toast and draw the gate band ---
 
 # One field of the base's progress record, as jq -r prints it.
 progress_field() {  # record_file jq_filter
@@ -2355,7 +2355,7 @@ test_finish_progress_records_a_retirement() {
     [ "$(progress_field "$record" .id)" != "$landed_id" ] || { echo "  FAIL: the retire is a run of its own and needs its own id"; return 1; }
 }
 
-# An encrypted session keeps ags's files behind .cs/private, a link into its
+# An encrypted session keeps cs's files behind .cs/private, a link into its
 # vault; a locked vault (the link dangles) gets no plaintext record instead.
 test_finish_progress_goes_behind_private_in_an_encrypted_session() {
     local sha base_dir status=0
@@ -2394,7 +2394,7 @@ test_finish_progress_write_failure_changes_nothing_but_one_warning() {
     assert_eq "integrated fix-auth $sha -> $(git -C "$base_dir" rev-parse HEAD)" "$output" "stdout is the summary line alone" || return 1
     assert_file_exists "$base_dir/feature.txt" "the feature landed" || return 1
     assert_eq "1" "$(wc -l < "$TEST_TMPDIR/stderr" | tr -d ' ')" "exactly one line on stderr: $(cat "$TEST_TMPDIR/stderr")" || return 1
-    assert_file_contains "$TEST_TMPDIR/stderr" "^ags: /finish progress not recorded: could not write $base_dir/.cs/local/finish-progress.json$" \
+    assert_file_contains "$TEST_TMPDIR/stderr" "^cs: /finish progress not recorded: could not write $base_dir/.cs/local/finish-progress.json$" \
         "the one line is the warning" || return 1
 }
 

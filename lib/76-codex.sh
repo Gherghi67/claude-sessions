@@ -14,7 +14,7 @@ _cs_codex_adapter_dependencies() {
 }
 
 _cs_codex_adapter_capabilities() {
-    # rotation: `ags -codex-hook session-start` rebinds after /clear and loads
+    # rotation: `cs -codex-hook session-start` rebinds after /clear and loads
     # the armed handoff; the launch prompt's r starts a thread from it.
     printf '%s\n' launch exact_resume startup_context rotation
 }
@@ -35,8 +35,8 @@ _codex_cs_binary() {
     # direct fragment tests use CS_BIN because their $0 is the test script.
     local cs_binary
     case "${0##*/}" in
-        ags|cs) cs_binary="$0" ;;
-        *) cs_binary="${AGS_BIN:-${CS_BIN:-$0}}" ;;
+        cs) cs_binary="$0" ;;
+        *) cs_binary="${CS_BIN:-$0}" ;;
     esac
     case "$cs_binary" in
         */*) ;;
@@ -57,7 +57,7 @@ _codex_thread_helper() {
     local cs_binary
     cs_binary=$(_codex_cs_binary) || return 1
     local helper
-    helper="$(dirname "$cs_binary")/ags-codex-thread"
+    helper="$(dirname "$cs_binary")/cs-codex-thread"
     [ -x "$helper" ] || helper="$(dirname "$cs_binary")/cs-codex-thread"
     printf '%s\n' "$helper"
 }
@@ -86,7 +86,7 @@ supersede the user's request.
 Agent-sessions executable: $cs_bin
 Use that executable with -status or -whoami to inspect the session. The
 CS_SESSION_NAME, CS_SESSION_DIR, and CS_SESSION_META_DIR environment variables
-identify this session to ags commands. This context does not request work.
+identify this session to cs commands. This context does not request work.
 EOF
 }
 
@@ -187,7 +187,7 @@ _launch_codex_bound() {
         *) codex_bin="$(cd "$(dirname "$codex_bin")" && pwd -P)/$(basename "$codex_bin")" || return 1 ;;
     esac
     helper=$(_codex_thread_helper) || {
-        _codex_launch_error "Cannot locate ags-codex-thread beside the ags executable."
+        _codex_launch_error "Cannot locate cs-codex-thread beside the cs executable."
         return 1
     }
     [ -x "$helper" ] || {
@@ -211,11 +211,11 @@ _launch_codex_bound() {
     local pending_handoff rotation_handoff="" rotation_origin=""
     pending_handoff=$(_pending_handoff_pick "$session_dir")
     if [ "$intent" = handoff ]; then
-        # --from-handoff (and the relaunch of an ags -switch): the r answer,
+        # --from-handoff (and the relaunch of a cs -switch): the r answer,
         # unasked, as on Claude. Not from an encrypted session's vault, which
         # the r path below does not read (lib/78-switch.sh).
         if _switch_session_encrypted "$session_dir"; then
-            _codex_launch_error "Codex does not read handoffs from .cs/private yet. Continue from it under Claude: ags $session_name --engine claude --from-handoff"
+            _codex_launch_error "Codex does not read handoffs from .cs/private yet. Continue from it under Claude: cs $session_name --engine claude --from-handoff"
             return 1
         fi
         [ -n "$pending_handoff" ] || {
@@ -299,11 +299,10 @@ _launch_codex_bound() {
     unset CLAUDE_CODE_ENABLE_FUNCTION_HOOKS CLAUDE_CODE_AUTO_MEMORY_PATH
     unset CLAUDE_COWORK_MEMORY_PATH_OVERRIDE
     CS_BIN=$(_codex_cs_binary) || {
-        _codex_launch_error "Cannot resolve the ags executable for this session."
+        _codex_launch_error "Cannot resolve the cs executable for this session."
         return 1
     }
     export CS_BIN
-    export AGS_BIN="$CS_BIN"
 
     local actor
     actor=$(cs_actor_slug "$session_dir") || return 1
@@ -387,7 +386,7 @@ _launch_codex_bound() {
         _switch_resume_handoff "$session_dir" "$thread_id" kick
     fi
 
-    printf '%s\n' 'Codex via ags: session context, exact resume and rotation are enabled; Claude hooks, autosave, and task queue integration are unavailable.'
+    printf '%s\n' 'Codex via cs: session context, exact resume and rotation are enabled; Claude hooks, autosave, and task queue integration are unavailable.'
     # A dedicated native writer lives for this supervised CLI lifetime.
     # Signals and lock cleanup belong to the shared controller.
     cs_run_child "$codex_bin" --no-daemon resume "$thread_id" -C "$session_dir" ${kick:+"$kick"}

@@ -177,7 +177,7 @@ _cs_session_is_enabled() {  # session_dir
     return 0
 }
 
-# The name a session is known by is not always its basename: `ags -adopt` links
+# The name a session is known by is not always its basename: `cs -adopt` links
 # a chosen name at an unrelated project path, and the link is invisible from the
 # directory this walk arrives at. Adoption records the name in machine-local
 # state, and opening an adopted session through cs rewrites it there, so a

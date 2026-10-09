@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-# ABOUTME: Titles the iTerm tab showing a tmux window (iTerm's tmux integration) after the ags sessions in its panes.
-# ABOUTME: ags runs it in the background on every title claim; iTerm's Python API is the only way to set that tab's title.
+# ABOUTME: Titles the iTerm tab showing a tmux window (iTerm's tmux integration) after the cs sessions in its panes.
+# ABOUTME: cs runs it in the background on every title claim; iTerm's Python API is the only way to set that tab's title.
 """Usage: cs-iterm-tab.py <tmux window id, e.g. @12>
 
 Reads the window's pane claims (the @cs_session pane option) from the tmux
 server in $TMUX and sets the title of the iTerm tab showing that window to
-"ags: a | b", in pane order. Setting it also renames the tmux window to the
+"cs: a | b", in pane order. Setting it also renames the tmux window to the
 same text.
 
 Failures (no iterm2 module, iTerm not running, the API disabled) are raised
-as they are: ags discards this script's output and never waits on it.
+as they are: cs discards this script's output and never waits on it.
 """
 
 import signal
@@ -33,16 +33,16 @@ def _tmux(*args: str) -> str:
 
 
 def window_title(window: str) -> str:
-    """'ags: a | b' from the window's pane claims in pane order; '' when none."""
+    """'cs: a | b' from the window's pane claims in pane order; '' when none."""
     names: list[str] = []
     for line in _tmux("list-panes", "-t", window, "-F", "#{@cs_session}").splitlines():
         if line and line not in names:
             names.append(line)
-    return "ags: " + " | ".join(names) if names else ""
+    return "cs: " + " | ".join(names) if names else ""
 
 
 def release_window(window: str) -> None:
-    """The state ags leaves a window in once no ags session claims it: setting
+    """The state cs leaves a window in once no cs session claims it: setting
     the tab title renamed the window, and a rename turns automatic-rename off."""
     for option in ("automatic-rename", "allow-rename", "allow-set-title"):
         subprocess.run(["tmux", "set-window-option", "-t", window, option, "on"],

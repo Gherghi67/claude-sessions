@@ -192,7 +192,7 @@ test_remove_confirm_lists_foreign_entries() {
     touch "$dir/notes.txt"
     local out
     out=$(printf 'n\n' | CS_ASSUME_TTY=1 "$CS_BIN" -rm f4 2>&1) || return 1
-    assert_output_contains "$out" "Also deletes files ags did not create: notes.txt" "confirm lists the foreign entry" || return 1
+    assert_output_contains "$out" "Also deletes files cs did not create: notes.txt" "confirm lists the foreign entry" || return 1
     assert_dir "$dir" "declined session must survive" || return 1
 }
 
@@ -228,7 +228,7 @@ test_remove_goes_ahead_once_the_vault_is_unmounted() {
     assert_not_exists "$dir" "an unmounted encrypted session is removed" || return 1
 }
 
-# An ags -encrypt that stops partway leaves its volume mounted at .cs/vault-mnt
+# A cs -encrypt that stops partway leaves its volume mounted at .cs/vault-mnt
 # before any vault link exists, so only the mount table shows it.
 _half_encrypted_session() {  # name; echoes the session dir
     local dir
@@ -280,13 +280,13 @@ test_remove_refuses_when_the_mount_table_cannot_be_read() {
     _stub_mount_unreadable "$d" || return 1
     out=$(PATH="$d:$PATH" "$CS_BIN" -rm h4 --force --delete-files </dev/null 2>&1) || rc=$?
     assert_eq "1" "$rc" "removal refuses" || return 1
-    assert_output_contains "$out" "Error: ags -rm could not read the mount table, so it cannot tell whether a volume is mounted inside 'h4'; refusing to remove it." "says why" || return 1
+    assert_output_contains "$out" "Error: cs -rm could not read the mount table, so it cannot tell whether a volume is mounted inside 'h4'; refusing to remove it." "says why" || return 1
     assert_dir "$dir" "the session survives" || return 1
 }
 
-# Runs `ags -rm <args>` with a mount stub first on PATH and gives it 30 s, so a
+# Runs `cs -rm <args>` with a mount stub first on PATH and gives it 30 s, so a
 # parse that never ends fails the test instead of hanging the suite. The scan
-# runs in a command-substitution child of ags, so that child goes first. Prints
+# runs in a command-substitution child of cs, so that child goes first. Prints
 # the output, then "rc=<status>" (124 for a run that had to be stopped).
 _rm_within_30s() {  # stub-dir args...
     local stub="$1" out="$TEST_TMPDIR/rm-within.out" pid i=0 rc=0
@@ -402,7 +402,7 @@ test_remove_force_on_adopted_removes_only_the_link() {
     assert_dir "$project_dir/.cs" "project .cs/ should still be present" || return 1
 }
 
-# Under the ags profile's encrypted backend the keychain holds the stable
+# Under the code-sessions profile's encrypted backend the keychain holds the stable
 # install's cs:<session>:* secrets, and a session both have shares the name.
 # -rm deletes the session's files and nothing in any secrets store, so it must
 # never call security at all.
@@ -414,7 +414,7 @@ test_remove_never_touches_the_keychain() {
     chmod +x "$stub/security"
     CS_SECRETS_BACKEND=encrypted PATH="$stub:$PATH" "$CS_BIN" -rm ask --force </dev/null >/dev/null 2>&1 || return 1
     assert_not_exists "$CS_SESSIONS_ROOT/ask" "the session is removed" || return 1
-    assert_file_not_exists "$stub/calls" "ags -rm must not call security" || return 1
+    assert_file_not_exists "$stub/calls" "cs -rm must not call security" || return 1
 }
 
 run_test test_remove_empty_name_rejected_before_any_deletion

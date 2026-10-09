@@ -7,7 +7,7 @@ The user's message may contain sensitive credentials. Your task is to store any 
 
 ## Prerequisites
 
-This skill only works in an `ags` session. Check if `$CS_SESSION_NAME` environment variable exists:
+This skill only works in an `cs` session. Check if `$CS_SESSION_NAME` environment variable exists:
 
 ```bash
 echo $CS_SESSION_NAME
@@ -41,7 +41,7 @@ If empty, inform the user that secrets storage requires a cs session and skip st
    `.cs/local/session.log` (`.cs/private/session.log` in an encrypted
    session) under Claude Code, and in the engine's own transcript under every
    engine. The shell command itself must not contain the secret:
-   - Run `ags -secrets list` first. `set` replaces an existing value silently
+   - Run `cs -secrets list` first. `set` replaces an existing value silently
      (no diff, no prompt), so if the name you chose already exists, pick a more
      specific name or confirm with the user before overwriting.
    - Write the raw value to a scratch file with your file-writing tool, not the
@@ -53,7 +53,7 @@ If empty, inform the user that secrets storage requires a cs session and skip st
      and that snapshot survives the later `rm`
    - Store it by redirecting that file into stdin:
      ```bash
-     ags -secrets set KEY_NAME < <scratchdir>/.secret
+     cs -secrets set KEY_NAME < <scratchdir>/.secret
      ```
    - Delete the scratch file: `rm -f <scratchdir>/.secret`
 
@@ -63,9 +63,9 @@ If empty, inform the user that secrets storage requires a cs session and skip st
    file is still deleted per step 4, but do not tell the user a secret was saved.
    On success, tell the user:
    - Which secrets were stored and under what names
-   - How to retrieve: `ags -secrets get KEY_NAME`
-   - How to list all: `ags -secrets list`
-   - How to delete if unwanted: `ags -secrets delete KEY_NAME`
+   - How to retrieve: `cs -secrets get KEY_NAME`
+   - How to list all: `cs -secrets list`
+   - How to delete if unwanted: `cs -secrets delete KEY_NAME`
 
 ## Important
 

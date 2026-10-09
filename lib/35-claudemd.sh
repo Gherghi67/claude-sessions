@@ -61,7 +61,7 @@ _emit_memory_note_block() {
 <!-- cs:memory-note -->
 ## Where memory lives
 
-Claude's built-in memory writes durable facts to `.cs/memory/` (ags redirects via `CLAUDE_COWORK_MEMORY_PATH_OVERRIDE`); the `MEMORY.md` index lists entries and individual `<bucket>_*.md` files are loaded lazily. Only `narrative.<actor>.md` is per-actor: the durable buckets and their index are shared by every actor working in this session, so an entry may describe a different person than the one present.
+Claude's built-in memory writes durable facts to `.cs/memory/` (cs redirects via `CLAUDE_COWORK_MEMORY_PATH_OVERRIDE`); the `MEMORY.md` index lists entries and individual `<bucket>_*.md` files are loaded lazily. Only `narrative.<actor>.md` is per-actor: the durable buckets and their index are shared by every actor working in this session, so an entry may describe a different person than the one present.
 EOF
 }
 
@@ -75,10 +75,10 @@ _emit_encrypted_protocol_block() {
 
 This session keeps its private files in an encrypted vault: `.cs/memory`, `.cs/plans` and `.cs/private` link into it. Every other path in the session directory is plaintext on disk and in backups. These rules override the Session Files and Documentation Discipline sections above:
 
-- Keep the objective, environment and outcome at the top of your narrative (`.cs/memory/narrative.<actor>.md`), and read them from there on resume. `.cs/README.md` stays frontmatter only; ags does not copy your first prompt into it.
+- Keep the objective, environment and outcome at the top of your narrative (`.cs/memory/narrative.<actor>.md`), and read them from there on resume. `.cs/README.md` stays frontmatter only; cs does not copy your first prompt into it.
 - The bash-logger records every Bash command in `.cs/private/session.log`, inside the vault. The secrets rule above still applies.
 - Rotation handoffs live in `.cs/private/handoffs/` and are never committed; the `rotate` skill says how.
-- `ags -narrative rotate` archives your narrative's older sections into `.cs/private/narrative-archive/<actor>/` (or through a `.cs/narrative-archive` link into the vault); grep there on demand.
+- `cs -narrative rotate` archives your narrative's older sections into `.cs/private/narrative-archive/<actor>/` (or through a `.cs/narrative-archive` link into the vault); grep there on demand.
 - `/checkpoint` saves under `.cs/private/checkpoints/`, and the timeline records no label.
 - Keep session notes (research, scratch, drafts) under `.cs/memory`, `.cs/plans` or `.cs/private`.
 EOF
@@ -97,7 +97,7 @@ _claude_emit_session_context() {
 <!-- cs:session-protocol -->
 # Session Documentation Protocol
 
-This is a Claude Code session managed by agent-sessions (ags). Session metadata lives in the .cs/ directory. The session root is your workspace for project files.
+This is a Claude Code session managed by the cs tool. Session metadata lives in the .cs/ directory. The session root is your workspace for project files.
 
 ## Session Files - READ THESE ON RESUME
 
@@ -126,29 +126,29 @@ Treat these files as a lab notebook - document as you go, not just at the end.
 
 When the session is complete, use the \`/wrap\` command to distill durable memory entries and generate an intelligent summary of the entire session ($CS_CONTEXT_SUMMARY). Use \`/summary\` for the narrative alone, or \`/sweep\` for the memory pass alone. Mid-session, use \`/checkpoint <label>\` to snapshot git state and the narrative — e.g. before a risky refactor or destructive operation, and after reaching a green milestone (tests passing, a feature working) — saved under $CS_CONTEXT_CHECKPOINTS/.
 
-When a conversation's context grows heavy or a work phase completes, invoke the \`rotate\` skill: it writes a handoff to $CS_CONTEXT_HANDOFFS/ and arms it, so the user can run \`/clear\` to continue in a fresh conversation without leaving Claude Code (exiting and answering \`r\` at the next launch does the same). \`ags -conversations\` shows the session's conversation chain.
+When a conversation's context grows heavy or a work phase completes, invoke the \`rotate\` skill: it writes a handoff to $CS_CONTEXT_HANDOFFS/ and arms it, so the user can run \`/clear\` to continue in a fresh conversation without leaving Claude Code (exiting and answering \`r\` at the next launch does the same). \`cs -conversations\` shows the session's conversation chain.
 
 EOF
     cat << 'EOF'
 ## Secure Secrets Handling
 
-Secrets live in the ags session store, never in a project file. `ags -secrets set`
+Secrets live in the cs session store, never in a project file. `cs -secrets set`
 and the `store-secret` skill read the value on **stdin** via a file redirect —
 never `echo`/`printf` a secret into a pipe or a Bash heredoc: the bash-logger
 records the whole Bash command, plaintext and all, in `.cs/local/session.log`.
 
-Consume a secret inline — `some-command --token "$(ags -secrets get API_KEY)"` —
+Consume a secret inline — `some-command --token "$(cs -secrets get API_KEY)"` —
 so it stays out of the tool result and the transcript. A retrieved value is read
 by a command, never printed, echoed, piped, or written to a file (that includes
-`ags -secrets export` output). `ags -secrets --help` lists the rest of the verbs.
+`cs -secrets export` output). `cs -secrets --help` lists the rest of the verbs.
 
 **When you find a credential already in the workspace**, invoke the
 `store-secret` skill — it carries the full procedure. Replace the literal with
-the reference the file wants — `${API_KEY}` in a config, `$(ags -secrets get
+the reference the file wants — `${API_KEY}` in a config, `$(cs -secrets get
 API_KEY)` in a shell script. Doing it by hand instead, the safe path is exactly
 this: write the value with the **Write** tool to a file OUTSIDE the session
 directory (any Write inside it is snapshotted into the autosave ref and survives
-`rm`), run `ags -secrets set NAME < that-file`, then delete the scratch file
+`rm`), run `cs -secrets set NAME < that-file`, then delete the scratch file
 immediately.
 
 EOF
@@ -176,7 +176,7 @@ When the conversation reaches a natural stopping point — work shipped, a PR me
 
 Do not fire on every short affirmative ("yes", "ok", "thanks"). Fire when the *work itself* has reached a coherent stopping point, not when a single answer satisfied a single question. False positives erode the signal — be picky.
 
-To opt out, delete the prose above but keep the `cs:wrap-cues` HTML comment as a tombstone — ags treats the sentinel's presence as "managed, do not re-add."
+To opt out, delete the prose above but keep the `cs:wrap-cues` HTML comment as a tombstone — cs treats the sentinel's presence as "managed, do not re-add."
 EOF
 }
 

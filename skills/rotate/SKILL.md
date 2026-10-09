@@ -16,15 +16,15 @@ Only works in a cs session: check that `$CS_SESSION_NAME` is set. If
 empty, tell the user rotation needs a cs session and stop.
 
 The engine's adapter has to carry the handoff into the fresh conversation:
-run `ags -engine supports rotation`. If it exits non-zero, print the line it
+run `cs -engine supports rotation`. If it exits non-zero, print the line it
 printed, tell the user that exiting and answering `r` at the next
-`ags <session-name>` launch is not available either, and stop before writing
+`cs <session-name>` launch is not available either, and stop before writing
 anything. The Claude and Codex adapters both declare `rotation`; steps 10 and
-11 differ between them, so note the `engine:` line `ags -engine` prints.
+11 differ between them, so note the `engine:` line `cs -engine` prints.
 
 A rotation needs a purpose — one line describing what the next conversation
 should do. If the user did not give one, take it from the conversation: the
-work in flight and its next step. Do not stop to ask; the `ags` mod's
+work in flight and its next step. Do not stop to ask; the `cs` mod's
 button runs `/rotate` with no argument, and a question there would defeat the
 one-key rotation it exists for.
 
@@ -39,7 +39,7 @@ vault is locked: tell the user to mount it and stop.
 ## Process
 
 1. Determine the parent conversation UUID: the `conversation:` line that
-   `ags -engine` prints (under Claude, the `claude_session_id` binding cs
+   `cs -engine` prints (under Claude, the `claude_session_id` binding cs
    keeps in `.cs/local/state`), or if that is empty, `$CS_CLAUDE_SESSION_ID`.
 
    Take the binding first. `CS_CLAUDE_SESSION_ID` is the *launch* UUID —
@@ -173,8 +173,8 @@ vault is locked: tell the user to mount it and stop.
      path first, and if the file is absent on this machine, to ask the user
      before proceeding as if there were no constraint.
      `.cs/handoffs/` is tracked, so writing one here publishes it;
-     credentials live in `ags -secrets`. Name the secret's purpose instead:
-     "the deploy token, in `ags -secrets get DEPLOY_TOKEN`".
+     credentials live in `cs -secrets`. Name the secret's purpose instead:
+     "the deploy token, in `cs -secrets get DEPLOY_TOKEN`".
      Re-read the finished body before step 4 commits it, for secrets and
      for the detail this rule names: an exact reading is where a secret
      hides, and a verbatim quote is where personal detail does.
@@ -274,7 +274,7 @@ vault is locked: tell the user to mount it and stop.
 
    Arming is the final step because an armed marker is fragile in a way a
    committed file is not. If the CLI exits before the ritual finishes and
-   the user relaunches, `ags <name>`'s prompt disarms the marker on `Y`, `n`
+   the user relaunches, `cs <name>`'s prompt disarms the marker on `Y`, `n`
    or Enter (lib/75-launch.sh), and nothing re-arms it; a later `/clear`
    then opens a bare conversation with this handoff left `unconsumed`. The
    launch prompt recovers either state — it scans the store and offers an
@@ -288,13 +288,13 @@ vault is locked: tell the user to mount it and stop.
    to start it, and a message they do send takes precedence over the handoff.
 
    Under Codex (`engine: codex`) say instead: Codex starts no turn by itself,
-   so after `/clear` they send one message, and `go` is enough. ags's
+   so after `/clear` they send one message, and `go` is enough. cs's
    SessionStart hook runs on that first message: it points the session at the
    new conversation and hands it this handoff, and the reply begins the next
    step. A message with its own content takes precedence over the handoff.
 
    If they would rather stop for the day, exiting and answering `r` at the
-   next `ags <session-name>` launch does the same thing. Answering `Y` or `n`
+   next `cs <session-name>` launch does the same thing. Answering `Y` or `n`
    there disarms the marker (the handoff itself stays pending, so a later
    rotate can re-arm it), and `d` discards the handoff outright.
 
@@ -309,7 +309,7 @@ vault is locked: tell the user to mount it and stop.
 
    This is the one step you cannot take for the user. A hook cannot submit
    to Claude Code's command queue (it accepts the TUI's own input only); the
-   `ags` mod's button can, and once the marker is armed it reads
+   `cs` mod's button can, and once the marker is armed it reads
    `/clear and continue from the handoff`. Forced rotation is on by
    default (at 80% context), and while it is on, the mod counts twenty
    seconds down once this turn ends with the handoff armed and runs the

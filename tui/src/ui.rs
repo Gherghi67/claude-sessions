@@ -296,7 +296,7 @@ fn render_masthead(app: &App, frame: &mut Frame, area: Rect) {
     };
     let mut spans = vec![
         Span::styled("\u{258c} ", Style::default().fg(p.rail[0])),
-        Span::styled("ags-tui", Style::default().fg(p.rust).add_modifier(Modifier::BOLD)),
+        Span::styled("cs-tui", Style::default().fg(p.rust).add_modifier(Modifier::BOLD)),
         Span::styled(
             format!("  {} sessions", app.sessions.len()),
             Style::default().fg(p.ink).add_modifier(Modifier::BOLD),
@@ -3620,7 +3620,7 @@ mod tests {
         let mut app = App::new(one_session());
         app.theme = Palette::dark();
         let text = render_wide(&mut app);
-        assert!(text.contains("ags-tui"), "masthead brand missing:\n{text}");
+        assert!(text.contains("cs-tui"), "masthead brand missing:\n{text}");
         assert!(text.contains("sessions"), "session count missing:\n{text}");
         assert!(text.contains("live"), "live count missing:\n{text}");
         assert!(text.contains("sorted by"), "sort readout missing:\n{text}");

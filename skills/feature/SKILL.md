@@ -14,7 +14,7 @@ Only works in a cs session: check that `$CS_SESSION_NAME` has a value.
 If empty, tell the user starting a feature needs a cs session and stop.
 
 The new session reads its brief at its first turn only where the engine's
-adapter hands it over: run `ags -engine supports spawn_brief`. If it exits
+adapter hands it over: run `cs -engine supports spawn_brief`. If it exits
 non-zero, print its line and stop; a spawned session there would open
 without the brief. Today only the Claude adapter declares `spawn_brief`.
 
@@ -55,7 +55,7 @@ One paragraph: what to build and why.
 
 ## Report back
 When done, send a one-line result to the session that spawned you:
-ags -msg <spawner> -k result "<what landed, what is left>"
+cs -msg <spawner> -k result "<what landed, what is left>"
 The base session <base> then lands the work with /finish <feature>.
 ```
 
@@ -78,16 +78,16 @@ into place, so nothing of yours stays in the session tree.
 ## Spawn
 
 ```
-ags -spawn <base>@<feature> --brief "$brief"
+cs -spawn <base>@<feature> --brief "$brief"
 rm -f "$brief"
 ```
 
 Add `--task "..."` lines only for work that is a checklist item on its own;
 the brief already carries the feature. Let the permission prompt on
-`ags -spawn` stand: that prompt is the user's confirmation that a worktree, a
+`cs -spawn` stand: that prompt is the user's confirmation that a worktree, a
 branch and a window are about to exist. Never work around it.
 
-ags refuses when the name is invalid, tmux is missing, the session is already
+cs refuses when the name is invalid, tmux is missing, the session is already
 open, or a pending spawn for the name exists (cs keeps the earlier brief and
 refuses the new one). Print the refusal verbatim and stop; do not retry with
 a different name on your own.
@@ -100,7 +100,7 @@ tmux; the session is `cs` unless `CS_TMUX_SESSION` names another, and a
 `CS_TMUX_SOCKET` server adds `-L <socket>`). Then tell the
 user, in one or two lines, that the feature session reads its brief at
 `.cs/brief.md` and begins, that its result arrives here as mail from
-`ags -msg`, and that `/finish <feature>` lands it. The mail surfaces in this
-conversation by itself only where `ags -engine supports mail_delivery`
-succeeds; elsewhere, say the user reads it with `ags -msg` themselves. This
+`cs -msg`, and that `/finish <feature>` lands it. The mail surfaces in this
+conversation by itself only where `cs -engine supports mail_delivery`
+succeeds; elsewhere, say the user reads it with `cs -msg` themselves. This
 session continues with its own work.

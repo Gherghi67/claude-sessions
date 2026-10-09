@@ -21,7 +21,7 @@ test_lint_global_command_removed() {
     local out ec
     out=$("$CS_BIN" -lint /dev/null 2>&1); ec=$?
     [ "$ec" -ne 0 ] || { echo "  FAIL: 'cs -lint' should exit non-zero"; return 1; }
-    assert_output_contains "$out" "Unknown command" "'ags -lint' must report an unknown command" || return 1
+    assert_output_contains "$out" "Unknown command" "'cs -lint' must report an unknown command" || return 1
 }
 
 test_help_has_no_lint() {
@@ -75,7 +75,7 @@ test_install_does_not_register_prose_lint() {
 test_no_shipped_prompt_invokes_lint() {
     local hits
     hits=$(grep -rl -- "cs -lint" "$REPO_ROOT/commands" "$REPO_ROOT/skills" "$REPO_ROOT/hooks" 2>/dev/null || true)
-    assert_eq "" "$hits" "no shipped command, skill or hook may invoke the removed ags -lint" || return 1
+    assert_eq "" "$hits" "no shipped command, skill or hook may invoke the removed cs -lint" || return 1
 }
 
 test_completions_do_not_offer_lint() {

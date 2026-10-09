@@ -38,8 +38,7 @@ setup() {
     export CS_HELPER_EXIT=0 CS_CODEX_EXIT=0
     export CODEX_BIN="$TEST_TMPDIR/codex with spaces"
     export CS_CODEX_THREAD_BIN="$TEST_TMPDIR/cs-codex-thread"
-    unset AGS_BIN
-    export CS_BIN="$SCRIPT_DIR/../bin/ags"
+    export CS_BIN="$SCRIPT_DIR/../bin/cs"
     cat > "$CODEX_BIN" <<'CODEX'
 #!/usr/bin/env bash
 printf '%s\n' "$@" > "$CS_CODEX_LOG"

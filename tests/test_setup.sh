@@ -9,13 +9,14 @@ REPO="$SCRIPT_DIR/.."
 stage_checkout() {
     local payload
     CHECKOUT="$TEST_TMPDIR/checkout with spaces"
-    PROFILE="$(cd -P "$HOME" && pwd)/.local/share/agent-sessions/home"
+    PROFILE="$(cd -P "$HOME" && pwd)/.local/share/code-sessions/home"
+    OLD_PROFILE="$(cd -P "$HOME" && pwd)/.local/share/agent-sessions/home"
     mkdir -p "$CHECKOUT/bin" "$CHECKOUT/tui" "$TEST_TMPDIR/tools"
     cp "$REPO/setup.sh" "$REPO/build.sh" "$REPO/install.sh.in" "$CHECKOUT/"
     for payload in lib hooks skills mods completions scripts; do
         cp -R "$REPO/$payload" "$CHECKOUT/"
     done
-    for payload in ags-secrets ags-codex-thread ags-statusline ags-subagent-statusline; do
+    for payload in cs-secrets cs-codex-thread cs-statusline cs-subagent-statusline; do
         cp "$REPO/bin/$payload" "$CHECKOUT/bin/"
     done
     cp "$REPO/tui/Cargo.toml" "$REPO/tui/Cargo.lock" "$CHECKOUT/tui/"
@@ -23,11 +24,11 @@ stage_checkout() {
     # build invocation and the real installer's selection of the built picker.
     cat > "$TEST_TMPDIR/tools/cargo" <<'EOF'
 #!/bin/sh
-printf '%s\n' "$*" >> "$AGS_SETUP_CARGO_LOG"
-[ "${AGS_SETUP_CARGO_FAIL:-0}" -eq 0 ] || exit 7
+printf '%s\n' "$*" >> "$CS_SETUP_CARGO_LOG"
+[ "${CS_SETUP_CARGO_FAIL:-0}" -eq 0 ] || exit 7
 mkdir -p tui/target/release
-printf '#!/bin/sh\nprintf "picker fixture\\n"\n' > tui/target/release/ags-tui
-chmod +x tui/target/release/ags-tui
+printf '#!/bin/sh\nprintf "picker fixture\\n"\n' > tui/target/release/cs-tui
+chmod +x tui/target/release/cs-tui
 EOF
     chmod +x "$TEST_TMPDIR/tools/cargo"
 }
@@ -37,7 +38,7 @@ run_setup() {
         unset ZDOTDIR CS_INSTALL_ENGINES
         cd "$TEST_TMPDIR"
         PATH="$TEST_TMPDIR/tools:$PATH" SHELL="${TEST_SHELL:-/bin/zsh}" \
-            AGS_SETUP_CARGO_LOG="$TEST_TMPDIR/cargo.log" \
+            CS_SETUP_CARGO_LOG="$TEST_TMPDIR/cargo.log" \
             sh "$CHECKOUT/setup.sh" "$@"
     ) > "$TEST_TMPDIR/setup.log" 2>&1 || {
         cat "$TEST_TMPDIR/setup.log"
@@ -52,12 +53,17 @@ test_setup_builds_and_installs_both_engines_from_any_directory() {
     assert_eq 'claude,codex' "$(cat "$PROFILE/.local/bin/.cs-install-engines")" || return 1
     assert_file_contains "$TEST_TMPDIR/cargo.log" 'build --release --locked --manifest-path' || return 1
     local tool
-    for tool in ags ags-secrets ags-codex-thread ags-statusline ags-subagent-statusline ags-tui; do
-        [ -x "$HOME/.local/bin/$tool" ] || { echo "Missing executable: $tool"; return 1; }
+    for tool in code-sessions ccs; do
+        [ -x "$HOME/.local/bin/$tool" ] || { echo "Missing launcher: $tool"; return 1; }
     done
+    for tool in cs cs-secrets cs-codex-thread cs-statusline cs-subagent-statusline cs-tui; do
+        [ -x "$PROFILE/.local/bin/$tool" ] && [ ! -L "$PROFILE/.local/bin/$tool" ] \
+            || { echo "Missing profile executable: $tool"; return 1; }
+    done
+    # cs on PATH stays the original's: setup puts nothing of its own there.
     assert_not_exists "$HOME/.local/bin/cs" || return 1
-    assert_eq ags "$(readlink "$PROFILE/.local/bin/cs")" || return 1
-    assert_eq 'picker fixture' "$("$HOME/.local/bin/ags-tui")" || return 1
+    assert_not_exists "$HOME/.local/bin/ags" || return 1
+    assert_eq 'picker fixture' "$("$PROFILE/.local/bin/cs-tui")" || return 1
     jq -e '.hooks.SessionStart | length > 0' "$PROFILE/.claude/settings.json" >/dev/null || return 1
     jq -e 'has("tui") | not' "$PROFILE/.claude/settings.json" >/dev/null || return 1
     # The launcher points CODEX_HOME here, and Codex refuses one that does not exist.
@@ -68,10 +74,11 @@ test_setup_builds_and_installs_both_engines_from_any_directory() {
     assert_not_exists "$HOME/user-codex" "setup deploys into the profile's CODEX_HOME, not the caller's" || return 1
     assert_not_exists "$HOME/.codex" || return 1
     assert_not_exists "$HOME/.claude" || return 1
-    "$HOME/.local/bin/ags" -version >/dev/null || return 1
+    assert_output_contains "$("$HOME/.local/bin/ccs" -version)" '(code-sessions, a fork of cs)' || return 1
+    assert_eq "$("$HOME/.local/bin/ccs" -version)" "$("$HOME/.local/bin/code-sessions" -version)" || return 1
     # Test the saved path as a new shell would read it.
-    PATH=/usr/bin:/bin /bin/sh -c '. "$HOME/.zshrc"; command -v ags' > "$TEST_TMPDIR/resolved"
-    assert_eq "$HOME/.local/bin/ags" "$(cat "$TEST_TMPDIR/resolved")"
+    PATH=/usr/bin:/bin /bin/sh -c '. "$HOME/.zshrc"; command -v ccs' > "$TEST_TMPDIR/resolved"
+    assert_eq "$HOME/.local/bin/ccs" "$(cat "$TEST_TMPDIR/resolved")"
 }
 
 test_setup_reinstall_preserves_user_configuration_and_path_is_unique() {
@@ -80,7 +87,7 @@ test_setup_reinstall_preserves_user_configuration_and_path_is_unique() {
     run_setup || return 1
     run_setup --skip-tui-build || return 1
     assert_file_contains "$HOME/.zshrc" '# my existing settings' || return 1
-    assert_eq 1 "$(grep -c '^# >>> agent-sessions PATH >>>$' "$HOME/.zshrc")" || return 1
+    assert_eq 1 "$(grep -c '^# >>> code-sessions PATH >>>$' "$HOME/.zshrc")" || return 1
     assert_eq 1 "$(wc -l < "$TEST_TMPDIR/cargo.log" | tr -d ' ')"
 }
 
@@ -89,8 +96,8 @@ test_setup_configures_bash_login_and_interactive_shells() {
     printf '# keep my login settings\n' > "$HOME/.bash_profile"
     TEST_SHELL=/bin/bash run_setup --skip-tui-build || return 1
     assert_file_contains "$HOME/.bash_profile" '# keep my login settings' || return 1
-    assert_file_contains "$HOME/.bash_profile" '# >>> agent-sessions PATH >>>' || return 1
-    assert_file_contains "$HOME/.bashrc" '# >>> agent-sessions PATH >>>' || return 1
+    assert_file_contains "$HOME/.bash_profile" '# >>> code-sessions PATH >>>' || return 1
+    assert_file_contains "$HOME/.bashrc" '# >>> code-sessions PATH >>>' || return 1
     assert_not_exists "$HOME/.profile"
 }
 
@@ -105,7 +112,7 @@ test_setup_respects_a_custom_zsh_startup_directory() {
             return 1
         }
     assert_file_contains "$startup_dir/.zshrc" '# my custom zsh settings' || return 1
-    assert_file_contains "$startup_dir/.zshrc" '# >>> agent-sessions PATH >>>' || return 1
+    assert_file_contains "$startup_dir/.zshrc" '# >>> code-sessions PATH >>>' || return 1
     assert_not_exists "$HOME/.zshrc"
 }
 
@@ -119,7 +126,7 @@ test_setup_reinstall_remembers_a_codex_only_selection() {
     run_setup --skip-tui-build || return 1
     assert_eq codex "$(cat "$PROFILE/.local/bin/.cs-install-engines")" || return 1
     assert_not_exists "$HOME/.claude" || return 1
-    [ -x "$HOME/.local/bin/ags-codex-thread" ]
+    [ -x "$PROFILE/.local/bin/cs-codex-thread" ]
 }
 
 # The profile's Claude starts from a fresh config, and Claude Code gives a fresh
@@ -174,7 +181,8 @@ seed_stable_install() {
 stable_snapshot() {
     find "$HOME/.claude" "$HOME/.claude-sessions" "$HOME/.config" "$HOME/.cache" \
         "$HOME/.bash_completion.d" "$HOME/.zsh" "$HOME/.local/bin" \
-        -path "$HOME/.local/bin/ags*" -prune -o -type f -exec shasum {} \; | sort
+        \( -path "$HOME/.local/bin/code-sessions" -o -path "$HOME/.local/bin/ccs" \) -prune \
+        -o -type f -exec shasum {} \; | sort
 }
 
 test_setup_and_reinstall_preserve_the_entire_stable_install() {
@@ -192,59 +200,62 @@ test_public_launchers_keep_the_users_home_and_point_tools_at_the_profile() {
     stage_checkout
     seed_stable_install
     run_setup --skip-tui-build || return 1
-    cat > "$PROFILE/.local/bin/ags" <<'EOF'
+    cat > "$PROFILE/.local/bin/cs" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$HOME" "$CLAUDE_CONFIG_DIR" "$CODEX_HOME" "$CS_SESSIONS_ROOT" "$CS_INSTALL_DIR" \
     "$CS_CONFIG_DIR" "$CS_CACHE_DIR" "$CS_DATA_DIR" "$CS_SECRETS_DIR" "${XDG_CONFIG_HOME:-unset}" \
-    "${CS_TMUX_SOCKET:-unset}" "${CS_TMUX_SESSION:-unset}" "${CS_SECRETS_BACKEND:-unset}"
+    "${CS_TMUX_SOCKET:-unset}" "${CS_TMUX_SESSION:-unset}" "${CS_SECRETS_BACKEND:-unset}" \
+    "${CODE_SESSIONS_HOME:-unset}" "$CS_BIN" "$(command -v cs)"
 mkdir -p "$CS_CACHE_DIR"
 printf 'experimental cache\n' > "$CS_CACHE_DIR/update-check"
 EOF
-    chmod +x "$PROFILE/.local/bin/ags"
+    chmod +x "$PROFILE/.local/bin/cs"
     local output
     output=$(CS_SESSIONS_ROOT="$HOME/.claude-sessions" CLAUDE_CONFIG_DIR="$HOME/.claude" \
-        CODEX_HOME="$HOME/.codex" CS_SECRETS_BACKEND=keychain "$HOME/.local/bin/ags" -version)
+        CODEX_HOME="$HOME/.codex" CS_SECRETS_BACKEND=keychain PATH="$HOME/.local/bin:$PATH" \
+        "$HOME/.local/bin/ccs" -version)
     # HOME stays the user's: macOS finds the login keychain through it, and ~/.ssh
     # and the rest of the user's credentials stay visible to the session. Every
     # tool is pointed at the profile through its own directory variable, and the
     # generic XDG roots are left alone so gh, git and friends keep their config.
-    # ags -spawn opens its windows on a tmux server of its own, and secrets stay
+    # cs -spawn opens its windows on a tmux server of its own, and secrets stay
     # in the profile's encrypted store, out of the keychain's shared cs:<session>
-    # namespace, whatever the caller's shell says.
-    assert_eq "$HOME"$'\n'"$PROFILE/.claude"$'\n'"$PROFILE/.codex"$'\n'"$PROFILE/sessions"$'\n'"$PROFILE/.local/bin"$'\n'"$PROFILE/.config/cs"$'\n'"$PROFILE/.cache/cs"$'\n'"$PROFILE/.local/share/cs"$'\n'"$PROFILE/.cs-secrets"$'\n'unset$'\n'ags$'\n'ags$'\n'encrypted "$output" || return 1
+    # namespace, whatever the caller's shell says. Inside, cs is code-sessions:
+    # CODE_SESSIONS_HOME says so, and the profile's bin comes first on PATH.
+    assert_eq "$HOME"$'\n'"$PROFILE/.claude"$'\n'"$PROFILE/.codex"$'\n'"$PROFILE/sessions"$'\n'"$PROFILE/.local/bin"$'\n'"$PROFILE/.config/cs"$'\n'"$PROFILE/.cache/cs"$'\n'"$PROFILE/.local/share/cs"$'\n'"$PROFILE/.cs-secrets"$'\n'unset$'\n'code-sessions$'\n'code-sessions$'\n'encrypted$'\n'"$PROFILE"$'\n'"$PROFILE/.local/bin/cs"$'\n'"$PROFILE/.local/bin/cs" "$output" || return 1
     assert_eq 'stable cache' "$(cat "$HOME/.cache/cs/update-check")" || return 1
     assert_eq 'experimental cache' "$(cat "$PROFILE/.cache/cs/update-check")" || return 1
     local status=0
-    (cd "$HOME/.claude-sessions/stable-project" && "$HOME/.local/bin/ags" .) \
+    (cd "$HOME/.claude-sessions/stable-project" && "$HOME/.local/bin/ccs" .) \
         > "$TEST_TMPDIR/refusal" 2>&1 || status=$?
     assert_eq 1 "$status" || return 1
-    assert_file_contains "$TEST_TMPDIR/refusal" 'existing cs workspace' || return 1
+    assert_file_contains "$TEST_TMPDIR/refusal" 'workspace of the original cs' || return 1
     status=0
-    "$HOME/.local/bin/ags" -update > "$TEST_TMPDIR/refusal" 2>&1 || status=$?
+    "$HOME/.local/bin/ccs" -update > "$TEST_TMPDIR/refusal" 2>&1 || status=$?
     assert_eq 1 "$status"
 }
 
-# A project cs-to-ags.py moved over keeps its .cs/, and ags has it by a link in
-# its sessions root: the directory commands work there, nested folders too.
-test_launcher_runs_directory_commands_in_a_project_ags_has() {
+# A project the profile has by a link in its sessions root keeps its .cs/: the
+# directory commands work there, nested folders too.
+test_launcher_runs_directory_commands_in_a_project_the_profile_has() {
     stage_checkout
     seed_stable_install
     run_setup --skip-tui-build || return 1
-    printf '#!/bin/sh\necho "profile ags $*"\n' > "$PROFILE/.local/bin/ags"
-    chmod +x "$PROFILE/.local/bin/ags"
+    printf '#!/bin/sh\necho "profile cs $*"\n' > "$PROFILE/.local/bin/cs"
+    chmod +x "$PROFILE/.local/bin/cs"
     local project="$TEST_TMPDIR/moved-project"
     mkdir -p "$project/.cs" "$project/src" "$TEST_TMPDIR/other-project/.cs" "$PROFILE/sessions"
     ln -s "$project" "$PROFILE/sessions/moved"
     ln -s "$TEST_TMPDIR/elsewhere" "$PROFILE/sessions/dangling"
     local output
-    output=$(cd "$project/src" && "$HOME/.local/bin/ags" -checkpoint list) || return 1
-    assert_eq 'profile ags -checkpoint list' "$output" || return 1
-    output=$(cd "$project" && "$HOME/.local/bin/ags" .) || return 1
-    assert_eq 'profile ags .' "$output" || return 1
+    output=$(cd "$project/src" && "$HOME/.local/bin/ccs" -checkpoint list) || return 1
+    assert_eq 'profile cs -checkpoint list' "$output" || return 1
+    output=$(cd "$project" && "$HOME/.local/bin/ccs" .) || return 1
+    assert_eq 'profile cs .' "$output" || return 1
     local status=0
-    (cd "$TEST_TMPDIR/other-project" && "$HOME/.local/bin/ags" .) > "$TEST_TMPDIR/refusal" 2>&1 || status=$?
+    (cd "$TEST_TMPDIR/other-project" && "$HOME/.local/bin/ccs" .) > "$TEST_TMPDIR/refusal" 2>&1 || status=$?
     assert_eq 1 "$status" || return 1
-    assert_file_contains "$TEST_TMPDIR/refusal" 'scripts/cs-to-ags.py'
+    assert_file_contains "$TEST_TMPDIR/refusal" 'scripts/cs-to-code-sessions.py'
 }
 
 test_setup_registers_profile_hooks_by_absolute_path() {
@@ -279,7 +290,7 @@ test_direct_installer_refuses_to_replace_original_cs() {
     local status=0
     SHELL=/bin/sh bash "$CHECKOUT/install.sh" > "$TEST_TMPDIR/refusal" 2>&1 || status=$?
     assert_eq 1 "$status" || return 1
-    assert_file_contains "$TEST_TMPDIR/refusal" 'Existing cs installation detected' || return 1
+    assert_file_contains "$TEST_TMPDIR/refusal" 'The original cs is installed' || return 1
     assert_eq 'stable cs' "$("$HOME/.local/bin/cs" -version)"
 }
 
@@ -290,11 +301,11 @@ test_public_launcher_creates_a_first_session_in_the_private_profile() {
     run_setup --skip-tui-build || return 1
     cat > "$TEST_TMPDIR/tools/claude-fixture" <<'EOF'
 #!/bin/sh
-printf '%s\n' "$PWD" "$HOME" "$CLAUDE_CONFIG_DIR" > "$AGS_LAUNCH_LOG"
+printf '%s\n' "$PWD" "$HOME" "$CLAUDE_CONFIG_DIR" > "$CS_LAUNCH_LOG"
 EOF
     chmod +x "$TEST_TMPDIR/tools/claude-fixture"
-    CLAUDE_CODE_BIN="$TEST_TMPDIR/tools/claude-fixture" AGS_LAUNCH_LOG="$TEST_TMPDIR/launch.log" \
-        "$HOME/.local/bin/ags" first-test-session --engine claude > "$TEST_TMPDIR/launch-output" 2>&1 || {
+    CLAUDE_CODE_BIN="$TEST_TMPDIR/tools/claude-fixture" CS_LAUNCH_LOG="$TEST_TMPDIR/launch.log" \
+        "$HOME/.local/bin/ccs" first-test-session --engine claude > "$TEST_TMPDIR/launch-output" 2>&1 || {
             cat "$TEST_TMPDIR/launch-output"
             return 1
         }
@@ -339,22 +350,23 @@ seed_old_profile_sessions() {
         "$old/ask" "$home/work/linked" > "$PROFILE/.codex/config.toml"
 }
 
-# scripts/ags-carry-over.sh has its own suite; these pin how setup runs it.
+# scripts/carry-over.sh has its own suite; these pin how setup runs it.
 test_setup_carries_the_users_own_setup_unless_opted_out() {
     stage_checkout
     mkdir -p "$HOME/.claude/skills/my-skill"
     printf 'mine\n' > "$HOME/.claude/skills/my-skill/SKILL.md"
     run_setup --skip-tui-build --no-carry-over || return 1
     assert_not_exists "$PROFILE/.claude/skills/my-skill" "--no-carry-over" || return 1
-    AGS_CARRY_OVER=0 run_setup --skip-tui-build || return 1
-    assert_not_exists "$PROFILE/.claude/skills/my-skill" "AGS_CARRY_OVER=0" || return 1
+    CS_CARRY_OVER=0 run_setup --skip-tui-build || return 1
+    assert_not_exists "$PROFILE/.claude/skills/my-skill" "CS_CARRY_OVER=0" || return 1
     run_setup --skip-tui-build || return 1
     assert_eq "$HOME/.claude/skills/my-skill" "$(readlink "$PROFILE/.claude/skills/my-skill")" || return 1
     assert_file_contains "$TEST_TMPDIR/setup.log" 'linked claude/skills/my-skill'
 }
 
-# A link an earlier carry-over made to a skill of the user's, before ags
-# shipped one of that name: the install must not copy ags's files through it.
+# A link an earlier carry-over made to a skill of the user's, before
+# code-sessions shipped one of that name: the install must not copy its files
+# through it.
 test_setup_never_installs_through_a_carried_link() {
     stage_checkout
     mkdir -p "$HOME/.claude/skills/finish"
@@ -409,11 +421,11 @@ test_setup_moves_an_existing_profile_sessions_root() {
 test_setup_does_not_move_sessions_while_a_profile_command_runs() {
     stage_checkout
     mkdir -p "$PROFILE/.claude-sessions/ask/.cs" "$PROFILE/.local/bin"
-    printf '#!/bin/sh\nwhile :; do sleep 1; done\n' > "$PROFILE/.local/bin/ags"
-    chmod +x "$PROFILE/.local/bin/ags"
-    "$PROFILE/.local/bin/ags" ask &
+    printf '#!/bin/sh\nwhile :; do sleep 1; done\n' > "$PROFILE/.local/bin/cs"
+    chmod +x "$PROFILE/.local/bin/cs"
+    "$PROFILE/.local/bin/cs" ask &
     local pid=$! tries=0 status=0
-    until ps -p "$pid" -o command= | grep -Fq "$PROFILE/.local/bin/ags"; do
+    until ps -p "$pid" -o command= | grep -Fq "$PROFILE/.local/bin/cs"; do
         tries=$((tries + 1))
         [ "$tries" -lt 50 ] || { kill "$pid"; echo "  FAIL: fixture never started"; return 1; }
         sleep 0.1
@@ -421,12 +433,12 @@ test_setup_does_not_move_sessions_while_a_profile_command_runs() {
     run_setup --skip-tui-build > /dev/null || status=$?
     kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
     assert_eq 1 "$status" || return 1
-    assert_file_contains "$TEST_TMPDIR/setup.log" "^ *$pid .*/.local/bin/ags ask" || return 1
+    assert_file_contains "$TEST_TMPDIR/setup.log" "^ *$pid .*/.local/bin/cs ask" || return 1
     assert_dir "$PROFILE/.claude-sessions/ask/.cs" || return 1
     assert_not_exists "$PROFILE/sessions" || return 1
     # Refused before the build, so nothing was deployed.
-    assert_not_exists "$CHECKOUT/bin/ags" || return 1
-    assert_not_exists "$HOME/.local/bin/ags"
+    assert_not_exists "$CHECKOUT/bin/cs" || return 1
+    assert_not_exists "$HOME/.local/bin/ccs"
 }
 
 test_setup_does_not_merge_two_sessions_roots() {
@@ -439,6 +451,178 @@ test_setup_does_not_merge_two_sessions_roots() {
     assert_dir "$PROFILE/.claude-sessions/old-one/.cs" || return 1
     assert_dir "$PROFILE/sessions/new-one/.cs" || return 1
     assert_not_exists "$PROFILE/sessions/old-one"
+}
+
+# Before the rename the fork was ags, with its profile in
+# ~/.local/share/agent-sessions/home and ags launchers in ~/.local/bin.
+seed_ags_profile() {
+    local home old
+    home=$(cd -P "$HOME" && pwd)
+    old="$OLD_PROFILE"
+    mkdir -p "$old/.local/bin" "$old/sessions/ask/.cs" "$home/work/linked/.cs" "$old/.codex" \
+        "$old/.claude/hooks/cs" "$old/.cs-secrets" "$old/.zsh/completions" "$old/.cache/cs/git" || return 1
+    printf '#!/bin/sh\necho old ags\n' > "$old/.local/bin/ags"
+    printf '#!/bin/sh\necho old statusline\n' > "$old/.local/bin/ags-statusline"
+    chmod +x "$old/.local/bin/ags" "$old/.local/bin/ags-statusline"
+    ln -s ags "$old/.local/bin/cs"
+    ln -s ags-statusline "$old/.local/bin/cs-statusline"
+    printf 'claude,codex\n' > "$old/.local/bin/.cs-install-engines"
+    printf 'old completion\n' > "$old/.zsh/completions/_ags"
+    printf 'ask notes\n' > "$old/sessions/ask/.cs/summary.md"
+    ln -s "$home/work/linked" "$old/sessions/linked"
+    # The protocol said ags; what the user wrote above it is theirs.
+    cat > "$old/sessions/ask/CLAUDE.local.md" <<'EOF'
+My notes: try `ags -secrets` here first.
+<!-- cs:session-protocol -->
+This is a Claude Code session managed by agent-sessions (ags). Session metadata lives in the .cs/ directory.
+`ags -conversations` shows the session's conversation chain.
+Secrets live in the ags session store, never in a project file. `ags -secrets set`
+Consume a secret inline — `some-command --token "$(ags -secrets get API_KEY)"` —
+Claude's built-in memory writes durable facts to `.cs/memory/` (ags redirects via `CLAUDE_COWORK_MEMORY_PATH_OVERRIDE`)
+keep the `cs:wrap-cues` HTML comment as a tombstone — ags treats the sentinel's presence as "managed, do not re-add."
+<!-- cs:wrap-cues -->
+EOF
+    printf '<!-- cs:session-protocol -->\nmanaged by agent-sessions (ags).\n' > "$home/work/linked/CLAUDE.local.md"
+    printf 'sealed\n' > "$old/.cs-secrets/ask.enc"
+    printf 'stale\n' > "$old/.cache/cs/git/$(claude_project_key "$old/sessions/ask")"
+    mkdir -p "$old/.claude/projects/$(claude_project_key "$old/sessions/ask")"
+    printf '{}\n' > "$old/.claude/projects/$(claude_project_key "$old/sessions/ask")/transcript.jsonl"
+    # The old install wrote its hooks under HOME as setup spelled it, maybe a
+    # symlinked spelling; Claude keys trust and transcripts by the physical path.
+    local installed="$HOME/.local/share/agent-sessions/home"
+    jq -n --arg sl "$installed/.local/bin/ags-statusline" --arg hook "$installed/.claude/hooks/cs/session-start.sh" \
+        '{statusLine: {type: "command", command: $sl},
+          hooks: {SessionStart: [{hooks: [{type: "command", command: $hook}]}]}}' \
+        > "$old/.claude/settings.json"
+    jq -n --arg ask "$old/sessions/ask" --arg linked "$home/work/linked" \
+        '{other: 1, projects: {($ask): {hasTrustDialogAccepted: true}, ($linked): {hasTrustDialogAccepted: true}}}' \
+        > "$old/.claude/.claude.json"
+    printf '[projects."%s"]\ntrust_level = "trusted"\n' "$old/sessions/ask" > "$old/.codex/config.toml"
+    jq -n --arg c "$installed/.local/bin/ags -codex-hook session-start" \
+        '{hooks: {SessionStart: [{hooks: [{type: "command", command: $c}]}]}}' > "$old/.codex/hooks.json"
+    printf '{"carried": true}\n' > "$old/.codex/.ags-carried-hooks.json"
+    printf '{"display":"hi","project":"%s"}\n' "$old/sessions/ask" > "$old/.claude/history.jsonl"
+    mkdir -p "$HOME/.local/bin"
+    local name
+    for name in ags ags-tui; do
+        printf '#!/bin/sh\nprofile_home=$(cd -P "$(dirname "$0")/../share/agent-sessions/home" && pwd)\n' \
+            > "$HOME/.local/bin/$name"
+        chmod +x "$HOME/.local/bin/$name"
+    done
+    printf '#!/bin/sh\necho mine\n' > "$HOME/.local/bin/ags-mine"
+    chmod +x "$HOME/.local/bin/ags-mine"
+}
+
+test_setup_moves_the_ags_profile_over() {
+    stage_checkout
+    seed_stable_install
+    seed_ags_profile || return 1
+    stable_snapshot | grep -v -e '/\.local/bin/ags' > "$TEST_TMPDIR/before"
+    local home new old
+    home=$(cd -P "$HOME" && pwd)
+    new="$PROFILE" old="$OLD_PROFILE"
+    run_setup --skip-tui-build || return 1
+    assert_file_contains "$TEST_TMPDIR/setup.log" 'Moved the ags profile' || return 1
+    assert_not_exists "$old" || return 1
+    assert_not_exists "$(dirname "$old")" "the emptied agent-sessions folder goes too" || return 1
+    # Sessions, links, secrets and engines came along.
+    assert_eq 'ask notes' "$(cat "$new/sessions/ask/.cs/summary.md")" || return 1
+    assert_eq "$home/work/linked" "$(readlink "$new/sessions/linked")" || return 1
+    assert_eq sealed "$(cat "$new/.cs-secrets/ask.enc")" || return 1
+    assert_eq 'claude,codex' "$(cat "$new/.local/bin/.cs-install-engines")" || return 1
+    # The commands are cs's now, real files, and nothing named ags is left.
+    [ -f "$new/.local/bin/cs" ] && [ ! -L "$new/.local/bin/cs" ] || { echo "  FAIL: profile cs is not its own file"; return 1; }
+    grep -q '^CS_FORK="code-sessions"' "$new/.local/bin/cs" || { echo "  FAIL: profile cs is not code-sessions"; return 1; }
+    assert_not_exists "$new/.local/bin/ags" || return 1
+    assert_not_exists "$new/.local/bin/ags-statusline" || return 1
+    assert_not_exists "$new/.zsh/completions/_ags" || return 1
+    assert_not_exists "$new/.cache/cs/git" || return 1
+    # Transcripts and trust follow the session's new path.
+    assert_file_exists "$new/.claude/projects/$(claude_project_key "$new/sessions/ask")/transcript.jsonl" || return 1
+    assert_not_exists "$new/.claude/projects/$(claude_project_key "$old/sessions/ask")" || return 1
+    assert_eq "$(printf '%s\n' "$home/work/linked" "$new/sessions/ask" | LC_ALL=C sort)" \
+        "$(jq -r '.projects | keys[]' "$new/.claude/.claude.json" | LC_ALL=C sort)" || return 1
+    assert_eq 1 "$(jq -r '.other' "$new/.claude/.claude.json")" || return 1
+    grep -Fqx "[projects.\"$new/sessions/ask\"]" "$new/.codex/config.toml" \
+        || { cat "$new/.codex/config.toml"; echo "  FAIL: Codex trust not moved"; return 1; }
+    assert_eq "$new/sessions/ask" "$(jq -r '.project' "$new/.claude/history.jsonl")" || return 1
+    # The session protocol says cs now, in a linked session's own folder too.
+    cat > "$TEST_TMPDIR/protocol" <<'EOF'
+My notes: try `ags -secrets` here first.
+<!-- cs:session-protocol -->
+This is a Claude Code session managed by the cs tool. Session metadata lives in the .cs/ directory.
+`cs -conversations` shows the session's conversation chain.
+Secrets live in the cs session store, never in a project file. `cs -secrets set`
+Consume a secret inline — `some-command --token "$(cs -secrets get API_KEY)"` —
+Claude's built-in memory writes durable facts to `.cs/memory/` (cs redirects via `CLAUDE_COWORK_MEMORY_PATH_OVERRIDE`)
+keep the `cs:wrap-cues` HTML comment as a tombstone — cs treats the sentinel's presence as "managed, do not re-add."
+<!-- cs:wrap-cues -->
+EOF
+    cmp "$TEST_TMPDIR/protocol" "$new/sessions/ask/CLAUDE.local.md" || return 1
+    assert_eq "$(printf '<!-- cs:session-protocol -->\nmanaged by the cs tool.')" \
+        "$(cat "$home/work/linked/CLAUDE.local.md")" || return 1
+    # No file names the old profile; the hooks are registered once, by the new path.
+    local leftover
+    leftover=$(grep -rlF -e "$old" -e "$HOME/.local/share/agent-sessions" "$new/.claude/settings.json" \
+        "$new/.claude/.claude.json" "$new/.codex/hooks.json" "$new/.codex/config.toml" 2>/dev/null || true)
+    [ -z "$leftover" ] || { echo "  FAIL: still naming the old profile: $leftover"; return 1; }
+    # install.sh registers its status line under HOME as setup spells it, which
+    # may be a symlinked spelling of the same directory.
+    local status_line
+    status_line=$(jq -r '.statusLine.command' "$new/.claude/settings.json")
+    assert_eq "$new/.local/bin/cs-statusline" \
+        "$(cd -P "$(dirname "$status_line")" 2>/dev/null && pwd)/${status_line##*/}" || return 1
+    assert_eq 1 "$(jq '[.hooks[][] | .hooks[]?.command | select(endswith("/session-start.sh"))] | length' "$new/.claude/settings.json")" || return 1
+    assert_eq 1 "$(jq '[.hooks.SessionStart[] | .hooks[]?.command | select(test("-codex-hook session-start"))] | length' "$new/.codex/hooks.json")" || return 1
+    assert_file_exists "$new/.codex/.carried-hooks.json" || return 1
+    assert_not_exists "$new/.codex/.ags-carried-hooks.json" || return 1
+    # The old launchers go; a file of the user's that only shares the prefix stays,
+    # and so does the original cs.
+    assert_not_exists "$HOME/.local/bin/ags" || return 1
+    assert_not_exists "$HOME/.local/bin/ags-tui" || return 1
+    assert_eq mine "$("$HOME/.local/bin/ags-mine")" || return 1
+    assert_file_contains "$TEST_TMPDIR/setup.log" "Removed the old launcher $HOME/.local/bin/ags" || return 1
+    stable_snapshot | grep -v -e '/\.local/bin/ags' > "$TEST_TMPDIR/after"
+    cmp "$TEST_TMPDIR/before" "$TEST_TMPDIR/after" || return 1
+    # A rerun finds nothing left to move.
+    run_setup --skip-tui-build || return 1
+    assert_file_not_contains "$TEST_TMPDIR/setup.log" 'Moved the ags profile' || return 1
+    assert_eq 'ask notes' "$(cat "$new/sessions/ask/.cs/summary.md")"
+}
+
+test_setup_does_not_move_the_ags_profile_while_it_runs() {
+    stage_checkout
+    seed_ags_profile || return 1
+    printf '#!/bin/sh\nwhile :; do sleep 1; done\n' > "$OLD_PROFILE/.local/bin/ags"
+    "$OLD_PROFILE/.local/bin/ags" ask &
+    local pid=$! tries=0 status=0
+    until ps -p "$pid" -o command= | grep -Fq "$OLD_PROFILE/.local/bin/ags"; do
+        tries=$((tries + 1))
+        [ "$tries" -lt 50 ] || { kill "$pid"; echo "  FAIL: fixture never started"; return 1; }
+        sleep 0.1
+    done
+    run_setup --skip-tui-build > /dev/null || status=$?
+    kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+    assert_eq 1 "$status" || return 1
+    assert_file_contains "$TEST_TMPDIR/setup.log" "^ *$pid .*/.local/bin/ags ask" || return 1
+    assert_eq 'ask notes' "$(cat "$OLD_PROFILE/sessions/ask/.cs/summary.md")" || return 1
+    assert_not_exists "$PROFILE" || return 1
+    # Refused before the build, so nothing was deployed.
+    assert_not_exists "$CHECKOUT/bin/cs" || return 1
+    assert_not_exists "$HOME/.local/bin/ccs"
+}
+
+test_setup_does_not_merge_the_ags_profile_into_an_existing_one() {
+    stage_checkout
+    seed_ags_profile || return 1
+    mkdir -p "$PROFILE/sessions/new-one/.cs"
+    local status=0
+    run_setup --skip-tui-build > /dev/null || status=$?
+    assert_eq 1 "$status" || return 1
+    assert_file_contains "$TEST_TMPDIR/setup.log" 'Both .* exist' || return 1
+    assert_dir "$OLD_PROFILE/sessions/ask/.cs" || return 1
+    assert_dir "$PROFILE/sessions/new-one/.cs" || return 1
+    assert_not_exists "$PROFILE/sessions/ask"
 }
 
 test_setup_missing_dependency_stops_before_install_or_shell_changes() {
@@ -454,14 +638,14 @@ test_setup_missing_dependency_stops_before_install_or_shell_changes() {
     assert_file_contains "$TEST_TMPDIR/setup.log" 'prerequisites.*jq' || return 1
     assert_not_exists "$HOME/.local/bin" || return 1
     assert_not_exists "$HOME/.zshrc" || return 1
-    assert_not_exists "$CHECKOUT/bin/ags"
+    assert_not_exists "$CHECKOUT/bin/cs"
 }
 
 test_setup_failed_picker_build_stops_before_deployment() {
     stage_checkout
     local status=0
     PATH="$TEST_TMPDIR/tools:$PATH" CS_INSTALL_ENGINES=claude,codex \
-        AGS_SETUP_CARGO_LOG="$TEST_TMPDIR/cargo.log" AGS_SETUP_CARGO_FAIL=1 \
+        CS_SETUP_CARGO_LOG="$TEST_TMPDIR/cargo.log" CS_SETUP_CARGO_FAIL=1 \
         sh "$CHECKOUT/setup.sh" > "$TEST_TMPDIR/setup.log" 2>&1 || status=$?
     assert_eq 7 "$status" || return 1
     assert_not_exists "$HOME/.local/bin" || return 1
@@ -480,11 +664,14 @@ run_test test_setup_never_installs_through_a_carried_link
 run_test test_setup_moves_an_existing_profile_sessions_root
 run_test test_setup_does_not_move_sessions_while_a_profile_command_runs
 run_test test_setup_does_not_merge_two_sessions_roots
+run_test test_setup_moves_the_ags_profile_over
+run_test test_setup_does_not_move_the_ags_profile_while_it_runs
+run_test test_setup_does_not_merge_the_ags_profile_into_an_existing_one
 run_test test_setup_missing_dependency_stops_before_install_or_shell_changes
 run_test test_setup_failed_picker_build_stops_before_deployment
 run_test test_setup_and_reinstall_preserve_the_entire_stable_install
 run_test test_public_launchers_keep_the_users_home_and_point_tools_at_the_profile
-run_test test_launcher_runs_directory_commands_in_a_project_ags_has
+run_test test_launcher_runs_directory_commands_in_a_project_the_profile_has
 run_test test_setup_registers_profile_hooks_by_absolute_path
 run_test test_direct_installer_refuses_to_replace_original_cs
 run_test test_public_launcher_creates_a_first_session_in_the_private_profile

@@ -48,13 +48,13 @@ test_finish_registered_and_merge_retired_in_both_manifests() {
 test_finish_skill_teaches_the_ritual() {
     assert_file_contains "$SKILL" "scripts/finish.sh prepare" "runs the capture script" || return 1
     assert_file_contains "$SKILL" "scripts/finish.sh report" "runs the report script" || return 1
-    assert_file_contains "$SKILL" "ags <base> -integrate-feature <task> <sha> -- <gate command" "mutates only through the hidden entry" || return 1
+    assert_file_contains "$SKILL" "cs <base> -integrate-feature <task> <sha> -- <gate command" "mutates only through the hidden entry" || return 1
     assert_file_contains "$SKILL" "from-remote" "teaches the PR path" || return 1
     assert_file_contains "$SKILL" "temporary detached worktree" "gates run in the temp" || return 1
     assert_file_contains "$SKILL" "pr_state" "reads the PR state keys" || return 1
     assert_file_contains "$SKILL" "unknown" "the unknown PR state exists" || return 1
     assert_file_contains "$SKILL" "Same question as OPEN" "OPEN/unknown need explicit confirmation" || return 1
-    assert_file_contains "$SKILL" "ags <base> -retire-feature <task> <sha>" "retires only through the hidden entry" || return 1
+    assert_file_contains "$SKILL" "cs <base> -retire-feature <task> <sha>" "retires only through the hidden entry" || return 1
     assert_file_contains "$SKILL" "retire: ready" "reads the report's retire key" || return 1
     assert_file_contains "$SKILL" "retire: not-landed" "the squash case exists" || return 1
     assert_file_contains "$SKILL" "[-]-force" "and takes force only on PR evidence" || return 1
@@ -68,7 +68,7 @@ test_finish_skill_teaches_the_ritual() {
 test_finish_skill_runs_no_gate_unless_asked() {
     assert_file_contains "$SKILL" "runs no tests unless" "landing without tests is the default" || return 1
     assert_file_contains "$SKILL" "/finish <task> [-][-]gate" "the gate is one flag away" || return 1
-    assert_file_contains "$SKILL" "[-]- true" "no gate is passed as ags's own -- true" || return 1
+    assert_file_contains "$SKILL" "[-]- true" "no gate is passed as cs's own -- true" || return 1
 }
 
 test_finish_skill_keeps_the_plain_branch_context() {

@@ -543,12 +543,12 @@ test_claude_config_link_moves_claude_code_into_the_vault() {
     local rc=0
     env -u CLAUDE_CONFIG_DIR -u CLAUDE_SECURESTORAGE_CONFIG_DIR "$CS_BIN" vt <<< "" >/dev/null 2>&1 || rc=$?
 
-    assert_eq "0" "$rc" "ags should open the session" || return 1
+    assert_eq "0" "$rc" "cs should open the session" || return 1
     assert_eq "config=$CS_SESSIONS_ROOT/vt/.cs/claude-config secure=" "$(cat "$TEST_TMPDIR/launched")" \
         "claude should keep its config in the vault and its login in the default keychain entry" || return 1
 }
 
-# An ags launched from inside an encrypted session inherits that session's config
+# A cs launched from inside an encrypted session inherits that session's config
 # variables; the session it opens has no vault, so it must get the shell's
 # config, not the parent's vault. A config dir the user set themselves is theirs.
 test_session_without_claude_config_drops_an_inherited_vault_config() {
@@ -594,9 +594,9 @@ test_unmounted_claude_config_refuses_open() {
     local out rc=0
     out=$("$CS_BIN" vt <<< "" 2>&1) || rc=$?
 
-    assert_eq "1" "$rc" "ags should exit 1" || return 1
+    assert_eq "1" "$rc" "cs should exit 1" || return 1
     assert_eq "Error: vt: .cs/claude-config points at $meta/vault-mnt/claude-config, which is missing (encrypted storage not mounted?). Mount it, then reopen." \
-        "$out" "ags should name the dangling config link" || return 1
+        "$out" "cs should name the dangling config link" || return 1
     assert_file_not_exists "$TEST_TMPDIR/launched" "claude must not launch with its config unmounted" || return 1
 }
 
@@ -618,7 +618,7 @@ test_claude_config_links_the_shared_config() {
     _open_vaulted_config_session || rc=$?
 
     local config="$CS_SESSIONS_ROOT/vt/.cs/claude-config"
-    assert_eq "0" "$rc" "ags should open the session" || return 1
+    assert_eq "0" "$rc" "cs should open the session" || return 1
     assert_eq "$HOME/.claude/settings.json" "$(readlink "$config/settings.json")" \
         "settings.json should link to the shell's config" || return 1
     assert_eq "$HOME/.claude/skills" "$(readlink "$config/skills")" \
@@ -704,7 +704,7 @@ test_claude_config_seeds_claude_json_without_projects() {
     _open_vaulted_config_session || rc=$?
 
     local seeded="$CS_SESSIONS_ROOT/vt/.cs/claude-config/.claude.json"
-    assert_eq "0" "$rc" "ags should open the session" || return 1
+    assert_eq "0" "$rc" "cs should open the session" || return 1
     assert_eq '{"hasCompletedOnboarding":true,"projects":{}}' "$(jq -c . "$seeded")" \
         "the copy should keep the settings and drop every project" || return 1
     assert_eq "$seeded" "$(find "$seeded" -perm 600)" "the copy should be readable by its owner only" || return 1
@@ -728,7 +728,7 @@ test_claude_config_seeds_the_shell_profile_claude_json() {
         "the copy should come from the profile's .claude.json" || return 1
 }
 
-# An ags launched from inside another encrypted session inherits that session's
+# A cs launched from inside another encrypted session inherits that session's
 # vault as CLAUDE_CONFIG_DIR; sharing from it would tie this vault to that one.
 test_claude_config_shares_from_the_shell_config_not_an_inherited_vault() {
     local other="$TEST_TMPDIR/other/.cs/claude-config"
@@ -753,8 +753,8 @@ test_claude_config_shares_from_the_shell_config_not_an_inherited_vault() {
         "claude should run on this vault and the default login" || return 1
 }
 
-# A session whose ags files (command log, mail, traces) live on its encrypted
-# volume: .cs/private links into vault-mnt. The log ags wrote at creation is
+# A session whose cs files (command log, mail, traces) live on its encrypted
+# volume: .cs/private links into vault-mnt. The log cs wrote at creation is
 # moved in, as a migration would.
 _make_vaulted_private() {  # name
     local meta="$CS_SESSIONS_ROOT/$1/.cs"
@@ -771,7 +771,7 @@ test_private_link_session_opens() {
     local out rc=0
     out=$("$CS_BIN" vt <<< "" 2>&1) || rc=$?
 
-    assert_eq "0" "$rc" "ags should open the session: $out" || return 1
+    assert_eq "0" "$rc" "cs should open the session: $out" || return 1
     assert_eq "launched" "$(cat "$TEST_TMPDIR/launched")" "claude should launch once" || return 1
     assert_file_not_exists "$CS_SESSIONS_ROOT/vt/.cs/local/session.log" \
         "the open must not write a plaintext log" || return 1
@@ -793,14 +793,14 @@ test_unmounted_private_refuses_open() {
     local out rc=0
     out=$("$CS_BIN" vt <<< "" 2>&1) || rc=$?
 
-    assert_eq "1" "$rc" "ags should exit 1" || return 1
+    assert_eq "1" "$rc" "cs should exit 1" || return 1
     assert_eq "Error: vt: .cs/private points at $meta/vault-mnt/private, which is missing (encrypted storage not mounted?). Mount it, then reopen." \
-        "$out" "ags should name the dangling private link" || return 1
+        "$out" "cs should name the dangling private link" || return 1
     assert_file_not_exists "$TEST_TMPDIR/launched" "claude must not launch" || return 1
 }
 
-# Once a session keeps its ags files in the vault, a copy left in .cs/local is
-# plaintext the vault was meant to hold; ags names it rather than open beside it.
+# Once a session keeps its cs files in the vault, a copy left in .cs/local is
+# plaintext the vault was meant to hold; cs names it rather than open beside it.
 test_plaintext_left_beside_private_refuses_open() {
     _make_vaulted_session vt
     _make_vaulted_private vt
@@ -811,9 +811,9 @@ test_plaintext_left_beside_private_refuses_open() {
     local out rc=0
     out=$("$CS_BIN" vt <<< "" 2>&1) || rc=$?
 
-    assert_eq "1" "$rc" "ags should exit 1" || return 1
-    assert_eq "Error: vt: .cs/private keeps this session's ags files in its vault, but .cs/local still holds session.log in plaintext. Move it into .cs/private or delete it, then reopen." \
-        "$out" "ags should name the plaintext file" || return 1
+    assert_eq "1" "$rc" "cs should exit 1" || return 1
+    assert_eq "Error: vt: .cs/private keeps this session's cs files in its vault, but .cs/local still holds session.log in plaintext. Move it into .cs/private or delete it, then reopen." \
+        "$out" "cs should name the plaintext file" || return 1
     assert_file_not_exists "$TEST_TMPDIR/launched" "claude must not launch" || return 1
 }
 
@@ -829,14 +829,14 @@ test_plaintext_mailbox_left_beside_private_refuses_open() {
     local out rc=0
     out=$("$CS_BIN" vt <<< "" 2>&1) || rc=$?
 
-    assert_eq "1" "$rc" "ags should exit 1" || return 1
-    assert_eq "Error: vt: .cs/private keeps this session's ags files in its vault, but .cs/local still holds mail in plaintext. Move it into .cs/private or delete it, then reopen." \
-        "$out" "ags should name the plaintext mailbox" || return 1
+    assert_eq "1" "$rc" "cs should exit 1" || return 1
+    assert_eq "Error: vt: .cs/private keeps this session's cs files in its vault, but .cs/local still holds mail in plaintext. Move it into .cs/private or delete it, then reopen." \
+        "$out" "cs should name the plaintext mailbox" || return 1
     assert_file_not_exists "$TEST_TMPDIR/launched" "claude must not launch" || return 1
 }
 
 # The queue, its run mode, its inbox, the traces, the pending-handoff marker
-# and the /finish progress record are ags files too: each one left in
+# and the /finish progress record are cs files too: each one left in
 # .cs/local is named the same way.
 test_plaintext_queue_files_left_beside_private_refuse_open() {
     _make_vaulted_session vt
@@ -848,24 +848,24 @@ test_plaintext_queue_files_left_beside_private_refuse_open() {
         case "$name" in queue|queue.tmp) mkdir -p "$meta/local/$name" ;; *) printf 'x\n' > "$meta/local/$name" ;; esac
         rc=0
         out=$("$CS_BIN" vt <<< "" 2>&1) || rc=$?
-        assert_eq "1" "$rc" "ags should exit 1 on $name" || return 1
-        assert_eq "Error: vt: .cs/private keeps this session's ags files in its vault, but .cs/local still holds $name in plaintext. Move it into .cs/private or delete it, then reopen." \
-            "$out" "ags should name $name" || return 1
+        assert_eq "1" "$rc" "cs should exit 1 on $name" || return 1
+        assert_eq "Error: vt: .cs/private keeps this session's cs files in its vault, but .cs/local still holds $name in plaintext. Move it into .cs/private or delete it, then reopen." \
+            "$out" "cs should name $name" || return 1
         rm -rf "${meta:?}/local/$name"
     done
 }
 
 # A regular file where a vault link belongs is neither a vault nor a place
-# ags can write; the open names it rather than treat the session as locked.
+# cs can write; the open names it rather than treat the session as locked.
 test_a_file_at_a_vault_link_refuses_open() {
     _make_vaulted_session vt
     _make_launch_sentinel
     local meta="$CS_SESSIONS_ROOT/vt/.cs" out rc=0
     printf 'not a vault\n' > "$meta/private"
     out=$("$CS_BIN" vt <<< "" 2>&1) || rc=$?
-    assert_eq "1" "$rc" "ags should exit 1" || return 1
+    assert_eq "1" "$rc" "cs should exit 1" || return 1
     assert_eq "Error: vt: .cs/private is a file, not a directory or a link into encrypted storage. Remove it, or link it into the vault, then reopen." \
-        "$out" "ags should name the file" || return 1
+        "$out" "cs should name the file" || return 1
     assert_not_exists "$TEST_TMPDIR/launched" "claude never starts" || return 1
 }
 
@@ -878,16 +878,16 @@ test_plaintext_checkpoints_and_archive_beside_private_refuse_open() {
     local meta="$CS_SESSIONS_ROOT/vt/.cs" out rc=0
     mkdir -p "$meta/checkpoints"
     out=$("$CS_BIN" vt <<< "" 2>&1) || rc=$?
-    assert_eq "1" "$rc" "ags should exit 1 on checkpoints" || return 1
+    assert_eq "1" "$rc" "cs should exit 1 on checkpoints" || return 1
     assert_eq "Error: vt: .cs/private keeps this session's checkpoints in its vault, but .cs/checkpoints is still plaintext. Move it to .cs/private/checkpoints or delete it, then reopen." \
-        "$out" "ags should name .cs/checkpoints" || return 1
+        "$out" "cs should name .cs/checkpoints" || return 1
     rm -rf "$meta/checkpoints"
     mkdir -p "$meta/narrative-archive/alice"
     rc=0
     out=$("$CS_BIN" vt <<< "" 2>&1) || rc=$?
-    assert_eq "1" "$rc" "ags should exit 1 on narrative-archive" || return 1
+    assert_eq "1" "$rc" "cs should exit 1 on narrative-archive" || return 1
     assert_eq "Error: vt: this session's narrative lives in its vault, but .cs/narrative-archive is still plaintext. Move it to .cs/private/narrative-archive or delete it, then reopen." \
-        "$out" "ags should name .cs/narrative-archive" || return 1
+        "$out" "cs should name .cs/narrative-archive" || return 1
     rm -rf "$meta/narrative-archive"
     mkdir -p "$meta/vault-mnt/narrative-archive"
     ln -s "$meta/vault-mnt/narrative-archive" "$meta/narrative-archive"
@@ -922,11 +922,11 @@ test_claude_config_refuses_an_unreadable_claude_json() {
         rc=0
         out=$(env -u CLAUDE_CONFIG_DIR -u CLAUDE_SECURESTORAGE_CONFIG_DIR "$CS_BIN" vt <<< "" 2>&1) || rc=$?
 
-        assert_eq "1" "$rc" "ags should exit 1 for '$content'" || return 1
+        assert_eq "1" "$rc" "cs should exit 1 for '$content'" || return 1
         # The line before it is the stale-lock notice the fixture's own
         # creating launch leaves behind.
-        assert_eq "Error: $HOME/.claude.json is not a JSON object ags can copy into $CS_SESSIONS_ROOT/vt/.cs/claude-config; fix it, then reopen." \
-            "$(tail -n 1 <<< "$out")" "ags should name the source it cannot copy" || return 1
+        assert_eq "Error: $HOME/.claude.json is not a JSON object cs can copy into $CS_SESSIONS_ROOT/vt/.cs/claude-config; fix it, then reopen." \
+            "$(tail -n 1 <<< "$out")" "cs should name the source it cannot copy" || return 1
         assert_file_not_exists "$TEST_TMPDIR/launched" "claude must not launch" || return 1
         assert_eq "" "$(ls -A "$CS_SESSIONS_ROOT/vt/.cs/claude-config")" \
             "nothing should be left in the session's config" || return 1
@@ -942,7 +942,7 @@ echo "cs auto-memory tests"
 echo "===================="
 echo ""
 
-# ags rewrites settings.local.json through a temp file. The temp name must be
+# cs rewrites settings.local.json through a temp file. The temp name must be
 # unique, so a user's own <file>.tmp sibling is never clobbered, and the
 # rewritten file must keep the mode the user gave it.
 test_settings_merge_leaves_a_tmp_sibling_alone_and_keeps_the_mode() {

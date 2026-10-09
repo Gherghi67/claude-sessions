@@ -3,15 +3,6 @@
 version = 4
 
 [[package]]
-name = "ags-tui"
-version = "0.1.0"
-dependencies = [
- "crossterm",
- "ratatui",
- "unicode-width 0.2.0",
-]
-
-[[package]]
 name = "allocator-api2"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -81,6 +72,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "acdd7c62a3665c7f6830a51635d9ac9b23ed385797f70a83bb8bafe9c572ab2b"
 dependencies = [
  "winapi",
+]
+
+[[package]]
+name = "cs-tui"
+version = "0.1.0"
+dependencies = [
+ "crossterm",
+ "ratatui",
+ "unicode-width 0.2.0",
 ]
 
 [[package]]

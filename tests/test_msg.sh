@@ -287,7 +287,7 @@ test_alias_thread_errors_instead_of_mailing_the_words() {
 
 test_alias_lone_log_errors_instead_of_sending() {
     local out; out=$("$CS_BIN" receiver -msg log 2>&1) && return 1
-    assert_output_contains "$out" "ags -msg log" "hint points at the in-session read form" || return 1
+    assert_output_contains "$out" "cs -msg log" "hint points at the in-session read form" || return 1
     assert_eq "0" "$(NEW_COUNT)" "'log' was not sent as a message body" || return 1
 }
 
@@ -577,7 +577,7 @@ run_test test_task_kind_lands_in_recipient_queue
 run_test test_task_kind_clears_declined_flag
 run_test test_task_kind_rejects_multiline_body
 
-# An encrypted session keeps its ags files on its vault volume: .cs/private
+# An encrypted session keeps its cs files on its vault volume: .cs/private
 # links into it. Mail is one of those files, at either end of a send.
 _make_private() {  # session name
     local meta="$CS_SESSIONS_ROOT/$1/.cs"
@@ -815,7 +815,7 @@ test_mail_read_clears_digest() {
     assert_output_contains "$out" "transient note" "shown before read" || return 1
     _as_receiver -msg >/dev/null 2>&1 || return 1
     out=$(_prompt_as_receiver "after") || return 1
-    assert_output_not_contains "$out" "transient note" "cleared after ags -msg read" || return 1
+    assert_output_not_contains "$out" "transient note" "cleared after cs -msg read" || return 1
 }
 
 # A task-kind message is already queued (cs -msg -k task enqueues it); the digest
@@ -884,7 +884,7 @@ test_mail_digest_reports_when_nothing_parses() {
     done
     local out; out=$(_prompt_as_receiver "hello") || return 1
     assert_output_contains "$out" "Unread mail (6)" "the count is still surfaced" || return 1
-    assert_output_contains "$out" "ags -msg" "and the way to clear it" || return 1
+    assert_output_contains "$out" "cs -msg" "and the way to clear it" || return 1
 }
 
 # Long bodies are truncated (codepoint-safe, inside jq) so context stays bounded.
@@ -1469,7 +1469,7 @@ test_stop_wake_blocks_on_unread_mail() {
     "$CS_BIN" -msg receiver "hello there" >/dev/null 2>&1 || return 1
     local out; out=$(wake)
     assert_output_contains "$out" '"block"' "unread mail blocks the stop" || return 1
-    assert_output_contains "$out" "ags -msg" "the wake names the reader command" || return 1
+    assert_output_contains "$out" "cs -msg" "the wake names the reader command" || return 1
 }
 
 test_stop_wake_fires_once_per_arrival() {
@@ -1643,7 +1643,7 @@ run_test test_migration_reads_unterminated_final_line
 run_test test_migration_runs_on_worktree_open
 
 # --- mail hooks in an encrypted session ------------------------------------
-# The digest, the wakes and the watch all read the mailbox ags -msg writes, so
+# The digest, the wakes and the watch all read the mailbox cs -msg writes, so
 # in an encrypted session they follow it into the vault, and none of them may
 # recreate .cs/local/mail beside it: that is plaintext the open refuses.
 

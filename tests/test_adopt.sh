@@ -380,7 +380,7 @@ test_adopt_gitignores_cs_local() {
 }
 
 # An encrypted session mounts its volume at .cs/vault-mnt by convention; git
-# must ignore it both in the .gitignore ags writes and in a project's own
+# must ignore it both in the .gitignore cs writes and in a project's own
 # .gitignore that adopt appends to.
 test_adopt_gitignores_the_vault_mount() {
     local fresh="$TEST_TMPDIR/fresh" owned="$TEST_TMPDIR/owned"
@@ -389,7 +389,7 @@ test_adopt_gitignores_the_vault_mount() {
     (cd "$owned" && git init -q && printf 'node_modules/\n' > .gitignore \
         && "$CS_BIN" -adopt owned-session >/dev/null 2>&1)
     git -C "$fresh" check-ignore -q .cs/vault-mnt/memory/narrative.md \
-        || { echo "  FAIL: ags's own .gitignore must ignore .cs/vault-mnt/"; return 1; }
+        || { echo "  FAIL: cs's own .gitignore must ignore .cs/vault-mnt/"; return 1; }
     git -C "$owned" check-ignore -q .cs/vault-mnt/memory/narrative.md \
         || { echo "  FAIL: adopt must append .cs/vault-mnt/ to a project .gitignore"; return 1; }
     assert_file_contains "$owned/.gitignore" "node_modules/" "the project's own entry stays" || return 1
@@ -397,7 +397,7 @@ test_adopt_gitignores_the_vault_mount() {
 
 # cs_write_atomic stages each write in a temp file beside its destination; one
 # left by a killed writer must not reach an autosave snapshot, both under the
-# .gitignore ags writes and under a project's own .gitignore that adopt appends to.
+# .gitignore cs writes and under a project's own .gitignore that adopt appends to.
 test_adopt_gitignores_atomic_write_temps() {
     local fresh="$TEST_TMPDIR/fresh" owned="$TEST_TMPDIR/owned" tmp dir
     mkdir -p "$fresh" "$owned"
@@ -442,7 +442,7 @@ _adopt_state_id() {  # project_dir
     awk '/^claude_session_id:/ { print $2; exit }' "$1/.cs/local/state" 2>/dev/null
 }
 
-# The conversation a launch handed claude. ags stages it and SessionStart,
+# The conversation a launch handed claude. cs stages it and SessionStart,
 # which the stub never runs, commits it to state.
 _adopt_launched_id() {  # project_dir
     jq -r '.candidate_id // empty' "$1/.cs/local/pending-binding-claude.json" 2>/dev/null
@@ -492,7 +492,7 @@ test_first_launch_after_adopt_starts_fresh_without_asking() {
     assert_output_contains "$launches" "<--session-id><$recorded>" "claude starts the recorded conversation" || return 1
     assert_output_contains "$launches" "<--name><probe>" "the conversation is named after the session" || return 1
     assert_output_not_contains "$launches" "<--resume>" "nothing to resume" || return 1
-    assert_output_not_contains "$launches" "<--continue>" "ags never passes --continue" || return 1
+    assert_output_not_contains "$launches" "<--continue>" "cs never passes --continue" || return 1
     if grep -q '"event":"rotated"' "$project_dir/.cs/timeline.jsonl" 2>/dev/null; then
         echo "  FAIL: the first conversation rotates from nothing"; return 1
     fi

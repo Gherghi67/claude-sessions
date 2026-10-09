@@ -95,7 +95,7 @@ EXPECT
             echo "  FAIL: permanence must not ride on the same line as the outcome"; return 1 ;;
     esac
     # And the way back stays with it.
-    grep -q "ags -statusline enable" "$out" \
+    grep -q "cs -statusline enable" "$out" \
         || { echo "  FAIL: the decline must name the command that undoes it"; return 1; }
 }
 
@@ -360,22 +360,21 @@ test_local_install_prefers_a_freshly_built_picker() {
         [ -e "$real/$e" ] && ln -s "$(cd "$real" && pwd)/$e" "$repo/$e"
     done
     cp "$real/install.sh" "$repo/install.sh"
-    cp "$real/bin/ags" "$real/bin/ags-secrets" "$real/bin/ags-statusline" \
-       "$real/bin/ags-subagent-statusline" "$real/bin/ags-codex-thread" "$repo/bin/"
-    printf 'STALE PICKER' > "$repo/bin/ags-tui"
-    chmod +x "$repo/bin/ags-tui"
+    cp "$real/bin/cs" "$real/bin/cs-secrets" "$real/bin/cs-statusline" \
+       "$real/bin/cs-subagent-statusline" "$real/bin/cs-codex-thread" "$repo/bin/"
+    printf 'STALE PICKER' > "$repo/bin/cs-tui"
+    chmod +x "$repo/bin/cs-tui"
     # Distinct mtimes, oldest first: -nt is the whole decision.
-    printf 'FRESH PICKER' > "$repo/tui/target/release/ags-tui"
-    chmod +x "$repo/tui/target/release/ags-tui"
-    touch -t 202001010000 "$repo/bin/ags-tui"
+    printf 'FRESH PICKER' > "$repo/tui/target/release/cs-tui"
+    chmod +x "$repo/tui/target/release/cs-tui"
+    touch -t 202001010000 "$repo/bin/cs-tui"
 
     HOME="$fake_home" bash "$repo/install.sh" > /dev/null 2>&1 || true
 
-    local installed="$fake_home/.local/bin/ags-tui"
+    local installed="$fake_home/.local/bin/cs-tui"
     assert_file_exists "$installed" "a picker should have been installed" || return 1
     assert_eq "FRESH PICKER" "$(cat "$installed")" \
-        "the newer cargo build must win over a stale bin/ags-tui" || return 1
-    assert_symlink "$fake_home/.local/bin/cs-tui" "legacy picker name must point to canonical ags-tui" || return 1
+        "the newer cargo build must win over a stale bin/cs-tui" || return 1
 }
 
 # The reverse: nothing built, so bin/cs-tui is all there is. A release tarball
@@ -389,16 +388,15 @@ test_local_install_uses_bin_picker_when_nothing_was_built() {
         [ -e "$real/$e" ] && ln -s "$(cd "$real" && pwd)/$e" "$repo/$e"
     done
     cp "$real/install.sh" "$repo/install.sh"
-    cp "$real/bin/ags" "$real/bin/ags-secrets" "$real/bin/ags-statusline" \
-       "$real/bin/ags-subagent-statusline" "$real/bin/ags-codex-thread" "$repo/bin/"
-    printf 'ONLY PICKER' > "$repo/bin/ags-tui"
-    chmod +x "$repo/bin/ags-tui"
+    cp "$real/bin/cs" "$real/bin/cs-secrets" "$real/bin/cs-statusline" \
+       "$real/bin/cs-subagent-statusline" "$real/bin/cs-codex-thread" "$repo/bin/"
+    printf 'ONLY PICKER' > "$repo/bin/cs-tui"
+    chmod +x "$repo/bin/cs-tui"
 
     HOME="$fake_home" bash "$repo/install.sh" > /dev/null 2>&1 || true
 
-    assert_eq "ONLY PICKER" "$(cat "$fake_home/.local/bin/ags-tui" 2>/dev/null)" \
+    assert_eq "ONLY PICKER" "$(cat "$fake_home/.local/bin/cs-tui" 2>/dev/null)" \
         "with no build present the shipped picker must still install" || return 1
-    assert_symlink "$fake_home/.local/bin/cs-tui" "legacy picker name must point to canonical ags-tui" || return 1
 }
 
 # hooks/cs-shared.sh is a build artifact: build.sh writes it from lib/02-shared.sh
@@ -408,7 +406,7 @@ test_local_install_uses_bin_picker_when_nothing_was_built() {
 test_build_generates_the_shared_hook_fragment() {
     local repo="$TEST_TMPDIR/build-repo" real="$SCRIPT_DIR/.."
     mkdir -p "$repo/bin" "$repo/hooks"
-    cp "$real"/bin/ags-{secrets,codex-thread,statusline,subagent-statusline} "$repo/bin/"
+    cp "$real"/bin/cs-{secrets,codex-thread,statusline,subagent-statusline} "$repo/bin/"
     cp -R "$real/lib" "$repo/lib"
     cp "$real/build.sh" "$real/install.sh.in" "$repo/"
     (cd "$repo" && bash build.sh > /dev/null) || { echo "  FAIL: build.sh failed"; return 1; }
@@ -428,7 +426,7 @@ test_build_generates_the_shared_hook_fragment() {
 test_build_generates_install_sh_from_its_template() {
     local repo="$TEST_TMPDIR/build-repo2" real="$SCRIPT_DIR/.."
     mkdir -p "$repo/bin" "$repo/hooks"
-    cp "$real"/bin/ags-{secrets,codex-thread,statusline,subagent-statusline} "$repo/bin/"
+    cp "$real"/bin/cs-{secrets,codex-thread,statusline,subagent-statusline} "$repo/bin/"
     cp -R "$real/lib" "$repo/lib"
     cp "$real/build.sh" "$real/install.sh.in" "$repo/"
     (cd "$repo" && bash build.sh > /dev/null) || { echo "  FAIL: build.sh failed"; return 1; }
@@ -447,7 +445,7 @@ test_build_generates_install_sh_from_its_template() {
 test_build_refuses_a_template_without_the_marker() {
     local repo="$TEST_TMPDIR/build-repo3" real="$SCRIPT_DIR/.."
     mkdir -p "$repo/bin" "$repo/hooks"
-    cp "$real"/bin/ags-{secrets,codex-thread,statusline,subagent-statusline} "$repo/bin/"
+    cp "$real"/bin/cs-{secrets,codex-thread,statusline,subagent-statusline} "$repo/bin/"
     cp -R "$real/lib" "$repo/lib"
     cp "$real/build.sh" "$repo/"
     grep -v '^# @@CS_MANIFESTS@@$' "$real/install.sh.in" > "$repo/install.sh.in"
@@ -465,7 +463,7 @@ test_build_refuses_a_template_without_the_marker() {
 test_build_refuses_a_missing_manifests_source() {
     local repo="$TEST_TMPDIR/build-repo4" real="$SCRIPT_DIR/.."
     mkdir -p "$repo/bin" "$repo/hooks"
-    cp "$real"/bin/ags-{secrets,codex-thread,statusline,subagent-statusline} "$repo/bin/"
+    cp "$real"/bin/cs-{secrets,codex-thread,statusline,subagent-statusline} "$repo/bin/"
     cp -R "$real/lib" "$repo/lib"
     cp "$real/build.sh" "$real/install.sh.in" "$repo/"
     rm "$repo/lib/01-manifests.sh"
@@ -483,12 +481,12 @@ test_build_refuses_a_missing_manifests_source() {
 test_build_outputs_are_world_readable() {
     local repo="$TEST_TMPDIR/build-repo5" real="$SCRIPT_DIR/.."
     mkdir -p "$repo/bin" "$repo/hooks"
-    cp "$real"/bin/ags-{secrets,codex-thread,statusline,subagent-statusline} "$repo/bin/"
+    cp "$real"/bin/cs-{secrets,codex-thread,statusline,subagent-statusline} "$repo/bin/"
     cp -R "$real/lib" "$repo/lib"
     cp "$real/build.sh" "$real/install.sh.in" "$repo/"
     (cd "$repo" && bash build.sh > /dev/null) || { echo "  FAIL: build.sh failed"; return 1; }
     local f mode
-    for f in bin/ags bin/cs hooks/cs-shared.sh install.sh; do
+    for f in bin/cs bin/cs hooks/cs-shared.sh install.sh; do
         # GNU stat first: its -c is invalid on BSD stat (no output, exit 1), while
         # BSD's -f means "filesystem" to GNU stat and prints a block before failing.
         mode=$(stat -c '%a' "$repo/$f" 2>/dev/null || stat -f '%Lp' "$repo/$f")
@@ -647,7 +645,7 @@ test_uninstall_removes_the_claude_links() {
     local fake_home="$TEST_TMPDIR/links-home"
     mkdir -p "$fake_home/.claude" "$fake_home/.local/share/cs/claude/9.9.9" "$fake_home/.local/share/cs/vaults"
     : > "$fake_home/.local/share/cs/claude/9.9.9/claude"
-    printf 'y\n' | HOME="$fake_home" "$CS_BIN" -uninstall > /dev/null 2>&1 || { echo "  FAIL: ags -uninstall exited non-zero"; return 1; }
+    printf 'y\n' | HOME="$fake_home" "$CS_BIN" -uninstall > /dev/null 2>&1 || { echo "  FAIL: cs -uninstall exited non-zero"; return 1; }
     [ ! -e "$fake_home/.local/share/cs/claude" ] \
         || { echo "  FAIL: uninstall left ~/.local/share/cs/claude behind"; return 1; }
     [ -d "$fake_home/.local/share/cs/vaults" ] \
@@ -663,7 +661,7 @@ _uninstall_with_mounts() {  # case-name stub-dir
     mkdir -p "$home/.claude" "$root/s1/.cs/vault-mnt"
     echo sealed > "$root/s1/.cs/vault-mnt/notes.md"
     printf 'yny' | HOME="$home" CS_SESSIONS_ROOT="$root" PATH="$2:$PATH" "$CS_BIN" -uninstall \
-        > "$TEST_TMPDIR/$1.out" 2>&1 || { echo "  FAIL: ags -uninstall exited non-zero"; return 1; }
+        > "$TEST_TMPDIR/$1.out" 2>&1 || { echo "  FAIL: cs -uninstall exited non-zero"; return 1; }
 }
 
 test_uninstall_keeps_session_data_while_a_volume_is_mounted_inside() {
@@ -683,7 +681,7 @@ test_uninstall_keeps_session_data_when_the_mount_table_cannot_be_read() {
     _uninstall_with_mounts umount-broken "$stub" || return 1
     out=$(cat "$TEST_TMPDIR/umount-broken.out")
     assert_file_exists "$root/s1/.cs/vault-mnt/notes.md" "the data survives" || return 1
-    assert_output_contains "$out" "Kept $root: ags could not read the mount table, so it cannot tell whether a volume is mounted inside it" "says why the data stays" || return 1
+    assert_output_contains "$out" "Kept $root: cs could not read the mount table, so it cannot tell whether a volume is mounted inside it" "says why the data stays" || return 1
 }
 
 test_uninstall_deletes_session_data_with_no_volume_mounted_inside() {
@@ -790,7 +788,7 @@ test_install_registers_a_trusted_codex_hook() {
     mkdir -p "$fake_home"
     HOME="$fake_home" CS_INSTALL_ENGINES=codex bash "$INSTALL_SH" > /dev/null 2>&1 < /dev/null \
         || { echo "  FAIL: install.sh exited non-zero"; return 1; }
-    cmd="$fake_home/.local/bin/ags -codex-hook session-start"
+    cmd="$fake_home/.local/bin/cs -codex-hook session-start"
     assert_eq "$cmd" "$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$fake_home/.codex/hooks.json")" || return 1
     assert_eq 1 "$(jq '.hooks.SessionStart | length' "$fake_home/.codex/hooks.json")" || return 1
     hash=$(jq -ncS --arg c "$cmd" '{event_name:"session_start",hooks:[{async:false,command:$c,timeout:600,type:"command"}]}' \
@@ -805,7 +803,7 @@ test_install_registers_a_trusted_codex_hook() {
     assert_eq "$before_config" "$(cat "$fake_home/.codex/config.toml")" "nor grows the config" || return 1
 }
 
-# Codex keys trust by a group's position, so ags must never move the user's
+# Codex keys trust by a group's position, so cs must never move the user's
 # groups: it appends its own after them, and an uninstall puts both files back.
 test_codex_hook_keeps_the_users_hooks_and_trust() {
     local fake_home="$TEST_TMPDIR/codex-hook-user" codex
@@ -818,20 +816,20 @@ test_codex_hook_keeps_the_users_hooks_and_trust() {
         "$codex/hooks.json" "$codex/hooks.json" > "$codex/config.toml"
     cp "$codex/hooks.json" "$TEST_TMPDIR/hooks.orig"; cp "$codex/config.toml" "$TEST_TMPDIR/config.orig"
     HOME="$fake_home" CS_INSTALL_ENGINES=codex bash "$INSTALL_SH" > /dev/null 2>&1 < /dev/null || return 1
-    assert_eq "/opt/mine/a.sh /opt/mine/b.sh $fake_home/.local/bin/ags -codex-hook session-start" \
+    assert_eq "/opt/mine/a.sh /opt/mine/b.sh $fake_home/.local/bin/cs -codex-hook session-start" \
         "$(jq -r '[.hooks.SessionStart[].hooks[0].command] | join(" ")' "$codex/hooks.json")" \
-        "the user's groups keep their places; ags's comes after" || return 1
+        "the user's groups keep their places; cs's comes after" || return 1
     assert_eq "/opt/mine/stop.sh" "$(jq -r '.hooks.Stop[0].hooks[0].command' "$codex/hooks.json")" || return 1
     assert_file_contains "$codex/config.toml" 'trusted_hash = "sha256:aaaa"' || return 1
     assert_file_contains "$codex/config.toml" 'trusted_hash = "sha256:bbbb"' || return 1
     assert_file_contains "$codex/config.toml" "session_start:2:0" || return 1
-    printf 'y\nn\n' | HOME="$fake_home" "$fake_home/.local/bin/ags" -uninstall > /dev/null 2>&1 \
-        || { echo "  FAIL: ags -uninstall exited non-zero"; return 1; }
+    printf 'y\nn\n' | HOME="$fake_home" "$fake_home/.local/bin/cs" -uninstall > /dev/null 2>&1 \
+        || { echo "  FAIL: cs -uninstall exited non-zero"; return 1; }
     assert_eq "$(jq -S . "$TEST_TMPDIR/hooks.orig")" "$(jq -S . "$codex/hooks.json")" "uninstall restores hooks.json" || return 1
     assert_eq "$(cat "$TEST_TMPDIR/config.orig")" "$(cat "$codex/config.toml")" "and config.toml" || return 1
 }
 
-# A group the user added after ags's moves up when ags's goes, and its trust
+# A group the user added after cs's moves up when cs's goes, and its trust
 # table has to move with it, or Codex stops running it.
 test_uninstall_renumbers_trust_for_later_codex_hooks() {
     local fake_home="$TEST_TMPDIR/codex-hook-later" codex
@@ -841,13 +839,13 @@ test_uninstall_renumbers_trust_for_later_codex_hooks() {
     jq '.hooks.SessionStart += [{hooks: [{type: "command", command: "/opt/mine/later.sh"}]}]' "$codex/hooks.json" \
         > "$TEST_TMPDIR/h" && mv "$TEST_TMPDIR/h" "$codex/hooks.json"
     printf '\n[hooks.state."%s:session_start:1:0"]\ntrusted_hash = "sha256:cccc"\n' "$codex/hooks.json" >> "$codex/config.toml"
-    printf 'y\nn\n' | HOME="$fake_home" "$fake_home/.local/bin/ags" -uninstall > /dev/null 2>&1 || return 1
+    printf 'y\nn\n' | HOME="$fake_home" "$fake_home/.local/bin/cs" -uninstall > /dev/null 2>&1 || return 1
     assert_eq "/opt/mine/later.sh" "$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$codex/hooks.json")" || return 1
     assert_eq "$(printf '[hooks.state."%s:session_start:0:0"]\ntrusted_hash = "sha256:cccc"' "$codex/hooks.json")" \
         "$(cat "$codex/config.toml")" "the user's trust follows their group to index 0" || return 1
 }
 
-# A hooks.json that is not JSON is the user's to fix; ags neither rewrites
+# A hooks.json that is not JSON is the user's to fix; cs neither rewrites
 # it nor fails the install over it.
 test_install_leaves_an_unreadable_codex_hooks_file_alone() {
     local fake_home="$TEST_TMPDIR/codex-hook-bad" output status=0
@@ -882,8 +880,8 @@ test_uninstall_removes_only_cs_skills_from_codex() {
         || { echo "  FAIL: install.sh exited non-zero"; return 1; }
     assert_eq 'user merge skill' "$(cat "$fake_home/.codex/skills/merge/SKILL.md")" \
         "RETIRED_SKILLS never deployed to Codex, so install leaves that name alone" || return 1
-    printf 'y\nn\n' | HOME="$fake_home" "$fake_home/.local/bin/ags" -uninstall > /dev/null 2>&1 \
-        || { echo "  FAIL: ags -uninstall exited non-zero"; return 1; }
+    printf 'y\nn\n' | HOME="$fake_home" "$fake_home/.local/bin/cs" -uninstall > /dev/null 2>&1 \
+        || { echo "  FAIL: cs -uninstall exited non-zero"; return 1; }
     for skill in $(extract_array "$SCRIPT_DIR/../install.sh" CS_SKILLS); do
         assert_not_exists "$fake_home/.codex/skills/$skill" "uninstall must remove the Codex copy of $skill" || return 1
     done
@@ -1104,11 +1102,10 @@ test_install_deploys_statusline_binary() {
         echo "  FAIL: install.sh exited non-zero"
         return 1
     }
-    if [ ! -x "$fake_home/.local/bin/ags-statusline" ]; then
-        echo "  FAIL: ags-statusline not deployed executable to ~/.local/bin"
+    if [ ! -x "$fake_home/.local/bin/cs-statusline" ]; then
+        echo "  FAIL: cs-statusline not deployed executable to ~/.local/bin"
         return 1
     fi
-    assert_symlink "$fake_home/.local/bin/cs-statusline" "legacy cs-statusline must point to the canonical helper" || return 1
 }
 
 test_install_deploys_subagent_statusline_binary() {
@@ -1118,11 +1115,10 @@ test_install_deploys_subagent_statusline_binary() {
         echo "  FAIL: install.sh exited non-zero"
         return 1
     }
-    if [ ! -x "$fake_home/.local/bin/ags-subagent-statusline" ]; then
-        echo "  FAIL: ags-subagent-statusline not deployed executable to ~/.local/bin"
+    if [ ! -x "$fake_home/.local/bin/cs-subagent-statusline" ]; then
+        echo "  FAIL: cs-subagent-statusline not deployed executable to ~/.local/bin"
         return 1
     fi
-    assert_symlink "$fake_home/.local/bin/cs-subagent-statusline" "legacy cs-subagent-statusline must point to the canonical helper" || return 1
 }
 
 test_install_and_uninstall_codex_thread_helper() {
@@ -1132,13 +1128,12 @@ test_install_and_uninstall_codex_thread_helper() {
         echo "  FAIL: install.sh exited non-zero"
         return 1
     }
-    local helper="$fake_home/.local/bin/ags-codex-thread"
+    local helper="$fake_home/.local/bin/cs-codex-thread"
     [ -x "$helper" ] || { echo "  FAIL: Codex thread helper is not executable"; return 1; }
-    cmp -s "$SCRIPT_DIR/../bin/ags-codex-thread" "$helper" || {
+    cmp -s "$SCRIPT_DIR/../bin/cs-codex-thread" "$helper" || {
         echo "  FAIL: installed Codex helper differs from the source"
         return 1
     }
-    assert_symlink "$fake_home/.local/bin/cs-codex-thread" "legacy Codex helper alias must be installed" || return 1
     printf 'y\n' | HOME="$fake_home" "$CS_BIN" -uninstall > /dev/null 2>&1 || {
         echo "  FAIL: uninstall failed"
         return 1
@@ -1160,7 +1155,7 @@ test_install_skips_statusline_noninteractive() {
         echo "  FAIL: statusLine was registered without consent (got '$cmd')"
         return 1
     fi
-    assert_output_contains "$out" "ags -statusline enable" \
+    assert_output_contains "$out" "cs -statusline enable" \
         "non-interactive install should say how to enable the status line" || return 1
 }
 
@@ -1178,7 +1173,7 @@ test_statusline_enable_registers() {
     local cmd
     cmd=$(jq -r '.statusLine.command // ""' "$fake_home/.claude/settings.json")
     case "$cmd" in
-        */ags-statusline) ;;
+        */cs-statusline) ;;
         *)
             echo "  FAIL: enable did not register cs-statusline (got '$cmd')"
             return 1
@@ -1235,7 +1230,7 @@ EOF
         echo "  FAIL: foreign statusLine was replaced non-interactively (now '$cmd')"
         return 1
     fi
-    assert_output_contains "$out" "ags-statusline" "install should mention how to enable ags-statusline" || return 1
+    assert_output_contains "$out" "cs-statusline" "install should mention how to enable cs-statusline" || return 1
 }
 
 # A declined status-line prompt is remembered, so `cs -update` (which re-runs
@@ -1257,7 +1252,7 @@ test_install_honors_declined_statusline_marker() {
         return 1
     fi
     assert_output_contains "$out" "declined earlier"         "install should say the status line was declined earlier" || return 1
-    assert_output_contains "$out" "ags -statusline enable"         "install should still say how to enable" || return 1
+    assert_output_contains "$out" "cs -statusline enable"         "install should still say how to enable" || return 1
 }
 
 # The marker honors XDG_CONFIG_HOME, and it wins over a foreign status line's
@@ -1296,7 +1291,7 @@ test_install_refreshes_registered_statusline_despite_marker() {
     }
     local cmd
     cmd=$(jq -r '.statusLine.command // ""' "$fake_home/.claude/settings.json")
-    if [ "$cmd" != "$fake_home/.local/bin/ags-statusline" ]; then
+    if [ "$cmd" != "$fake_home/.local/bin/cs-statusline" ]; then
         echo "  FAIL: registered cs-statusline was not refreshed (got '$cmd')"
         return 1
     fi
@@ -1417,7 +1412,7 @@ case "\$url" in
 esac
 if [ -n "\$out" ]; then
     case "\$out" in
-        */ags) printf 'VERSION="9999.9.9"\n' > "\$out" ;;
+        */cs) printf 'VERSION="9999.9.9"\n' > "\$out" ;;
         *.sha256) printf 'deadbeef  x\n' > "\$out" ;;
         *)    printf 'stub-binary\n' > "\$out" ;;
     esac
@@ -1464,7 +1459,7 @@ test_tui_removed_when_checksum_cannot_be_fetched() {
     local bin
     bin=$(CS_TEST_SHA_FETCH=fail _install_tui_with_broken_verification fetch)
     local f
-    for f in "$bin"/ags-tui "$bin"/ags-tui.exe; do
+    for f in "$bin"/cs-tui "$bin"/cs-tui.exe; do
         if [ -f "$f" ]; then
             echo "  FAIL: kept an unverified $f when the checksum could not be fetched"
             return 1
@@ -1478,7 +1473,7 @@ test_tui_removed_when_digest_cannot_be_computed() {
     local bin
     bin=$(CS_TEST_SHA_TOOL=fail _install_tui_with_broken_verification tool)
     local f
-    for f in "$bin"/ags-tui "$bin"/ags-tui.exe; do
+    for f in "$bin"/cs-tui "$bin"/cs-tui.exe; do
         if [ -f "$f" ]; then
             echo "  FAIL: kept an unverified $f when no digest could be computed"
             return 1
@@ -1629,13 +1624,10 @@ test_codex_only_install_and_reinstall_leave_claude_absent() {
     local fake_home="$TEST_TMPDIR/codex-home" output
     mkdir -p "$fake_home"
     output=$(HOME="$fake_home" XDG_CONFIG_HOME="$fake_home/.config" CS_INSTALL_ENGINES=codex bash "$INSTALL_SH" 2>&1) || { echo "$output"; return 1; }
-    assert_file_exists "$fake_home/.local/bin/ags" || return 1
-    assert_symlink "$fake_home/.local/bin/cs" "cs remains an executable alias" || return 1
-    assert_file_exists "$fake_home/.local/bin/ags-secrets" || return 1
-    assert_file_exists "$fake_home/.local/bin/ags-codex-thread" || return 1
-    assert_symlink "$fake_home/.local/bin/cs-codex-thread" || return 1
+    assert_file_exists "$fake_home/.local/bin/cs" || return 1
+    assert_file_exists "$fake_home/.local/bin/cs-secrets" || return 1
+    assert_file_exists "$fake_home/.local/bin/cs-codex-thread" || return 1
     assert_not_exists "$fake_home/.claude" || return 1
-    assert_not_exists "$fake_home/.local/bin/ags-statusline" || return 1
     assert_not_exists "$fake_home/.local/bin/cs-statusline" || return 1
     assert_eq codex "$(cat "$fake_home/.local/bin/.cs-install-engines")" || return 1
     assert_file_exists "$fake_home/.codex/skills/finish/agents/openai.yaml" \
@@ -1644,8 +1636,8 @@ test_codex_only_install_and_reinstall_leave_claude_absent() {
     assert_not_exists "$fake_home/.claude" "reinstall must remember the selected adapter"
 }
 
-test_install_refuses_to_replace_legacy_cs_commands() {
-    local fake_home="$TEST_TMPDIR/reinstall-legacy"
+test_install_refuses_to_replace_the_original_cs() {
+    local fake_home="$TEST_TMPDIR/reinstall-original"
     mkdir -p "$fake_home/.local/bin"
     local name
     for name in cs cs-secrets cs-codex-thread; do
@@ -1656,25 +1648,33 @@ test_install_refuses_to_replace_legacy_cs_commands() {
 
     local status=0 output
     output=$(HOME="$fake_home" XDG_CONFIG_HOME="$fake_home/.config" bash "$INSTALL_SH" 2>&1) || status=$?
-    assert_eq 1 "$status" "direct installation must protect the original cs" || return 1
-    assert_output_contains "$output" 'Run sh setup.sh' || return 1
+    assert_eq 1 "$status" "a direct install must leave the original cs alone" || return 1
+    assert_output_contains "$output" 'run sh setup.sh' || return 1
     for name in cs cs-secrets cs-codex-thread; do
         assert_eq $'#!/bin/sh\nexit 0' "$(cat "$fake_home/.local/bin/$name")" || return 1
-        [ ! -L "$fake_home/.local/bin/$name" ] || return 1
     done
-    assert_not_exists "$fake_home/.local/bin/ags" || return 1
-    assert_eq codex "$(cat "$fake_home/.local/bin/.cs-install-engines")" \
-        "engine preference storage remains compatible" || return 1
+    assert_eq codex "$(cat "$fake_home/.local/bin/.cs-install-engines")" || return 1
 }
 
-test_uninstall_removes_canonical_commands_and_legacy_aliases() {
-    local fake_home="$TEST_TMPDIR/uninstall-ags" name
+test_install_replaces_its_own_code_sessions_build() {
+    local fake_home="$TEST_TMPDIR/reinstall-own"
+    mkdir -p "$fake_home"
+    HOME="$fake_home" CS_INSTALL_ENGINES=codex bash "$INSTALL_SH" >/dev/null 2>&1 \
+        || { echo "  FAIL: first install failed"; return 1; }
+    printf '\n# an older build\n' >> "$fake_home/.local/bin/cs"
+    HOME="$fake_home" CS_INSTALL_ENGINES=codex bash "$INSTALL_SH" >/dev/null 2>&1 \
+        || { echo "  FAIL: a reinstall over code-sessions' own cs was refused"; return 1; }
+    assert_eq "$(cat "$SCRIPT_DIR/../bin/cs")" "$(cat "$fake_home/.local/bin/cs")" "the reinstall replaced it" || return 1
+}
+
+test_uninstall_removes_the_commands() {
+    local fake_home="$TEST_TMPDIR/uninstall-cs" name
     mkdir -p "$fake_home"
     HOME="$fake_home" CS_INSTALL_ENGINES=codex bash "$INSTALL_SH" >/dev/null 2>&1 \
         || { echo "  FAIL: install failed"; return 1; }
-    printf 'y\n' | HOME="$fake_home" "$fake_home/.local/bin/ags" -uninstall >/dev/null 2>&1 \
-        || { echo "  FAIL: ags -uninstall failed"; return 1; }
-    for name in ags cs ags-secrets cs-secrets ags-codex-thread cs-codex-thread; do
+    printf 'y\n' | HOME="$fake_home" "$fake_home/.local/bin/cs" -uninstall >/dev/null 2>&1 \
+        || { echo "  FAIL: cs -uninstall failed"; return 1; }
+    for name in cs cs-secrets cs-codex-thread; do
         assert_not_exists "$fake_home/.local/bin/$name" "uninstall must remove $name" || return 1
     done
 }
@@ -1819,7 +1819,7 @@ test_rewake_labels_do_not_claim_the_wake_is_mail() {
 # bindings an older cs wrote.
 # ============================================================================
 
-# ags's block, as `jq -c` prints it.
+# cs's block, as `jq -c` prints it.
 _OK_CS_BLOCK='{"context":"Global","bindings":{"ctrl+x r":"command:rotate","ctrl+x w":"command:wrap","ctrl+x 1":"strip:jump1","ctrl+x 2":"strip:jump2"}}'
 
 _need_expect() {
@@ -1851,7 +1851,7 @@ EXPECT
     expect -f "$exp" >/dev/null 2>&1
 }
 
-# 1. No keybindings.json: a yes creates it holding exactly ags's block, and the
+# 1. No keybindings.json: a yes creates it holding exactly cs's block, and the
 # answer is recorded for the next install.
 test_rotate_wrap_keys_yes_creates_the_file_with_only_cs_block() {
     _need_expect || return 77
@@ -1860,7 +1860,7 @@ test_rotate_wrap_keys_yes_creates_the_file_with_only_cs_block() {
     _install_answering_rotate_wrap_keys ok-create "$home" y \
         || { echo "  FAIL: install.sh exited non-zero"; return 1; }
     assert_eq "{\"bindings\":[$_OK_CS_BLOCK]}" "$(jq -c . "$home/.claude/keybindings.json" 2>&1)" \
-        "a new keybindings.json holds exactly ags's block" || return 1
+        "a new keybindings.json holds exactly cs's block" || return 1
     assert_eq "yes" "$(cat "$home/.config/cs/option-keys" 2>&1)" "the yes is recorded" || return 1
 }
 
@@ -1896,7 +1896,7 @@ test_rotate_wrap_keys_never_overwrite_a_user_binding() {
         || { echo "  FAIL: no warning naming ctrl+x r and its current action"; return 1; }
 }
 
-# 4. A file ags cannot read as {"bindings":[...]} is refused and left byte for
+# 4. A file cs cannot read as {"bindings":[...]} is refused and left byte for
 # byte as it was, with no temp file beside it, and the message names it.
 test_rotate_wrap_keys_refuse_an_unparseable_file() {
     _need_expect || return 77
@@ -1955,7 +1955,7 @@ test_rotate_wrap_keys_non_interactive_writes_nothing_and_says_how() {
     assert_eq "1" "$(grep -c 'Ctrl+X R' "$TEST_TMPDIR/ok-pipe.out")" "exactly one line mentions Ctrl+X R" || return 1
     # The whole line: the installer's notes sit in the three-space gutter
     # behind a dot, like every other line it prints.
-    grep -qxF '   · Rotate/wrap keys: not bound. To bind Ctrl+X R to /rotate, Ctrl+X W to /wrap and Ctrl+X 1/2 to the ags band, run ags -update in a terminal.' \
+    grep -qxF '   · Rotate/wrap keys: not bound. To bind Ctrl+X R to /rotate, Ctrl+X W to /wrap and Ctrl+X 1/2 to the cs band, run cs -update in a terminal.' \
         "$TEST_TMPDIR/ok-pipe.out" || { echo "  FAIL: the hint line is missing, reworded or out of the gutter"; return 1; }
 }
 
@@ -1978,8 +1978,8 @@ test_rotate_wrap_keys_reinstall_after_yes_is_idempotent() {
         "$(jq -c . "$kb" 2>&1)" "one Global block, each key once" || return 1
 }
 
-# 8. Uninstall takes back only keys that still hold ags's values, the chords and
-# an older ags's Option+1 / Option+2 alike, keeps every user binding (an
+# 8. Uninstall takes back only keys that still hold cs's values, the chords and
+# an older cs's Option+1 / Option+2 alike, keeps every user binding (an
 # unbinding null included), and deletes a file it leaves holding nothing.
 test_rotate_wrap_keys_uninstall_removes_only_cs_values() {
     local home="$TEST_TMPDIR/home-ok-un" kb
@@ -1988,15 +1988,15 @@ test_rotate_wrap_keys_uninstall_removes_only_cs_values() {
     printf 'yes\n' > "$home/.config/cs/option-keys"
     printf '%s\n' '{"bindings":[{"context":"Chat","bindings":{"ctrl+e":"chat:externalEditor"}},{"context":"Global","bindings":{"ctrl+t":"app:toggleTodos","ctrl+x":null,"ctrl+x r":"command:rotate","ctrl+x w":"command:other","alt+1":"command:rotate","alt+2":"chat:submit"}}]}' > "$kb"
     printf 'y\n' | env -u CLAUDE_CONFIG_DIR -u XDG_CONFIG_HOME HOME="$home" "$CS_BIN" -uninstall > /dev/null 2>&1 \
-        || { echo "  FAIL: ags -uninstall exited non-zero"; return 1; }
+        || { echo "  FAIL: cs -uninstall exited non-zero"; return 1; }
     assert_eq '{"bindings":[{"context":"Chat","bindings":{"ctrl+e":"chat:externalEditor"}},{"context":"Global","bindings":{"ctrl+t":"app:toggleTodos","ctrl+x":null,"ctrl+x w":"command:other","alt+2":"chat:submit"}}]}' \
-        "$(jq -c . "$kb" 2>&1)" "only ctrl+x r and alt+1, which held ags's values, are removed" || return 1
+        "$(jq -c . "$kb" 2>&1)" "only ctrl+x r and alt+1, which held cs's values, are removed" || return 1
 
     local home2="$TEST_TMPDIR/home-ok-un2"
     mkdir -p "$home2/.claude"
     printf '%s\n' "{\"bindings\":[$_OK_CS_BLOCK]}" > "$home2/.claude/keybindings.json"
     printf 'y\n' | env -u CLAUDE_CONFIG_DIR -u XDG_CONFIG_HOME HOME="$home2" "$CS_BIN" -uninstall > /dev/null 2>&1 \
-        || { echo "  FAIL: ags -uninstall exited non-zero"; return 1; }
+        || { echo "  FAIL: cs -uninstall exited non-zero"; return 1; }
     assert_file_not_exists "$home2/.claude/keybindings.json" "a file left with no bindings is deleted" || return 1
 }
 
@@ -2031,7 +2031,7 @@ test_rotate_wrap_keys_write_through_a_symlink() {
 
 # 11. Inside an encrypted session CLAUDE_CONFIG_DIR is the session's
 # .cs/claude-config, which every other session cannot see. The keys go to the
-# shell's config dir that ags recorded in CLAUDE_SECURESTORAGE_CONFIG_DIR:
+# shell's config dir that cs recorded in CLAUDE_SECURESTORAGE_CONFIG_DIR:
 # empty selects ~/.claude, a path selects that dir.
 test_rotate_wrap_keys_skip_an_encrypted_sessions_config_dir() {
     _need_expect || return 77
@@ -2064,8 +2064,8 @@ _install_with_recorded_yes() {  # label, home, keybindings-json
         < /dev/null > "$TEST_TMPDIR/$1.out" 2>&1
 }
 
-# 12. A machine an older ags bound Option+1 / Option+2 on: its recorded yes is
-# honoured without a terminal, ags's alt+1 and alt+2 make way for the chords,
+# 12. A machine an older cs bound Option+1 / Option+2 on: its recorded yes is
+# honoured without a terminal, cs's alt+1 and alt+2 make way for the chords,
 # and every other binding stays. The one line says what was replaced.
 test_rotate_wrap_keys_replace_cs_option_keys() {
     local home="$TEST_TMPDIR/home-ok-mig" kb
@@ -2074,25 +2074,25 @@ test_rotate_wrap_keys_replace_cs_option_keys() {
         || { echo "  FAIL: install.sh exited non-zero"; return 1; }
     assert_eq '{"bindings":[{"context":"Chat","bindings":{"ctrl+e":"chat:externalEditor"}},{"context":"Global","bindings":{"ctrl+t":"app:toggleTodos","ctrl+x r":"command:rotate","ctrl+x w":"command:wrap","ctrl+x 1":"strip:jump1","ctrl+x 2":"strip:jump2"}}]}' \
         "$(jq -c . "$kb" 2>&1)" "alt+1 and alt+2 are gone and the chords are bound" || return 1
-    grep -qxF "   · Rotate/wrap keys: bound ctrl+x r, ctrl+x w, ctrl+x 1, ctrl+x 2 in $kb (replacing ags's alt+1, alt+2)" \
+    grep -qxF "   · Rotate/wrap keys: bound ctrl+x r, ctrl+x w, ctrl+x 1, ctrl+x 2 in $kb (replacing cs's alt+1, alt+2)" \
         "$TEST_TMPDIR/ok-mig.out" || { echo "  FAIL: the replacement line is missing or reworded"; return 1; }
 }
 
-# 13. Only ags's own values are taken back: an alt+1 the user binds to anything
-# else stays, while ags's alt+2 goes.
+# 13. Only cs's own values are taken back: an alt+1 the user binds to anything
+# else stays, while cs's alt+2 goes.
 test_rotate_wrap_keys_migration_keeps_a_users_alt_key() {
     local home="$TEST_TMPDIR/home-ok-mig2" kb
     kb="$home/.claude/keybindings.json"
     _install_with_recorded_yes ok-mig2 "$home" '{"bindings":[{"context":"Global","bindings":{"alt+1":"chat:submit","alt+2":"command:wrap"}}]}' \
         || { echo "  FAIL: install.sh exited non-zero"; return 1; }
     assert_eq '{"bindings":[{"context":"Global","bindings":{"alt+1":"chat:submit","ctrl+x r":"command:rotate","ctrl+x w":"command:wrap","ctrl+x 1":"strip:jump1","ctrl+x 2":"strip:jump2"}}]}' \
-        "$(jq -c . "$kb" 2>&1)" "the user's alt+1 stays, ags's alt+2 goes" || return 1
+        "$(jq -c . "$kb" 2>&1)" "the user's alt+1 stays, cs's alt+2 goes" || return 1
 }
 
 # 14. Claude Code waits for a chord's second key once its first is pressed, so
 # binding ctrl+x r would silence a user's own bare ctrl+x. That counts as a
 # conflict for every chord: the file is left as it is, each is named, and
-# ags's Option+1 / Option+2 stay, as the only rotate and wrap keys there are.
+# cs's Option+1 / Option+2 stay, as the only rotate and wrap keys there are.
 test_rotate_wrap_keys_never_shadow_a_users_ctrl_x() {
     local home="$TEST_TMPDIR/home-ok-prefix" kb doc chord
     kb="$home/.claude/keybindings.json"
@@ -2106,7 +2106,7 @@ test_rotate_wrap_keys_never_shadow_a_users_ctrl_x() {
     done
 }
 
-# 15. Chords already bound beside ags's alt+1 / alt+2: the install only takes
+# 15. Chords already bound beside cs's alt+1 / alt+2: the install only takes
 # the alt keys back, and says so.
 test_rotate_wrap_keys_take_back_option_keys_beside_bound_chords() {
     local home="$TEST_TMPDIR/home-ok-left" kb
@@ -2115,11 +2115,11 @@ test_rotate_wrap_keys_take_back_option_keys_beside_bound_chords() {
         || { echo "  FAIL: install.sh exited non-zero"; return 1; }
     assert_eq '{"bindings":[{"context":"Global","bindings":{"ctrl+x r":"command:rotate","ctrl+x w":"command:wrap","ctrl+x 1":"strip:jump1","ctrl+x 2":"strip:jump2"}}]}' \
         "$(jq -c . "$kb" 2>&1)" "only the chords are left" || return 1
-    grep -qxF "   · Rotate/wrap keys: removed ags's alt+1, alt+2 from $kb" "$TEST_TMPDIR/ok-left.out" \
+    grep -qxF "   · Rotate/wrap keys: removed cs's alt+1, alt+2 from $kb" "$TEST_TMPDIR/ok-left.out" \
         || { echo "  FAIL: the removal line is missing or reworded"; return 1; }
 }
 
-# 16. One chord taken by the user: the free chords are bound and ags's alt+1 /
+# 16. One chord taken by the user: the free chords are bound and cs's alt+1 /
 # alt+2 stay, so /rotate keeps a key.
 test_rotate_wrap_keys_one_conflict_keeps_option_keys() {
     local home="$TEST_TMPDIR/home-ok-half" kb
@@ -2156,7 +2156,7 @@ test_rotate_wrap_keys_read_keys_as_claude_code_does() {
 
 # 18. Option+1 / Option+2 stand in for Ctrl+X R and Ctrl+X W only: a band
 # chord the user binds elsewhere leaves /rotate and /wrap their chords, so
-# ags's dead Option keys still go, and the other keys are bound.
+# cs's dead Option keys still go, and the other keys are bound.
 test_rotate_wrap_keys_band_chord_conflict_still_retires_option_keys() {
     local home="$TEST_TMPDIR/home-ok-band" kb
     kb="$home/.claude/keybindings.json"
@@ -2164,7 +2164,7 @@ test_rotate_wrap_keys_band_chord_conflict_still_retires_option_keys() {
         || { echo "  FAIL: install.sh exited non-zero"; return 1; }
     assert_eq '{"bindings":[{"context":"Global","bindings":{"ctrl+x 1":"app:redraw","ctrl+x r":"command:rotate","ctrl+x w":"command:wrap","ctrl+x 2":"strip:jump2"}}]}' \
         "$(jq -c . "$kb" 2>&1)" "the user's ctrl+x 1 stays, the alt keys go, the free chords are bound" || return 1
-    grep -qxF "   · Rotate/wrap keys: bound ctrl+x r, ctrl+x w, ctrl+x 2 in $kb (replacing ags's alt+1, alt+2)" \
+    grep -qxF "   · Rotate/wrap keys: bound ctrl+x r, ctrl+x w, ctrl+x 2 in $kb (replacing cs's alt+1, alt+2)" \
         "$TEST_TMPDIR/ok-band.out" || { echo "  FAIL: the replacement line is missing or reworded"; return 1; }
 }
 
@@ -2198,8 +2198,9 @@ run_test test_uninstall_removes_declined_marker
 run_test test_install_removes_the_retired_hint_mod
 run_test test_install_removes_the_mod_under_its_old_name
 run_test test_codex_only_install_and_reinstall_leave_claude_absent
-run_test test_install_refuses_to_replace_legacy_cs_commands
-run_test test_uninstall_removes_canonical_commands_and_legacy_aliases
+run_test test_install_refuses_to_replace_the_original_cs
+run_test test_install_replaces_its_own_code_sessions_build
+run_test test_uninstall_removes_the_commands
 run_test test_codex_only_install_preserves_existing_claude_settings
 run_test test_invalid_install_adapter_selection_fails_before_writes
 run_test test_rotate_wrap_keys_yes_creates_the_file_with_only_cs_block

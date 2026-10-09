@@ -33,7 +33,7 @@ _in_session() {  # name — export ambient env for the in-session verb form
 test_tag_subcommand_exists() {
     local output
     output=$("$CS_BIN" -tag 2>&1) || true
-    assert_output_not_contains "$output" "Unknown command" "ags -tag should be a recognized verb" || return 1
+    assert_output_not_contains "$output" "Unknown command" "cs -tag should be a recognized verb" || return 1
 }
 
 test_tag_add_and_list_roundtrip() {
@@ -75,7 +75,7 @@ test_tag_add_inserts_line_and_preserves_rest_byte_for_byte() {
     }
 }
 
-# ags rewrites .cs/README.md through a uniquely named temp file: a sibling the
+# cs rewrites .cs/README.md through a uniquely named temp file: a sibling the
 # user named README.md.tmp is never clobbered, and the README keeps its mode.
 test_tag_add_leaves_a_tmp_sibling_alone_and_keeps_the_mode() {
     _session_with_readme "sib" "tags: []" >/dev/null

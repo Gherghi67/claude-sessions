@@ -1,5 +1,5 @@
 # ABOUTME: Release verification (SHA-256 + minisign) and the self-update mechanism.
-# ABOUTME: Backs 'ags -update' and the non-blocking update-available notice.
+# ABOUTME: Backs 'cs -update' and the non-blocking update-available notice.
 
 # --- Release verification ---
 
@@ -247,6 +247,15 @@ fetch_remote_changelog() {
 }
 
 # Check for updates
+# code-sessions updates from its checkout (setup.sh). Its release URLs are the
+# original cs's, so `cs -update` inside its profile would install the original
+# over it, and -uninstall would take the profile's commands. The launcher
+# exports CODE_SESSIONS_HOME; with it set both refuse.
+refuse_in_code_sessions() {  # verb
+    [ -n "${CODE_SESSIONS_HOME:-}" ] || return 0
+    error "code-sessions updates from its checkout: rerun sh setup.sh there. cs $1 here would act as the original cs."
+}
+
 check_update() {
     local remote_version
     remote_version=$(get_remote_version) || {
@@ -258,7 +267,7 @@ check_update() {
 
     if version_greater "$remote_version" "$VERSION"; then
         echo ""
-        info "Update available. Run 'ags -update' to install."
+        info "Update available. Run 'cs -update' to install."
         local notes
         if notes=$(fetch_remote_changelog); then
             changelog_span "$notes" "$VERSION" | render_changelog
@@ -291,9 +300,9 @@ do_update() {
 
     echo ""
     if [ "$is_upgrade" = true ]; then
-        echo -e "   ${COMMENT}Updating${NC} ags ${COMMENT}from${NC} ${RUST}$VERSION${NC} ${COMMENT}→${NC} ${GREEN}$remote_version${NC}"
+        echo -e "   ${COMMENT}Updating${NC} cs ${COMMENT}from${NC} ${RUST}$VERSION${NC} ${COMMENT}→${NC} ${GREEN}$remote_version${NC}"
     else
-        echo -e "   ${COMMENT}Reinstalling${NC} ags ${GREEN}$VERSION${NC}"
+        echo -e "   ${COMMENT}Reinstalling${NC} cs ${GREEN}$VERSION${NC}"
     fi
     echo ""
 
@@ -339,7 +348,7 @@ do_update() {
 
     # Show release notes for the installed version
     local new_version
-    new_version=$(grep '^VERSION=' "${CS_INSTALL_DIR:-$HOME/.local/bin}/ags" 2>/dev/null | head -1 | cut -d'"' -f2)
+    new_version=$(grep '^VERSION=' "${CS_INSTALL_DIR:-$HOME/.local/bin}/cs" 2>/dev/null | head -1 | cut -d'"' -f2)
     if [ -n "$new_version" ]; then
         local changelog
         local script_dir

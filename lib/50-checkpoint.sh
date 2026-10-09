@@ -1,5 +1,5 @@
 # ABOUTME: Labelled state checkpoints (save/list/show).
-# ABOUTME: Backs 'ags -checkpoint'.
+# ABOUTME: Backs 'cs -checkpoint'.
 
 get_file_mtime() {
     local file="$1"
@@ -45,11 +45,11 @@ save_checkpoint() {
     local label="$*"
 
     if [ -z "$label" ]; then
-        error "Usage: ags -checkpoint \"<label>\"   # from inside a session"
+        error "Usage: cs -checkpoint \"<label>\"   # from inside a session"
     fi
 
     if [ -z "${CS_SESSION_NAME:-${CLAUDE_SESSION_NAME:-}}" ] || [ -z "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ] || [ ! -d "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ]; then
-        error "ags -checkpoint must be run from inside a cs session"
+        error "cs -checkpoint must be run from inside a cs session"
     fi
 
     local meta_dir="${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}"
@@ -124,13 +124,13 @@ save_checkpoint() {
 # List all checkpoints for the current session
 list_checkpoints() {
     if [ -z "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ]; then
-        error "ags -checkpoint list must be run from inside a cs session"
+        error "cs -checkpoint list must be run from inside a cs session"
     fi
     local checkpoints_dir rc=0
     checkpoints_dir=$(_checkpoints_dir "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}") || rc=$?
     _refuse_checkpoints_dir "$rc" "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}"
     if [ ! -d "$checkpoints_dir" ] || [ -z "$(ls -A "$checkpoints_dir" 2>/dev/null)" ]; then
-        info "No checkpoints yet. Save one with: ags -checkpoint \"<label>\""
+        info "No checkpoints yet. Save one with: cs -checkpoint \"<label>\""
         return 0
     fi
     echo "Checkpoints for session: ${CS_SESSION_NAME:-${CLAUDE_SESSION_NAME:-}}"
@@ -148,10 +148,10 @@ list_checkpoints() {
 show_checkpoint() {
     local name="$1"
     if [ -z "$name" ]; then
-        error "Usage: ags -checkpoint show <checkpoint-name>"
+        error "Usage: cs -checkpoint show <checkpoint-name>"
     fi
     if [ -z "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ]; then
-        error "ags -checkpoint show must be run from inside a cs session"
+        error "cs -checkpoint show must be run from inside a cs session"
     fi
     local checkpoints_dir rc=0
     checkpoints_dir=$(_checkpoints_dir "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}") || rc=$?
@@ -163,7 +163,7 @@ show_checkpoint() {
     cat "$path"
 }
 
-# Dispatcher for ags -checkpoint subcommand
+# Dispatcher for cs -checkpoint subcommand
 run_checkpoint() {
     local sub="${1:-}"
     case "$sub" in
@@ -175,7 +175,7 @@ run_checkpoint() {
             show_checkpoint "${1:-}"
             ;;
         "")
-            error "Usage: ags -checkpoint \"<label>\" | list | show <name>"
+            error "Usage: cs -checkpoint \"<label>\" | list | show <name>"
             ;;
         *)
             save_checkpoint "$@"
@@ -183,7 +183,7 @@ run_checkpoint() {
     esac
 }
 
-# --- Task queue (ags -queue) ---------------------------------------------------
+# --- Task queue (cs -queue) ---------------------------------------------------
 # Machine-local queue of prompts drained by the Stop hook. Files live in
 # <session>/.cs/local/ (.cs/private/ in an encrypted session): queue/ (one
 # file per task, staged via queue.tmp/),

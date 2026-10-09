@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ABOUTME: Tests for ags -encrypt: the refusals, the vault it builds for an existing session,
+# ABOUTME: Tests for cs -encrypt: the refusals, the vault it builds for an existing session,
 # ABOUTME: and how it stops. hdiutil, uname and mount are PATH stubs that log every call.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -26,7 +26,7 @@ if [ "$1" = "create" ] && [ -n "${FAKE_LOCK_WATCH:-}" ]; then
     p=$(cat "$FAKE_LOCK_WATCH" 2>/dev/null)
     if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then echo live; else echo "none:$p"; fi > "$FAKE_LOCK_WATCH.seen"
 fi
-# create makes the container, the one side effect ags relies on.
+# create makes the container, the one side effect cs relies on.
 if [ "$1" = "create" ]; then eval "last=\${$#}"; mkdir -p "$last"; fi
 # With $FAKE_MOUNT_FLAG set, attach and detach flip the mount stub's answer.
 if [ -n "${FAKE_MOUNT_FLAG:-}" ]; then
@@ -41,7 +41,7 @@ EOF
     : > "$FAKE_HDIUTIL_LOG"
 }
 
-_encrypt() {  # name -> runs ags -encrypt as a human at a terminal would
+_encrypt() {  # name -> runs cs -encrypt as a human at a terminal would
     CS_ASSUME_TTY=1 "$CS_BIN" -encrypt "$@" </dev/null
 }
 
@@ -67,7 +67,7 @@ test_encrypt_refuses_off_macos() {
     local out rc=0
     out=$(FAKE_UNAME=Linux _encrypt enc 2>&1) || rc=$?
     assert_eq "1" "$rc" "non-zero exit" || return 1
-    assert_output_contains "$out" "ags -encrypt needs macOS (hdiutil); Linux is not supported yet." "names the platform" || return 1
+    assert_output_contains "$out" "cs -encrypt needs macOS (hdiutil); Linux is not supported yet." "names the platform" || return 1
     _assert_nothing_written enc || return 1
 }
 
@@ -77,7 +77,7 @@ test_encrypt_refuses_without_a_terminal() {
     local out rc=0
     out=$("$CS_BIN" -encrypt enc </dev/null 2>&1) || rc=$?
     assert_eq "1" "$rc" "non-zero exit" || return 1
-    assert_output_contains "$out" "ags -encrypt asks for the vault password; run it from a terminal." "says why" || return 1
+    assert_output_contains "$out" "cs -encrypt asks for the vault password; run it from a terminal." "says why" || return 1
     _assert_nothing_written enc || return 1
 }
 
@@ -157,7 +157,7 @@ test_encrypt_refuses_a_real_claude_config_or_private() {
             local out rc=0
             out=$(_encrypt enc 2>&1) || rc=$?
             assert_eq "1" "$rc" "non-zero exit with a $kind at .cs/$l" || return 1
-            assert_output_contains "$out" "enc: .cs/$l already exists and is not a link; ags -encrypt links it into the vault. Move it aside first." "names .cs/$l ($kind)" || return 1
+            assert_output_contains "$out" "enc: .cs/$l already exists and is not a link; cs -encrypt links it into the vault. Move it aside first." "names .cs/$l ($kind)" || return 1
             _assert_nothing_written enc || return 1
         done
     done
@@ -171,7 +171,7 @@ test_encrypt_refuses_an_existing_pre_open() {
     before=$(cat "$CS_SESSIONS_ROOT/enc/.cs/local/pre-open")
     out=$(_encrypt enc 2>&1) || rc=$?
     assert_eq "1" "$rc" "non-zero exit" || return 1
-    assert_output_contains "$out" "enc: .cs/local/pre-open already exists; ags -encrypt writes its own. Move yours aside first." "names the hook" || return 1
+    assert_output_contains "$out" "enc: .cs/local/pre-open already exists; cs -encrypt writes its own. Move yours aside first." "names the hook" || return 1
     assert_eq "$before" "$(cat "$CS_SESSIONS_ROOT/enc/.cs/local/pre-open")" "pre-open unchanged" || return 1
     assert_eq "" "$(cat "$FAKE_HDIUTIL_LOG")" "hdiutil never called" || return 1
 }
@@ -183,11 +183,11 @@ test_encrypt_refuses_an_existing_container() {
     local out rc=0
     out=$(_encrypt enc 2>&1) || rc=$?
     assert_eq "1" "$rc" "non-zero exit" || return 1
-    assert_output_contains "$out" "enc: $(_vault_path enc) already exists; ags -encrypt will not reuse or overwrite it." "names the container" || return 1
+    assert_output_contains "$out" "enc: $(_vault_path enc) already exists; cs -encrypt will not reuse or overwrite it." "names the container" || return 1
     assert_eq "" "$(cat "$FAKE_HDIUTIL_LOG")" "hdiutil never called" || return 1
 }
 
-# The ags profile points CS_DATA_DIR into its own tree; the refusal looks there.
+# The code-sessions profile points CS_DATA_DIR into its own tree; the refusal looks there.
 test_encrypt_refuses_an_existing_container_under_cs_data_dir() {
     _stubs
     local CS_DATA_DIR="$TEST_TMPDIR/profile/.local/share/cs"
@@ -197,7 +197,7 @@ test_encrypt_refuses_an_existing_container_under_cs_data_dir() {
     local out rc=0
     out=$(_encrypt enc 2>&1) || rc=$?
     assert_eq "1" "$rc" "non-zero exit" || return 1
-    assert_output_contains "$out" "enc: $CS_DATA_DIR/vaults/enc.sparsebundle already exists; ags -encrypt will not reuse or overwrite it." "names the container under CS_DATA_DIR" || return 1
+    assert_output_contains "$out" "enc: $CS_DATA_DIR/vaults/enc.sparsebundle already exists; cs -encrypt will not reuse or overwrite it." "names the container under CS_DATA_DIR" || return 1
     assert_eq "" "$(cat "$FAKE_HDIUTIL_LOG")" "hdiutil never called" || return 1
 }
 
@@ -209,7 +209,7 @@ test_encrypt_refuses_a_relative_cs_data_dir() {
     local out rc=0
     out=$(cd "$TEST_TMPDIR" && CS_DATA_DIR=rel/data _encrypt enc 2>&1) || rc=$?
     assert_eq "1" "$rc" "non-zero exit" || return 1
-    assert_output_contains "$out" "CS_DATA_DIR=rel/data: ags -encrypt needs an absolute path" "names the variable" || return 1
+    assert_output_contains "$out" "CS_DATA_DIR=rel/data: cs -encrypt needs an absolute path" "names the variable" || return 1
     _assert_nothing_written enc || return 1
     assert_not_exists "$TEST_TMPDIR/rel" "no container made beside the caller" || return 1
 }
@@ -265,7 +265,7 @@ test_encrypt_builds_the_vault_and_detaches() {
     assert_eq "create -size 50g -type SPARSEBUNDLE -fs APFS -encryption AES-256 -volname cs-enc $c
 attach -nobrowse -mountpoint $s/vault-mnt $c
 detach $s/vault-mnt" "$(cat "$FAKE_HDIUTIL_LOG")" "create, attach, then detach" || return 1
-    # shellcheck disable=SC2088  # ags prints the literal ~ path
+    # shellcheck disable=SC2088  # cs prints the literal ~ path
     assert_output_contains "$out" "~/.claude/history.jsonl" "lists copies it could not move" || return 1
 }
 
@@ -284,7 +284,7 @@ test_encrypt_builds_a_session_never_opened_on_this_machine() {
 }
 
 # Stable cs keeps its containers in ~/.local/share/cs/vaults, named after the
-# session alone. Under the ags profile (CS_DATA_DIR set) a session stable cs
+# session alone. Under the code-sessions profile (CS_DATA_DIR set) a session stable cs
 # also has is neither refused for that container nor given it.
 test_encrypt_builds_the_container_under_cs_data_dir() {
     _stubs
@@ -303,8 +303,8 @@ test_encrypt_builds_the_container_under_cs_data_dir() {
     assert_eq "" "$(ls -A "$stable")" "stable cs's container is untouched" || return 1
 }
 
-# An open while ags -encrypt asks for passwords would race its moves; the
-# session lock holds it off, and is gone once ags -encrypt ends.
+# An open while cs -encrypt asks for passwords would race its moves; the
+# session lock holds it off, and is gone once cs -encrypt ends.
 test_encrypt_holds_the_session_lock_while_it_works() {
     _stubs
     _populated_session enc
@@ -468,7 +468,7 @@ test_pre_open_refuses_without_a_terminal() {
     local out rc=0
     out=$(_pre_open enc 2>&1) || rc=$?
     assert_eq "1" "$rc" "non-zero exit" || return 1
-    assert_output_contains "$out" "ags: this session is encrypted and needs a terminal to ask for the vault password." "says why" || return 1
+    assert_output_contains "$out" "cs: this session is encrypted and needs a terminal to ask for the vault password." "says why" || return 1
     assert_eq "" "$(cat "$FAKE_HDIUTIL_LOG")" "no hdiutil call, so no dialog" || return 1
 }
 
@@ -554,16 +554,16 @@ test_open_that_stops_leaves_a_vault_another_holder_keeps() {
     assert_eq "" "$(cat "$FAKE_HDIUTIL_LOG")" "joined the holder's mount, never detached it" || return 1
 }
 
-# The collision menu's session manager replaces this ags with the picker: that
+# The collision menu's session manager replaces this cs with the picker: that
 # process no longer opens the vault, so it must not stay listed as a holder.
 test_open_handing_off_to_the_session_manager_leaves_the_holders() {
     _encrypted_session enc || return 1
     : > "$TEST_TMPDIR/mounted"
-    cat > "$TEST_TMPDIR/stub/ags-tui" <<EOF
+    cat > "$TEST_TMPDIR/stub/cs-tui" <<EOF
 #!/bin/sh
 grep -qx "\$PPID" "$CS_SESSIONS_ROOT/enc/.cs/local/vault-holders" 2>/dev/null && echo listed > "$TEST_TMPDIR/tui-saw" || echo absent > "$TEST_TMPDIR/tui-saw"
 EOF
-    chmod +x "$TEST_TMPDIR/stub/ags-tui"
+    chmod +x "$TEST_TMPDIR/stub/cs-tui"
     sleep 300 &
     local live=$! out rc=0
     echo "$live" > "$CS_SESSIONS_ROOT/enc/.cs/session.lock"
@@ -581,8 +581,8 @@ _claude_snapshot() {
     printf '%s' "$c"
 }
 
-# Resuming, ags runs claude as its child: the vault stays mounted while claude
-# runs, and ags, its last holder, detaches it once claude exits.
+# Resuming, cs runs claude as its child: the vault stays mounted while claude
+# runs, and cs, its last holder, detaches it once claude exits.
 test_open_resuming_keeps_the_vault_while_claude_runs() {
     _encrypted_session enc || return 1
     _bind_conversation enc
@@ -595,7 +595,7 @@ test_open_resuming_keeps_the_vault_while_claude_runs() {
 detach $FAKE_MNT" "$(cat "$FAKE_HDIUTIL_LOG")" "detached after claude exits" || return 1
 }
 
-# ags runs claude as its child on every path, a fresh start included, so it
+# cs runs claude as its child on every path, a fresh start included, so it
 # holds the vault while claude runs and detaches it once claude exits (upstream
 # cs execs claude there and leaves the detach to the SessionEnd waiter).
 test_open_fresh_detaches_after_claude_exits() {

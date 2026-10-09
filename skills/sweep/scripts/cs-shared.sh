@@ -88,10 +88,10 @@ _narrative_budget() {  # value, default
 
 # The four names under .cs/ that an encrypted session links into its vault;
 # see docs/session-layout.md "Encrypted sessions".
-# shellcheck disable=SC2034  # read by ags and by the hooks that source this file
+# shellcheck disable=SC2034  # read by cs and by the hooks that source this file
 CS_VAULT_LINKS="memory plans claude-config private"
 
-# The directory holding a session's ags content files (command log, mail,
+# The directory holding a session's cs content files (command log, mail,
 # traces). An encrypted session links .cs/private into its vault; any other
 # keeps them in .cs/local. Fails, printing nothing, when .cs/private is a link
 # whose vault is locked: a writer drops its line rather than write it anywhere
@@ -151,7 +151,7 @@ cs_tmux_title_window() {  # pane, session name ("" releases the pane)
     names=$(tmux list-panes -t "$pane" -F '#{@cs_session}' 2>/dev/null \
         | awk 'NF && !seen[$0]++ { out = out (out == "" ? "" : " | ") $0 } END { print out }') || names=""
     if [ -n "$names" ]; then
-        tmux rename-window -t "$pane" "ags: $names" 2>/dev/null || true
+        tmux rename-window -t "$pane" "cs: $names" 2>/dev/null || true
         tmux set-window-option -t "$pane" allow-rename off 2>/dev/null || true
         tmux set-window-option -t "$pane" allow-set-title off 2>/dev/null || true
     else
@@ -291,7 +291,7 @@ _cs_file_mode() {  # path
 # them BEFORE the rename, so a shared directory never sees a 0600 window. A
 # failed command, chmod or rename leaves the destination as it was, the temp
 # file removed, and returns the failing status. Callers that want a message
-# add it: hooks source this file, and `error` is ags's alone.
+# add it: hooks source this file, and `error` is cs's alone.
 # Usage: cs_write_atomic <dest> <command> [args...]
 cs_write_atomic() {  # dest, command [args...]
     local dest="$1"; shift
@@ -323,7 +323,7 @@ cs_write_atomic() {  # dest, command [args...]
 }
 
 # The machine-local state file (.cs/local/state) is rewritten whole from its
-# old contents, by ags and by the SessionStart hook, so two writers can lose an
+# old contents, by cs and by the SessionStart hook, so two writers can lose an
 # update unless they take turns: the lock is _cs_mkdir_lock on a directory
 # beside the file. The vault holder list takes turns through it too. Prints the lock directory when it holds it, nothing when it
 # does not.

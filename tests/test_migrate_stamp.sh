@@ -6,12 +6,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/test_lib.sh"
 
 # Open a session as an actor (alice unless named), answering the resume prompt.
-# Prints ags's output; returns ags's status.
+# Prints cs's output; returns cs's status.
 _open() {  # name, [actor]
     CS_ACTOR="${2:-alice}" "$CS_BIN" "$1" <<< "" 2>&1
 }
 
-# A session ags created, then reopened once so the migration stamped it.
+# A session cs created, then reopened once so the migration stamped it.
 _stamped_session() {  # name
     local dir="$CS_SESSIONS_ROOT/$1"
     _open "$1" > /dev/null || { echo "  FAIL: creating $1 failed"; return 1; }
@@ -46,7 +46,7 @@ _drop_line() {  # file, line
 # only ensure_cs_gitignore_entries re-adds, and the cs:memory-note sentinel
 # only Phase 9 re-adds. The positive control removes the stamp from the same
 # fixture and watches both come back, so their absence means "skipped", not
-# "ags never repairs this".
+# "cs never repairs this".
 test_fresh_stamp_skips_the_one_time_phases() {
     local dir="$CS_SESSIONS_ROOT/stamped" out
     _stamped_session stamped || return 1
@@ -105,15 +105,15 @@ test_merge_driver_removed_after_the_stamp_is_restored() {
         "a merge driver removed after the stamp is set again" || return 1
 }
 
-# A checkout ags hides itself in (git_bookkeeping: exclude) never gets the merge
+# A checkout cs hides itself in (git_bookkeeping: exclude) never gets the merge
 # driver, so its absence there must not send every open through the migration.
 test_excluded_bookkeeping_without_a_driver_stays_fresh() {
     local dir="$CS_SESSIONS_ROOT/excluded" out
     _stamped_session excluded || return 1
-    # An excluded checkout tracks none of ags's files, or the open refuses it.
+    # An excluded checkout tracks none of cs's files, or the open refuses it.
     git -C "$dir" rm -r -q --cached --ignore-unmatch .cs .claude/settings.local.json CLAUDE.local.md \
-        && git -C "$dir" commit -q -m "untrack ags files" \
-        || { echo "  FAIL: could not untrack ags's files"; return 1; }
+        && git -C "$dir" commit -q -m "untrack cs files" \
+        || { echo "  FAIL: could not untrack cs's files"; return 1; }
     printf 'git_bookkeeping: exclude\n' >> "$dir/.cs/local/state"
     git -C "$dir" config --unset merge.ours.driver \
         || { echo "  FAIL: the fixture has no merge driver to remove"; return 1; }
@@ -139,16 +139,17 @@ _rewrite_stamp_line1() {  # dir, line1
 test_stamp_from_another_version_reruns_the_migration() {
     local dir="$CS_SESSIONS_ROOT/upgraded" version
     version=$("$CS_BIN" -version)
-    version=${version#ags }
+    version=${version#cs }
+    version=${version%% *}
     _stamped_session upgraded || return 1
     _rewrite_stamp_line1 "$dir" "$(printf '2000.1.1\talice\t0\tclaude')"
     _drop_line "$dir/.gitignore" ".obsidian/"
     _age_session "$dir"
     _open upgraded > /dev/null || { echo "  FAIL: the reopen failed"; return 1; }
     assert_file_contains "$dir/.gitignore" '^\.obsidian/$' \
-        "a stamp from another ags version runs the full migration" || return 1
+        "a stamp from another cs version runs the full migration" || return 1
     assert_eq "$(printf '%s\talice\t0\tclaude' "$version")" "$(sed -n 1p "$dir/.cs/local/migrated")" \
-        "the migration restamps with this ags version" || return 1
+        "the migration restamps with this cs version" || return 1
 }
 
 test_another_actor_reruns_the_migration() {
@@ -165,7 +166,7 @@ test_session_encrypted_after_the_stamp_gains_the_protocol() {
     _stamped_session vaulted || return 1
     assert_file_not_contains "$dir/CLAUDE.local.md" 'cs:encrypted-protocol' \
         "precondition: the plain session has no encrypted protocol" || return 1
-    # What ags -encrypt does to a plain session: link .cs/private into the
+    # What cs -encrypt does to a plain session: link .cs/private into the
     # vault and move the launch's plaintext log behind it, which the open
     # otherwise refuses.
     mkdir -p "$TEST_TMPDIR/vault/private"
@@ -211,7 +212,8 @@ test_migration_with_a_failed_write_leaves_no_stamp() {
 test_unusable_stamp_reruns_the_migration_quietly() {
     local dir="$CS_SESSIONS_ROOT/torn" version out rc content
     version=$("$CS_BIN" -version)
-    version=${version#ags }
+    version=${version#cs }
+    version=${version%% *}
     _stamped_session torn || return 1
     for content in "" "garbage" "$(printf '%s\talice\t0\tclaude\n' "$version")" \
         "$(printf '%s\talice\t0\tclaude\n.gitignore\tCLAUDE.loc' "$version")"; do
@@ -279,7 +281,7 @@ test_stamp_that_cannot_be_written_does_not_stop_the_open() {
     assert_dir "$dir/.cs/local/migrated" "the open leaves what it could not replace" || return 1
 }
 
-# ags -switch reopens a session under the other engine. A Codex open runs none
+# cs -switch reopens a session under the other engine. A Codex open runs none
 # of Claude's phases, so a stamp written under Codex vouches for nothing a
 # Claude open needs: the .obsidian/ line (the full migration's) and the memory
 # note (Claude's Phase 9) both come back. The positive control is
@@ -288,7 +290,8 @@ test_stamp_that_cannot_be_written_does_not_stop_the_open() {
 test_stamp_from_another_engine_reruns_the_migration() {
     local dir="$CS_SESSIONS_ROOT/switched" version out
     version=$("$CS_BIN" -version)
-    version=${version#ags }
+    version=${version#cs }
+    version=${version%% *}
     _stamped_session switched || return 1
     _rewrite_stamp_line1 "$dir" "$(printf '%s\talice\t0\tcodex' "$version")"
     _drop_line "$dir/.gitignore" ".obsidian/"
@@ -311,11 +314,12 @@ test_stamp_from_another_engine_reruns_the_migration() {
 }
 
 # Upstream cs writes a stamp without the engine field. It vouches for no
-# engine of ags's, so the open runs the full migration and restamps.
+# engine of cs's, so the open runs the full migration and restamps.
 test_stamp_naming_no_engine_reruns_the_migration() {
     local dir="$CS_SESSIONS_ROOT/unnamed" version
     version=$("$CS_BIN" -version)
-    version=${version#ags }
+    version=${version#cs }
+    version=${version%% *}
     _stamped_session unnamed || return 1
     _rewrite_stamp_line1 "$dir" "$(printf '%s\talice\t0' "$version")"
     _drop_line "$dir/.gitignore" ".obsidian/"
@@ -339,7 +343,8 @@ _open_codex() {  # name, stub_dir
 test_switching_engines_restamps_for_each() {
     local dir="$CS_SESSIONS_ROOT/both" stub="$TEST_TMPDIR/stub" version out
     version=$("$CS_BIN" -version)
-    version=${version#ags }
+    version=${version#cs }
+    version=${version%% *}
     mkdir -p "$stub"
     printf '#!/bin/sh\nexit 0\n' > "$stub/codex"
     printf '#!/bin/sh\necho 12345678-1234-1234-1234-123456789abc\n' > "$stub/codex-thread"

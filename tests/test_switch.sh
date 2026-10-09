@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ABOUTME: ags -switch and --from-handoff: the verb's refusals and pending-switch file, the
+# ABOUTME: cs -switch and --from-handoff: the verb's refusals and pending-switch file, the
 # ABOUTME: launch flag on both engines, and the relaunch under the other engine after the CLI exits.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -10,7 +10,7 @@ HANDOFF=2026-10-07-switch.md
 # Stub engines record each call's argv (one per line) and the values of the
 # variables a relaunch must not inherit. Behaviour comes from a one-shot plan
 # file the test writes before the launch it is meant for: arm a handoff (what
-# rotate's steps leave), run ags -switch from inside the run, simulate a
+# rotate's steps leave), run cs -switch from inside the run, simulate a
 # /clear, exit with a status. A one-shot <engine>.fail-early file holding a
 # status makes the next call exit with it before its conversation starts
 # (no SessionStart): a resume Claude Code refuses, a Codex that cannot start.
@@ -58,7 +58,7 @@ rm -f "$plan"
 [ -z "${PLAN_HANDOFF:-}" ] || "$CS_STUB_DIR/arm-handoff" "$PLAN_HANDOFF"
 if [ -n "${PLAN_SWITCH+x}" ]; then
     # shellcheck disable=SC2086
-    "$AGS_BIN" -switch $PLAN_SWITCH > "$CS_STUB_DIR/switch.out" 2>&1 || echo "switch exit $?" >> "$CS_STUB_DIR/switch.out"
+    "$CS_BIN" -switch $PLAN_SWITCH > "$CS_STUB_DIR/switch.out" 2>&1 || echo "switch exit $?" >> "$CS_STUB_DIR/switch.out"
 fi
 if [ -n "${PLAN_RAW_SWITCH:-}" ]; then
     printf '%b' "$PLAN_RAW_SWITCH" > "$CS_SESSION_DIR/.cs/local/pending-switch"
@@ -72,7 +72,7 @@ if [ -n "${PLAN_CLEAR:-}" ]; then
             | CLAUDE_PID=$PPID bash "$CS_TEST_START_HOOK" >/dev/null 2>&1
     else
         jq -nc --arg id 99999999-9999-4999-8999-999999999999 '{session_id:$id,source:"clear"}' \
-            | "$AGS_BIN" -codex-hook session-start >/dev/null 2>&1
+            | "$CS_BIN" -codex-hook session-start >/dev/null 2>&1
     fi
 fi
 echo "${PLAN_EXIT:-0}"
@@ -240,7 +240,7 @@ test_verb_refusals_name_the_fix_and_write_nothing() {
     # Outside a session.
     status=0; out=$("$CS_BIN" -switch codex 2>&1) || status=$?
     [ "$status" -ne 0 ] || { echo "  FAIL: outside a session must refuse"; return 1; }
-    assert_output_contains "$out" 'inside an ags session' || return 1
+    assert_output_contains "$out" 'inside a cs session' || return 1
     assert_eq 1 "$(printf '%s\n' "$out" | grep -c .)" "one line" || return 1
 
     _fake_run vr claude
@@ -251,10 +251,10 @@ test_verb_refusals_name_the_fix_and_write_nothing() {
     [ "$status" -ne 0 ] && assert_output_contains "$out" 'Unknown engine: wat' || return 1
     # A shell without a run.
     status=0; out=$(env -u CS_RUN_ID "$CS_BIN" -switch codex 2>&1) || status=$?
-    [ "$status" -ne 0 ] && assert_output_contains "$out" 'conversation ags launched' || return 1
+    [ "$status" -ne 0 ] && assert_output_contains "$out" 'conversation cs launched' || return 1
     # A run id no live lease names.
     status=0; out=$(CS_RUN_ID=bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb "$CS_BIN" -switch codex 2>&1) || status=$?
-    [ "$status" -ne 0 ] && assert_output_contains "$out" 'No live ags run' || return 1
+    [ "$status" -ne 0 ] && assert_output_contains "$out" 'No live cs run' || return 1
     # Target CLI not found.
     status=0; out=$(CODEX_BIN="$TEST_TMPDIR/no-codex" "$CS_BIN" -switch codex 2>&1) || status=$?
     [ "$status" -ne 0 ] && assert_output_contains "$out" 'not found; install it' || return 1
@@ -285,7 +285,7 @@ test_verb_refuses_a_second_switch_and_cancel_keeps_the_handoff() {
     "$CS_BIN" -switch codex >/dev/null 2>&1 || { echo "  FAIL: first switch failed"; return 1; }
     out=$("$CS_BIN" -switch codex 2>&1) || status=$?
     [ "$status" -ne 0 ] || { echo "  FAIL: a second switch must refuse"; return 1; }
-    assert_output_contains "$out" 'ags -switch cancel' "names the fix" || return 1
+    assert_output_contains "$out" 'cs -switch cancel' "names the fix" || return 1
     status=0; out=$("$CS_BIN" -switch --check 2>&1) || status=$?
     [ "$status" -ne 0 ] || { echo "  FAIL: --check must refuse while a switch is pending"; return 1; }
     out=$("$CS_BIN" -switch cancel 2>&1) || { echo "  FAIL: cancel failed: $out"; return 1; }
@@ -408,7 +408,7 @@ test_from_handoff_refuses_without_a_handoff_and_conflicts() {
     status=0; out=$("$CS_BIN" fh3 --from-handoff </dev/null 2>&1) || status=$?
     [ "$status" -ne 0 ] || { echo "  FAIL: no handoff must refuse"; return 1; }
     assert_output_contains "$out" 'No rotation handoff is pending' || return 1
-    assert_output_contains "$out" 'ags fh3 --fresh' "hints at --fresh" || return 1
+    assert_output_contains "$out" 'cs fh3 --fresh' "hints at --fresh" || return 1
     assert_eq 1 "$(_calls claude)" "claude is not launched" || return 1
     assert_not_exists "$dir/.cs/session.lock" "the lock is released" || return 1
 
@@ -463,7 +463,7 @@ test_codex_from_handoff_refuses_an_encrypted_session() {
     out=$("$CS_BIN" cenc --from-handoff </dev/null 2>&1) || status=$?
     [ "$status" -ne 0 ] || { echo "  FAIL: codex must refuse a handoff kept in the vault"; return 1; }
     assert_output_contains "$out" 'does not read handoffs from .cs/private' || return 1
-    assert_output_contains "$out" 'ags cenc --engine claude --from-handoff' "names the way that works" || return 1
+    assert_output_contains "$out" 'cs cenc --engine claude --from-handoff' "names the way that works" || return 1
     assert_eq 1 "$(_calls codex)" "codex is not launched" || return 1
     _has "$dir/.cs/private/handoffs/$HANDOFF" "status: unconsumed" || return 1
     assert_eq "$HANDOFF" "$(cat "$dir/.cs/private/pending-handoff")" "the handoff stays armed" || return 1
@@ -507,8 +507,8 @@ Continue from the pending rotation handoff: read .cs/handoffs/$HANDOFF first." "
     [ -n "$codex_run" ] && [ "$codex_run" != "$claude_run" ] \
         || { echo "  FAIL: the relaunch must be a new run ($claude_run -> $codex_run)"; return 1; }
     assert_eq codex "$(_envv codex 1 CS_RUN_ENGINE)" || return 1
-    assert_eq "$(_envv codex 1 PPID)" "$(_envv codex 1 CS_LEAD_PID)" "the lead is the relaunched ags" || return 1
-    assert_eq "$(_envv codex 1 PPID)" "$(_envv codex 1 CS_RUN_OWNER_PID)" "the owner is the relaunched ags" || return 1
+    assert_eq "$(_envv codex 1 PPID)" "$(_envv codex 1 CS_LEAD_PID)" "the lead is the relaunched cs" || return 1
+    assert_eq "$(_envv codex 1 PPID)" "$(_envv codex 1 CS_RUN_OWNER_PID)" "the owner is the relaunched cs" || return 1
     assert_eq "$TEST_TMPDIR/hooks/prompt-rewriter.sh" "$(_envv claude 2 EDITOR)" "(fixture) Claude ran with the rewriter shim" || return 1
     assert_eq switch-test-editor "$(_envv codex 1 EDITOR)" "the relaunch gets the user's EDITOR back" || return 1
     _has "$CS_STUB_DIR/codex.env.1" "CS_REAL_EDITOR unset" || return 1
@@ -571,10 +571,10 @@ test_failed_cli_exit_does_not_relaunch_and_names_both_ways_back() {
     dir=$(_dir swf)
     _plan claude "PLAN_HANDOFF=$HANDOFF" "PLAN_SWITCH=codex" "PLAN_EXIT=3"
     out=$("$CS_BIN" swf </dev/null 2>&1) || status=$?
-    assert_eq 3 "$status" "ags ends with the CLI's status" || return 1
+    assert_eq 3 "$status" "cs ends with the CLI's status" || return 1
     assert_eq 0 "$(_calls codex)" "no relaunch" || return 1
-    assert_output_contains "$out" 'ags swf --engine codex --from-handoff' || return 1
-    assert_output_contains "$out" 'ags swf --engine claude$' || return 1
+    assert_output_contains "$out" 'cs swf --engine codex --from-handoff' || return 1
+    assert_output_contains "$out" 'cs swf --engine claude$' || return 1
     assert_not_exists "$dir/.cs/local/pending-switch" "consumed once, whatever happens" || return 1
     assert_eq "$HANDOFF" "$(cat "$dir/.cs/local/pending-handoff")" "the handoff stays armed" || return 1
     _has "$dir/.cs/handoffs/$HANDOFF" "status: unconsumed" || return 1
@@ -724,14 +724,14 @@ HELPER
     assert_eq 0 "$(_calls codex)" || return 1
     assert_output_contains "$out" 'did not start' || return 1
     assert_eq 1 "$(printf '%s\n' "$out" | grep -c 'Reopen with either')" "said once, not by the guard as well" || return 1
-    assert_output_contains "$out" 'ags swd --engine codex --from-handoff' || return 1
-    assert_output_contains "$out" 'ags swd --engine claude$' || return 1
+    assert_output_contains "$out" 'cs swd --engine codex --from-handoff' || return 1
+    assert_output_contains "$out" 'cs swd --engine claude$' || return 1
     assert_eq "$HANDOFF" "$(cat "$dir/.cs/local/pending-handoff")" "the handoff stays armed" || return 1
     _has "$dir/.cs/handoffs/$HANDOFF" "status: unconsumed" || return 1
 }
 
 # An open step of the relaunch refuses before its run begins (here a pre-open
-# hook that is not executable): ags ends through error(), and the guard still
+# hook that is not executable): cs ends through error(), and the guard still
 # names both ways back.
 test_relaunch_refused_by_an_open_step_names_both_ways_back() {
     local out status=0 dir
@@ -745,8 +745,8 @@ test_relaunch_refused_by_an_open_step_names_both_ways_back() {
     assert_eq 0 "$(_calls codex)" "codex never starts" || return 1
     assert_output_contains "$out" 'The switch to codex did not start' || return 1
     assert_eq 1 "$(printf '%s\n' "$out" | grep -c 'Reopen with either')" "said once" || return 1
-    assert_output_contains "$out" 'ags swo --engine codex --from-handoff' || return 1
-    assert_output_contains "$out" 'ags swo --engine claude$' || return 1
+    assert_output_contains "$out" 'cs swo --engine codex --from-handoff' || return 1
+    assert_output_contains "$out" 'cs swo --engine claude$' || return 1
     assert_eq "$HANDOFF" "$(cat "$dir/.cs/local/pending-handoff")" "the handoff stays armed" || return 1
     _has "$dir/.cs/handoffs/$HANDOFF" "status: unconsumed" || return 1
     assert_not_exists "$dir/.cs/local/pending-switch" || return 1
@@ -769,8 +769,8 @@ test_encrypted_leftovers_stop_the_relaunch_before_it_starts() {
     assert_eq 0 "$(_calls claude)" "no relaunch" || return 1
     assert_output_contains "$out" 'Not switching to claude: the session would not reopen' || return 1
     assert_output_contains "$out" 'session.log in plaintext' "names what to fix" || return 1
-    assert_output_contains "$out" 'ags swl --engine claude --from-handoff' || return 1
-    assert_output_contains "$out" 'ags swl --engine codex$' || return 1
+    assert_output_contains "$out" 'cs swl --engine claude --from-handoff' || return 1
+    assert_output_contains "$out" 'cs swl --engine codex$' || return 1
     assert_not_exists "$dir/.cs/private/pending-switch" || return 1
     assert_eq "$HANDOFF" "$(cat "$dir/.cs/private/pending-handoff")" "the handoff stays armed" || return 1
     _has "$dir/.cs/private/handoffs/$HANDOFF" "status: unconsumed" || return 1
@@ -800,7 +800,7 @@ test_relaunch_ignores_user_variables_named_like_its_locals() {
     assert_eq 1 "$(_calls codex)" "codex is launched exactly once" || return 1
     _has "$CS_STUB_DIR/codex.args.1" "$dir" "codex opens swv" || return 1
     assert_eq swv "$(_envv codex 1 CS_SESSION_NAME)" || return 1
-    # ("name" is not checked: ags itself assigns one on a direct launch too.)
+    # ("name" is not checked: cs itself assigns one on a direct launch too.)
     assert_eq claude "$(_envv codex 1 target)" "the user's own variables ride along" || return 1
     assert_eq resume "$(_envv codex 1 mode)" || return 1
     assert_eq codex "$(_envv codex 1 from)" || return 1
@@ -818,14 +818,14 @@ test_resume_relaunch_claude_refuses_puts_the_handoff_back() {
     _plan codex "PLAN_HANDOFF=$HANDOFF" "PLAN_SWITCH='claude --resume'"
     echo 1 > "$CS_STUB_DIR/claude.fail-early"
     out=$("$CS_BIN" rrf </dev/null 2>&1) || status=$?
-    assert_eq 1 "$status" "ags ends with the relaunch's status: $out" || return 1
+    assert_eq 1 "$status" "cs ends with the relaunch's status: $out" || return 1
     assert_eq 2 "$(_calls claude)" "(fixture) claude was asked to resume" || return 1
     _has "$CS_STUB_DIR/claude.args.2" "$claude_id" || return 1
     assert_output_contains "$out" 'Could not resume the recorded Claude conversation' "(fixture) the launch's own error" || return 1
     assert_output_contains "$out" "The switch to claude did not start; the handoff $HANDOFF stays armed" || return 1
     assert_eq 1 "$(printf '%s\n' "$out" | grep -c 'Reopen with either')" "said once" || return 1
-    assert_output_contains "$out" 'ags rrf --engine claude --from-handoff' || return 1
-    assert_output_contains "$out" 'ags rrf --engine codex$' || return 1
+    assert_output_contains "$out" 'cs rrf --engine claude --from-handoff' || return 1
+    assert_output_contains "$out" 'cs rrf --engine codex$' || return 1
     _has "$dir/.cs/handoffs/$HANDOFF" "status: unconsumed" "the spend is undone" || return 1
     _lacks "$dir/.cs/handoffs/$HANDOFF" "consumed_by:" || return 1
     assert_eq "$HANDOFF" "$(cat "$dir/.cs/local/pending-handoff" 2>/dev/null)" "the handoff is armed again" || return 1
@@ -842,12 +842,12 @@ test_fresh_relaunch_codex_cannot_start_puts_the_handoff_back() {
     _plan claude "PLAN_HANDOFF=$HANDOFF" "PLAN_SWITCH=codex"
     echo 1 > "$CS_STUB_DIR/codex.fail-early"
     out=$("$CS_BIN" rcf </dev/null 2>&1) || status=$?
-    assert_eq 1 "$status" "ags ends with the relaunch's status: $out" || return 1
+    assert_eq 1 "$status" "cs ends with the relaunch's status: $out" || return 1
     assert_eq 1 "$(_calls codex)" "(fixture) codex was started once" || return 1
     assert_output_contains "$out" "The switch to codex did not start; the handoff $HANDOFF stays armed" || return 1
     assert_eq 1 "$(printf '%s\n' "$out" | grep -c 'Reopen with either')" "said once" || return 1
-    assert_output_contains "$out" 'ags rcf --engine codex --from-handoff' || return 1
-    assert_output_contains "$out" 'ags rcf --engine claude$' || return 1
+    assert_output_contains "$out" 'cs rcf --engine codex --from-handoff' || return 1
+    assert_output_contains "$out" 'cs rcf --engine claude$' || return 1
     _has "$dir/.cs/handoffs/$HANDOFF" "status: unconsumed" "the spend is undone" || return 1
     _lacks "$dir/.cs/handoffs/$HANDOFF" "consumed_by:" || return 1
     assert_eq "$HANDOFF" "$(cat "$dir/.cs/local/pending-handoff" 2>/dev/null)" "the handoff is armed again" || return 1
@@ -863,7 +863,7 @@ test_relaunched_conversation_that_rotated_then_failed_keeps_its_rotation() {
     _plan claude "PLAN_HANDOFF=$HANDOFF" "PLAN_SWITCH=codex"
     _plan codex "PLAN_HANDOFF=$later" "PLAN_EXIT=1"
     out=$("$CS_BIN" rrt </dev/null 2>&1) || status=$?
-    assert_eq 1 "$status" "ags ends with codex's status" || return 1
+    assert_eq 1 "$status" "cs ends with codex's status" || return 1
     assert_eq 1 "$(_calls codex)" || return 1
     thread=$(cat "$dir/.cs/local/codex-thread-id")
     assert_output_not_contains "$out" 'did not start' "codex did start" || return 1
@@ -883,14 +883,14 @@ test_relaunched_conversation_that_ran_then_failed_keeps_the_handoff_spent() {
     _plan codex "PLAN_EXIT=1" \
         "PLAN_CMD='echo \"2026-10-07 10:00:00 - Session started (source: resume, ID: x)\" >> \"\$CS_SESSION_DIR/.cs/local/session.log\"'"
     out=$("$CS_BIN" rrs </dev/null 2>&1) || status=$?
-    assert_eq 1 "$status" "ags ends with codex's status" || return 1
+    assert_eq 1 "$status" "cs ends with codex's status" || return 1
     thread=$(cat "$dir/.cs/local/codex-thread-id")
     assert_output_not_contains "$out" 'did not start' "codex did start" || return 1
     _has "$dir/.cs/handoffs/$HANDOFF" "consumed_by: $thread" || return 1
     assert_not_exists "$dir/.cs/local/pending-handoff" "nothing is re-armed" || return 1
 }
 
-# The target CLI vanished between ags -switch and the exit: the settle says
+# The target CLI vanished between cs -switch and the exit: the settle says
 # so itself, leaves the handoff armed, and the run ends with the CLI's status.
 test_settle_keeps_the_handoff_when_the_target_cli_went_missing() {
     local out status=0 dir
@@ -902,14 +902,14 @@ test_settle_keeps_the_handoff_when_the_target_cli_went_missing() {
     _has "$CS_STUB_DIR/switch.out" "Switch armed" "(fixture) the switch was armed" || return 1
     assert_output_contains "$out" "Not switching to codex:" || return 1
     assert_output_contains "$out" "not found; the handoff $HANDOFF stays armed" || return 1
-    assert_output_contains "$out" 'ags swn --engine codex --from-handoff' || return 1
-    assert_output_contains "$out" 'ags swn --engine claude$' || return 1
+    assert_output_contains "$out" 'cs swn --engine codex --from-handoff' || return 1
+    assert_output_contains "$out" 'cs swn --engine claude$' || return 1
     assert_eq 0 "$(_calls codex)" "no relaunch" || return 1
     assert_eq "$HANDOFF" "$(cat "$dir/.cs/local/pending-handoff")" "the handoff stays armed" || return 1
     assert_not_exists "$dir/.cs/local/pending-switch" || return 1
 }
 
-# A pending-switch naming the engine that is running, or none ags knows, is
+# A pending-switch naming the engine that is running, or none cs knows, is
 # dropped by the settle rather than relaunched.
 test_settle_refuses_a_switch_that_names_no_other_engine() {
     local out status=0 dir bad
@@ -939,7 +939,7 @@ test_verb_refuses_an_encrypted_session_that_would_not_reopen() {
     echo '2026-10-07 10:00:00 - Session started (source: resume, ID: x)' > "$dir/.cs/local/session.log"
     out=$("$CS_BIN" -switch claude 2>&1) || status=$?
     [ "$status" -ne 0 ] || { echo "  FAIL: a switch the reopen would refuse must refuse now"; return 1; }
-    assert_output_contains "$out" 'ags would not reopen the session' || return 1
+    assert_output_contains "$out" 'cs would not reopen the session' || return 1
     assert_output_contains "$out" 'session.log in plaintext' "names what to fix" || return 1
     assert_eq 1 "$(printf '%s\n' "$out" | grep -c .)" "one line" || return 1
     assert_not_exists "$dir/.cs/private/pending-switch" || return 1

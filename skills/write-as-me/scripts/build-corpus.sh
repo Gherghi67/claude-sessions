@@ -102,12 +102,12 @@ while IFS= read -r f; do
         | ((.promptSource // "typed")
            | . as $src
            | ["typed", "queued", "suggestion_accepted"] | index($src) | not) as $src_machine
-        # ags hands claude a kick as its launch prompt, which Claude Code stamps
+        # cs hands claude a kick as its launch prompt, which Claude Code stamps
         # "typed". Patterns mirror handoff_arg (lib/42-claude-state.sh) and spawn_kick
         # (lib/75-launch.sh); test_cs_launch_kicks_dropped pins both wordings.
         | ($src_machine
            or ($t | test("^Continue from the pending rotation handoff(: read \\.cs/handoffs/|\\.$)"))
-           or ($t | test("^Spawned by .* Send results with: (?:ags|cs) -msg "))
+           or ($t | test("^Spawned by .* Send results with: cs -msg "))
            or ($t | test("^Your (brief is \\.cs/brief\\.md: read it first\\.|walk-away queue is armed with [0-9]+ task)"))) as $machine
         | (if ($t | length) == 0 then "not-typed"
            elif $machine then "machine"

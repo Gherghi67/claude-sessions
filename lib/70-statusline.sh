@@ -1,25 +1,25 @@
 # ABOUTME: Status line enable/disable and terminal light/dark theme + background detection.
-# ABOUTME: Backs 'ags -statusline' and 'ags -detect-theme'.
+# ABOUTME: Backs 'cs -statusline' and 'cs -detect-theme'.
 
 _strip_statusline_registration() {
     local settings_file="$1"
     [ -f "$settings_file" ] || return 1
-    jq -e '.statusLine.command // "" | test("/(ags|cs)-statusline$")' "$settings_file" >/dev/null 2>&1 || return 1
+    jq -e '.statusLine.command // "" | endswith("/cs-statusline")' "$settings_file" >/dev/null 2>&1 || return 1
     cs_write_atomic "$settings_file" jq 'del(.statusLine)' "$settings_file" 2>/dev/null || return 2
 }
 
-# test("/(ags|cs)-subagent-statusline$") never matches "/ags-statusline", so this
+# endswith("/cs-subagent-statusline") never matches "/cs-statusline", so this
 # stripper and _strip_statusline_registration cannot cross-fire on each other's
 # registration. Returns 0 stripped, 1 foreign-or-absent, 2 write failure.
 _strip_subagent_statusline_registration() {
     local settings_file="$1"
     [ -f "$settings_file" ] || return 1
-    jq -e '.subagentStatusLine.command // "" | test("/(ags|cs)-subagent-statusline$")' \
+    jq -e '.subagentStatusLine.command // "" | endswith("/cs-subagent-statusline")' \
         "$settings_file" >/dev/null 2>&1 || return 1
     cs_write_atomic "$settings_file" jq 'del(.subagentStatusLine)' "$settings_file" 2>/dev/null || return 2
 }
 
-# The installer remembers a declined status-line prompt here so `ags -update`
+# The installer remembers a declined status-line prompt here so `cs -update`
 # stops asking; enable clears it, disable sets it (KEEP IN SYNC with install.sh).
 _statusline_declined_marker() {
     echo "${CS_CONFIG_DIR:-$HOME/.config/cs}/statusline-declined"
@@ -27,7 +27,7 @@ _statusline_declined_marker() {
 
 # The rounded capsule caps are the bar's one private-use glyph, so nothing
 # draws them until this machine has said its font has them. The answer lives
-# here, per machine; bin/ags-statusline reads it before every render (KEEP THE
+# here, per machine; bin/cs-statusline reads it before every render (KEEP THE
 # PATH IN SYNC with _caps_file there and with install.sh).
 _statusline_caps_file() {
     echo "${CS_CONFIG_DIR:-$HOME/.config/cs}/statusline-caps"
@@ -45,7 +45,7 @@ _statusline_caps_write() {  # on|off -> 0 written, 1 not
 # the caller decides what a non-interactive run does. Sets _CAPS_ANSWER to
 # on or off; enter means on, since the person is looking at the sample.
 _statusline_caps_ask() {
-    printf '\n  %s\n' "$(printf '\xee\x82\xb6')ags-statusline$(printf '\xee\x82\xb4')"
+    printf '\n  %s\n' "$(printf '\xee\x82\xb6')cs-statusline$(printf '\xee\x82\xb4')"
     _CAPS_ANSWER=""
     while :; do
         echo -en "Do the ends of that capsule render as rounded shapes (not boxes)? [y/n] "
@@ -58,19 +58,19 @@ _statusline_caps_ask() {
     done
 }
 
-# disable strips only an ags-statusline registration, never a foreign one.
+# disable strips only an cs-statusline registration, never a foreign one.
 run_statusline_cmd() {
     local action="${1:-}"
     local settings="${CS_CLAUDE_DIR:-$HOME/.claude}/settings.json"
     local declined
     declined="$(_statusline_declined_marker)"
-    local bin="${CS_INSTALL_DIR:-$HOME/.local/bin}/ags-statusline"
-    local subbin="${CS_INSTALL_DIR:-$HOME/.local/bin}/ags-subagent-statusline"
-    command -v jq >/dev/null 2>&1 || error "jq is required for ags -statusline"
+    local bin="${CS_INSTALL_DIR:-$HOME/.local/bin}/cs-statusline"
+    local subbin="${CS_INSTALL_DIR:-$HOME/.local/bin}/cs-subagent-statusline"
+    command -v jq >/dev/null 2>&1 || error "jq is required for cs -statusline"
     case "$action" in
         enable)
-            [ -x "$bin" ] || warn "ags-statusline binary not found at $bin (run install.sh first)"
-            [ -x "$subbin" ] || warn "ags-subagent-statusline binary not found at $subbin (run install.sh first)"
+            [ -x "$bin" ] || warn "cs-statusline binary not found at $bin (run install.sh first)"
+            [ -x "$subbin" ] || warn "cs-subagent-statusline binary not found at $subbin (run install.sh first)"
             mkdir -p "$(dirname "$settings")"
             [ -f "$settings" ] || echo '{}' > "$settings"
             # refreshInterval 60 repaints an idle bar once a minute, which keeps
@@ -82,8 +82,8 @@ run_statusline_cmd() {
                  | .subagentStatusLine = {type: "command", command: $subcmd}' \
                 "$settings" 2>/dev/null; then
                 rm -f "$declined"
-                info "Registered ags-statusline as the Claude Code status line"
-                info "Registered ags-subagent-statusline for the agent panel rows"
+                info "Registered cs-statusline as the Claude Code status line"
+                info "Registered cs-subagent-statusline for the agent panel rows"
                 info "Claude Code reads both at startup: restart it to see them."
             else
                 error "Could not update $settings"
@@ -97,13 +97,13 @@ run_statusline_cmd() {
             local slrc=0 subrc=0
             _strip_statusline_registration "$settings" || slrc=$?
             case $slrc in
-                0) info "Removed the ags-statusline registration" ;;
-                1) info "Status line is not ags-statusline; leaving it untouched." ;;
+                0) info "Removed the cs-statusline registration" ;;
+                1) info "Status line is not cs-statusline; leaving it untouched." ;;
                 *) error "Could not update $settings" ;;
             esac
             _strip_subagent_statusline_registration "$settings" || subrc=$?
             case $subrc in
-                0) info "Removed the ags-subagent-statusline registration" ;;
+                0) info "Removed the cs-subagent-statusline registration" ;;
                 1) : ;;
                 *) error "Could not update $settings" ;;
             esac
@@ -113,10 +113,10 @@ run_statusline_cmd() {
             # and exiting non-zero.
             if mkdir -p "$(dirname "$declined")" 2>/dev/null \
                 && touch "$declined" 2>/dev/null; then
-                info "ags -update won't offer the status line again; ags -statusline enable re-registers it."
+                info "cs -update won't offer the status line again; cs -statusline enable re-registers it."
             else
                 warn "Status line disabled, but the choice could not be recorded in $declined"
-                warn "  ags -update will ask again next release."
+                warn "  cs -update will ask again next release."
             fi
             ;;
         caps)
@@ -124,12 +124,12 @@ run_statusline_cmd() {
             case "$answer" in
                 on|off) ;;
                 ask)
-                    cs_interactive || error "ags -statusline caps ask needs a terminal; use caps on|off"
+                    cs_interactive || error "cs -statusline caps ask needs a terminal; use caps on|off"
                     _statusline_caps_ask
                     answer="$_CAPS_ANSWER"
-                    [ -n "$answer" ] || error "No answer recorded; run ags -statusline caps on|off"
+                    [ -n "$answer" ] || error "No answer recorded; run cs -statusline caps on|off"
                     ;;
-                *) error "Usage: ags -statusline caps on|off|ask" ;;
+                *) error "Usage: cs -statusline caps on|off|ask" ;;
             esac
             if _statusline_caps_write "$answer"; then
                 info "Capsule caps: $answer (recorded in $(_statusline_caps_file))"
@@ -139,7 +139,7 @@ run_statusline_cmd() {
             fi
             ;;
         *)
-            error "Usage: ags -statusline enable|disable|caps on|off|ask"
+            error "Usage: cs -statusline enable|disable|caps on|off|ask"
             ;;
     esac
 }
@@ -261,7 +261,7 @@ detect_term_theme_and_bg() {
 }
 
 # Thin wrapper over detect_term_theme_and_bg that keeps the original
-# single-word contract (`ags -detect-theme`, and any caller that only needs the
+# single-word contract (`cs -detect-theme`, and any caller that only needs the
 # light/dark/unknown classification, not the RGB).
 detect_term_theme() {
     local out
@@ -302,7 +302,7 @@ _write_term_cache() {
     mkdir -p "$dir" 2>/dev/null || return 0
     # `theme rgb epoch`, rgb as `-` when there is none: the render refuses an
     # entry older than twelve hours by that epoch (KEEP IN SYNC with
-    # _sl_theme_from_client_cache in bin/ags-statusline).
+    # _sl_theme_from_client_cache in bin/cs-statusline).
     { printf '%s %s %s\n' "$theme" "${rgb:--}" "$(date +%s)" > "$dir/$key"; } 2>/dev/null || true
     return 0
 }
@@ -330,7 +330,7 @@ _export_term_theme() {
 
 # macOS reports dark mode by the presence of the AppleInterfaceStyle key;
 # the key is absent in light mode (including auto mode while light). KEEP IN SYNC
-# with the classification in bin/ags-statusline's own ladder.
+# with the classification in bin/cs-statusline's own ladder.
 _theme_from_os_appearance() {
     [[ "$OSTYPE" == darwin* ]] || { echo "unknown"; return; }
     if defaults read -g AppleInterfaceStyle >/dev/null 2>&1; then

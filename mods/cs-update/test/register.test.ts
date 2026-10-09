@@ -1,5 +1,5 @@
 // ABOUTME: Unit tests for the cs-update mod against a fake engine `$`.
-// ABOUTME: Covers the span parser, the once-per-load gate (env, option, lead, tombstone), the pane body, the update key and both update commands.
+// ABOUTME: Covers the span parser, the once-per-load gate (env, option, lead, tombstone), the pane body, the update key and /cs-update.
 import { test, expect, beforeEach } from 'bun:test'
 
 ;(globalThis as any).h = (type: any, props: any, ...children: any[]) => ({ type, props: props ?? {}, children })
@@ -106,7 +106,7 @@ function load(options: Record<string, unknown> = {}) {
 }
 
 beforeEach(() => {
-  envVars = { CS_UPDATE_AVAILABLE: '2026.99.3', AGS_BIN: '/opt/agent-sessions/bin/ags', CS_BIN: '/opt/cs/bin/cs', HOME: '/home/u' }
+  envVars = { CS_UPDATE_AVAILABLE: '2026.99.3', CS_BIN: '/opt/cs/bin/cs', HOME: '/home/u' }
   files = {
     '/work/.cs/local/state': 'claude_session_color: red\nclaude_session_id: uuid-lead\n',
     '/home/u/.cache/cs/update-notes-full-2026.99.3': SPAN,
@@ -149,7 +149,7 @@ test('parseSpan of an empty file is no sections', () => {
 test('session.start opens the pane once per load and writes the heartbeat', async () => {
   expect(await start()).toBe('started')
   expect(opens()).toHaveLength(1)
-  expect(opens()[0].args).toMatchObject({ id: PANE, title: 'agent-sessions 2026.99.3 is available', closeOnEscape: true, focus: true })
+  expect(opens()[0].args).toMatchObject({ id: PANE, title: 'cs 2026.99.3 is available', closeOnEscape: true, focus: true })
   expect(written['/work/' + HEARTBEAT]).toMatch(/^\d{4}-/)
   await start()
   expect(opens()).toHaveLength(1)
@@ -191,7 +191,7 @@ test('the pane draws the title, every version in the session colour, its lines, 
   const tree = await draw()
   const words = texts(tree).join('\n')
   // A lone pane draws no title of its own, so the body carries it.
-  expect(words).toContain('agent-sessions 2026.99.3 is available')
+  expect(words).toContain('cs 2026.99.3 is available')
   expect(headings(tree).map(t => [t.props.color, texts(t).join('')])).toEqual([['red', '2026.99.3'], ['red', '2026.99.2']])
   expect(words).toContain('One fix: the statusline is readable on light terminals.')
   expect(words).toContain('- Menu: keypress. Cancel stays the default.')
@@ -249,7 +249,7 @@ test('a directory opted out of cs (.cs/local/disabled) gets no pane', async () =
   expect(opens()).toHaveLength(0)
 })
 
-test('1 runs ags -update once using AGS_BIN, by the exported path, and reports the install', async () => {
+test('1 runs cs -update once, by the exported path, with a ten-minute timeout, and reports the install', async () => {
   await start()
   // The key is gone from the redraw once pressed, so the callback is kept
   // and pressed twice; the run is held in flight so the second press lands
@@ -263,31 +263,24 @@ test('1 runs ags -update once using AGS_BIN, by the exported path, and reports t
   release({ exitCode: 0, stdout: '', stderr: '' })
   await first; await second
   expect(runs).toHaveLength(1)
-  expect(runs[0].argv).toEqual(['/opt/agent-sessions/bin/ags', '-update'])
+  expect(runs[0].argv).toEqual(['/opt/cs/bin/cs', '-update'])
   expect(runs[0].init).toMatchObject({ timeoutMs: 600000 })
   const words = texts(await draw()).join('\n')
-  // Version-neutral: ags -update installs whatever is latest when pressed,
+  // Version-neutral: cs -update installs whatever is latest when pressed,
   // which may be newer than the launch saw.
   expect(words).toContain('Update finished. Takes effect on your next launch.')
   expect(buttons(await draw())).toHaveLength(0)
   expect(invalidated).toContain('ui.render')
 })
 
-test('the update key falls back to CS_BIN for sessions launched by an older command', async () => {
-  delete envVars.AGS_BIN
-  await start()
-  await buttons(await draw())[0].props.onPress()
-  expect(runs[0].argv).toEqual(['/opt/cs/bin/cs', '-update'])
-})
-
 test('a second press returns at the running guard before any lookup', async () => {
   await start()
   let giveBin!: (v: any) => void
-  ;($ as any).env.get = async (name: string) => name === 'AGS_BIN' ? new Promise(r => { giveBin = r }) : envVars[name]
+  ;($ as any).env.get = async (name: string) => name === 'CS_BIN' ? new Promise(r => { giveBin = r }) : envVars[name]
   const press = buttons(await draw())[0].props.onPress
   const a = press(); const b = press()
   await Promise.resolve()
-  giveBin('/opt/agent-sessions/bin/ags')
+  giveBin('/opt/cs/bin/cs')
   await a; await b
   ;($ as any).env.get = async (name: string) => envVars[name]
   expect(runs).toHaveLength(1)
@@ -311,7 +304,7 @@ test('a non-zero exit shows the last stderr lines and keeps the key for another 
   runResult = { exitCode: 1, stdout: '', stderr: 'a\nb\nc\nd\ne\nf\nchecksum mismatch\n' }
   await buttons(await draw())[0].props.onPress()
   const words = texts(await draw()).join('\n')
-  expect(words).toContain('ags -update exited 1')
+  expect(words).toContain('cs -update exited 1')
   expect(words).toContain('checksum mismatch')
   expect(words).not.toContain('\na\n')
   expect(buttons(await draw())).toHaveLength(1)
@@ -324,24 +317,22 @@ test('a run that cannot start shows the rejection', async () => {
   expect(texts(await draw()).join('\n')).toContain('spawn ENOENT')
 })
 
-test('no executable path means the key says so instead of running nothing', async () => {
-  delete envVars.AGS_BIN
+test('no CS_BIN means the key says so instead of running nothing', async () => {
   delete envVars.CS_BIN
   await start()
   await buttons(await draw())[0].props.onPress()
   expect(runs).toHaveLength(0)
-  expect(texts(await draw()).join('\n')).toContain('ags -update')
+  expect(texts(await draw()).join('\n')).toContain('cs -update')
 })
 
-test('the mod registers both /ags-update and the legacy /cs-update command', async () => {
+test('the mod registers /cs-update at load', async () => {
   await start()
-  expect(commands.map(c => c.name)).toEqual(['ags-update', 'cs-update'])
-  expect(hooks['command.run:ags-update']).toBe(hooks['command.run:cs-update'])
+  expect(commands.map(c => c.name)).toEqual(['cs-update'])
 })
 
-const runCommand = (command = 'ags-update') => hooks[`command.run:${command}`]($, { command, args: '', cwd: '/work' }, async () => ({ text: 'unhandled' }))
+const runCommand = () => hooks['command.run:cs-update']($, { command: 'cs-update', args: '', cwd: '/work' }, async () => ({ text: 'unhandled' }))
 
-test('/ags-update reopens the pane after a dismiss, and with the option off, and answers the command', async () => {
+test('/cs-update reopens the pane after a dismiss, and with the option off, and answers the command', async () => {
   load({ [OPTION]: false })
   await start()
   expect(opens()).toHaveLength(0)
@@ -350,35 +341,27 @@ test('/ags-update reopens the pane after a dismiss, and with the option off, and
   expect(texts(await draw()).join('\n')).toContain('2026.99.3')
 })
 
-test('/ags-update with nothing pending says so as its output and opens nothing', async () => {
+test('/cs-update with nothing pending says so as its output and opens nothing', async () => {
   delete envVars.CS_UPDATE_AVAILABLE
   await start()
-  expect(await runCommand()).toEqual({ text: 'This launch found no newer agent-sessions release; the check runs again at the next launch.' })
+  expect(await runCommand()).toEqual({ text: 'This launch found no newer cs; the check runs again at the next launch.' })
   expect(opens()).toHaveLength(0)
 })
 
-test('/ags-update in a teammate opens nothing', async () => {
+test('/cs-update in a teammate opens nothing', async () => {
   sessionId = 'uuid-teammate'
   await start()
-  expect(await runCommand()).toEqual({ text: 'The release-notes pane belongs to the conversation ags launched.' })
+  expect(await runCommand()).toEqual({ text: 'The release-notes pane belongs to the conversation cs launched.' })
   expect(opens()).toHaveLength(0)
 })
 
-test('/ags-update after a reload restores the finished pane instead of offering the update again', async () => {
+test('/cs-update after a reload, with no session.start or render between, restores the finished pane instead of offering the update again', async () => {
   files['/work/' + DONE] = '2026.99.3\nUpdate finished. Takes effect on your next launch.\n'
   expect(await runCommand()).toEqual({ text: 'Release notes are in the side pane.' })
   expect(opens()).toHaveLength(1)
   const words = texts(await draw()).join('\n')
   expect(words).toContain('Update finished. Takes effect on your next launch.')
   expect(buttons(await draw())).toHaveLength(0)
-})
-
-test('the legacy /cs-update command reaches the same pane handler', async () => {
-  load({ [OPTION]: false })
-  await start()
-  expect(await runCommand('cs-update')).toEqual({ text: 'Release notes are in the side pane.' })
-  expect(opens()).toHaveLength(1)
-  expect(texts(await draw()).join('\n')).toContain('agent-sessions 2026.99.3 is available')
 })
 
 test('a clean exit writes the DONE marker with the version and the outcome line', async () => {
@@ -434,7 +417,7 @@ test('a marker naming a version no longer pending is stale: cleared, and the idl
   expect(opens()).toHaveLength(1)
   const tree = await draw()
   const words = texts(tree).join('\n')
-  expect(words).toContain('agent-sessions 2026.99.3 is available')
+  expect(words).toContain('cs 2026.99.3 is available')
   expect(words).not.toContain('Update finished')
   expect(buttons(tree)).toHaveLength(1)
 })

@@ -1,4 +1,4 @@
-# ABOUTME: ags -archive / ags -unarchive: the tracked .cs/archived marker that
+# ABOUTME: cs -archive / cs -unarchive: the tracked .cs/archived marker that
 # ABOUTME: hides finished sessions from default listings until reopened.
 
 # Resolve a session name for the archive verbs. Sets ARCHIVE_DIR (real path,
@@ -28,13 +28,13 @@ run_archive() {
     for arg in "$@"; do
         case "$arg" in
             --force|-f) force="true" ;;
-            -*) error "Unknown archive option: $arg. Usage: ags -archive <name>... [--force]" ;;
+            -*) error "Unknown archive option: $arg. Usage: cs -archive <name>... [--force]" ;;
             *)
-                [ -n "$arg" ] || error "Usage: ags -archive <name>... [--force] (empty session name)"
+                [ -n "$arg" ] || error "Usage: cs -archive <name>... [--force] (empty session name)"
                 names+=("$arg") ;;
         esac
     done
-    [ "${#names[@]}" -ge 1 ] || error "Usage: ags -archive <name>... [--force]"
+    [ "${#names[@]}" -ge 1 ] || error "Usage: cs -archive <name>... [--force]"
     for name in "${names[@]}"; do
         _archive_resolve "$name"
         if [ -f "$ARCHIVE_MARKER" ]; then
@@ -45,7 +45,7 @@ run_archive() {
             error "Session '$name' is live (pid $(read_lock_pid "$ARCHIVE_DIR/.cs")); use --force to archive anyway"
         fi
         printf 'archived: %s by %s\n' "$(date +%Y-%m-%d)" "$(cs_actor_slug)" > "$ARCHIVE_MARKER"
-        info "Archived: $name (opening it restores it; or run 'ags -unarchive $name')"
+        info "Archived: $name (opening it restores it; or run 'cs -unarchive $name')"
     done
 }
 
@@ -55,13 +55,13 @@ run_unarchive() {
     names=()
     for arg in "$@"; do
         case "$arg" in
-            -*) error "Unknown unarchive option: $arg. Usage: ags -unarchive <name>..." ;;
+            -*) error "Unknown unarchive option: $arg. Usage: cs -unarchive <name>..." ;;
             *)
-                [ -n "$arg" ] || error "Usage: ags -unarchive <name>... (empty session name)"
+                [ -n "$arg" ] || error "Usage: cs -unarchive <name>... (empty session name)"
                 names+=("$arg") ;;
         esac
     done
-    [ "${#names[@]}" -ge 1 ] || error "Usage: ags -unarchive <name>..."
+    [ "${#names[@]}" -ge 1 ] || error "Usage: cs -unarchive <name>..."
     for name in "${names[@]}"; do
         _archive_resolve "$name"
         if [ ! -f "$ARCHIVE_MARKER" ]; then
@@ -76,5 +76,5 @@ run_unarchive() {
 # One dimmed line noting how many archived sessions the default listing hid.
 _list_archived_trailer() {  # count
     [ "$1" -gt 0 ] || return 0
-    echo -e "${COMMENT}$1 archived (ags -list --archived)${NC}"
+    echo -e "${COMMENT}$1 archived (cs -list --archived)${NC}"
 }

@@ -1,23 +1,20 @@
 /* @jsxRuntime classic */
 /* @jsx h */
 /* @jsxFrag Fragment */
-// ABOUTME: cs-update mod: when an agent-sessions launch found a newer release, one pane per load with its release notes, `1` to install it in place, Esc for later.
-// ABOUTME: Reads the launch's verdict from CS_UPDATE_AVAILABLE, the ags path from AGS_BIN (or CS_BIN for older launchers), and the cached changelog; /ags-update reopens the pane; session.start writes a heartbeat for doctor.
+// ABOUTME: cs-update mod: when a cs launch found a newer release, one pane per load with its release notes, `1` to install it in place, Esc for later.
+// ABOUTME: Reads the launch's verdict from CS_UPDATE_AVAILABLE, the cs path from CS_BIN, and the span cs cached (under CS_CACHE_DIR when the launch names one); /cs-update reopens the pane; session.start writes a heartbeat for doctor.
 import type { On, EngineInterface, PluginOptions } from 'claude-code'
 
 declare const h: any
 declare const Fragment: any
 
 export const PANE = 'cs-update'
-export const UPDATE_COMMAND = 'ags-update'
-export const LEGACY_UPDATE_COMMAND = 'cs-update'
-const UPDATE_COMMANDS = [UPDATE_COMMAND, LEGACY_UPDATE_COMMAND]
 // The /config row (`cs-update.showReleaseNotes`): off, the launch pane is
-// skipped and /ags-update still opens it.
+// skipped and /cs-update still opens it.
 export const OPTION = 'showReleaseNotes'
 // Doctor observes the mod RUNNING, not merely installed (see the cs mod).
 export const HEARTBEAT = '.cs/local/cs-update.heartbeat'
-// The finished pane's outcome, written on a clean `ags -update` exit and read
+// The finished pane's outcome, written on a clean `cs -update` exit and read
 // back on the reloaded module's next render: installing the update rewrites
 // this mod's own deployed file, Claude Code reloads it and immediately
 // re-renders the open pane, and the reload drops the module state the `done`
@@ -30,7 +27,7 @@ export const STATE = '.cs/local/state'
 // KEEP IN SYNC with check_update_notify in lib/20-update.sh: the file cs
 // caches the pending release's changelog span in, keyed by that version.
 export const NOTES = (cacheDir: string, version: string) => `${cacheDir}/update-notes-full-${version}`
-// How long `ags -update` may take: the download, the checksum, the signature.
+// How long `cs -update` may take: the download, the checksum, the signature.
 export const UPDATE_TIMEOUT_MS = 600000
 
 export type Section = { version: string; lines: string[] }
@@ -60,7 +57,7 @@ export function parseSpan(text: string): Section[] {
   return sections
 }
 
-// What the pane shows. Module state survives a /clear (as in the session mod) and is
+// What the pane shows. Module state survives a /clear (as in the cs mod) and is
 // dropped on a reload, which is what "once per load" means. A finished update
 // is the one exception: the DONE marker survives the reload the update itself
 // causes, and the marker is redrawn from disk, either by session.start at the
@@ -70,30 +67,13 @@ let version: string | undefined
 let sections: Section[] | undefined
 let accent: string | undefined
 let shown = false
-// The update key's life: idle until pressed, running while ags -update is,
+// The update key's life: idle until pressed, running while cs -update is,
 // then what happened. `failed` keeps the key, so a transient failure (a
 // download) gets another press; `done` retires it, since a second update
 // would install the same version again.
 let phase: 'idle' | 'running' | 'done' | 'failed' = 'idle'
 let outcome = ''
 let registered = false
-
-// Both slash-command names resolve here so the legacy spelling cannot drift
-// from the canonical command's authorization or pane behavior.
-async function handleUpdateCommand($: EngineInterface, _e: any) {
-  const cwd = await $.session.cwd()
-  if (!(await isLead($, cwd))) return { text: 'The release-notes pane belongs to the conversation ags launched.' }
-  const pending = await $.env.get('CS_UPDATE_AVAILABLE')
-  if (!pending) return { text: 'This launch found no newer agent-sessions release; the check runs again at the next launch.' }
-  // After a reload (which drops the module state, and fires no
-  // session.start) a pane dismissed before the update installed leaves
-  // nothing open for the render path to restore, so the command asks the
-  // marker itself before it offers an install that already finished.
-  if (version === undefined && (await restoreDone($, cwd))) return { text: 'Release notes are in the side pane.' }
-  shown = true
-  await openPane($, cwd, pending)
-  return { text: 'Release notes are in the side pane.' }
-}
 
 export function register(on: On, options: PluginOptions) {
   version = undefined; sections = undefined; accent = undefined; shown = false
@@ -104,9 +84,7 @@ export function register(on: On, options: PluginOptions) {
   on('session.start', async ($, e, next) => {
     if (!registered) {
       registered = true
-      for (const command of UPDATE_COMMANDS) {
-        await $.command.register({ name: command, description: 'Release notes for the pending agent-sessions update; /ags-update is the primary command.' })
-      }
+      await $.command.register({ name: 'cs-update', description: 'Release notes for the pending cs update, with 1 to install it.' })
     }
     if (await $.fs.exists(`${e.cwd}/.cs/local`)) {
       await $.fs.write(`${e.cwd}/${HEARTBEAT}`, `${new Date().toISOString()}\n`)
@@ -139,13 +117,13 @@ export function register(on: On, options: PluginOptions) {
     // keeps its `- `), so the text is drawn verbatim and no margin doubles it.
     return (
       <Box flexDirection="column" paddingX={1}>
-        <Text bold>{`agent-sessions ${version} is available`}</Text>
+        <Text bold>{`cs ${version} is available`}</Text>
         <Box marginTop={1} flexDirection="column">
-          {phase === 'running' && <Text dimColor>{`updating… running ags -update ${version}`}</Text>}
+          {phase === 'running' && <Text dimColor>{`updating… running cs -update ${version}`}</Text>}
           {(phase === 'done' || phase === 'failed') && <Text>{outcome}</Text>}
           {(phase === 'idle' || phase === 'failed') && (
             <Box>
-              {/* a Button is a block: nested in a Text the engine refuses the whole tree, so the keys stand in a Box */}
+              {/* a Button is a block: nested in a Text the engine refuses the whole tree (measured in the cs mod), so the keys stand in a Box */}
               <Button key="cs-update-now" hotkey="1" plain label="update now" onPress={() => runUpdate($)} />
               <Text dimColor>{'   Esc: later'}</Text>
             </Box>
@@ -176,11 +154,23 @@ export function register(on: On, options: PluginOptions) {
   // that found nothing pending has nothing to show, and says so instead; a
   // teammate (which inherits the exports) is refused as the launch pane
   // refuses it.
-  on('command.run', { command: 'ags-update' }, handleUpdateCommand)
-  on('command.run', { command: 'cs-update' }, handleUpdateCommand)
+  on('command.run', { command: 'cs-update' }, async ($, e) => {
+    const cwd = await $.session.cwd()
+    if (!(await isLead($, cwd))) return { text: 'The release-notes pane belongs to the conversation cs launched.' }
+    const pending = await $.env.get('CS_UPDATE_AVAILABLE')
+    if (!pending) return { text: 'This launch found no newer cs; the check runs again at the next launch.' }
+    // After a reload (which drops the module state, and fires no
+    // session.start) a pane dismissed before the update installed leaves
+    // nothing open for the render path to restore, so the command asks the
+    // marker itself before it offers an install that already finished.
+    if (version === undefined && (await restoreDone($, cwd))) return { text: 'Release notes are in the side pane.' }
+    shown = true
+    await openPane($, cwd, pending)
+    return { text: 'Release notes are in the side pane.' }
+  })
 }
 
-// The conversation ags launched is the one whose id ags recorded before the
+// The conversation cs launched is the one whose id cs recorded before the
 // launch; a teammate in the same directory reads the same file and does not
 // match. A directory without the file is not a cs session: no pane. The id
 // may be quoted (KEEP IN SYNC with ownsRotation in mods/cs).
@@ -192,7 +182,7 @@ async function isLead($: EngineInterface, cwd: string): Promise<boolean> {
   return lead !== undefined && lead === (await $.session.id())
 }
 
-// The session colour ags recorded, for the version headings; none is fine.
+// The session colour cs recorded, for the version headings; none is fine.
 async function sessionColor($: EngineInterface, cwd: string): Promise<string | undefined> {
   try {
     const state = await $.fs.read(`${cwd}/${STATE}`)
@@ -203,8 +193,8 @@ async function sessionColor($: EngineInterface, cwd: string): Promise<string | u
 async function openPane($: EngineInterface, cwd: string, pending: string) {
   version = pending
   accent = await sessionColor($, cwd)
-  // The launch exports CS_CACHE_DIR (the profile launcher names its own cache
-  // there); an older launcher leaves only HOME, where the stable install caches.
+  // A launch with its own cache (code-sessions' profile) exports CS_CACHE_DIR;
+  // otherwise the stable install's cache under HOME.
   const home = await $.env.get('HOME')
   const cacheDir = (await $.env.get('CS_CACHE_DIR')) || (home ? `${home}/.cache/cs` : '')
   let text = ''
@@ -212,7 +202,7 @@ async function openPane($: EngineInterface, cwd: string, pending: string) {
   sections = parseSpan(text)
   // focus is a request the surface grants only over an idle, empty composer;
   // without it the keys stay with the prompt and `1` does nothing.
-  await $.ui.open({ id: PANE, title: `agent-sessions ${pending} is available`, focus: true, closeOnEscape: true })
+  await $.ui.open({ id: PANE, title: `cs ${pending} is available`, focus: true, closeOnEscape: true })
 }
 
 // Restores the finished pane from the DONE marker on a reload, since the
@@ -238,7 +228,7 @@ async function restoreDone($: EngineInterface, cwd: string): Promise<boolean> {
   return true
 }
 
-// Runs the update ags would run from the shell, by the path launch exported
+// Runs the update cs would run from the shell, by the path launch exported
 // (no shell: `$.process.run` takes an argv, and the claude process's PATH is
 // not the launching shell's). The pane keeps the outcome until dismissed, so
 // it is read rather than flashed. The new files take effect on the next
@@ -252,14 +242,14 @@ async function runUpdate($: EngineInterface) {
   phase = 'running'; outcome = ''
   $.ui.invalidate('ui.render')
   try {
-    const bin = (await $.env.get('AGS_BIN')) || (await $.env.get('CS_BIN'))
+    const bin = await $.env.get('CS_BIN')
     if (!bin) {
-      phase = 'failed'; outcome = 'The launch did not say where ags is; run `ags -update` from a shell.'
+      phase = 'failed'; outcome = 'The launch did not say where cs is; run `cs -update` from a shell.'
       $.ui.invalidate('ui.render'); return
     }
     const { exitCode, stderr } = await $.process.run([bin, '-update'], { timeoutMs: UPDATE_TIMEOUT_MS })
     if (exitCode === 0) {
-      // Version-neutral: ags -update resolves the latest release when it runs,
+      // Version-neutral: cs -update resolves the latest release when it runs,
       // which may be newer than the one this launch saw.
       phase = 'done'; outcome = 'Update finished. Takes effect on your next launch.'
       try {
@@ -270,10 +260,10 @@ async function runUpdate($: EngineInterface) {
       }
     } else {
       const tail = stderr.split('\n').filter(l => l.trim() !== '').slice(-5).join('\n')
-      phase = 'failed'; outcome = `ags -update exited ${exitCode}.\n${tail}`
+      phase = 'failed'; outcome = `cs -update exited ${exitCode}.\n${tail}`
     }
   } catch (err) {
-    phase = 'failed'; outcome = `ags -update did not run: ${String(err instanceof Error ? err.message : err)}`
+    phase = 'failed'; outcome = `cs -update did not run: ${String(err instanceof Error ? err.message : err)}`
   }
   $.ui.invalidate('ui.render')
 }

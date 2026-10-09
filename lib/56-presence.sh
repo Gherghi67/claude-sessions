@@ -1,5 +1,5 @@
-# ABOUTME: Per-session advertised status (presence). Backs 'ags -status'.
-# ABOUTME: A single-line status file at .cs/local/presence, read by 'ags -live'.
+# ABOUTME: Per-session advertised status (presence). Backs 'cs -status'.
+# ABOUTME: A single-line status file at .cs/local/presence, read by 'cs -live'.
 
 # Absolute path to a session's presence file. Arg: the session's .cs meta dir.
 _presence_file() {  # meta_dir
@@ -51,7 +51,7 @@ session_status() {  # session_dir
     status="$(_read_presence "$session_dir/.cs")"
     [ -n "$status" ] || status="$(_session_objective "$session_dir")"
     # The single funnel for both render sites (run_status and cmd_live) and
-    # for the _session_objective fallback, which under `ags -live` is another
+    # for the _session_objective fallback, which under `cs -live` is another
     # session's README. Scrubbed on read, not on write: the write path only
     # guards this session's own text, and the threat is a file it never wrote.
     printf '%s' "$status" | _scrub_controls
@@ -82,7 +82,7 @@ agent_states() {
     # times, so the rules are stated once and pinned on both sides: a record
     # earns a state only with a non-empty name, a non-empty status and a pid
     # that is a NUMBER. `.pid != null` also admitted a quoted pid, which the TUI
-    # refuses outright -- one session then carried a state in ags -live that the
+    # refuses outright -- one session then carried a state in cs -live that the
     # TUI never showed for it.
     prog='
         select((.name // "") != "" and (.status // "") != "" and (.pid | type) == "number")
@@ -158,10 +158,10 @@ agent_state_of() {  # table, name
     done <<< "$1"
 }
 
-# Dispatcher for 'ags -status'. In-session only (ambient env), like run_queue.
+# Dispatcher for 'cs -status'. In-session only (ambient env), like run_queue.
 run_status() {
     if [ -z "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ]; then
-        error "ags -status must be run inside a cs session"
+        error "cs -status must be run inside a cs session"
     fi
     local meta_dir="${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}"
     if [ $# -eq 0 ]; then
@@ -176,7 +176,7 @@ run_status() {
             rm -f "$(_presence_file "$meta_dir")"
             ;;
         "")
-            error "ags -status: empty status; use 'ags -status --clear' to clear"
+            error "cs -status: empty status; use 'cs -status --clear' to clear"
             ;;
         *)
             _write_presence "$meta_dir" "$*"

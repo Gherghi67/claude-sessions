@@ -253,7 +253,7 @@ test_unlinkable_claude_still_launches() {
     assert_eq "iTerm.app" "$(_launched "$out" TERM_PROGRAM)" "the loader does not need the link" || return 1
 }
 
-# The links live under CS_DATA_DIR, which the ags profile points at its own
+# The links live under CS_DATA_DIR, which the code-sessions profile points at its own
 # home: the profile never runs from, or prunes, the stable install's links.
 test_links_live_under_cs_data_dir() {
     _tab_launch_env 1
@@ -336,10 +336,10 @@ _user_record() {
 }
 
 # Upstream cs execs claude on a resume that is sure to land, so the tab takes
-# claude's icon. ags keeps claude as its child on every launch: the run lease,
-# an encrypted session's vault and a pending `ags -switch` all need ags back
+# claude's icon. cs keeps claude as its child on every launch: the run lease,
+# an encrypted session's vault and a pending `cs -switch` all need cs back
 # when claude exits.
-test_resume_of_a_real_conversation_keeps_ags_as_the_parent() {
+test_resume_of_a_real_conversation_keeps_cs_as_the_parent() {
     _tab_launch_env 1
     local uuid out argv0
     uuid=$(_resume_session resumer)
@@ -348,13 +348,13 @@ test_resume_of_a_real_conversation_keeps_ags_as_the_parent() {
     out=$("$CS_BIN" resumer <<< "" 2>&1) || true
     assert_output_contains "$(_launched "$out" args)" "--resume $uuid" "the second open resumes" || return 1
     assert_output_contains "$(_launched "$out" parent)" "resumer" \
-        "claude runs as ags's child, not in its place" || return 1
+        "claude runs as cs's child, not in its place" || return 1
     assert_output_contains "$(_launched "$out" args)" "/color" "the launch prompt reaches the resumed claude" || return 1
     mkdir -p "$CS_SESSIONS_ROOT/.spawn"
     : > "$CS_SESSIONS_ROOT/.spawn/resumer.seed"
     echo "brief" > "$CS_SESSIONS_ROOT/.spawn/resumer.brief.md"
     out=$("$CS_BIN" resumer <<< "" 2>&1) || true
-    assert_output_contains "$(_launched "$out" parent)" "resumer" "a spawned resume keeps ags as the parent too" || return 1
+    assert_output_contains "$(_launched "$out" parent)" "resumer" "a spawned resume keeps cs as the parent too" || return 1
     assert_output_contains "$(_launched "$out" args)" "Your brief is .cs/brief.md" \
         "a spawn kick, not the colour, reaches the resumed claude" || return 1
     argv0=$(_launched "$out" argv0)
@@ -426,7 +426,7 @@ test_npm_shaped_claude_is_not_linked() {
 run_test test_launch_under_iterm_cc_shows_loader_and_icon
 run_test test_npm_shaped_claude_is_not_linked
 run_test test_claude_bin_without_a_command_is_refused_by_name
-run_test test_resume_of_a_real_conversation_keeps_ags_as_the_parent
+run_test test_resume_of_a_real_conversation_keeps_cs_as_the_parent
 run_test test_resume_that_might_not_land_keeps_cs_as_the_parent
 run_test test_native_claude_with_flags_runs_the_link_with_its_flags
 run_test test_plain_tmux_keeps_tmux_name_unless_term_is_tmux

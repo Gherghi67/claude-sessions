@@ -90,7 +90,7 @@ test_wrap_family_pinned_to_opus() {
 }
 
 # wrap reads its passes from the sibling skills wherever this engine deployed
-# them. A ~/.claude path resolves against the real HOME, which under the ags
+# them. A ~/.claude path resolves against the real HOME, which under the cs
 # profile is the stable cs install, and under Codex is no install at all.
 test_wrap_references_sibling_skills() {
     assert_file_contains "$SKILLS_DIR/wrap/SKILL.md" '`../sweep/SKILL.md`' \
@@ -115,9 +115,9 @@ test_sweep_runs_the_memory_index_guard() {
         || { echo "  FAIL: skills/sweep/scripts/memory-index-guard.sh missing"; return 1; }
 }
 
-# Every shipped skill reaches its helpers through its own directory or an ags
+# Every shipped skill reaches its helpers through its own directory or a cs
 # verb. A path under ~/.claude names whichever install owns the real HOME: the
-# stable cs under the ags profile, nothing at all under Codex.
+# stable cs under the code-sessions profile, nothing at all under Codex.
 test_no_skill_names_a_claude_home_path() {
     local hits
     hits=$(grep -lE '~/\.claude/|\$HOME/\.claude/(skills|commands|hooks)' "$SKILLS_DIR"/*/SKILL.md 2>/dev/null || true)
@@ -128,13 +128,13 @@ test_no_skill_names_a_claude_home_path() {
 # A skill that relies on an adapter feature asks the session manager first and
 # refuses cleanly, rather than half-running under an engine that lacks it.
 test_skills_check_adapter_capabilities_before_use() {
-    assert_file_contains "$SKILLS_DIR/rotate/SKILL.md" 'ags -engine supports rotation' \
+    assert_file_contains "$SKILLS_DIR/rotate/SKILL.md" 'cs -engine supports rotation' \
         "rotate must check the rotation capability" || return 1
-    assert_file_contains "$SKILLS_DIR/feature/SKILL.md" 'ags -engine supports spawn_brief' \
+    assert_file_contains "$SKILLS_DIR/feature/SKILL.md" 'cs -engine supports spawn_brief' \
         "feature must check the spawn_brief capability" || return 1
-    assert_file_contains "$SKILLS_DIR/feature/SKILL.md" 'ags -engine supports mail_delivery' \
+    assert_file_contains "$SKILLS_DIR/feature/SKILL.md" 'cs -engine supports mail_delivery' \
         "feature must say where the result mail surfaces" || return 1
-    assert_file_contains "$SKILLS_DIR/sweep/SKILL.md" 'ags -engine supports memory_index' \
+    assert_file_contains "$SKILLS_DIR/sweep/SKILL.md" 'cs -engine supports memory_index' \
         "sweep must say which engines load the index" || return 1
     local hits
     hits=$(grep -l 'CLAUDE_SESSION_NAME' "$SKILLS_DIR"/*/SKILL.md 2>/dev/null || true)
@@ -184,16 +184,16 @@ test_switch_is_user_invoked_only() {
         "Codex must not invoke switch on its own" || return 1
 }
 
-# Nothing is written before ags says the switch can happen: a handoff armed for
+# Nothing is written before cs says the switch can happen: a handoff armed for
 # a switch that cannot happen is armed for a /clear nobody asked for. Running
 # background work refuses too, since the exit would cut it off.
 test_switch_checks_before_writing() {
     local skill="$SKILLS_DIR/switch/SKILL.md" check_at rotate_at record_at
-    check_at=$(grep -n -x -F 'ags -switch --check <target>' "$skill" | head -1 | cut -d: -f1)
+    check_at=$(grep -n -x -F 'cs -switch --check <target>' "$skill" | head -1 | cut -d: -f1)
     rotate_at=$(grep -n -F '`../rotate/SKILL.md`' "$skill" | head -1 | cut -d: -f1)
-    record_at=$(grep -n -x -F '   ags -switch <target>' "$skill" | head -1 | cut -d: -f1)
+    record_at=$(grep -n -x -F '   cs -switch <target>' "$skill" | head -1 | cut -d: -f1)
     if [ -z "$check_at" ] || [ -z "$rotate_at" ] || [ -z "$record_at" ]; then
-        echo "  FAIL: switch must run 'ags -switch --check <target>', read rotate's steps, then run 'ags -switch <target>'"
+        echo "  FAIL: switch must run 'cs -switch --check <target>', read rotate's steps, then run 'cs -switch <target>'"
         return 1
     fi
     [ "$check_at" -lt "$rotate_at" ] && [ "$rotate_at" -lt "$record_at" ] \
@@ -249,13 +249,13 @@ test_switch_step_numbers_match_rotate() {
 # user must act on, so both lines are pinned exactly.
 test_switch_names_both_final_lines() {
     local skill="$SKILLS_DIR/switch/SKILL.md"
-    grep -qxF '   **Run `/exit` now** (or press the capsule above the prompt, or Ctrl+X 1 if you bound it) — ags reopens this session under Codex.' "$skill" \
+    grep -qxF '   **Run `/exit` now** (or press the capsule above the prompt, or Ctrl+X 1 if you bound it) — cs reopens this session under Codex.' "$skill" \
         || { echo "  FAIL: switch must end, under Claude, on the exact /exit line"; return 1; }
-    grep -qxF '   **Quit Codex now (`/quit`)** — ags reopens this session under Claude.' "$skill" \
+    grep -qxF '   **Quit Codex now (`/quit`)** — cs reopens this session under Claude.' "$skill" \
         || { echo "  FAIL: switch must end, under Codex, on the exact /quit line"; return 1; }
     assert_file_contains "$skill" 'CS_ROTATE_FORCE_CTX=off' \
         "the skill must name the switch that turns the mod's /exit countdown off" || return 1
-    assert_file_contains "$skill" 'ags -switch cancel' \
+    assert_file_contains "$skill" 'cs -switch cancel' \
         "the skill must say how to call a recorded switch off" || return 1
 }
 
@@ -447,7 +447,7 @@ test_checkpoint_quotes_label_and_stops_on_failure() {
     assert_file_contains "$SKILLS_DIR/checkpoint/SKILL.md" "single-quoting the label" \
         "checkpoint.md must single-quote the label, not double-quote it" || return 1
     assert_file_contains "$SKILLS_DIR/checkpoint/SKILL.md" "do not retry" \
-        "checkpoint.md must stop (not retry) when ags -checkpoint fails" || return 1
+        "checkpoint.md must stop (not retry) when cs -checkpoint fails" || return 1
 }
 
 test_sweep_supersedes_stale_entries() {
@@ -479,12 +479,12 @@ test_sweep_states_memory_pointer_format() {
 }
 
 test_sweep_resolves_actor_before_narrative_append() {
-    # ags -whoami resolution must be repeated at the narrative step, not left only in the
+    # cs -whoami resolution must be repeated at the narrative step, not left only in the
     # framing parenthetical, so a multi-actor session appends to the right file.
     local count
-    count=$(grep -c "ags -whoami" "$SKILLS_DIR/sweep/SKILL.md" || true)
+    count=$(grep -c "cs -whoami" "$SKILLS_DIR/sweep/SKILL.md" || true)
     if [ "$count" -lt 2 ]; then
-        echo "  FAIL: sweep.md must repeat 'ags -whoami' in the narrative step (found $count)"
+        echo "  FAIL: sweep.md must repeat 'cs -whoami' in the narrative step (found $count)"
         return 1
     fi
 }
@@ -741,8 +741,8 @@ run_test test_release_gate_mandates_an_empirical_pass
 test_wrap_rotates_the_narrative_after_the_summary() {
     assert_file_contains "$SKILLS_DIR/wrap/SKILL.md" "## Pass 3 — Narrative rotation" \
         "wrap has a third pass" || return 1
-    assert_file_contains "$SKILLS_DIR/wrap/SKILL.md" 'ags -narrative rotate' \
-        "the pass runs the ags helper rather than describing file surgery" || return 1
+    assert_file_contains "$SKILLS_DIR/wrap/SKILL.md" 'cs -narrative rotate' \
+        "the pass runs the cs helper rather than describing file surgery" || return 1
     assert_file_contains "$SKILLS_DIR/wrap/SKILL.md" '3\. \*\*Narrative:\*\*' \
         "the report gains a third item" || return 1
 }

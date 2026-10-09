@@ -133,12 +133,12 @@ if command -v cs_run_guarded >/dev/null 2>&1; then
     cs_run_guarded "$META_DIR" _cs_end_legacy_lock_cleanup || true
 fi
 
-# A session ags -encrypt built detaches its vault when the lead conversation
+# A session cs -encrypt built detaches its vault when the lead conversation
 # ends, so the next open asks for the password again. Claude Code still holds
 # the transcript under .cs/claude-config open while this hook runs, so a waiter
 # detaches once that claude exits. Before detaching it checks the lock again,
 # which SessionEnd removed above, so a reopen in the meantime holds the mount,
-# and .cs/local/vault-holders, where every ags that opened the vault is listed.
+# and .cs/local/vault-holders, where every cs that opened the vault is listed.
 # The detach is plain, never -force: whatever still holds the volume keeps it
 # mounted, and the next open's pre-open handles the leftover. A /clear or
 # /resume carries on in the same claude.

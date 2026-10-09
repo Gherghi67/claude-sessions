@@ -26,8 +26,8 @@ cs_assert_local_untracked() {
     fi
 }
 
-# For a checkout ags hides itself in through info/exclude (git_bookkeeping:
-# exclude): the first path ags would rewrite at open that the branch tracks, or
+# For a checkout cs hides itself in through info/exclude (git_bookkeeping:
+# exclude): the first path cs would rewrite at open that the branch tracks, or
 # "<path> is a symlink" when one of them points elsewhere (a write through it
 # lands on the target, which may be tracked). Empty when the open is safe. An
 # exclude hides only untracked files, so a tracked one here would be dirtied
@@ -120,7 +120,7 @@ _refuse_unmounted_meta() {  # session_name, session_dir
     _refuse_plaintext_beside_private "$1" "$2"
 }
 
-# Feature worktrees of an encrypted session are not designed yet. ags -encrypt
+# Feature worktrees of an encrypted session are not designed yet. cs -encrypt
 # links the four names relative to .cs/, so a checkout of them resolves inside
 # the worktree, where nothing is mounted; and a base whose .cs/ is ignored
 # gives the worktree plaintext files of its own. Refused by name until then.
@@ -132,24 +132,24 @@ _refuse_worktree_of_encrypted_base() {  # base_name, base_dir
     done
 }
 
-# The ags content files a plain session keeps in .cs/local and an encrypted one
+# The cs content files a plain session keeps in .cs/local and an encrypted one
 # keeps behind .cs/private. The open refuses a plaintext copy of any of them,
-# and ags -encrypt moves each into the vault.
+# and cs -encrypt moves each into the vault.
 CS_PRIVATE_LOCAL_FILES="session.log scope-prompt.trace memory-index.snapshot mail
     queue queue.tmp queue.state queue.mode queue.done queue.declined queue.migrating
     notifications.jsonl notifications.seen failures rewrite.trace pending-handoff
     pending-switch finish-progress.json"
 
-# Once .cs/private holds a session's ags content files, a copy still in
+# Once .cs/private holds a session's cs content files, a copy still in
 # .cs/local is plaintext the vault was meant to hold: an unmigrated log, or one
-# written by an older ags. Named rather than moved, since a move cannot remove
+# written by an older cs. Named rather than moved, since a move cannot remove
 # the copies backups and snapshots already hold.
 _refuse_plaintext_beside_private() {  # session_name, session_dir
     local meta="$2/.cs" name
     [ -e "$meta/private" ] || return 0
     for name in $CS_PRIVATE_LOCAL_FILES; do
         [ -e "$meta/local/$name" ] || continue
-        error "$1: .cs/private keeps this session's ags files in its vault, but .cs/local still holds $name in plaintext. Move it into .cs/private or delete it, then reopen."
+        error "$1: .cs/private keeps this session's cs files in its vault, but .cs/local still holds $name in plaintext. Move it into .cs/private or delete it, then reopen."
     done
     if [ -e "$meta/handoffs" ]; then
         error "$1: .cs/private keeps this session's rotation handoffs in its vault, but .cs/handoffs still holds them in plaintext. Move it to .cs/private/handoffs or delete it, then reopen."
@@ -168,7 +168,7 @@ _refuse_plaintext_beside_private() {  # session_name, session_dir
 # The part of a session README every reader parses: the YAML frontmatter
 # (status, created, tags, aliases) and the `# Session: <name>` title, followed
 # by one blank line. Callers append their own body. The TUI, the hooks and
-# `ags -list` read these fields, so every session kind writes them here.
+# `cs -list` read these fields, so every session kind writes them here.
 _write_session_readme_head() {  # readme, name, tags_yaml, aliases_yaml
     local readme="$1" name="$2" tags="$3" aliases="$4"
     cat > "$readme" << EOF
@@ -375,7 +375,7 @@ migrate_narrative_resume_wording() {  # session_dir, [actor_slug]
     fi
 }
 
-# Phases 13, 6 and 12: the text ags manages in every session, whatever its
+# Phases 13, 6 and 12: the text cs manages in every session, whatever its
 # engine: the narrative's description, its MEMORY.md pointer and
 # .cs/README.md. Each phase is a no-op once its file is current. Claude's own
 # documents (Phase 13's CLAUDE.local.md wording, phases 5 and 7) are the Claude
@@ -504,7 +504,7 @@ CS_MIGRATION_PROBES=".gitignore .gitattributes CLAUDE.local.md CLAUDE.md .cs/REA
 # "narrative" when only MEMORY.md changed after the stamp (Claude Code writes
 # it, and only the narrative check reads it), or "stale: <reason>" when the
 # open must run them all. The engine is the open's (CS_MIGRATE_ENGINE, which
-# migrate_session sets); outside an open, such as in ags -doctor, it is the
+# migrate_session sets); outside an open, such as in cs -doctor, it is the
 # engine the next open would pick. A stamp written under another engine is
 # stale: a Codex open runs none of Claude's phases, so its stamp vouches for
 # nothing a Claude open needs, and the reverse.
@@ -520,7 +520,7 @@ _migration_stamp_state() {  # session_dir, actor_raw
     fi
     case "$line1" in
         "$VERSION"$'\t'*) ;;
-        *) echo "stale: written by ags ${line1%%$'\t'*}, not $VERSION"; return 0 ;;
+        *) echo "stale: written by cs ${line1%%$'\t'*}, not $VERSION"; return 0 ;;
     esac
     case "$line1" in
         "$VERSION"$'\t'"$2"$'\t'*) ;;
@@ -560,7 +560,7 @@ _migration_stamp_state() {  # session_dir, actor_raw
             return 0
         fi
     done
-    # setup_merge_attributes sets merge.ours.driver in a checkout ags commits
+    # setup_merge_attributes sets merge.ours.driver in a checkout cs commits
     # into, and the doctor's advice for a missing one is to launch once. Every
     # `git config` write rewrites .git/config (SessionStart's hideRefs on each
     # launch among them), so its modification time says nothing: read the value.
@@ -576,7 +576,7 @@ _migration_stamp_state() {  # session_dir, actor_raw
     echo "fresh"
 }
 
-# Record a completed migration in .cs/local/migrated. Line 1: the ags version,
+# Record a completed migration in .cs/local/migrated. Line 1: the cs version,
 # the raw actor, whether the session is encrypted (1) or not (0) and the
 # engine the open ran under, tab separated. Line 2: the probe files that exist
 # now, tab separated, so a later open can tell one was deleted.
@@ -618,8 +618,8 @@ migrate_session() {
         conflict=$(_exclude_session_tracked_conflict "$session_dir")
         if [ -n "$conflict" ]; then
             case "$conflict" in
-                *symlink) error "$conflict in $session_dir, and ags writes through it at every open. Replace it with a real file or directory, or ags -rm the session." ;;
-                *) error "$conflict is tracked on the branch in $session_dir, and ags would rewrite it at every open. Stop tracking it, or ags -rm the session." ;;
+                *symlink) error "$conflict in $session_dir, and cs writes through it at every open. Replace it with a real file or directory, or cs -rm the session." ;;
+                *) error "$conflict is tracked on the branch in $session_dir, and cs would rewrite it at every open. Stop tracking it, or cs -rm the session." ;;
             esac
         fi
     fi
@@ -633,7 +633,7 @@ migrate_session() {
     # committed into git is refused before anything trusts it. A phase that
     # carries on past a failed write clears _CS_MIGRATE_CLEAN, so the next
     # open retries it. The stamp names the engine it was written under, so the
-    # first open after ags -switch runs the full migration for the other one.
+    # first open after cs -switch runs the full migration for the other one.
     # CS_MIGRATE_ENGINE and CS_MIGRATE_REPAIR are dynamically scoped: the stamp
     # check reads the first, and the engine adapters' prepare_workspace the
     # second.

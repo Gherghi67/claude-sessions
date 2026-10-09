@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
 # ABOUTME: Merges an upstream claude-sessions release into this branch, in a worktree of its own.
 # ABOUTME: Translates upstream into the fork's names and file layout first, so only real overlaps conflict.
-"""Merge an upstream claude-sessions release into the agent-sessions branch.
+"""Merge an upstream claude-sessions release into the code-sessions branch.
 
-The rebrand renamed commands and environment variables, moved Claude-only
-functions into fragments of their own, and turned bin/cs-* into symlinks to
-bin/ags-*. A plain `git merge` sees all of that as conflicts. Before merging,
-this script rewrites both upstream versions of every file (the merge base and
-the release) into the fork's dialect: the same renames, each function in the
-fragment the fork keeps it in, each file at the fork's path. Each file is then
-merged three ways with `git merge-file`.
+code-sessions keeps upstream's names (the command is cs inside it), but it
+moved Claude-only functions into fragments of their own, made the session
+variables engine-neutral (${CS_SESSION_DIR:-${CLAUDE_SESSION_DIR}}) and turned
+commands/*.md into skills. A plain `git merge` sees all of that as conflicts.
+Before merging, this script rewrites both upstream versions of every file (the
+merge base and the release) into the fork's dialect: the same variable forms,
+each function in the fragment the fork keeps it in, each file at the fork's
+path. Each file is then merged three ways with `git merge-file`.
 
-That is safe by construction. A line the fork deliberately left alone (a `cs`
-it kept on purpose) differs from the rewritten base, so it counts as a fork
-edit: the fork's line wins, or it conflicts if upstream changed it too. It is
-never renamed silently. The renames are only a preference: a file they leave
-with more conflicts than a plain merge is merged plainly.
+That is safe by construction. A line the fork deliberately left alone (a
+$CLAUDE_SESSION_DIR it kept on purpose) differs from the rewritten base, so it
+counts as a fork edit: the fork's line wins, or it conflicts if upstream
+changed it too. It is never rewritten silently. The rewrites are only a
+preference: a file they leave with more conflicts than a plain merge is merged
+plainly.
 
     scripts/sync-upstream.py status          # which releases are missing, what the next one conflicts in
     scripts/sync-upstream.py catch-up        # merge them one by one, landing each
@@ -39,18 +41,17 @@ import tempfile
 
 REMOTE = "origin"
 # Written by build.sh. Never merged: rebuilt once the sources are merged.
-GENERATED = {"bin/ags", "bin/cs", "hooks/cs-shared.sh", "skills/sweep/scripts/cs-shared.sh", "install.sh"}
-# Where the fork's renames apply. Prose (README, docs, CHANGELOG) was
-# rewritten by hand, so it merges plainly.
+GENERATED = {"bin/cs", "hooks/cs-shared.sh", "skills/sweep/scripts/cs-shared.sh", "install.sh"}
+# Where the fork's variable forms apply. Prose (README, docs, CHANGELOG) is
+# the fork's own, so it merges plainly.
 RENAME_DIRS = ("lib/", "hooks/", "skills/", "commands/", "mods/", "completions/",
                "tests/", "bin/", "scripts/")
 RENAME_FILES = {"install.sh.in", "setup.sh", "build.sh"}
 # Fragments build.sh joins into one program: a function can live in any of them.
 UNIT_DIR = "lib/"
 SESSION_VARS = ("SESSION_META_DIR", "SESSION_DIR", "SESSION_NAME")
-COMPANIONS = r"(?:subagent-statusline|statusline|secrets|tui|codex-thread)"
 LABELS = ("ours", "base", "upstream")
-STATE_NAME = "ags-sync-upstream.json"
+STATE_NAME = "code-sessions-sync-upstream.json"
 
 
 class SyncError(Exception):
@@ -68,7 +69,7 @@ def git_ok(*args, cwd=None):
     return subprocess.run(("git",) + args, cwd=cwd, capture_output=True).returncode == 0
 
 
-# ---- the fork's renames ---------------------------------------------------
+# ---- the fork's variable forms --------------------------------------------
 
 def _session_var(text, var):
     full = "${CS_%s:-${CLAUDE_%s:-%%s}}" % (var, var)
@@ -79,20 +80,10 @@ def _session_var(text, var):
 
 
 def rename(text):
-    """Apply the rebrand's mechanical renames to upstream text. Idempotent."""
+    """Give upstream text the fork's engine-neutral session variables. Idempotent."""
     for var in SESSION_VARS:
         text = _session_var(text, var)
-    text = re.sub(r"(?<![\w.-])cs-(%s)(?![\w-])" % COMPANIONS, r"ags-\1", text)
-    text = re.sub(r"(\$INSTALL_DIR/|bin/)cs(?![\w.-])", r"\1ags", text)
-    text = re.sub(r"/cs\.bash\b", "/ags.bash", text)
-    text = re.sub(r"/_cs(?![\w-])", "/_ags", text)
-    text = re.sub(r"\$CS_((?:SECRETS_|STATUSLINE_|SUBAGENT_STATUSLINE_)?URL)\b", r"$AGS_\1", text)
-    # The command itself: `cs -list`, "cs: name", (cs), ${COMMENT}cs${NC}. Not
-    # .cs/, hooks/cs, cs-shared.sh, cs_helper, CS_KEY or docs, and not a cs:word
-    # identifier: <!-- cs:wrap-cues --> and the other sentinels keep their names.
-    # Nor a jq variable named cs (`--argjson cs "$CS_OPTION_KEYS"`, read as $cs).
-    text = re.sub(r"(?<![\w./$-])(?<!--arg )(?<!--argjson )cs(?=$|[\s\"'`).,;]|:(?=\s|$)|\$\{)", "ags", text, flags=re.M)
-    return re.sub(r"\b([Aa]) ags\b", r"\1n ags", text)  # "a cs session" reads "an ags session"
+    return text
 
 
 def renames_apply(path):
@@ -266,14 +257,6 @@ def path_map(repo, base, ours):
     fields = [f for f in out.split("\0") if f]
     for i in range(0, len(fields) - 2, 3):
         mapping[fields[i + 1]] = fields[i + 2]
-    # bin/cs-statusline became a symlink to bin/ags-statusline, which git
-    # records as a type change plus a new file rather than a rename.
-    for path in base.modes:
-        if path in GENERATED or path in mapping or base.is_link(path) or not ours.is_link(path):
-            continue
-        target = os.path.normpath(os.path.join(os.path.dirname(path), ours.raw(path).decode()))
-        if ours.has(target) and not ours.is_link(target) and not base.has(target):
-            mapping[path] = target
     return mapping
 
 
@@ -576,7 +559,7 @@ def begin(repo, target, worktree=None, branch=None, skip_tests=False, trailers=(
     # merged below, in the fork's dialect.
     git("merge", "--quiet", "--no-ff", "--no-commit", "-s", "ours", upstream_rev, cwd=worktree)
 
-    scratch = git_path(worktree, "ags-sync-scratch")
+    scratch = git_path(worktree, "code-sessions-sync-scratch")
     os.makedirs(scratch, exist_ok=True)
     results, report = plan_merge(repo, base_rev, upstream_rev, ours_rev, scratch)
     for path, (result, executable) in results.items():
@@ -638,7 +621,7 @@ def status(args):
     ours_rev = git("rev-parse", "HEAD", cwd=repo).strip()
     upstream_rev = git("rev-parse", "%s^{commit}" % tags[0], cwd=repo).strip()
     base_rev = git("merge-base", ours_rev, upstream_rev, cwd=repo).strip()
-    scratch = tempfile.mkdtemp(prefix="ags-sync-status-")
+    scratch = tempfile.mkdtemp(prefix="code-sessions-sync-status-")
     try:
         _, report = plan_merge(repo, base_rev, upstream_rev, ours_rev, scratch)
     finally:

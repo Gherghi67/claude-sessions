@@ -1,4 +1,4 @@
-# ABOUTME: Backs 'ags -msg', the cross-session mailbox: send a typed message to
+# ABOUTME: Backs 'cs -msg', the cross-session mailbox: send a typed message to
 # ABOUTME: another session's maildir; read/log the current session's own mail.
 
 # Bounds render cost, not corruption: delivery is per-message-atomic, so a
@@ -8,13 +8,13 @@ MAIL_BODY_MAX=65536
 
 # The mailbox is a maildir: a message is written whole to tmp/, then renamed
 # into new/ (unread) — the rename is same-filesystem, so a message is either
-# entirely present or entirely absent. 'ags -msg' moves what it prints into
+# entirely present or entirely absent. 'cs -msg' moves what it prints into
 # cur/ (read). Unread is simply the count of new/*.json.
 _mail_ensure_maildir() {  # maildir
     mkdir -p "$1/tmp" "$1/new" "$1/cur" "$1/out"
 }
 
-# A session's mailbox sits with its other ags files: in its vault when
+# A session's mailbox sits with its other cs files: in its vault when
 # .cs/private links there, else in .cs/local. rc 1, printing nothing, when the
 # link dangles (the vault is locked): mail is never written beside it in
 # plaintext.
@@ -116,14 +116,14 @@ _mail_send() {  # target, [--kind|-k KIND] [--reply THREAD] body
     done
     if [ -n "$reply_thread" ]; then
         [ -n "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ] \
-            || error "ags -msg --reply resolves the thread from a session's mailbox; run it inside a session"
+            || error "cs -msg --reply resolves the thread from a session's mailbox; run it inside a session"
         local pair derived rc=0 mine
         mine=$(_mail_own_dir) || exit 1
         pair=$(_mail_reply_peer "$mine" "$reply_thread") || rc=$?
         case "$rc" in
             0) : ;;
             2) error "thread $reply_thread names more than one correspondent; it is not a single conversation" ;;
-            *) error "No such thread: $reply_thread (ags -msg log lists them)" ;;
+            *) error "No such thread: $reply_thread (cs -msg log lists them)" ;;
         esac
         IFS=$'\037' read -r derived reply_parent <<< "$pair"
         # An explicit target must EQUAL the derived peer. Accepting a different
@@ -136,10 +136,10 @@ _mail_send() {  # target, [--kind|-k KIND] [--reply THREAD] body
             target="$derived"
         elif [ -z "$target" ]; then
             # Reachable: 'from' is empty on mail sent from outside a session.
-            error "cannot tell who thread $reply_thread is with; name the target: ags -msg <session> --reply $reply_thread ..."
+            error "cannot tell who thread $reply_thread is with; name the target: cs -msg <session> --reply $reply_thread ..."
         fi
     fi
-    command -v jq >/dev/null 2>&1 || error "jq is required for ags -msg"
+    command -v jq >/dev/null 2>&1 || error "jq is required for cs -msg"
     validate_session_ref "$target"
     local target_dir="$SESSIONS_ROOT/$target"
     is_session_dir "$target_dir" || error "No such session: $target"
@@ -154,7 +154,7 @@ _mail_send() {  # target, [--kind|-k KIND] [--reply THREAD] body
         body="$(cat)"
         body="$(_trim "$body")"
     fi
-    [ -n "$body" ] || error "ags -msg needs a non-empty body"
+    [ -n "$body" ] || error "cs -msg needs a non-empty body"
     # Resolved before anything is written: a locked recipient gets nothing at
     # all, neither its queue task nor a plaintext mailbox beside the vault.
     local target_files
@@ -204,7 +204,7 @@ _mail_send() {  # target, [--kind|-k KIND] [--reply THREAD] body
         fi
         thread="$(_mail_new_thread "$roots")"
     fi
-    # The body rides on stdin, never as an --arg: `ags -msg <target> -` exists
+    # The body rides on stdin, never as an --arg: `cs -msg <target> -` exists
     # precisely so a multi-KB handoff need not go through argv, and putting it
     # back into jq's argv undid that. -Rs makes the whole of stdin one string,
     # byte for byte, and printf adds nothing to it.
@@ -352,7 +352,7 @@ _mail_emit_subtree() {  # index
 
 _mail_thread() {  # thread id
     local id="${1:-}"
-    [ -n "$id" ] || error "ags -msg thread needs a thread id (ags -msg log lists them)"
+    [ -n "$id" ] || error "cs -msg thread needs a thread id (cs -msg log lists them)"
     local maildir
     maildir=$(_mail_own_dir) || exit 1
     local files=() f
@@ -399,18 +399,18 @@ EOF
 }
 
 # Dispatcher. Reserved first words name a command, not a target session —
-# without this table `ags -msg thread a3f9c1` fails with "No such session:
+# without this table `cs -msg thread a3f9c1` fails with "No such session:
 # thread". A body that genuinely starts with a reserved word is still sendable
 # by quoting it into a single argument.
 run_mail() {
     local first="${1:-}"
     case "$first" in
         ""|log)
-            [ -n "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ] || error "ags -msg reads the current session's mail; run it inside a session"
+            [ -n "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ] || error "cs -msg reads the current session's mail; run it inside a session"
             if [ "$first" = "log" ]; then _mail_log; else _mail_read; fi;;
         thread)
             shift
-            [ -n "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ] || error "ags -msg thread reads the current session's mail; run it inside a session"
+            [ -n "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ] || error "cs -msg thread reads the current session's mail; run it inside a session"
             _mail_thread "${1:-}";;
         --reply|-r)
             # No target stated: it comes from the thread. The flag stays in the

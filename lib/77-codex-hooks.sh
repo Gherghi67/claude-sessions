@@ -1,9 +1,9 @@
-# ABOUTME: Codex hook entry points. The installer registers `ags -codex-hook session-start`
+# ABOUTME: Codex hook entry points. The installer registers `cs -codex-hook session-start`
 # ABOUTME: in $CODEX_HOME/hooks.json; it rebinds after /clear and carries an armed rotation.
 
 # What a fresh Codex conversation is told when it continues a rotation, both
 # after /clear (this hook) and after `r` at launch (the launch context). The
-# Claude wording lives in hooks/session-start.sh, which cannot source ags.
+# Claude wording lives in hooks/session-start.sh, which cannot source cs.
 # Codex starts no turn on its own after /clear, so the context arrives with the
 # user's first message and says how to read it. printf, not a here-document:
 # bash 3.2 writes a here-document to a temp file.
@@ -33,14 +33,14 @@ cmd_codex_hook() {  # event
     case "${1:-}" in
         session-start) _codex_hook_session_start ;;
         *)
-            printf 'Usage: ags -codex-hook session-start\n' >&2
+            printf 'Usage: cs -codex-hook session-start\n' >&2
             return 2
             ;;
     esac
 }
 
 # Codex fires SessionStart on the first turn of a thread, before the model
-# call: source `resume` for every ags launch (ags creates the thread, then
+# call: source `resume` for every cs launch (cs creates the thread, then
 # resumes it), `clear` for the first message after /clear, with the new
 # thread's id. Only `clear` changes anything here; the launch path owns every
 # other binding and its own rotation (`r`). The hook must never fail a turn,
@@ -50,7 +50,7 @@ _codex_hook_session_start() {
     input=$(cat) || input=""
     session_id=$(printf '%s' "$input" | jq -r '.session_id // ""' 2>/dev/null) || session_id=""
     source=$(printf '%s' "$input" | jq -r '.source // ""' 2>/dev/null) || source=""
-    # Only a conversation ags launched carries a session; a plain codex run
+    # Only a conversation cs launched carries a session; a plain codex run
     # anywhere else passes through untouched.
     [ "${CS_RUN_ENGINE:-}" = codex ] && [ -n "${CS_SESSION_DIR:-}" ] || return 0
     session_dir="$CS_SESSION_DIR"
@@ -82,7 +82,7 @@ _codex_hook_session_start() {
 }
 
 # Under the run lease: point the session at the thread /clear opened, so the
-# next `ags <name>` resumes it, and record the lineage the way a launch does.
+# next `cs <name>` resumes it, and record the lineage the way a launch does.
 _codex_hook_rebind() {  # session_dir, thread_id, handoff
     local session_dir="$1" thread_id="$2" handoff="$3" previous reason=rebind
     previous=$(cs_binding_read "$session_dir" codex) || return 1

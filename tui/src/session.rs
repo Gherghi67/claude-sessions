@@ -86,8 +86,8 @@ pub fn lock_marker() -> &'static str {
 }
 
 /// cs's directory for one kind of file: the CS_* override when it is set and
-/// not empty, as lib/00-header.sh reads it, else `default`. ags exports
-/// CS_CONFIG_DIR and CS_CACHE_DIR to the picker, and the ags profile points
+/// not empty, as lib/00-header.sh reads it, else `default`. cs exports
+/// CS_CONFIG_DIR and CS_CACHE_DIR to the picker, and the code-sessions profile points
 /// them away from the stable install's ~/.config/cs and ~/.cache/cs.
 fn cs_dir_or(overridden: Option<String>, default: Option<PathBuf>) -> Option<PathBuf> {
     match overridden {
@@ -1349,11 +1349,11 @@ fn count_secrets_from_keychain() -> HashMap<String, u32> {
     HashMap::new()
 }
 
-/// Whether the keychain is the store `ags-secrets` uses, given its
+/// Whether the keychain is the store `cs-secrets` uses, given its
 /// CS_SECRETS_BACKEND override (unset or empty: the keychain, on macOS).
 /// Under any other backend the keychain holds another install's secrets, and
 /// a count read from it would land beside a session that merely shares the
-/// name. KEEP IN SYNC with detect_backend in bin/ags-secrets and the dump in
+/// name. KEEP IN SYNC with detect_backend in bin/cs-secrets and the dump in
 /// list_sessions (lib/65-sessions.sh).
 #[cfg(any(target_os = "macos", test))]
 fn keychain_is_secrets_store(backend: Option<&str>) -> bool {
@@ -2564,7 +2564,7 @@ mod tests {
         let _ = counts; // content depends on the login keychain; only assert no panic
     }
 
-    // The ags profile keeps its caps answer and update cache under its own
+    // The code-sessions profile keeps its caps answer and update cache under its own
     // home; read from ~/.config/cs and ~/.cache/cs, the picker showed the
     // stable install's.
     #[test]
@@ -2578,7 +2578,7 @@ mod tests {
         assert_eq!(cs_dir_or(None, default.clone()), default);
     }
 
-    // The ags profile runs the encrypted backend, and the keychain beside it
+    // The code-sessions profile runs the encrypted backend, and the keychain beside it
     // holds the stable install's cs:<session>:* items. Counted, they showed
     // against any profile session of the same name.
     #[test]
@@ -2587,7 +2587,7 @@ mod tests {
         assert!(keychain_is_secrets_store(Some("")), "detect_backend reads empty as unset");
         assert!(keychain_is_secrets_store(Some("keychain")));
         assert!(!keychain_is_secrets_store(Some("encrypted")), "the profile's backend");
-        assert!(!keychain_is_secrets_store(Some("bogus")), "ags-secrets refuses it; no keychain count either");
+        assert!(!keychain_is_secrets_store(Some("bogus")), "cs-secrets refuses it; no keychain count either");
     }
 
     #[test]

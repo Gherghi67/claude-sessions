@@ -1,4 +1,4 @@
-# ABOUTME: Helpers shared by ags-to-cs.py and cs-to-ags.py, which carry sessions between the stable cs and ags.
+# ABOUTME: Helpers shared by code-sessions-to-cs.py and cs-to-code-sessions.py, which carry sessions between the stable cs and code-sessions.
 # ABOUTME: Claude folder names, open-session checks, the append-only transcript merge and the protocol wording.
 """What both directions of a session transfer need.
 
@@ -19,19 +19,6 @@ import subprocess
 import sys
 import tempfile
 import time
-
-# ags's session protocol says ags where the stable cs's says cs; nothing else
-# in the template differs. Only lines from the first cs sentinel on are
-# reworded, so text the user wrote above the protocol stays as it is.
-AGS_TO_CS_WORDING = (
-    ("managed by agent-sessions (ags).", "managed by the cs tool."),
-    ("`ags -", "`cs -"),
-    ("$(ags -", "$(cs -"),
-    ("the ags session store", "the cs session store"),
-    ("(ags redirects via", "(cs redirects via"),
-    ("tombstone — ags treats", "tombstone — cs treats"),
-    ("ags does not copy your first prompt", "cs does not copy your first prompt"),
-)
 
 
 def tilde(path):
@@ -236,24 +223,13 @@ def special_files(directory, names):
     return out
 
 
-def reword_protocol(text, wording):
-    lines = text.split("\n")
-    start = next((i for i, line in enumerate(lines) if "<!-- cs:" in line), None)
-    if start is None:
-        return text
-    for i in range(start, len(lines)):
-        for old, new in wording:
-            lines[i] = lines[i].replace(old, new)
-    return "\n".join(lines)
-
-
 def scrubbed_env():
-    """The caller's environment without what an ags or cs session exports."""
+    """The caller's environment without what a code-sessions or cs session exports."""
     env = {}
     for key, value in os.environ.items():
-        if key.startswith(("CS_", "AGS_", "CLAUDE_SESSION_")):
+        if key.startswith(("CS_", "CLAUDE_SESSION_")):
             continue
-        if key in ("CLAUDE_CONFIG_DIR", "CODEX_HOME", "CLAUDE_SECURESTORAGE_CONFIG_DIR"):
+        if key in ("CLAUDE_CONFIG_DIR", "CODEX_HOME", "CLAUDE_SECURESTORAGE_CONFIG_DIR", "CODE_SESSIONS_HOME"):
             continue
         env[key] = value
     return env
@@ -1008,7 +984,7 @@ def shown(names, limit=10):
 class Syncer:
     """Brings a copy up to date with its source, saying what it did; both directions use it.
 
-    src and dst are what the reader calls the two sides (cs, ags). say,
+    src and dst are what the reader calls the two sides (cs, code-sessions). say,
     problem and log are the calling script's.
     """
 

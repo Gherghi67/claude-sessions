@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
-# ABOUTME: agent-sessions: provider-neutral session manager with git-synced isolated workspaces
+# ABOUTME: code-sessions, a fork of cs: Claude and Codex session manager with git-synced isolated workspaces
 # ABOUTME: Creates isolated session workspaces with automatic documentation and file organization
 
 set -euo pipefail
 
 # Configuration
 VERSION="2026.10.7"
+# This build is code-sessions, a fork of cs. It runs as cs inside its own
+# profile; outside, the code-sessions (ccs) launcher starts it and cs is the
+# original. install.sh greps this line to tell its own build from the original.
+CS_FORK="code-sessions"
 SESSIONS_ROOT="${CS_SESSIONS_ROOT:-$HOME/.claude-sessions}"
 CLAUDE_CODE_BIN="${CLAUDE_CODE_BIN:-claude}"
 CODEX_BIN="${CODEX_BIN:-codex}"

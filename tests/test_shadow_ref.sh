@@ -882,7 +882,7 @@ test_autosave_logs_per_actor_narrative_edit() {
 # volume. The snapshot's `git add -A` must not stage what the volume holds:
 # the blobs would sit in plaintext .git/objects, pinned by the autosave ref.
 # Covers the conventional mount (.cs/vault-mnt, anything inside it) and a link
-# target elsewhere in the tree. The fixture writes no ags .gitignore on purpose:
+# target elsewhere in the tree. The fixture writes no cs .gitignore on purpose:
 # older and adopted sessions lack the ignore entry, so the hook must hold alone.
 test_autosave_never_stages_encrypted_storage() {
     local s="${CS_SESSION_DIR:-${CLAUDE_SESSION_DIR:-}}" uuid=44444444-4444-4444-4444-444444444444

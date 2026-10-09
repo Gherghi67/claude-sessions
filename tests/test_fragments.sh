@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ABOUTME: Checks the lib/*.sh fragments build.sh joins into bin/ags.
+# ABOUTME: Checks the lib/*.sh fragments build.sh joins into bin/cs.
 # ABOUTME: A function defined in two fragments is silently overridden by the later one.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=tests/test_lib.sh

@@ -23,10 +23,10 @@ set -euo pipefail
 unset CLAUDE_PROJECT_DIR CS_ACTOR CLAUDE_CODE_SESSION_ID CS_CLAUDE_SESSION_ID CLAUDE_CONFIG_DIR 2>/dev/null || true
 # A developer's preferred runtime must not turn a legacy Claude fixture into
 # a real Codex launch. Runtime suites set their own isolated overrides.
-# CODEX_HOME goes too: an ags Codex session exports it, and an install under
+# CODEX_HOME goes too: a cs Codex session exports it, and an install under
 # test would deploy into that real Codex home instead of the test HOME.
 unset CS_DEFAULT_ENGINE CODEX_BIN CS_CODEX_THREAD_BIN CODEX_HOME 2>/dev/null || true
-# The session a suite runs inside is not the session under test: a cs or ags
+# The session a suite runs inside is not the session under test: a cs
 # session exports these, and a suite that inherits them writes into it (mail
 # copies in its mail/out, a tag in its README).
 unset CS_SESSION_NAME CS_SESSION_DIR CS_SESSION_META_DIR 2>/dev/null || true
@@ -43,8 +43,8 @@ SKIPS=()
 # --- Paths ---
 # SCRIPT_DIR must be set by the sourcing test file before calling any helpers
 # CS_BIN is derived from SCRIPT_DIR
-unset AGS_BIN CS_BIN
-CS_BIN="${SCRIPT_DIR:?SCRIPT_DIR must be set before sourcing test_lib.sh}/../bin/ags"
+unset CS_BIN
+CS_BIN="${SCRIPT_DIR:?SCRIPT_DIR must be set before sourcing test_lib.sh}/../bin/cs"
 TEST_TMPDIR=""
 
 # Portable octal file-mode reader. BSD (macOS) uses `stat -f "%Lp"`; GNU (Linux)
@@ -159,7 +159,7 @@ _stub_tools() {  # dir, tools...
 # Name claude's per-project transcript dir for a cwd the way Claude Code does:
 # realpath it, then replace every character outside [A-Za-z0-9] with '-'
 # (2.1.289: `.replace(/[^a-zA-Z0-9]/g,"-")`). Tests seed transcripts at this
-# name so ags's discovery (_claude_project_dir) finds them.
+# name so cs's discovery (_claude_project_dir) finds them.
 _encode_cwd_for_claude_test() {  # cwd
     local resolved
     resolved=$(cd "$1" && pwd -P)
@@ -167,7 +167,7 @@ _encode_cwd_for_claude_test() {  # cwd
 }
 
 # Stage a `mount` into dir that prints the given lines as the mount table, for
-# a test that runs ags with dir first on PATH. Returns non-zero when the stub
+# a test that runs cs with dir first on PATH. Returns non-zero when the stub
 # cannot be staged.
 _stub_mount_table() {  # dir, line...
     local dir="$1"; shift

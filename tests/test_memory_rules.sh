@@ -60,7 +60,7 @@ test_new_session_secret_guidance_is_log_safe() {
     "$CS_BIN" test-session <<< "" >/dev/null 2>&1 || true
     local claude_md="$CS_SESSIONS_ROOT/test-session/CLAUDE.local.md"
 
-    assert_file_not_contains "$claude_md" "| ags -secrets set" \
+    assert_file_not_contains "$claude_md" "| cs -secrets set" \
         "must not pipe a secret into cs -secrets set (bash-logger logs the command)" || return 1
     assert_file_contains "$claude_md" "store-secret" \
         "should point at the store-secret skill's log-safe procedure" || return 1
@@ -357,7 +357,7 @@ test_new_session_secret_retrieval_is_transcript_safe() {
     local claude_md="$CS_SESSIONS_ROOT/test-session/CLAUDE.local.md"
 
     assert_file_exists "$claude_md" "session CLAUDE.local.md should exist" || return 1
-    assert_file_contains "$claude_md" '\$(ags -secrets get' \
+    assert_file_contains "$claude_md" '\$(cs -secrets get' \
         "retrieval guidance must show the inline-substitution safe form" || return 1
 }
 
@@ -436,14 +436,14 @@ test_always_loaded_surfaces_do_not_re_derive_the_resolved_actor() {
     local hook="$SCRIPT_DIR/../hooks/session-start.sh"
 
     assert_file_exists "$claude_md" "session CLAUDE.local.md should exist" || return 1
-    assert_file_not_contains "$claude_md" "ags -whoami" \
+    assert_file_not_contains "$claude_md" "cs -whoami" \
         "the protocol must not re-derive an actor the session context already names" || return 1
     # Both absences are only safe while the hook still resolves and states it.
     assert_file_contains "$hook" "Current actor: " \
         "SessionStart must still name the resolved actor" || return 1
     assert_file_contains "$hook" 'narrative\.\$ACTOR_SLUG\.md' \
         "SessionStart must still name the agent's own narrative path" || return 1
-    assert_file_not_contains "$hook" "run 'ags -whoami' for your actor" \
+    assert_file_not_contains "$hook" "run 'cs -whoami' for your actor" \
         "the injected block must not re-derive the actor it just named" || return 1
     assert_file_contains "$claude_md" 'narrative\.<actor>\.md' \
         "the protocol still names the per-actor path" || return 1

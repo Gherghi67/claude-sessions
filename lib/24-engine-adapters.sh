@@ -82,11 +82,11 @@ cmd_engine() {  # [supports <capability>]
                 "$engine" "$conversation" "${capabilities% }"
             ;;
         supports)
-            [ -n "${2:-}" ] && [ $# -eq 2 ] || error "Usage: ags -engine supports <capability>"
+            [ -n "${2:-}" ] && [ $# -eq 2 ] || error "Usage: cs -engine supports <capability>"
             cs_engine_supports "$engine" "$2" && return 0
-            printf '%s is not supported under %s in ags\n' "$2" "$engine" >&2
+            printf '%s is not supported under %s in cs\n' "$2" "$engine" >&2
             return 1
             ;;
-        *) error "Usage: ags -engine [supports <capability>]" ;;
+        *) error "Usage: cs -engine [supports <capability>]" ;;
     esac
 }

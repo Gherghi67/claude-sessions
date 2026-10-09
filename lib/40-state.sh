@@ -1,5 +1,5 @@
 # ABOUTME: Provider-neutral local-state read/write, JSONL records, and actor identity.
-# ABOUTME: Backs 'ags -whoami' and 'ags -who'.
+# ABOUTME: Backs 'cs -whoami' and 'cs -who'.
 
 _alloc_uuid() {
     if command -v uuidgen >/dev/null 2>&1; then
@@ -68,7 +68,7 @@ _read_local_state() {
 # line for that key. Creates .cs/local/ and the file on first write. Atomic
 # and serialised against the SessionStart hook's writer (cs_local_state_set),
 # idempotent. A write that fails (permissions, a full disk) names the file and
-# returns non-zero; the locking wrappers below then end ags: the launch has
+# returns non-zero; the locking wrappers below then end cs: the launch has
 # already told the user what it was about to start, and a silent miss leaves
 # the next open resuming nothing.
 _cs_set_local_state_unlocked() {
@@ -79,7 +79,7 @@ _cs_set_local_state_unlocked() {
 
 # Name the file a machine-local state write could not create or replace, as
 # error() would, but without exiting: a lease callback returns and its caller
-# decides; the wrappers below end ags.
+# decides; the wrappers below end cs.
 _cs_state_write_failed() {  # path [verb]
     printf "${RED}Error: could not %s %s${NC}\n" "${2:-write}" "$1" >&2
 }
@@ -222,7 +222,7 @@ _timeline_started() {  # session_dir, engine, native_id, source
 
 # Resolve a SPECIFIC session's actor slug from its own dir, bypassing $CS_ACTOR
 # (which cs_actor_slug honours first and would otherwise stamp the caller's
-# identity onto every 'ags -live' row). Arg: session_dir (session root).
+# identity onto every 'cs -live' row). Arg: session_dir (session root).
 # Falls back to git config in that dir, then 'unknown'. Always slugified.
 session_actor_slug() {  # session_dir
     local session_dir="$1" raw="" id_file="$1/.cs/local/identity"

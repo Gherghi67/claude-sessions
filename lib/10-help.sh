@@ -1,15 +1,16 @@
-# ABOUTME: The 'ags -help' usage text (show_help).
+# ABOUTME: The 'cs -help' usage text (show_help).
 # ABOUTME: Plus the warn helper and the cs_interactive TTY predicate.
 
 show_help() {
     cat << EOF
-ags $VERSION - agent-sessions — Claude and Codex session manager
+cs $VERSION - code-sessions, a fork of cs: Claude and Codex session manager
+Outside a session it starts as ccs (or code-sessions); there cs is the original.
 
-Usage: ags                             Open the session manager
-       ags .                           Open the session you are standing in
-       ags <session-name>              Create or resume a session
-       ags <session-name> -secrets <cmd>  Run secrets command on session
-       ags -<command>                  Run a global subcommand
+Usage: cs                             Open the session manager
+       cs .                           Open the session you are standing in
+       cs <session-name>              Create or resume a session
+       cs <session-name> -secrets <cmd>  Run secrets command on session
+       cs -<command>                  Run a global subcommand
 
 Commands:
   <name>              Create or resume session <name> (locks session)
@@ -42,16 +43,16 @@ Commands:
   -spawn <name>       Open a session in the session manager’s tmux session (--brief <file> hands it a brief; --task "..." seeds and arms its queue)
   -conversations      Show the session's conversation chain (rotations, lineage)
   -doctor, -diag      Run health checks (Keychain, hooks, memory, audit, tokens)
-  -statusline <cmd>   enable|disable the ags status line; caps on|off|ask records whether your font has the rounded caps
+  -statusline <cmd>   enable|disable the cs status line; caps on|off|ask records whether your font has the rounded caps
   -detect-theme       Show the detected terminal theme (light|dark)
-  -tui                Open the interactive session manager (bare 'ags' does too)
+  -tui                Open the interactive session manager (bare 'cs' does too)
   -list, -ls          List sessions (--tag <tag> filters; --archived shows only archived)
   -adopt <name> [--engine claude|codex]  Adopt current directory as a session
   -adopt --worktrees  Register Claude Code's .claude/worktrees/* here as <repo>.<worktree> sessions (--dry-run previews)
   -whoami             Show the current actor (for shared, multi-person sessions)
   -who                Show who contributed to shared memory/narrative (git history)
   -engine [supports <capability>]  Show this session's engine, conversation and capabilities
-  -switch [claude|codex] [--resume]  From inside a conversation with a handoff armed: on exit, ags reopens the session under the other engine from it (--check tests it; -switch cancel drops it)
+  -switch [claude|codex] [--resume]  From inside a conversation with a handoff armed: on exit, cs reopens the session under the other engine from it (--check tests it; -switch cancel drops it)
   -live               List sessions running right now on this machine
   -usage              Per-session token usage over the 5h/weekly rate-limit windows
   -tag add|rm <tag>   Tag the current session (frontmatter); -tag list [<name>] to view
@@ -59,12 +60,12 @@ Commands:
   -unarchive <name>...  Restore archived sessions to the listings
   -encrypt <name>     Move a closed session's private files into an encrypted vault (macOS; asks for a password at every open)
   -status "<text>"    Set this session's advertised status (also: -status, -status --clear/-c)
-  -remove, -rm <name>... [--force [--delete-files]]  Remove sessions (each asks its own confirm and names files ags did not create; --force if live; --delete-files lets --force remove those files)
+  -remove, -rm <name>... [--force [--delete-files]]  Remove sessions (each asks its own confirm and names files cs did not create; --force if live; --delete-files lets --force remove those files)
   -secrets <cmd>      Manage current session secrets (requires CS_SESSION_NAME)
-  -update             Update ags to latest version
+  -update             Update cs to latest version
     --check, -c       Check for updates without installing
     --force, -f       Force reinstall even if up to date
-  -uninstall          Uninstall ags and all components
+  -uninstall          Uninstall cs and all components
   -help, -h           Show this help message
   -version, -v        Show version
 
@@ -78,7 +79,7 @@ Secrets Commands:
   backend             Show which storage backend is active
 
   For encrypted-file sync (export-file/import-file), age public-key setup,
-  and legacy migration, run 'ags -secrets' to see the full secrets reference.
+  and legacy migration, run 'cs -secrets' to see the full secrets reference.
 
 Environment:
   CS_SESSIONS_ROOT    Override sessions directory (default: ~/.claude-sessions)
@@ -94,17 +95,17 @@ Environment:
                           logo,session,notes,mail,git,model,ctx,limits;
                           'cost' also available, off by default)
   CS_TERM_THEME           Override terminal theme detection (light|dark);
-                          ags -detect-theme shows what detection yields.
+                          cs -detect-theme shows what detection yields.
                           Under tmux, detection queries the outer terminal via
                           DCS passthrough (needs 'allow-passthrough on'), else
                           falls back to the OS appearance — set this to override.
 
 Examples:
-  ags debug-api                      Create or resume 'debug-api' session
-  ags my-session -secrets list       List secrets for 'my-session'
-  ags -search "postgres migration"   Search across all sessions
-  ags -list                          List all sessions
-  ags -rm old-session                Remove 'old-session'
+  cs debug-api                      Create or resume 'debug-api' session
+  cs my-session -secrets list       List secrets for 'my-session'
+  cs -search "postgres migration"   Search across all sessions
+  cs -list                          List all sessions
+  cs -rm old-session                Remove 'old-session'
 
 Sessions are stored in: $SESSIONS_ROOT
 EOF
@@ -112,8 +113,8 @@ EOF
 
 # Message through %s, like error()/info(): escapes in interpolated text are data.
 # Print the full help's own lines for one verb, and nothing else. Derived rather
-# than a second copy: adding a flag to a verb updates `ags -help` and
-# `ags <verb> --help` in the same edit, so the two can never disagree. Exits
+# than a second copy: adding a flag to a verb updates `cs -help` and
+# `cs <verb> --help` in the same edit, so the two can never disagree. Exits
 # non-zero only if the verb has no documented line, which is a help-text bug
 # rather than a user error.
 show_verb_help() {  # verb
@@ -125,7 +126,7 @@ show_verb_help() {  # verb
         | awk -v v="$verb" '{ orig = $0; n = split($0, f, /[[:space:],]+/);
               for (i = 1; i <= n; i++) if (f[i] == v) { print orig; break } }') || true
     if [ -z "$lines" ]; then
-        printf 'No help recorded for %s. Run: ags -help\n' "$verb" >&2
+        printf 'No help recorded for %s. Run: cs -help\n' "$verb" >&2
         return 1
     fi
     printf 'Usage:\n%s\n' "$lines"
@@ -133,7 +134,7 @@ show_verb_help() {  # verb
 
 # True when the next argument is a help flag. `<verb> --help` has to be answered
 # BEFORE the verb resolves a session or parses arguments, or the flag arrives
-# somewhere that reads it as data — `ags -msg --help` reported "No such session:
+# somewhere that reads it as data — `cs -msg --help` reported "No such session:
 # --help", which sends the reader looking for a session rather than for docs.
 _is_help_flag() {  # arg
     case "${1:-}" in -h|-help|--help) return 0 ;; *) return 1 ;; esac
@@ -146,7 +147,7 @@ warn() {
 # Offer a way forward when the session is already open elsewhere: open one of
 # its existing feature worktrees, start a new parallel feature, force a second
 # launch into the same checkout, or cancel. Returns only when the user chose
-# force; the open-feature and new-feature choices re-exec ags as
+# force; the open-feature and new-feature choices re-exec cs as
 # <session>@<feature>; cancel exits 0. Worktree sessions get no new-feature
 # option (features always branch from the base). CS_ASSUME_TTY lets
 # tests drive the menu with piped stdin.

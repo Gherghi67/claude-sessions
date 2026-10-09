@@ -147,7 +147,7 @@ test_list_hides_archived_and_prints_trailer() {
     output=$("$CS_BIN" -list 2>&1) || true
     assert_output_contains "$output" "visible-a" "plain session listed" || return 1
     assert_output_not_contains "$output" "hidden-a" "archived session hidden" || return 1
-    assert_output_contains "$output" "1 archived (ags -list --archived)" "trailer counts the hidden" || return 1
+    assert_output_contains "$output" "1 archived (cs -list --archived)" "trailer counts the hidden" || return 1
 }
 
 test_list_archived_shows_only_archived() {
@@ -159,7 +159,7 @@ test_list_archived_shows_only_archived() {
     assert_output_contains "$output" "arch-b" "archived session listed" || return 1
     assert_output_not_contains "$output" "plain-b" "plain session excluded" || return 1
     # No trailer in the --archived view — nothing is hidden by the archive rule.
-    assert_output_not_contains "$output" "ags -list --archived)" "no trailer when showing archived" || return 1
+    assert_output_not_contains "$output" "cs -list --archived)" "no trailer when showing archived" || return 1
 }
 
 test_list_archived_composes_with_tag() {
@@ -179,7 +179,7 @@ test_list_trailer_prints_even_when_all_sessions_archived() {
     local output
     output=$("$CS_BIN" -list 2>&1) || true
     assert_output_contains "$output" "No sessions found" "empty default view says so" || return 1
-    assert_output_contains "$output" "1 archived (ags -list --archived)" "trailer still points at the archive" || return 1
+    assert_output_contains "$output" "1 archived (cs -list --archived)" "trailer still points at the archive" || return 1
 }
 
 test_search_skips_archived_by_default() {
@@ -295,7 +295,7 @@ test_list_tag_trailer_counts_only_tagged_archived() {
     output=$("$CS_BIN" -list --tag api 2>&1) || true
     assert_output_contains "$output" "tagged-live" "unarchived tagged session listed" || return 1
     assert_output_not_contains "$output" "tagged-arch" "archived tagged session hidden" || return 1
-    assert_output_contains "$output" "1 archived (ags -list --archived)" "trailer counts only the tag-matching archived session" || return 1
+    assert_output_contains "$output" "1 archived (cs -list --archived)" "trailer counts only the tag-matching archived session" || return 1
 }
 
 test_search_flag_before_query() {

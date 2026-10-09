@@ -1,5 +1,5 @@
 # ABOUTME: The session walk-away task queue (add/list/rm/clear).
-# ABOUTME: Backs 'ags -queue'.
+# ABOUTME: Backs 'cs -queue'.
 
 _queue_set_state() {  # atomic single-word write; "" removes the file
     local qdir="$1" val="$2"
@@ -74,8 +74,8 @@ _queue_convert_legacy() {  # qdir
 # spliced line worse than a lost one. Names are <zero-padded epoch>-<pid>-<n>;
 # lexical order approximates arrival order (same caveats as mail filenames).
 # A task body is one line: the done log and the listing are line-oriented.
-# Every way in checks here: ags -queue add, task-kind mail (through
-# _queue_add), and ags -spawn --task before it stages its seed.
+# Every way in checks here: cs -queue add, task-kind mail (through
+# _queue_add), and cs -spawn --task before it stages its seed.
 _queue_require_single_line() {  # text
     # $(printf '\n') would collapse to "" (command substitution strips
     # trailing newlines); the literal embedded newline below does not.
@@ -89,7 +89,7 @@ _queue_require_single_line() {  # text
 _queue_add() {  # qdir, text
     local qdir="$1" text="$2"
     text="$(_trim "$text")"
-    [ -n "$text" ] || { error "ags -queue add needs a non-empty task"; }
+    [ -n "$text" ] || { error "cs -queue add needs a non-empty task"; }
     _queue_require_single_line "$text"
     # Senders write into other sessions' queues (task-kind mail), so a
     # recipient that has not reopened since the upgrade converts here.
@@ -147,7 +147,7 @@ _queue_list() {  # qdir
 
 _queue_rm() {  # qdir, index
     local qdir="$1" n="$2" len
-    case "$n" in ''|*[!0-9]*) error "ags -queue rm needs a task number";; esac
+    case "$n" in ''|*[!0-9]*) error "cs -queue rm needs a task number";; esac
     len=$(_queue_len "$qdir")
     [ "$len" -gt 0 ] || { error "queue is empty"; }
     # Refuse before touching anything: an index past the end used to fall
@@ -182,7 +182,7 @@ _queue_start() {  # qdir, [mode]
     case "$mode" in
         '') mkdir -p "$qdir"; rm -f "$qdir/queue.mode" ;;
         subagents|workflow) mkdir -p "$qdir"; cs_write_atomic "$qdir/queue.mode" printf '%s\n' "$mode" ;;
-        *) error "ags -queue start takes subagents or workflow, not '$mode'" ;;
+        *) error "cs -queue start takes subagents or workflow, not '$mode'" ;;
     esac
     _queue_set_state "$qdir" armed
 }
@@ -207,9 +207,9 @@ _queue_log() {  # qdir
 # Dispatcher. Runs inside a session (env) or via the session-scoped arm.
 run_queue() {
     if [ -z "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ]; then
-        error "ags -queue must be run inside a cs session, or as: ags <session> -queue ..."
+        error "cs -queue must be run inside a cs session, or as: cs <session> -queue ..."
     fi
-    # The queue sits with the session's other ags files: behind .cs/private in
+    # The queue sits with the session's other cs files: behind .cs/private in
     # an encrypted session, where a locked vault refuses rather than queue a
     # task beside it in plaintext.
     local qdir
@@ -233,7 +233,7 @@ run_queue() {
                { jq -nc --arg ts "$(date +%s)" '{ts: ($ts|tonumber), event: "gate_declined"}' \
                    >> "$qdir/notifications.jsonl"; } 2>/dev/null || true;;
         log)   _queue_log "$qdir";;
-        *)     error "Usage: ags -queue [add \"<task>\" | list | rm <n> | clear | log | start [subagents|workflow]]";;
+        *)     error "Usage: cs -queue [add \"<task>\" | list | rm <n> | clear | log | start [subagents|workflow]]";;
     esac
 }
 

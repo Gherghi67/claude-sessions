@@ -1,12 +1,12 @@
-# ABOUTME: ags -switch: a rotate that also moves the session to the other engine (Claude <-> Codex).
-# ABOUTME: The verb arms pending-switch; the run settles it at exit and main re-execs ags under the target.
+# ABOUTME: cs -switch: a rotate that also moves the session to the other engine (Claude <-> Codex).
+# ABOUTME: The verb arms pending-switch; the run settles it at exit and main re-execs cs under the target.
 
 # The flow. The switch skill runs rotate's steps (a handoff written and armed
-# in pending-handoff), then `ags -switch [engine] [--resume]` checks the target
+# in pending-handoff), then `cs -switch [engine] [--resume]` checks the target
 # and writes <private dir>/pending-switch naming this run. The user exits the
 # CLI. cs_launch_session settles the switch before its cleanup, while the lease
 # is held and an encrypted session's vault is still mounted (_switch_settle);
-# main then re-execs ags for the target from the environment this launch began
+# main then re-execs cs for the target from the environment this launch began
 # with (_switch_relaunch): `<name> --engine <target> --from-handoff` for a fresh
 # conversation, or `--resume`, which feeds the handoff to the target's recorded
 # conversation as its first message. No transcript crosses engines: the handoff
@@ -43,7 +43,7 @@ _switch_other_engine() {  # engine
 }
 
 # How the user leaves each CLI. /clear cannot change engines; only an exit
-# hands control back to the ags that relaunches.
+# hands control back to the cs that relaunches.
 _switch_quit_command() {  # engine
     case "$1" in
         claude) printf '/exit\n' ;;
@@ -63,7 +63,7 @@ _switch_engine_installed() {  # engine
 
 # The two ways back, for every outcome that leaves the handoff armed.
 _switch_reopen_hint() {  # session_name, target, previous_engine
-    printf '  ags %s --engine %s --from-handoff\n  ags %s --engine %s\n' "$1" "$2" "$1" "$3"
+    printf '  cs %s --engine %s --from-handoff\n  cs %s --engine %s\n' "$1" "$2" "$1" "$3"
 }
 
 # An encrypted session keeps its handoffs and marker in .cs/private (linked
@@ -82,10 +82,10 @@ _switch_engine_reads_vault() {  # engine
 }
 
 _switch_usage() {
-    error "Usage: ags -switch [--check] [claude|codex] [--resume], or ags -switch cancel"
+    error "Usage: cs -switch [--check] [claude|codex] [--resume], or cs -switch cancel"
 }
 
-# ags -switch [--check] [claude|codex] [--resume] | cancel
+# cs -switch [--check] [claude|codex] [--resume] | cancel
 # Run from inside the conversation, after the handoff is written and armed.
 # Every refusal is one line naming the fix. --check runs all of them except the
 # armed-handoff one and writes nothing: the skill asks before writing a handoff.
@@ -110,17 +110,17 @@ cmd_switch() {
 
     local session_dir="${CS_SESSION_DIR:-}" name="${CS_SESSION_NAME:-}"
     [ -n "$session_dir" ] && [ -d "$session_dir/.cs" ] \
-        || error "ags -switch runs inside an ags session; open one with: ags <name>"
+        || error "cs -switch runs inside a cs session; open one with: cs <name>"
     [ -n "$name" ] || name=$(basename "$session_dir")
     # The launcher consumes only the switch its own run wrote, so a shell
     # without a run (or with a stale one) would arm something nothing takes.
     [ -n "${CS_RUN_ID:-}" ] \
-        || error "ags -switch runs inside the conversation ags launched; open the session with: ags $name"
+        || error "cs -switch runs inside the conversation cs launched; open the session with: cs $name"
     jq -e --arg id "$CS_RUN_ID" '.run_id == $id' "$session_dir/.cs/local/run-lease.json" >/dev/null 2>&1 \
-        || error "No live ags run of $name matches this shell's CS_RUN_ID; run ags -switch from the conversation ags launched"
+        || error "No live cs run of $name matches this shell's CS_RUN_ID; run cs -switch from the conversation cs launched"
     local file
     file=$(_switch_file "$session_dir") \
-        || error "$name's vault is locked (.cs/private $(cs_private_state "$session_dir/.cs")); mount it, then run ags -switch again"
+        || error "$name's vault is locked (.cs/private $(cs_private_state "$session_dir/.cs")); mount it, then run cs -switch again"
 
     local current
     current=$(_cs_current_engine) || exit 1
@@ -132,11 +132,11 @@ cmd_switch() {
     [ "$target" != "$current" ] \
         || error "This conversation already runs under $current; use the rotate skill to start fresh in the same engine"
     _switch_engine_installed "$target" \
-        || error "$target is not set up by this ags install; reinstall with CS_INSTALL_ENGINES=claude,codex, then switch"
+        || error "$target is not set up by this cs install; reinstall with CS_INSTALL_ENGINES=claude,codex, then switch"
     local missing
     missing=$(cs_engine_call "$target" dependencies) || exit 1
     [ -z "$missing" ] \
-        || error "Cannot switch to $target: ${missing//$'\n'/ } not found; install it, then run ags -switch again"
+        || error "Cannot switch to $target: ${missing//$'\n'/ } not found; install it, then run cs -switch again"
     cs_engine_supports "$target" rotation \
         || error "Cannot switch to $target: its adapter has no rotation support to start from the handoff; use the rotate skill instead"
     if _switch_session_encrypted "$session_dir" && ! _switch_engine_reads_vault "$target"; then
@@ -149,27 +149,27 @@ cmd_switch() {
     if _switch_session_encrypted "$session_dir" \
         && ! refusal=$( (_refuse_unmounted_meta "$name" "$session_dir") 2>&1 ); then
         refusal=$(printf '%s' "$refusal" | sed $'s/\033\\[[0-9;]*m//g; s/^Error: //' | head -1)
-        error "Cannot switch to $target: ags would not reopen the session. $refusal"
+        error "Cannot switch to $target: cs would not reopen the session. $refusal"
     fi
     if [ -f "$file" ]; then
-        error "A switch to $(_switch_field "$file" engine) is already pending; exit this CLI to take it, or run: ags -switch cancel"
+        error "A switch to $(_switch_field "$file" engine) is already pending; exit this CLI to take it, or run: cs -switch cancel"
     fi
 
     if [ -n "$check" ]; then
-        printf 'ags can switch %s from %s to %s (%s).\n' "$name" "$current" "$target" "$mode"
+        printf 'cs can switch %s from %s to %s (%s).\n' "$name" "$current" "$target" "$mode"
         return 0
     fi
 
     local handoff
     handoff=$(_rotation_armed_handoff "$session_dir")
     [ -n "$handoff" ] \
-        || error "No rotation handoff is armed; write and arm one first (rotate's steps 1-9), then run ags -switch again"
+        || error "No rotation handoff is armed; write and arm one first (rotate's steps 1-9), then run cs -switch again"
     cs_write_atomic "$file" printf 'engine=%s\nmode=%s\nhandoff=%s\nrun=%s\n' \
         "$target" "$mode" "$handoff" "$CS_RUN_ID" \
         || error "Could not write $file"
     local how="a fresh $target conversation"
     [ "$mode" = fresh ] || how="$target's last conversation"
-    printf 'Switch armed: exit this CLI with %s, and ags reopens %s in %s from %s.\n' \
+    printf 'Switch armed: exit this CLI with %s, and cs reopens %s in %s from %s.\n' \
         "$(_switch_quit_command "$current")" "$name" "$how" "$handoff"
 }
 
@@ -178,9 +178,9 @@ cmd_switch() {
 _switch_cancel() {
     local session_dir="${CS_SESSION_DIR:-}" file target
     [ -n "$session_dir" ] && [ -d "$session_dir/.cs" ] \
-        || error "ags -switch cancel runs inside an ags session"
+        || error "cs -switch cancel runs inside a cs session"
     file=$(_switch_file "$session_dir") \
-        || error "The vault is locked (.cs/private $(cs_private_state "$session_dir/.cs")); mount it, then run ags -switch cancel again"
+        || error "The vault is locked (.cs/private $(cs_private_state "$session_dir/.cs")); mount it, then run cs -switch cancel again"
     if [ ! -f "$file" ]; then
         printf 'No switch is pending.\n'
         return 0
@@ -310,7 +310,7 @@ _switch_snapshot() {
 }
 
 # Called by main after cs_launch_session returns. Without a settled switch it
-# returns at once; otherwise it replaces this process with `ags` for the
+# returns at once; otherwise it replaces this process with `cs` for the
 # target, so the relaunch runs the target's own open steps (dependencies,
 # migration or the worktree path, the adapter's launch) under a new run.
 _switch_relaunch() {  # session_name
@@ -341,7 +341,7 @@ _switch_relaunch() {  # session_name
         for _cs_sw_entry in ${_cs_switch_env[@]+"${_cs_switch_env[@]}"}; do
             export "$_cs_sw_entry" 2>/dev/null || true
         done
-        # Even when the shell that started this launch carried them (ags run
+        # Even when the shell that started this launch carried them (cs run
         # from inside another session), they name a run that is not this one.
         unset CS_RUN_ID CS_RUN_ENGINE CS_RUN_OWNER_PID CS_LEAD_PID CS_FRESH_REBIND CS_CLAUDE_SESSION_ID 2>/dev/null || true
         umask "$_cs_sw_umask" 2>/dev/null || true
@@ -352,7 +352,7 @@ _switch_relaunch() {  # session_name
     # Only a failed exec gets here: give the vault back and say how to reopen.
     CS_OPENED_VAULT_META="${_cs_switch_vault_meta:-}"
     if declare -F _detach_opened_vault >/dev/null; then _detach_opened_vault || true; fi
-    printf 'Could not relaunch ags for %s (status %s); the handoff %s stays armed. Reopen with either:\n' \
+    printf 'Could not relaunch cs for %s (status %s); the handoff %s stays armed. Reopen with either:\n' \
         "$_cs_sw_target" "${_cs_sw_rc:-1}" "${_cs_switch_handoff:-}" >&2
     _switch_reopen_hint "$_cs_sw_name" "$_cs_sw_target" "$_cs_sw_from" >&2
     return 1
@@ -360,7 +360,7 @@ _switch_relaunch() {  # session_name
 
 # One notice for a switch relaunch that did not reach its CLI, from whichever
 # path saw it first: the run's settle, or the guard below when an open step
-# ended ags before the run began.
+# ended cs before the run began.
 _switch_failed_notice() {  # session_name, target, previous_engine, handoff
     [ -z "${_cs_switch_reported:-}" ] || return 0
     _cs_switch_reported=1
@@ -448,7 +448,7 @@ _switch_handoff_origin() {  # handoff_file, session_dir
 }
 
 # Called by main once its flags are read. A switch relaunch runs the target's
-# open steps before its run, and any of them can end ags through error() (a
+# open steps before its run, and any of them can end cs through error() (a
 # pre-open hook that refuses, a migration, the lock): the handoff is still
 # armed then, so an exit trap names the ways back. cs_launch_session saves and
 # restores the trap around the run. An encrypted session's pre-open replaces
@@ -473,7 +473,7 @@ _switch_guard_exit() {  # exit_status
 # Refusal for --from-handoff with nothing to start from, shared by both
 # adapters' launches.
 _switch_no_handoff_message() {  # session_name
-    printf 'No rotation handoff is pending in %s. Start a fresh conversation with: ags %s --fresh\n' "$1" "$1"
+    printf 'No rotation handoff is pending in %s. Start a fresh conversation with: cs %s --fresh\n' "$1" "$1"
 }
 
 # A --resume relaunch: the resumed conversation gets the armed handoff as its

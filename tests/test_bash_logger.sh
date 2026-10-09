@@ -104,7 +104,7 @@ test_never_blocks_exit_zero() {
     fi
 }
 
-# An encrypted session keeps its ags files behind .cs/private, a link into its
+# An encrypted session keeps its cs files behind .cs/private, a link into its
 # vault; the command log is the file that most needs it.
 test_logs_into_the_private_dir() {
     mkdir -p "$TEST_TMPDIR/vault/private"

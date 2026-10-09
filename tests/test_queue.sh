@@ -143,7 +143,7 @@ test_queue_start_refuses_an_unknown_mode() {
     local out rc=0
     out=$("$CS_BIN" -queue start teammates 2>&1) || rc=$?
     assert_eq "1" "$rc" "an unknown mode fails" || return 1
-    assert_output_contains "$out" "ags -queue start takes subagents or workflow, not 'teammates'" "the error names the value" || return 1
+    assert_output_contains "$out" "cs -queue start takes subagents or workflow, not 'teammates'" "the error names the value" || return 1
     assert_file_not_exists "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/queue.state" "a refused start does not arm" || return 1
 }
 
@@ -160,7 +160,7 @@ test_queue_defer_writes_declined_epoch() {
 }
 
 # A leftover or foreign file at the fixed name <file>.tmp must not stand between
-# ags and the file it is writing: every write goes through a uniquely named temp
+# cs and the file it is writing: every write goes through a uniquely named temp
 # file. A directory at the fixed name fails any writer that still uses it.
 test_queue_start_ignores_a_stale_state_tmp() {
     mkdir "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/queue.state.tmp"
@@ -432,7 +432,7 @@ test_drain_armed_mentions_queue_list() {
     qseed "task one" "task two" "task three"
     printf 'armed\n' > "$(QDIR)/queue.state"
     local out; out=$(drain)
-    assert_output_contains "$out" "ags -queue list" \
+    assert_output_contains "$out" "cs -queue list" \
         "mirror instruction must name cs -queue list (the message shows only the first task)" || return 1
 }
 
@@ -492,7 +492,7 @@ test_drain_disarms_when_the_pop_fails() {
     assert_output_not_contains "$out" "task two" "no task injected after a failed pop" || return 1
 }
 
-# The drain's own state writes hold the same promise as ags -queue's: a stale
+# The drain's own state writes hold the same promise as cs -queue's: a stale
 # queue.state.tmp does not stop armed -> draining -> idle, nor the disarm after
 # a failed pop.
 test_drain_advances_past_a_stale_state_tmp() {
@@ -527,7 +527,7 @@ test_drain_reports_a_state_it_cannot_write() {
     _allow_writes "$(QDIR)"
     assert_eq "0" "$rc" "the hook exits cleanly" || return 1
     assert_eq "approve" "$(jq -r '.decision' <<< "$out")" "the turn is allowed to end" || return 1
-    assert_eq "ags task queue: could not write $(QDIR)/queue.state" "$(jq -r '.systemMessage' <<< "$out")" \
+    assert_eq "cs task queue: could not write $(QDIR)/queue.state" "$(jq -r '.systemMessage' <<< "$out")" \
         "the user is told which file" || return 1
     assert_eq "armed" "$(cat "$(QDIR)/queue.state" | tr -d '[:space:]')" "the state is as it was" || return 1
 }
@@ -616,8 +616,8 @@ test_drain_gate_offers_subagents_and_workflows() {
     qseed "queued"
     local out; out=$(drain)
     assert_output_contains "$out" "In this conversation / In subagents / As workflows" "the gate asks how the tasks run" || return 1
-    assert_output_contains "$out" "ags -queue start subagents" "In subagents names its start" || return 1
-    assert_output_contains "$out" "ags -queue start workflow" "As workflows names its start" || return 1
+    assert_output_contains "$out" "cs -queue start subagents" "In subagents names its start" || return 1
+    assert_output_contains "$out" "cs -queue start workflow" "As workflows names its start" || return 1
 }
 
 # Every handed task carries the run's mode, the first and each next one.
@@ -690,7 +690,7 @@ test_drain_narrative_reminder_scopes_to_own() {
     touch -t 202001010000 "$CLAUDE_SESSION_META_DIR/memory/narrative.colleague.md"
     local out; out=$(drain)
     assert_output_contains "$out" '"block"' "stale narrative blocks with a reminder" || return 1
-    assert_output_contains "$out" "ags -whoami" "reminder tells the agent how to resolve its own actor" || return 1
+    assert_output_contains "$out" "cs -whoami" "reminder tells the agent how to resolve its own actor" || return 1
     assert_output_contains "$out" "teammate" "reminder must warn against editing a teammate's narrative" || return 1
 }
 
@@ -795,7 +795,7 @@ run_test test_queue_list_strips_control_bytes_from_a_pending_task
 run_test test_queue_list_strips_control_bytes_from_the_done_log
 run_test test_queue_log_strips_control_bytes
 
-# An encrypted session keeps its queue with its other ags files, behind
+# An encrypted session keeps its queue with its other cs files, behind
 # .cs/private (a link into its vault); a locked vault refuses rather than
 # write the task beside it in plaintext.
 _make_private_queue() {

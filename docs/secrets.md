@@ -4,16 +4,16 @@ Store sensitive data (API keys, tokens, passwords) in a secure backend instead o
 
 ## Storage Backends
 
-The `ags -secrets` command auto-detects the best available backend for the platform:
+The `cs -secrets` command auto-detects the best available backend for the platform:
 
 | Backend | Platform | Storage Location | Cross-Machine Sync |
 |---------|----------|------------------|-------------------|
 | macOS Keychain | macOS | Login keychain | Via export-file |
 | Encrypted file | Linux, WSL, and the fallback wherever no keychain is available | `~/.cs-secrets/<session>.enc` | Manual / age |
 
-Override the choice with `CS_SECRETS_BACKEND=keychain|encrypted`. `CS_SECRETS_DIR` moves the encrypted store from `~/.cs-secrets`; the ags profile launcher points it at the profile's own directory.
+Override the choice with `CS_SECRETS_BACKEND=keychain|encrypted`. `CS_SECRETS_DIR` moves the encrypted store from `~/.cs-secrets`; the code-sessions launcher points it at the profile's own directory.
 
-`ags -list` and the session picker show how many secrets each session holds only while the keychain is the active backend. They read the counts from one keychain dump; the encrypted store would take a decrypt per session, so under it they show no count. `ags <name> -secrets list` names a session's secrets under either backend.
+`cs -list` and the session picker show how many secrets each session holds only while the keychain is the active backend. They read the counts from one keychain dump; the encrypted store would take a decrypt per session, so under it they show no count. `cs <name> -secrets list` names a session's secrets under either backend.
 
 **Encrypted File Backend:**
 
@@ -24,7 +24,7 @@ The encrypted file backend uses AES-256-CBC with PBKDF2 key derivation (100,000 
 
 For additional security, set `CS_SECRETS_PASSWORD` to use an explicit master password instead of the auto-derived key.
 
-Check which backend is active: `ags -secrets backend`
+Check which backend is active: `cs -secrets backend`
 
 ## Conversational capture
 
@@ -35,49 +35,49 @@ capture it:
 - "Use this token: ghp_xxxx"
 
 Claude picks an appropriate key name, writes the value to a scratch file and
-pipes it into `ags -secrets set <name>` on stdin (never on argv), then removes the
+pipes it into `cs -secrets set <name>` on stdin (never on argv), then removes the
 scratch file and confirms what was stored.
 
-## Using ags -secrets
+## Using cs -secrets
 
-The `ags -secrets` command manages session secrets:
+The `cs -secrets` command manages session secrets:
 
 ```bash
 # Check which storage backend is being used
-ags -secrets backend
+cs -secrets backend
 
 # List all secrets for current session
-ags -secrets list
+cs -secrets list
 
 # Get a specific secret value
-ags -secrets get API_KEY
+cs -secrets get API_KEY
 
 # Store a secret manually (value read from stdin, never argv)
-printf '%s' "secret-value" | ags -secrets set my_secret
+printf '%s' "secret-value" | cs -secrets set my_secret
 
 # At a terminal, set prompts for the value without echoing it
-ags -secrets set my_secret
+cs -secrets set my_secret
 
 # Delete a secret
-ags -secrets rm API_KEY
+cs -secrets rm API_KEY
 
 # Delete ALL secrets for a session
-ags -secrets purge
+cs -secrets purge
 
 # Export all secrets as environment variables. Each is namespaced as
 # CS_SECRET_<NAME> (api_key becomes CS_SECRET_API_KEY), so a secret can never
 # land on PATH, PROMPT_COMMAND or another variable the shell acts on.
-eval "$(ags -secrets export)"
+eval "$(cs -secrets export)"
 
 # Use with a specific session
-ags -secrets --session my-session list
+cs -secrets --session my-session list
 ```
 
 `set` refuses a value that is a placeholder rather than a secret: anything starting with `[REDACTED:`, a run of asterisks, `<redacted>`, or `YOUR_API_KEY`. Storing one would replace a working secret with junk that breaks whatever reads it later.
 
 ### No session name?
 
-Run interactively with no session name and `ags -secrets` lists your
+Run interactively with no session name and `cs -secrets` lists your
 sessions and asks which one to use — plain Enter accepts the default when
 you are standing inside a session directory (a worktree directory defaults
 to its base session). Archived sessions stay out of the list; reach them
@@ -96,32 +96,32 @@ There are two ways to sync secrets: **age encryption** (recommended) or **passwo
 
 ```bash
 # Initialize age (auto-downloads if needed)
-ags -secrets age init
+cs -secrets age init
 
 # Show your public key (share this with collaborators)
-ags -secrets age pubkey
+cs -secrets age pubkey
 
 # Export secrets (auto-configures age on first use)
-ags -secrets export-file
+cs -secrets export-file
 
 # Import on another machine (after adding your pubkey as recipient)
-ags -secrets import-file
+cs -secrets import-file
 ```
 
 **Adding collaborators:**
 
 ```bash
 # Add a collaborator's public key
-ags -secrets age add colleague.pub
+cs -secrets age add colleague.pub
 
 # Or add a raw key directly
-ags -secrets age add age1abc123...
+cs -secrets age add age1abc123...
 
 # List who can decrypt
-ags -secrets age list
+cs -secrets age list
 
 # Revoke access (re-export to re-encrypt without them)
-ags -secrets age remove colleague
+cs -secrets age remove colleague
 ```
 
 **How it works:**
@@ -140,13 +140,13 @@ For simpler setups or when age isn't available:
 export CS_SECRETS_PASSWORD="your-secure-password"
 
 # Export secrets to encrypted file
-ags -secrets export-file
+cs -secrets export-file
 
 # Import secrets from encrypted file
-ags -secrets import-file
+cs -secrets import-file
 
 # Import and overwrite existing secrets
-ags -secrets import-file --replace
+cs -secrets import-file --replace
 ```
 
 ### Per-machine sync files
@@ -179,7 +179,7 @@ machine's age key, a different password) are skipped, not fatal. Per-machine
 files win key collisions over the legacy files; local secrets are preserved
 unless you pass `--replace`.
 
-Passing an explicit path (`ags -secrets import-file <file>`) imports just that
+Passing an explicit path (`cs -secrets import-file <file>`) imports just that
 one file, as before.
 
 ## Migrating Between Backends
@@ -188,13 +188,13 @@ Move secrets from one storage backend to another:
 
 ```bash
 # Migrate from current backend to encrypted file
-ags -secrets migrate-backend encrypted
+cs -secrets migrate-backend encrypted
 
 # Migrate from keychain to encrypted file
-ags -secrets migrate-backend encrypted --from keychain
+cs -secrets migrate-backend encrypted --from keychain
 
 # Migrate and delete from source after successful migration
-ags -secrets migrate-backend encrypted --from keychain --delete-source
+cs -secrets migrate-backend encrypted --from keychain --delete-source
 ```
 
 ## Migrating Existing Secrets
@@ -203,10 +203,10 @@ Sessions created before the secrets feature may hold plaintext secrets in the re
 
 ```bash
 # Scan the legacy .cs/artifacts/ files and migrate secrets (keeps originals)
-ags -secrets migrate
+cs -secrets migrate
 
 # Migrate and redact plaintext values in place
-ags -secrets migrate --redact
+cs -secrets migrate --redact
 ```
 
 The migrate command:
@@ -219,25 +219,25 @@ The migrate command:
 
 ```bash
 # Initialize keypair (auto-downloads age binary if needed)
-ags -secrets age init
+cs -secrets age init
 
 # Print your public key for sharing
-ags -secrets age pubkey
+cs -secrets age pubkey
 
 # Add recipient to current session
-ags -secrets age add <file.pub|age1...>
+cs -secrets age add <file.pub|age1...>
 
 # List recipients who can decrypt session secrets
-ags -secrets age list
+cs -secrets age list
 
 # Remove a recipient (re-export to apply)
-ags -secrets age remove <name>
+cs -secrets age remove <name>
 ```
 
 ## Environment Variables
 
-- `CLAUDE_SESSION_NAME` - Current session (set automatically by `ags`)
-- `CS_SECRETS_SESSION` - Overrides the session namespace; worktree feature sessions export it so their secrets land in the base session's store, and `ags <name> -secrets` sets it so an explicit target outranks ambient env
+- `CLAUDE_SESSION_NAME` - Current session (set automatically by `cs`)
+- `CS_SECRETS_SESSION` - Overrides the session namespace; worktree feature sessions export it so their secrets land in the base session's store, and `cs <name> -secrets` sets it so an explicit target outranks ambient env
 - `CS_SECRETS_BACKEND` - Force a specific backend (`keychain` or `encrypted`)
 - `CS_SECRETS_PASSWORD` - Master password for legacy sync (only needed if not using age)
 - `CS_SECRETS_LOCK_TIMEOUT` - Seconds to wait for the store lock before giving up (default 10)

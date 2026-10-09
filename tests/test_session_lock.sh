@@ -42,11 +42,11 @@ _stub_picker_dir() {
 #!/usr/bin/env bash
 exit 0
 STUB
-    cat > "$dir/ags-tui" << 'STUB'
+    cat > "$dir/cs-tui" << 'STUB'
 #!/usr/bin/env bash
 exec "$(dirname "$0")/cs-tui" "$@"
 STUB
-    chmod +x "$dir/cs-tui" "$dir/ags-tui"
+    chmod +x "$dir/cs-tui" "$dir/cs-tui"
     printf '%s\n' "$dir"
 }
 
@@ -57,7 +57,7 @@ _path_without_picker() {
     local out="" d
     while IFS= read -r d; do
         [ -n "$d" ] || continue
-        { [ -x "$d/ags-tui" ] || [ -x "$d/cs-tui" ]; } && continue
+        { [ -x "$d/cs-tui" ] || [ -x "$d/cs-tui" ]; } && continue
         out="${out:+$out:}$d"
     done <<< "$(printf '%s' "$PATH" | tr ':' '\n')"
     PATH="$out" command -v cs-tui >/dev/null 2>&1 && return 1
@@ -176,7 +176,7 @@ test_session_end_preserves_a_live_lock_from_env_only() {
 }
 
 # /clear and /resume end a conversation but not the claude that holds the
-# lock: it keeps running, so the next `ags <name>` must still meet the
+# lock: it keeps running, so the next `cs <name>` must still meet the
 # collision check.
 test_session_end_keeps_the_lock_for_clear_and_resume() {
     create_lock_test_session "test-session"

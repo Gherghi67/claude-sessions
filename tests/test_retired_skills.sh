@@ -136,7 +136,7 @@ test_retired_commands_are_skills_now() {
         || { echo "  FAIL: RETIRED_COMMANDS not found in install.sh"; return 1; }
     assert_eq "$(rs_extract_array "$INSTALL_SH" RETIRED_COMMANDS | sort)" \
         "$(rs_extract_array "$CS_BIN" RETIRED_COMMANDS | sort)" \
-        "RETIRED_COMMANDS must match between install.sh and bin/ags" || return 1
+        "RETIRED_COMMANDS must match between install.sh and bin/cs" || return 1
     for cmd in $(rs_extract_array "$INSTALL_SH" RETIRED_COMMANDS); do
         rs_extract_array "$INSTALL_SH" CS_SKILLS | grep -qx "${cmd%.md}" \
             || { echo "  FAIL: retired command $cmd has no skill of the same name"; return 1; }

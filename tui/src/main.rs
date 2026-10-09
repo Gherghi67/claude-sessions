@@ -28,7 +28,7 @@ fn main() {
     }
 
     if !io::stderr().is_terminal() {
-        eprintln!("ags-tui requires an interactive terminal");
+        eprintln!("cs-tui requires an interactive terminal");
         std::process::exit(1);
     }
 

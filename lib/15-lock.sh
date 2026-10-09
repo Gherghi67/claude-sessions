@@ -136,7 +136,7 @@ acquire_session_lock() {  # meta_dir, force, session_name
             warn "Overriding active session lock (PID $lock_pid)"
         else
             printf 'Error: Session is already open (PID %s)\n' "$lock_pid" >&2
-            printf 'Use --force to override: ags %s --force\n' "$session_name" >&2
+            printf 'Use --force to override: cs %s --force\n' "$session_name" >&2
             return 1
         fi
     done
@@ -260,7 +260,7 @@ session_heartbeat_alive() {  # meta_dir, now_epoch
 }
 
 # True when a session should DISPLAY as live: PID-locked, or breathing via the
-# statusline heartbeat. Display surfaces (ags -live, ags -usage) use this so they
+# statusline heartbeat. Display surfaces (cs -live, cs -usage) use this so they
 # match the TUI. The destructive guards (rm/archive/spawn) use strict
 # session_is_live, so a session whose process is gone can still be removed
 # without --force even if its statusline was touched recently.

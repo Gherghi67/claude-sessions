@@ -1,12 +1,12 @@
 # Configuration
 
-agent-sessions (`ags`) reads its configuration from environment variables. None are required — it
+cs reads its configuration from environment variables. None are required — cs
 runs with sensible defaults out of the box — but you can set any of these in
 `~/.bashrc` or `~/.zshrc` to override behavior.
 
-This lists every variable a user would set, plus the ones ags exports for hooks
+This lists every variable a user would set, plus the ones cs exports for hooks
 and helper binaries. It deliberately excludes test seams and internal state —
-values ags computes and passes to its own helpers, which change without notice and are
+values cs computes and passes to its own helpers, which change without notice and are
 documented in the code that reads them.
 
 ## Environment variables you set
@@ -16,21 +16,21 @@ documented in the code that reads them.
 export CS_SESSIONS_ROOT="/path/to/sessions"
 
 # Where cs's own configuration and caches live (defaults: $XDG_CONFIG_HOME/cs or
-# ~/.config/cs, and $XDG_CACHE_HOME/cs or ~/.cache/cs). The ags profile launcher
-# sets both so a session never touches the stable install's files.
+# ~/.config/cs, and $XDG_CACHE_HOME/cs or ~/.cache/cs). The code-sessions launcher
+# sets both so a session never touches the original install's files.
 export CS_CONFIG_DIR="$HOME/.config/cs"
 export CS_CACHE_DIR="$HOME/.cache/cs"
 
-# Where ags -encrypt makes new containers, under vaults/, and where a launch
+# Where cs -encrypt makes new containers, under vaults/, and where a launch
 # under tmux in iTerm2 keeps its hard links named claude, under claude/
 # (default: ~/.local/share/cs, whatever XDG_DATA_HOME says). The profile
 # launcher sets it to the profile's own, so a session the stable install also
 # has never shares its container, and neither install prunes the other's links. An encrypted session opens the container it recorded, so
-# changing this later moves no existing vault. ags -encrypt refuses a relative
+# changing this later moves no existing vault. cs -encrypt refuses a relative
 # path: every open attaches the container from the session directory.
 export CS_DATA_DIR="$HOME/.local/share/cs"
 
-# Where the deployed ags executables and the installer's adapter record live
+# Where the deployed cs executables and the installer's adapter record live
 # (default: ~/.local/bin). The profile launcher sets it to the profile's own.
 export CS_INSTALL_DIR="$HOME/.local/bin"
 
@@ -43,7 +43,7 @@ export CS_SECRETS_DIR="$HOME/.cs-secrets"
 # identity is not the one you want recorded.
 export CS_ACTOR="alice"
 
-# Skip the update check entirely. ags otherwise asks GitHub for the latest
+# Skip the update check entirely. cs otherwise asks GitHub for the latest
 # release at most hourly and caches the answer under ~/.cache/cs; this stops
 # both the request and the write, for an air-gapped machine or simply to keep
 # cs off the network.
@@ -52,7 +52,7 @@ export CS_NO_UPDATE_CHECK="1"
 # Legacy password for secrets sync (age encryption preferred - see secrets.md)
 export CS_SECRETS_PASSWORD="your-secure-password"
 
-# Override secrets backend (keychain or encrypted). ags -list and the picker
+# Override secrets backend (keychain or encrypted). cs -list and the picker
 # count secrets from the keychain, so under any other backend they show none.
 export CS_SECRETS_BACKEND="keychain"
 
@@ -61,22 +61,22 @@ export CLAUDE_CODE_BIN="claude"
 
 # Default runtime for sessions without a saved engine preference.
 # Legacy/dual installs default to Claude; a sole Codex install defaults to Codex.
-# A session's saved engine choice takes precedence; `--engine` on the `ags` command
+# A session's saved engine choice takes precedence; `--engine` on the `cs` command
 # takes precedence over both. Codex launches require CODEX_BIN and Python 3.
 export CS_DEFAULT_ENGINE="codex"   # claude | codex
 
-# Override the Codex CLI executable used by `ags <name> --engine codex`
+# Override the Codex CLI executable used by `cs <name> --engine codex`
 # (default: codex). This is one executable path, without extra arguments.
 export CODEX_BIN="/path/to/codex"
 
-# Nerd Font icons in ags banners and session listings (lock, host);
+# Nerd Font icons in cs banners and session listings (lock, host);
 # the status line uses standard Unicode and is unaffected by this
 export CS_NERD_FONTS="1"
 
 # Force the light/dark theme (session-picker TUI palette, statusline, hooks).
-# Unset (default), ags auto-detects the terminal background before launch; the
+# Unset (default), cs auto-detects the terminal background before launch; the
 # exact detection cascade lives in docs/statusline.md ("Terminal theme").
-# Set this to override; `ags -detect-theme` prints what detection yields.
+# Set this to override; `cs -detect-theme` prints what detection yields.
 export CS_TERM_THEME="light"   # or "dark"
 
 # Override the terminal's real background color (default: auto-detected via
@@ -106,7 +106,7 @@ export CS_USAGE_DIR="$HOME/.claude-sessions/.usage"
 export CS_USAGE_NO_REFRESH="1"
 
 # Every switch below that silences something the model would otherwise see is
-# listed by `ags -doctor` under "Authority", with its live on/off state.
+# listed by `cs -doctor` under "Authority", with its live on/off state.
 
 # Opt a session out of the scope-prompt auto-grounding hook
 export CS_SCOPE_DISABLE="1"
@@ -138,7 +138,7 @@ export CS_CLARIFY_DISABLE="1"
 
 # Opt a session out of prompt rewriting (ctrl+g in the composer; see hooks.md).
 # Separate from CS_CLARIFY_DISABLE: the questions and the rewriter are
-# independent. When set, ags leaves your $EDITOR alone entirely.
+# independent. When set, cs leaves your $EDITOR alone entirely.
 export CS_REWRITE_DISABLE="1"
 
 # Who rewrites prompts. The default is Claude, through the `claude` CLI and your
@@ -199,7 +199,7 @@ export CS_REWRITE_CMD="/path/to/my-rewriter"
 # Statusline context gauge escalation thresholds (see statusline.md). Each takes
 # a plain integer of at most three digits; anything else falls back to the
 # default shown. A value above 100 is out of the gauge's reach and so switches
-# that band off, the same idiom ags -doctor uses on the Stop hook's tiers below.
+# that band off, the same idiom cs -doctor uses on the Stop hook's tiers below.
 export CS_STATUSLINE_CTX_WARN="40"
 export CS_STATUSLINE_CTX_CRIT="65"
 
@@ -257,7 +257,7 @@ export CS_NO_ROTATION_WAKE="1"
 # line and no Claude icon.
 export CS_NO_ITERM2="1"
 
-# Leave the Task tools to Claude Code's model default. An ags launch exports
+# Leave the Task tools to Claude Code's model default. A cs launch exports
 # CLAUDE_CODE_ENABLE_TODO_TOOLS=1 because Claude Code 2.1.233+ withholds
 # TaskCreate/TaskList/TaskUpdate/TaskGet on Opus 4.8, Sonnet 5 and Fable 5,
 # and the rotation wake, the walk-away drain and the rotate skill all address
@@ -266,30 +266,30 @@ export CS_NO_ITERM2="1"
 export CS_NO_TASK_TOOLS="1"
 
 # Launch without CLAUDE_CODE_ENABLE_FUNCTION_HOOKS, even when the shell
-# carries it. An ags launch exports it so the rotate mod the installer deployed
+# carries it. A cs launch exports it so the rotate mod the installer deployed
 # (the "1: rotate this conversation" button past 65% context) loads; the flag
 # also loads any other function-hooks plugin on the machine. Without this knob
-# ags keeps a value already in the shell (0 keeps function hooks off).
+# cs keeps a value already in the shell (0 keeps function hooks off).
 export CS_NO_FUNCTION_HOOKS="1"
 
-# Override the tmux binary ags -spawn uses (default: tmux on PATH)
+# Override the tmux binary cs -spawn uses (default: tmux on PATH)
 export CS_TMUX_BIN="/opt/homebrew/bin/tmux"
 
-# The tmux session ags -spawn opens its windows in (default: cs). The profile
-# launcher sets ags. A name with ':' or '.' is refused: tmux would not keep it.
+# The tmux session cs -spawn opens its windows in (default: cs). The
+# code-sessions launcher sets code-sessions. A name with ':' or '.' is refused: tmux would not keep it.
 export CS_TMUX_SESSION="cs"
 
-# The tmux server ags -spawn and the doctor's spawn check use, as a tmux -L
+# The tmux server cs -spawn and the doctor's spawn check use, as a tmux -L
 # socket name (default: unset, the default server). A window runs with its
-# server's environment, not the spawner's, so the profile launcher sets ags:
+# server's environment, not the spawner's, so the code-sessions launcher sets code-sessions:
 # on the default server a spawned profile session would run as the stable
 # install, and a server the profile started would hand the profile's
 # variables to every later window. The attach hint names it
-# (tmux -L ags attach -t ags).
-export CS_TMUX_SOCKET="ags"
+# (tmux -L code-sessions attach -t code-sessions).
+export CS_TMUX_SOCKET="code-sessions"
 
 # Force the detected platform instead of probing for it; any other
-# value is rejected. Read by ags -secrets only, to choose between the
+# value is rejected. Read by cs -secrets only, to choose between the
 # macOS keychain and the encrypted file
 export CS_PLATFORM_OVERRIDE="linux"   # macos, wsl, or linux
 ```
@@ -323,34 +323,34 @@ key within 3 seconds. The chords need no terminal setting.
   untouched.
 - cs 2026.10.6 bound Option+1 and Option+2 (`alt+1`, `alt+2`), which iTerm2
   uses to switch panes. On a machine that answered yes, an install removes
-  those two where they still hold ags's values and binds the chords, with or
+  those two where they still hold cs's values and binds the chords, with or
   without a terminal. An `alt+1` or `alt+2` you bound to something else stays.
   cs's own stay too when Ctrl+X R or Ctrl+X W conflicts, so the command
   whose chord is taken keeps a key; a conflict on Ctrl+X 1 or Ctrl+X 2 does
   not keep them.
 - The installer records the answer in `~/.config/cs/option-keys` (`yes` or
   `no`; `$XDG_CONFIG_HOME/cs/option-keys` when you set that). After a `no` it
-  never asks again. After a `yes`, every install and `ags -update` adds any of
+  never asks again. After a `yes`, every install and `cs -update` adds any of
   the keys nothing binds, so a machine that bound Ctrl+X R and Ctrl+X W before
   gets Ctrl+X 1 and Ctrl+X 2 on its next update. Claude Code picks the file up
   without a relaunch. An encrypted session launched before the file existed
-  gets it at its next launch, when ags links it into the session.
+  gets it at its next launch, when cs links it into the session.
 - With no terminal attached (CI, a pipe) and no recorded answer, the installer
   asks nothing, writes nothing and records nothing; it prints one line saying
-  to run `ags -update` in a terminal.
-- To change the answer, remove `~/.config/cs/option-keys` and run `ags -update`
+  to run `cs -update` in a terminal.
+- To change the answer, remove `~/.config/cs/option-keys` and run `cs -update`
   (or `./install.sh`) in a terminal; it asks again. To drop the keys after a
   `yes`, answer `no` there and delete the four entries from `keybindings.json`.
-- `ags -uninstall` removes only the keys that still hold ags's values, the
-  chords and an earlier ags's `alt+1` and `alt+2` alike, drops a `Global` block
+- `cs -uninstall` removes only the keys that still hold cs's values, the
+  chords and an earlier cs's `alt+1` and `alt+2` alike, drops a `Global` block
   that leaves empty, deletes the file when it holds nothing else (a symlinked
   file keeps its link and gets `{"bindings": []}` written through it), and
   removes the recorded answer.
-- `ags -doctor` reports the state: bound, declined, not asked, a conflict on
+- `cs -doctor` reports the state: bound, declined, not asked, a conflict on
   one of the chords (or on a bare `ctrl+x`), a key not bound yet (as on
-  a machine that still has the Option keys, until its next `ags -update`), ags's
+  a machine that still has the Option keys, until its next `cs -update`), cs's
   `alt+1` or `alt+2` still there beside the chords, or an unparseable file.
-- ags reads keys the way Claude Code does: `Ctrl+X`, `control+x` and
+- cs reads keys the way Claude Code does: `Ctrl+X`, `control+x` and
   `ctrl+x  r` with two spaces are the same keys as `ctrl+x` and `ctrl+x r`,
   and `Option+1` is `alt+1`.
 
@@ -362,22 +362,22 @@ The launch banner's compact notes card draws only when `CS_NO_FUNCTION_HOOKS=1`
 or `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=0` withholds the mod, since otherwise
 the mod shows the full notes in the session.
 
-## Environment variables ags sets for you
+## Environment variables cs sets for you
 
 These are exported automatically when you start a session, so the Claude Code
 process and its hooks can find the session:
 
 - `CS_SESSION_NAME` - The session name (e.g., `myproject`); legacy `CLAUDE_SESSION_NAME` is accepted
-- `CS_CLAUDE_SESSION_ID` - The conversation UUID ags launched or resumed, exported so hooks can tell the launched conversation from any other claude that resolves the same session
-- `CS_REAL_EDITOR` - Your own `$EDITOR`, captured before ags repoints `EDITOR`/`VISUAL` at the prompt-rewriter shim. The shim hands every file that is not a composer buffer back to it, so `/memory` and commit messages still open your editor. Set it yourself to pin which editor that is
+- `CS_CLAUDE_SESSION_ID` - The conversation UUID cs launched or resumed, exported so hooks can tell the launched conversation from any other claude that resolves the same session
+- `CS_REAL_EDITOR` - Your own `$EDITOR`, captured before cs repoints `EDITOR`/`VISUAL` at the prompt-rewriter shim. The shim hands every file that is not a composer buffer back to it, so `/memory` and commit messages still open your editor. Set it yourself to pin which editor that is
 - `CS_SECRETS_SESSION` - For a worktree session, the base session its secrets key to, so a feature worktree reads the same store as its parent (see [secrets.md](secrets.md))
 - `CS_SESSION_DIR` - Full path to the session directory (workspace root)
 - `CS_SESSION_META_DIR` - Path to the `.cs/` metadata directory
 - `CLAUDE_CODE_TASK_LIST_ID` - Set to the session name for task list persistence; a feature worktree gets its own list under its `base@task` name, not the base's
 - `CLAUDE_CODE_AUTO_MEMORY_PATH` / `CLAUDE_COWORK_MEMORY_PATH_OVERRIDE` - Redirect Claude Code's auto-memory writer into `<session>/.cs/memory/`
-- `AGS_BIN` - Exported by every ags launch, never set by hand: the absolute path of the running ags executable, replacing any value inherited from a parent launch. The TUI and Claude Code mods prefer this pointer when calling ags because Claude Code's `PATH` may differ from the launching shell's
-- `CS_BIN` - Exported alongside `AGS_BIN` as a compatibility pointer to that same executable path. Existing integrations can keep reading it; new integrations should use `AGS_BIN`
-- `CS_UPDATE_AVAILABLE` - Exported by an ags launch, never set by hand: the version a newer cs was found at. The cs-update mod reads it to draw the release-notes pane. Absent when nothing is pending
+- `CS_BIN` - Exported by every cs launch, never set by hand: the absolute path of the running cs, replacing any value inherited from a parent launch. The mods run cs through it (`cs -update`, `/queue`), since the claude process's `PATH` is not the launching shell's
+- `CODE_SESSIONS_HOME` - Exported by the code-sessions launcher, never set by hand: the profile's path. It tells a cs run, and tools such as branch-out, that the fork is the one running. With it set, `cs -update` and `cs -uninstall` refuse: the fork updates from its checkout with `sh setup.sh`, and its release URLs are the original cs's
+- `CS_UPDATE_AVAILABLE` - Exported by a cs launch, never set by hand: the version a newer cs was found at. The cs-update mod reads it to draw the release-notes pane. Absent when nothing is pending
 
 ## Adapter installation
 
@@ -393,21 +393,21 @@ See [Migration](migration.md) for the compatibility policy.
 sets it for the profile, whose launcher keeps the user's HOME: a tilde there
 would run the stable install's hooks.
 
-## Your own setup in the ags profile
+## Your own setup in the code-sessions profile
 
-setup.sh ends by running `scripts/ags-carry-over.sh`, which brings your own
+setup.sh ends by running `scripts/carry-over.sh`, which brings your own
 Claude and Codex setup from `~/.claude`, `~/.claude.json` and `~/.codex` into
-the profile at `~/.local/share/agent-sessions/home`. It reads those and writes
-only inside the profile. Every path comes from `HOME`: inside an ags session
+the profile at `~/.local/share/code-sessions/home`. It reads those and writes
+only inside the profile. Every path comes from `HOME`: inside a code-sessions session
 `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and the `CS_*` variables name the profile.
 
 - **Linked**, one symlink per entry, so an edit in `~/.claude` or `~/.codex`
-  shows in ags at once: `CLAUDE.md`, `keybindings.json`, and the entries of
+  shows in code-sessions at once: `CLAUDE.md`, `keybindings.json`, and the entries of
   `agents/`, `commands/`, `skills/`, `workflows/`, `themes/` and
   `output-styles/`; for Codex, `AGENTS.md` and the entries of `skills/` and
   `agents/`. A skill directory holding `.claude-plugin/`, such as the Agents
   sidebar's, loads there as a plugin too.
-- **Skipped**: every name ags installs itself, read from the installer's own
+- **Skipped**: every name the install puts there itself, read from the installer's own
   lists (the skills, mods, retired skills and retired commands that uninstall
   removes), Claude Code's `skills/synced`, dot entries, and backups
   (`*.pre-*`, `*.before-*`).
@@ -423,7 +423,7 @@ only inside the profile. Every path comes from `HOME`: inside an ags session
   a table; every run names it so you can copy it by hand.
 - **Hooks** are told apart by event, matcher and command, so one command under
   two matchers is two hooks. The hooks a run adds are listed in
-  `.ags-carried-hooks.json` beside `settings.json` and `hooks.json`. One you
+  `.carried-hooks.json` beside `settings.json` and `hooks.json`. One you
   later change or remove in `~/.claude` or `~/.codex` leaves the profile on
   the next run, so an old and a new version never both run. A hook the profile
   had before is never removed.
@@ -438,7 +438,7 @@ only inside the profile. Every path comes from `HOME`: inside an ags session
   takes no space), with its marketplace when the profile lacks it, and recorded
   in the profile's `installed_plugins.json`. Nothing is downloaded, and the
   profile updates them on its own from then on.
-- **Codex hooks** are added after ags's own and trusted in the profile's
+- **Codex hooks** are added after cs's own and trusted in the profile's
   `config.toml` only when `~/.codex/config.toml` trusts the definition the
   profile holds. One you never reviewed stays untrusted, and Codex skips it
   until you do. Codex keys trust by a hook's position, so when a carried hook
@@ -446,13 +446,13 @@ only inside the profile. Every path comes from `HOME`: inside an ags session
   written only together with a `config.toml` that parses.
 - **The Agents sidebar**: when your `statusLine` is the sidebar's
   `statusline-bridge.sh`, the profile's status line moves inside the bridge
-  too, and the profile's own line (`ags-statusline`) is kept in
+  too, and the profile's own line (`cs-statusline`) is kept in
   `agents-sidebar-status/original-statusline` inside the profile's `.claude`.
   The bridge draws that line when `CLAUDE_CONFIG_DIR`, or in an encrypted
   session `CLAUDE_SECURESTORAGE_CONFIG_DIR`, names the profile; a bridge
   without that check draws the line `~/.claude` displaced instead. The wrap
   happens once: a status line you give the profile later stays (answer `y`
-  when setup offers ags-statusline, or run `ags -statusline enable`); delete
+  when setup offers cs-statusline, or run `cs -statusline enable`); delete
   that file to wrap it again.
 
 A rerun adds what is new and changes nothing else: a file whose content would
@@ -463,19 +463,19 @@ preference you remove or change there stays in the profile as it was; change
 it in the profile by hand.
 
 Remote MCP servers sign in per configuration directory, so one you authorised in
-`~/.claude` or `~/.codex` asks again in the profile: `/mcp` in an ags Claude
-session, or `CODEX_HOME=~/.local/share/agent-sessions/home/.codex codex mcp login <name>`
-for Codex. Run the carry-over with no ags Claude session open: a running
+`~/.claude` or `~/.codex` asks again in the profile: `/mcp` in a code-sessions
+Claude session, or `CODEX_HOME=~/.local/share/code-sessions/home/.codex codex mcp login <name>`
+for Codex. Run the carry-over with no code-sessions Claude session open: a running
 session can save its own copy of `.claude.json` over the merged servers, and a
 rerun puts them back.
 
 ```bash
-bash scripts/ags-carry-over.sh --dry-run   # what it would change; writes nothing
-bash scripts/ags-carry-over.sh             # run it alone, without reinstalling
-sh ./setup.sh --no-carry-over              # install without it; or AGS_CARRY_OVER=0
+bash scripts/carry-over.sh --dry-run   # what it would change; writes nothing
+bash scripts/carry-over.sh                 # run it alone, without reinstalling
+sh ./setup.sh --no-carry-over              # install without it; or CS_CARRY_OVER=0
 ```
 
-Before it installs, setup.sh also runs `scripts/ags-carry-over.sh --prune`,
+Before it installs, setup.sh also runs `scripts/carry-over.sh --prune`,
 with or without the opt-out. It removes the carried links that dangle, or that
-a name ags now installs shadows, so the install never copies ags's files
+a name the install now puts there shadows, so the install never copies cs's files
 through a link into your own directories.

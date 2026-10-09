@@ -16,7 +16,7 @@ target="${1:-}"
 _trace() {  # stage
     local dir="${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" base
     [ -n "$dir" ] && [ -d "$dir" ] || return 0
-    # An encrypted session keeps its ags files behind .cs/private, and a locked
+    # An encrypted session keeps its cs files behind .cs/private, and a locked
     # one gets no trace. cs_private_dir's rule, inlined: sourcing the library
     # would put a fork on the keypress path.
     if [ -L "$dir/private" ] || [ -e "$dir/private" ]; then

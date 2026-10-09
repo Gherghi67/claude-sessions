@@ -62,7 +62,7 @@ cs_run_child() {  # executable, arguments...
         kill -0 "$CS_RUN_OWNER_PID" 2>/dev/null || exit 1
         jq -e --arg id "$CS_RUN_ID" ".run_id == \$id" "$CS_SESSION_META_DIR/local/run-lease.json" >/dev/null 2>&1 || exit 1
         exec "$@"
-    ' ags-child "$_cs_run_gate" "$@" <&0 &
+    ' cs-child "$_cs_run_gate" "$@" <&0 &
     _cs_run_child_pid=$!
     if ! cs_run_with_lease "$_cs_run_meta" _cs_run_record_child "$_cs_run_meta" "$_cs_run_child_pid"; then
         kill -TERM "$_cs_run_child_pid" 2>/dev/null || true
@@ -113,7 +113,7 @@ cs_launch_session() {  # engine, name, directory, is_new, force, merge, intent
     if [ "$status" -eq 0 ]; then
         cs_run_with_lease "$_cs_run_meta" _cs_run_unarchive "$_cs_run_meta" "$name" || status=$?
     fi
-    # ags -switch (lib/78-switch.sh): a pending switch found as a run starts is
+    # cs -switch (lib/78-switch.sh): a pending switch found as a run starts is
     # an earlier run's leftover; the one this run arms is settled at its end,
     # while the lease is held and an encrypted session's vault is mounted.
     if [ "$status" -eq 0 ] && declare -F _switch_run_start >/dev/null; then

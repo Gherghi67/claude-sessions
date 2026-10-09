@@ -87,8 +87,8 @@ test_claude_protocol_is_unchanged() {
     write_session_claude_md "$session" || return 1
     output="$session/CLAUDE.local.md"
     # POSIX cksum of the complete pre-extraction template (including newlines).
-    # Normalize the executable rebrand, then pin the rest of the original protocol.
-    assert_eq '2777902387 5910' "$(sed -e 's/agent-sessions (ags)/the cs tool/g' -e 's/ags /cs /g' "$output" | cksum)" || return 1
+    # code-sessions keeps upstream's protocol text byte for byte.
+    assert_eq '2777902387 5910' "$(cksum < "$output")" || return 1
     assert_file_contains "$output" '<!-- cs:session-protocol -->' || return 1
     assert_file_contains "$output" '<!-- cs:memory-note -->' || return 1
     assert_file_contains "$output" '<!-- cs:wrap-cues -->' || return 1

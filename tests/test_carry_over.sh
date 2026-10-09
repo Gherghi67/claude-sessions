@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# ABOUTME: Exercises scripts/ags-carry-over.sh against a fake ~/.claude, ~/.codex and ags profile.
+# ABOUTME: Exercises scripts/carry-over.sh against a fake ~/.claude, ~/.codex and code-sessions profile.
 # ABOUTME: Covers links, skips, merges, reruns, Codex hook trust, the sidebar bridge and secrecy.
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=tests/test_lib.sh
 source "$SCRIPT_DIR/test_lib.sh"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
-CARRY="$REPO/scripts/ags-carry-over.sh"
+CARRY="$REPO/scripts/carry-over.sh"
 # shellcheck source=lib/01-manifests.sh
 source "$REPO/lib/01-manifests.sh"
 
@@ -44,22 +44,22 @@ jq_edit() {  # file, filter
     jq "$2" "$1" > "$1.tmp" && mv "$1.tmp" "$1"
 }
 
-# What setup.sh leaves: ags's own skills and mods, hooks, status line, a
+# What setup.sh leaves: cs's own skills and mods, hooks, status line, a
 # Codex hook it trusts, and a few entries of the profile's own.
 seed_profile() {
-    PROFILE="$HOME/.local/share/agent-sessions/home"
+    PROFILE="$HOME/.local/share/code-sessions/home"
     local skill
     mkdir -p "$PROFILE/.local/bin" "$PROFILE/.claude/commands" "$PROFILE/.claude/plugins" \
         "$PROFILE/.claude/skills/cs/.claude-plugin" "$PROFILE/.codex/skills"
     printf 'claude,codex\n' > "$PROFILE/.local/bin/.cs-install-engines"
     for skill in "${CS_SKILLS[@]}"; do
         mkdir -p "$PROFILE/.claude/skills/$skill" "$PROFILE/.codex/skills/$skill"
-        printf 'ags %s\n' "$skill" > "$PROFILE/.claude/skills/$skill/SKILL.md"
-        printf 'ags %s\n' "$skill" > "$PROFILE/.codex/skills/$skill/SKILL.md"
+        printf 'cs %s\n' "$skill" > "$PROFILE/.claude/skills/$skill/SKILL.md"
+        printf 'cs %s\n' "$skill" > "$PROFILE/.codex/skills/$skill/SKILL.md"
     done
     jq -n --arg p "$PROFILE" '{
         model: "opus", theme: "dark", effortLevel: "high",
-        statusLine: {type: "command", command: "\($p)/.local/bin/ags-statusline", refreshInterval: 60},
+        statusLine: {type: "command", command: "\($p)/.local/bin/cs-statusline", refreshInterval: 60},
         hooks: {SessionStart: [{hooks: [{type: "command", command: "\($p)/.claude/hooks/cs/session-start.sh", timeout: 30}]}]},
         enabledPlugins: {"clangd-lsp@official": true}}' > "$PROFILE/.claude/settings.json"
     printf '{"numStartups":3,"mcpServers":{"profile-own":{"type":"stdio","command":"/bin/echo"}}}\n' \
@@ -70,11 +70,11 @@ seed_profile() {
         > "$PROFILE/.claude/plugins/installed_plugins.json"
     printf '[tui]\nscreen_reader_detection_done = true\n\n[mcp_servers.profile-own]\ncommand = "/bin/echo"\n' \
         > "$PROFILE/.codex/config.toml"
-    _codex_hooks_register "$PROFILE/.codex" "$(_codex_hook_command "$PROFILE/.local/bin/ags")"
+    _codex_hooks_register "$PROFILE/.codex" "$(_codex_hook_command "$PROFILE/.local/bin/cs")"
 }
 
 # The user's own setup, with something of every kind the carry-over sorts:
-# entries to link, names ags installs, backups, cs hooks, secrets.
+# entries to link, names cs installs, backups, cs hooks, secrets.
 seed_user() {
     local U="$HOME/.claude" X="$HOME/.codex" name
     mkdir -p "$U/agents" "$U/commands" "$U/skills/my-skill" "$U/skills/finish" "$U/skills/cs" \
@@ -249,8 +249,8 @@ test_rerun_unlinks_what_the_user_removed_and_nothing_else() {
     assert_link "$PROFILE/.claude/commands/mine.md" "$HOME/.claude/commands/mine.md"
 }
 
-# A link made before ags shipped a skill of the same name would have the
-# install copy ags's files through it into ~/.claude.
+# A link made before cs shipped a skill of the same name would have the
+# install copy cs's files through it into ~/.claude.
 test_prune_drops_links_that_an_installed_name_shadows() {
     seed
     rm -rf "$PROFILE/.claude/skills/finish"
@@ -280,7 +280,7 @@ test_settings_merge_keeps_the_profiles_choices() {
     assert_eq dark "$(jq -r .theme "$s")" || return 1
     assert_eq high "$(jq -r .effortLevel "$s")" "the profile's value wins" || return 1
     assert_eq null "$(jq -r .tui "$s")" "setup.sh carries tui itself" || return 1
-    assert_eq null "$(jq -r .disableAllHooks "$s")" "would switch off ags's hooks" || return 1
+    assert_eq null "$(jq -r .disableAllHooks "$s")" "would switch off cs's hooks" || return 1
     assert_eq true "$(jq -r .alwaysThinkingEnabled "$s")" || return 1
     assert_eq auto "$(jq -r .permissions.defaultMode "$s")" || return 1
     assert_eq '["Bash(ls:*)"]' "$(jq -c .permissions.allow "$s")" || return 1
@@ -351,7 +351,7 @@ test_unexpected_shapes_in_the_profile_do_not_stop_the_run() {
     jq_edit "$s" '.permissions = {allow: "Bash(FIXTURE-VALUE)"}'
     jq_edit "$PROFILE/.claude/.claude.json" '.mcpServers = "FIXTURE-VALUE"'
     printf 'mcp_servers = { profile-own = { command = "/bin/echo" } }\n' > "$config"
-    _codex_hooks_register "$PROFILE/.codex" "$(_codex_hook_command "$PROFILE/.local/bin/ags")"
+    _codex_hooks_register "$PROFILE/.codex" "$(_codex_hook_command "$PROFILE/.local/bin/cs")"
     # /usr/bin first: its Python has no tomllib, so nothing checks the merged
     # config.toml and the run itself must not break it.
     PATH="/usr/bin:/bin:$PATH" bash "$CARRY" > "$TEST_TMPDIR/carry.out" 2>&1 || status=$?
@@ -383,7 +383,7 @@ test_codex_hooks_wait_for_a_config_that_parses() {
     assert_file_contains "$TEST_TMPDIR/carry.out" 'would not parse' || return 1
     assert_eq "$before" "$(shasum < "$hooks")" "hooks.json unchanged" || return 1
     cmp -s "$TEST_TMPDIR/config.before" "$config" || { echo "  FAIL: config.toml changed"; return 1; }
-    assert_absent "$PROFILE/.codex/.ags-carried-hooks.json"
+    assert_absent "$PROFILE/.codex/.carried-hooks.json"
 }
 
 test_disabled_plugins_are_not_copied() {
@@ -416,13 +416,13 @@ test_codex_hooks_carry_the_users_trust_and_no_more() {
     seed
     carry || return 1
     local hooks="$PROFILE/.codex/hooks.json" config="$PROFILE/.codex/config.toml" key
-    assert_eq '/opt/bin/emit SessionStart' "$(jq -r '.hooks.SessionStart[1].hooks[0].command' "$hooks")" "appended after ags's group" || return 1
+    assert_eq '/opt/bin/emit SessionStart' "$(jq -r '.hooks.SessionStart[1].hooks[0].command' "$hooks")" "appended after cs's group" || return 1
     assert_eq 1 "$(jq '[.hooks.SessionStart[].hooks[] | select(.command | endswith("-codex-hook session-start"))] | length' "$hooks")" || return 1
     key="$PROFILE/.codex/hooks.json:session_start:1:0"
     assert_file_contains "$config" "^\[hooks.state.\"$key\"\]$" || return 1
     assert_eq "sha256:$(codex_hash session_start "/opt/bin/emit SessionStart")" \
         "$(awk -v h="[hooks.state.\"$key\"]" '$0 == h {getline; sub(/^[^"]*"/, ""); sub(/".*/, ""); print}' "$config")" || return 1
-    # ags's own trust stays, and the hook ~/.codex never trusted is carried untrusted.
+    # cs's own trust stays, and the hook ~/.codex never trusted is carried untrusted.
     assert_file_contains "$config" "^\[hooks.state.\"$PROFILE/.codex/hooks.json:session_start:0:0\"\]$" || return 1
     assert_eq '/opt/bin/emit Stop' "$(jq -r '.hooks.Stop[0].hooks[0].command' "$hooks")" || return 1
     assert_file_not_contains "$config" 'hooks.json:stop:' || return 1
@@ -499,7 +499,7 @@ test_codex_hook_that_leaves_takes_its_trust_and_moves_the_rest() {
     carry || return 1
     local X="$HOME/.codex" hooks="$PROFILE/.codex/hooks.json" config="$PROFILE/.codex/config.toml" own_hash own2_hash f
     f="$PROFILE/.codex/hooks.json"
-    # Two hooks trusted in an ags Codex session, in a group after the carried
+    # Two hooks trusted in a cs Codex session, in a group after the carried
     # one, and a table left behind for a position no hook holds.
     jq_edit "$hooks" '.hooks.SessionEnd += [{hooks: [{type: "command", command: "/profile/own-end", timeout: 2},
         {type: "command", command: "/profile/own-end2", timeout: 2}]}]'
@@ -553,13 +553,13 @@ test_sidebar_bridge_wraps_the_profiles_status_line_once() {
     assert_eq /opt/sidebar/plugin/statusline-bridge.sh "$(jq -r .statusLine.command "$s")" || return 1
     assert_eq 1 "$(jq -r .statusLine.refreshInterval "$s")" || return 1
     # As the sidebar records it: the command alone, no newline.
-    assert_eq "$PROFILE/.local/bin/ags-statusline" "$(cat "$original")" || return 1
-    assert_eq "$(printf '%s' "$PROFILE/.local/bin/ags-statusline" | wc -c)" "$(wc -c < "$original")" || return 1
+    assert_eq "$PROFILE/.local/bin/cs-statusline" "$(cat "$original")" || return 1
+    assert_eq "$(printf '%s' "$PROFILE/.local/bin/cs-statusline" | wc -c)" "$(wc -c < "$original")" || return 1
     # Given its own line back later, the profile keeps it.
-    jq --arg c "$PROFILE/.local/bin/ags-statusline" '.statusLine = {type: "command", command: $c, refreshInterval: 60}' \
+    jq --arg c "$PROFILE/.local/bin/cs-statusline" '.statusLine = {type: "command", command: $c, refreshInterval: 60}' \
         "$s" > "$s.tmp" && mv "$s.tmp" "$s"
     carry || return 1
-    assert_eq "$PROFILE/.local/bin/ags-statusline" "$(jq -r .statusLine.command "$s")"
+    assert_eq "$PROFILE/.local/bin/cs-statusline" "$(jq -r .statusLine.command "$s")"
 }
 
 test_status_line_left_alone_without_the_sidebar() {
@@ -567,7 +567,7 @@ test_status_line_left_alone_without_the_sidebar() {
     local s="$HOME/.claude/settings.json"
     jq '.statusLine = {type: "command", command: "/opt/bin/my-line"}' "$s" > "$s.tmp" && mv "$s.tmp" "$s"
     carry || return 1
-    assert_eq "$PROFILE/.local/bin/ags-statusline" "$(jq -r .statusLine.command "$PROFILE/.claude/settings.json")" || return 1
+    assert_eq "$PROFILE/.local/bin/cs-statusline" "$(jq -r .statusLine.command "$PROFILE/.claude/settings.json")" || return 1
     assert_absent "$PROFILE/.claude/agents-sidebar-status"
 }
 
@@ -579,7 +579,7 @@ test_dry_run_writes_nothing() {
     cmp "$TEST_TMPDIR/before" "$TEST_TMPDIR/after" || return 1
     assert_file_contains "$TEST_TMPDIR/carry.out" 'would link claude/skills/my-skill' || return 1
     assert_file_contains "$TEST_TMPDIR/carry.out" 'would copy plugin tool@official' || return 1
-    assert_file_contains "$TEST_TMPDIR/carry.out" 'leave claude/skills/finish (ags installs its own)'
+    assert_file_contains "$TEST_TMPDIR/carry.out" 'leave claude/skills/finish (cs installs its own)'
 }
 
 test_codex_only_profile_gets_no_claude_changes() {
@@ -591,7 +591,7 @@ test_codex_only_profile_gets_no_claude_changes() {
     assert_link "$PROFILE/.codex/skills/codex-skill" "$HOME/.codex/skills/codex-skill"
 }
 
-# Inside an ags session these name the profile itself; the carry-over reads
+# Inside a cs session these name the profile itself; the carry-over reads
 # the user's directories from HOME alone.
 test_session_environment_does_not_redirect_the_source() {
     seed

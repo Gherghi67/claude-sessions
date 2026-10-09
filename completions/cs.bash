@@ -1,4 +1,4 @@
-# ABOUTME: Bash completion script for agent-sessions (ags command and cs alias)
+# ABOUTME: Bash completion script for cs (Claude Code session manager)
 # ABOUTME: Provides tab-completion for session names, commands, and subcommands
 
 _cs_completions() {
@@ -33,9 +33,11 @@ _cs_completions() {
     local session_opts="-secrets -queue -msg -narrative -conversations -usage -tag -features -finish --engine --fresh --resume --from-handoff --force"
     local engine_values="claude codex"
 
-    # Ask the command being completed so ags and its cs alias both work.
+    # Get list of session names. cs owns the definition of a session, including
+    # which symlinks and marker directories count; asking it keeps this script
+    # from drifting out of step with `cs -list`.
     _cs_sessions() {
-        "${COMP_WORDS[0]:-ags}" -complete sessions 2>/dev/null
+        cs -complete sessions 2>/dev/null
     }
 
     # Append the session names that prefix-match $1 to COMPREPLY. Names are matched
@@ -277,6 +279,4 @@ _cs_completions() {
     COMPREPLY=()
 }
 
-# Register canonical command and compatibility alias.
-complete -F _cs_completions ags
 complete -F _cs_completions cs

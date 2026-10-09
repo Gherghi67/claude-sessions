@@ -59,7 +59,7 @@ test_engine_verb_reports_the_running_engine() {
     local dir output
     dir=$(_engine_verb_session)
     output=$(CS_SESSION_DIR="$dir" CS_RUN_ENGINE=codex "$CS_BIN" -engine 2>&1) \
-        || { echo "  FAIL: ags -engine failed: $output"; return 1; }
+        || { echo "  FAIL: cs -engine failed: $output"; return 1; }
     assert_output_contains "$output" "engine: codex" "the run's engine wins over the saved one" || return 1
     assert_output_contains "$output" "conversation: thread-abc" "Codex reads its own binding" || return 1
     assert_output_contains "$output" "capabilities: launch exact_resume startup_context" \
@@ -75,7 +75,7 @@ test_engine_verb_falls_back_to_the_saved_engine() {
     dir=$(_engine_verb_session)
     printf 'engine: codex\n' > "$dir/.cs/local/state"
     output=$(env -u CS_RUN_ENGINE CS_SESSION_DIR="$dir" "$CS_BIN" -engine 2>&1) \
-        || { echo "  FAIL: ags -engine failed: $output"; return 1; }
+        || { echo "  FAIL: cs -engine failed: $output"; return 1; }
     assert_output_contains "$output" "engine: codex" "outside a run the saved preference answers" || return 1
 }
 
@@ -92,7 +92,7 @@ test_engine_verb_supports_answers_by_exit_status() {
     status=0
     output=$(CS_SESSION_DIR="$dir" CS_RUN_ENGINE=claude "$CS_BIN" -engine supports 2>&1) || status=$?
     [ "$status" -ne 0 ] || { echo "  FAIL: a missing capability name must be refused"; return 1; }
-    assert_output_contains "$output" "Usage: ags -engine supports <capability>" || return 1
+    assert_output_contains "$output" "Usage: cs -engine supports <capability>" || return 1
 }
 
 # Codex runs a skill's commands in a sandbox that can refuse every file write,
@@ -115,13 +115,13 @@ test_engine_verb_supports_answers_without_temp_files() {
     output=$(CS_SESSION_DIR="$dir" CS_RUN_ENGINE=codex \
         sandbox-exec -p "$policy" /bin/bash "$CS_BIN" -engine supports spawn_brief 2>&1) || status=$?
     assert_eq 1 "$status" "an unsupported capability still exits 1" || return 1
-    assert_eq "spawn_brief is not supported under codex in ags" "$output" "with only its own line" || return 1
+    assert_eq "spawn_brief is not supported under codex in cs" "$output" "with only its own line" || return 1
 }
 
 test_engine_verb_refuses_outside_a_session() {
     local output status=0
     output=$(env -u CS_RUN_ENGINE -u CS_SESSION_DIR -u CLAUDE_SESSION_DIR "$CS_BIN" -engine 2>&1) || status=$?
-    [ "$status" -ne 0 ] || { echo "  FAIL: ags -engine outside a session must fail"; return 1; }
+    [ "$status" -ne 0 ] || { echo "  FAIL: cs -engine outside a session must fail"; return 1; }
     assert_output_contains "$output" "Not in a cs session" || return 1
 }
 

@@ -1,28 +1,28 @@
 #!/usr/bin/env bash
-# ABOUTME: Carries the user's own Claude and Codex setup (~/.claude, ~/.codex) into the ags profile.
+# ABOUTME: Carries the user's own Claude and Codex setup (~/.claude, ~/.codex) into the code-sessions profile.
 # ABOUTME: Links what the user edits and merges what lives in the profile's own files; setup.sh runs it.
 set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: bash scripts/ags-carry-over.sh [--dry-run | --prune]
+Usage: bash scripts/carry-over.sh [--dry-run | --prune]
 
-Carries your own Claude and Codex setup into the ags profile at
-~/.local/share/agent-sessions/home. CLAUDE.md, AGENTS.md, agents, skills,
+Carries your own Claude and Codex setup into the code-sessions profile at
+~/.local/share/code-sessions/home. CLAUDE.md, AGENTS.md, agents, skills,
 commands, workflows, themes and output styles are linked one entry at a time,
-so an edit made in ~/.claude or ~/.codex reaches ags at once. Hooks, enabled
+so an edit made in ~/.claude or ~/.codex reaches cs at once. Hooks, enabled
 plugins, MCP servers and preferences are merged into the profile's own files.
-Whatever ags installs itself is skipped, and an entry the profile already has
+Whatever cs installs itself is skipped, and an entry the profile already has
 is the profile's: it is never replaced or removed. A hook the carry-over added
 leaves the profile again once you change or remove it in ~/.claude or
 ~/.codex. A second run changes nothing unless ~/.claude or ~/.codex changed.
 
   --dry-run  print what would change; write nothing
-  --prune    only remove carried links that dangle, or that a name ags now
+  --prune    only remove carried links that dangle, or that a name cs now
              installs shadows (setup.sh runs this before it installs)
 
 setup.sh runs the carry-over after every install. Pass --no-carry-over to
-setup.sh, or set AGS_CARRY_OVER=0, to leave the profile as the install made it.
+setup.sh, or set CS_CARRY_OVER=0, to leave the profile as the install made it.
 EOF
 }
 
@@ -39,18 +39,18 @@ esac
 
 : "${HOME:?HOME must be set}"
 here=$(CDPATH='' cd -P "$(dirname "$0")" && pwd)
-# The installer's own lists: what ags deploys, and what it removes on uninstall.
+# The installer's own lists: what cs deploys, and what it removes on uninstall.
 # shellcheck source=lib/01-manifests.sh
 . "$here/../lib/01-manifests.sh"
 command -v jq >/dev/null 2>&1 || { printf 'Error: the carry-over needs jq.\n' >&2; exit 1; }
 
-# Every path comes from HOME. Inside an ags session CLAUDE_CONFIG_DIR,
+# Every path comes from HOME. Inside a cs session CLAUDE_CONFIG_DIR,
 # CODEX_HOME and the CS_* variables name the profile itself, so reading them
 # would carry the profile into itself.
 user_claude="$HOME/.claude"
 user_claude_json="$HOME/.claude.json"
 user_codex="$HOME/.codex"
-profile="$HOME/.local/share/agent-sessions/home"
+profile="$HOME/.local/share/code-sessions/home"
 p_claude="$profile/.claude"
 p_codex="$profile/.codex"
 
@@ -58,14 +58,14 @@ engines=$(cat "$profile/.local/bin/.cs-install-engines" 2>/dev/null || true)
 if [ -z "$engines" ]; then
     # Nothing is installed yet, so there is nothing a link could shadow.
     [ "$prune_only" -eq 1 ] && exit 0
-    printf 'Error: no ags profile at %s; run setup.sh first.\n' "$profile" >&2
+    printf 'Error: no code-sessions profile at %s; run setup.sh first.\n' "$profile" >&2
     exit 1
 fi
 has_claude=0 has_codex=0
 case ",$engines," in *,claude,*) [ -d "$p_claude" ] && has_claude=1 ;; esac
 case ",$engines," in *,codex,*) [ -d "$p_codex" ] && has_codex=1 ;; esac
 
-work=$(mktemp -d "${TMPDIR:-/tmp}/ags-carry-over.XXXXXX")
+work=$(mktemp -d "${TMPDIR:-/tmp}/carry-over.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 
 changes=0
@@ -107,9 +107,9 @@ _listed() {  # name, newline-separated list
     return 1
 }
 
-# The names ags installs, from the lists run_uninstall removes them by. A
+# The names cs installs, from the lists run_uninstall removes them by. A
 # skill or command of the user's by one of these names would answer the same
-# slash command twice, and the next install would copy ags's file into the
+# slash command twice, and the next install would copy cs's file into the
 # user's own directory through the link. "synced" is Claude Code's store of
 # skills synced from claude.ai, which the profile keeps for its own login.
 claude_skill_skip=$(printf '%s\n' "${CS_SKILLS[@]}" "${RETIRED_SKILLS[@]}"; \
@@ -150,7 +150,7 @@ _remove_link() {  # link, what, why
 }
 
 # Drop the links a run made that no longer stand: the user removed the entry,
-# or ags now installs an entry of that name. Only links into the user's own
+# or cs now installs an entry of that name. Only links into the user's own
 # directory are judged; any other link is the profile's.
 _prune_dir() {  # category, user_dir, profile_dir
     local category="$1" udir="$2" pdir="$3" link name target skip
@@ -164,7 +164,7 @@ _prune_dir() {  # category, user_dir, profile_dir
         if [ ! -e "$link" ]; then
             _remove_link "$link" "$category/$name" "it no longer exists in $(_tilde "$udir")"
         elif [ -n "$skip" ] && _listed "$name" "$skip"; then
-            _remove_link "$link" "$category/$name" "ags installs its own $name"
+            _remove_link "$link" "$category/$name" "cs installs its own $name"
         fi
     done
 }
@@ -178,7 +178,7 @@ _prune_file() {  # what, user_file, profile_file
 }
 
 # One symlink per user entry, never one for the directory: the profile's own
-# entries, and everything ags installs, stay real files beside the links.
+# entries, and everything cs installs, stay real files beside the links.
 _link_dir() {  # category, user_dir, profile_dir
     local category="$1" udir="$2" pdir="$3" src name dest skip
     [ -d "$udir" ] || return 0
@@ -193,7 +193,7 @@ _link_dir() {  # category, user_dir, profile_dir
             if [ "$name" = synced ]; then
                 _left "$category/$name" "Claude Code syncs the profile's own"
             else
-                _left "$category/$name" "ags installs its own"
+                _left "$category/$name" "cs installs its own"
             fi
             continue
         fi
@@ -352,7 +352,7 @@ _ledger_write() {  # ledger, new content
 
 # Settings the profile keeps its own: the model and theme it was set up with,
 # the display mode setup.sh carries once, the status lines (the sidebar's
-# bridge is handled below), the switch that would turn off ags's own hooks,
+# bridge is handled below), the switch that would turn off cs's own hooks,
 # and the login helpers (the profile has a login of its own). Hooks, plugins,
 # permissions and the keyed settings are merged entry by entry instead; a
 # profile value of another shape than the user's is the profile's and stays.
@@ -383,7 +383,7 @@ $user[0] as $u
 # takes the profile's place the same way: the profile's own line is kept in
 # the profile's agents-sidebar-status/original-statusline, which the bridge
 # reads when CLAUDE_CONFIG_DIR is the profile. Once wrapped, a status line the
-# profile is given later (ags -statusline enable, or yes to the installer) is
+# profile is given later (cs -statusline enable, or yes to the installer) is
 # its choice and stays; delete that file to have the bridge put back.
 statusline_original="$p_claude/agents-sidebar-status/original-statusline"
 wrapped_statusline=''
@@ -408,7 +408,7 @@ _claude_statusline() {  # merged settings file (updated in place)
 
 _claude_settings() {
     local dest="$p_claude/settings.json" user="$user_claude/settings.json" new="$work/settings.json"
-    local ledger="$p_claude/.ags-carried-hooks.json"
+    local ledger="$p_claude/.carried-hooks.json"
     [ -f "$user" ] || return 0
     jq -e 'type == "object"' "$user" >/dev/null 2>&1 \
         || { printf 'Warning: %s is not a JSON object; settings not carried.\n' "$user" >&2; return 0; }
@@ -784,7 +784,7 @@ _codex_hooks() {  # working copy of the profile's config.toml (updated in place)
         || { printf 'Warning: %s is not a JSON object; Codex hooks not carried.\n' "$user" >&2; return 0; }
     _json_target_ok "$dest" || return 0
     _object_or_empty "$dest" > "$work/hooks.before.json"
-    _ledger_read "$p_codex/.ags-carried-hooks.json" "$work/codex-ledger.before.json"
+    _ledger_read "$p_codex/.carried-hooks.json" "$work/codex-ledger.before.json"
     if ! jq --slurpfile user "$user" --slurpfile ledger "$work/codex-ledger.before.json" "$codex_own_hook$hooks_jq"'
             $user[0] as $u | prune(stale($u; $ledger[0])) | merge_hooks($u)
             | if .hooks == {} then del(.hooks) else . end' "$work/hooks.before.json" > "$new" 2>/dev/null \
@@ -844,7 +844,7 @@ _codex_hooks() {  # working copy of the profile's config.toml (updated in place)
         [ "$(_trusted_hash "$config" "$pkey")" != "$want" ] || continue
         if [ "$(_trusted_hash "$user_codex/config.toml" "$ukey")" != "$want" ]; then
             if [ "$dry" -eq 1 ] || [ "$hooks_changed" -eq 1 ]; then
-                _note "~/.codex does not trust Codex hook $ev:$pgi:$phi as the profile holds it; Codex skips it until you trust it in an ags Codex session"
+                _note "~/.codex does not trust Codex hook $ev:$pgi:$phi as the profile holds it; Codex skips it until you trust it in a cs Codex session"
             fi
             continue
         fi
@@ -873,7 +873,7 @@ _codex_config_and_hooks() {
         fi
         config_changed=1
     fi
-    [ -z "$codex_ledger_new" ] || _ledger_write "$p_codex/.ags-carried-hooks.json" "$codex_ledger_new"
+    [ -z "$codex_ledger_new" ] || _ledger_write "$p_codex/.carried-hooks.json" "$codex_ledger_new"
     [ -z "$codex_hooks_new" ] || _replace "$p_codex/hooks.json" "$codex_hooks_new" 600
     [ "$config_changed" -eq 0 ] || _replace "$dest" "$config" 600
 }
@@ -933,9 +933,9 @@ fi
 # A remote MCP server signs in per configuration directory, so one the user
 # authorised in ~/.claude or ~/.codex asks again inside the profile.
 if [ -n "$carried_claude_mcp" ]; then
-    printf 'Remote Claude MCP servers sign in per profile; if one asks, log in with /mcp in an ags Claude session:%s\n' "$carried_claude_mcp"
+    printf 'Remote Claude MCP servers sign in per profile; if one asks, log in with /mcp in a cs Claude session:%s\n' "$carried_claude_mcp"
 fi
 if [ -n "$carried_codex_mcp" ]; then
     printf 'Remote Codex MCP servers sign in per profile; if one asks: CODEX_HOME=%s codex mcp login <name>:%s\n' "$(_tilde "$p_codex")" "$carried_codex_mcp"
 fi
-[ "$dry" -eq 1 ] || [ "$prune_only" -eq 1 ] || printf 'Rerun with: bash %s\n' "$here/ags-carry-over.sh"
+[ "$dry" -eq 1 ] || [ "$prune_only" -eq 1 ] || printf 'Rerun with: bash %s\n' "$here/carry-over.sh"

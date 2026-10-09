@@ -118,7 +118,7 @@ if [ -n "$changed_mode" ]; then
     while IFS= read -r path; do
         [ -n "$path" ] || continue
         case "$path" in
-            lib/*|bin/ags|bin/cs|tests/test_lib.sh|tests/run_all.sh) full_reason="$path"; break ;;
+            lib/*|bin/cs|bin/cs|tests/test_lib.sh|tests/run_all.sh) full_reason="$path"; break ;;
             # Not code: session state, docs, plans, changelog, editor and CI
             # config. A change here proves nothing about the suites, so it
             # neither selects one nor forces the full gate. Skill and command

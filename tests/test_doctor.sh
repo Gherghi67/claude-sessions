@@ -70,7 +70,7 @@ test_doctor_warns_on_a_narrative_over_budget() {
     # Colour escapes may sit between the [WARN] tag and the message, so the two
     # are pinned separately.
     assert_output_contains "$output" "Narrative: narrative.alice.md is 2 KB (budget 2 KB)" "warns with file and budget" || return 1
-    assert_output_contains "$output" "run ags -narrative rotate" "points at the rotation" || return 1
+    assert_output_contains "$output" "run cs -narrative rotate" "points at the rotation" || return 1
     # This fixture never trips a FAIL check, so the summary takes the WARN
     # branch ("Complete with N warning(s).") rather than the FAIL branch's
     # "Warnings: N" — assert against the branch this scenario actually hits.
@@ -102,8 +102,8 @@ test_doctor_reports_ok_when_narratives_fit() {
     budget_kb=$(( $(grep -o 'CS_NARRATIVE_MAX_DEFAULT=[0-9]*' "$SCRIPT_DIR/../lib/02-shared.sh" \
         | head -1 | cut -d= -f2) / 1024 ))
     assert_output_contains "$output" "Narrative: all within the $budget_kb KB budget" \
-        "ok line names the budget ags -narrative rotate would use" || return 1
-    assert_output_not_contains "$output" "run ags -narrative rotate" "no warning" || return 1
+        "ok line names the budget cs -narrative rotate would use" || return 1
+    assert_output_not_contains "$output" "run cs -narrative rotate" "no warning" || return 1
 }
 
 test_doctor_survives_an_unreadable_narrative() {
@@ -147,7 +147,7 @@ make_fake_checkout() {  # dir, [deploy_dir], [version]
     local dir="$1" deployed="${2:-}" version="${3:-9999.9.9}"
     mkdir -p "$dir/hooks" "$dir/bin"
     : > "$dir/install.sh"
-    printf 'VERSION="%s"\n' "$version" > "$dir/bin/ags"
+    printf 'VERSION="%s"\n' "$version" > "$dir/bin/cs"
     # The drift scan compares only against the checkout that produced the
     # install, which it recognises by the stamp install.sh writes into the
     # deploy directory. Without a matching stamp it declines to compare.
@@ -633,9 +633,9 @@ test_doctor_statusline_ok_when_registered_and_executable() {
     local fake_claude="$TEST_TMPDIR/sl-claude"
     local fake_bin="$TEST_TMPDIR/sl-bin"
     mkdir -p "$fake_claude" "$fake_bin"
-    printf '#!/bin/sh\n' > "$fake_bin/ags-statusline"
-    chmod +x "$fake_bin/ags-statusline"
-    printf '{"statusLine":{"type":"command","command":"%s"}}\n' "$fake_bin/ags-statusline" > "$fake_claude/settings.json"
+    printf '#!/bin/sh\n' > "$fake_bin/cs-statusline"
+    chmod +x "$fake_bin/cs-statusline"
+    printf '{"statusLine":{"type":"command","command":"%s"}}\n' "$fake_bin/cs-statusline" > "$fake_claude/settings.json"
     local output
     output=$(CS_CLAUDE_DIR="$fake_claude" "$CS_BIN" -doctor 2>&1) || true
     assert_output_contains "$output" "Statusline" "doctor should run a Statusline check" || return 1
@@ -648,7 +648,7 @@ test_doctor_statusline_ok_when_registered_and_executable() {
 test_doctor_statusline_fails_when_binary_missing() {
     local fake_claude="$TEST_TMPDIR/sl-claude-missing"
     mkdir -p "$fake_claude"
-    printf '{"statusLine":{"type":"command","command":"%s"}}\n' "$TEST_TMPDIR/absent/ags-statusline" > "$fake_claude/settings.json"
+    printf '{"statusLine":{"type":"command","command":"%s"}}\n' "$TEST_TMPDIR/absent/cs-statusline" > "$fake_claude/settings.json"
     local output
     output=$(CS_CLAUDE_DIR="$fake_claude" "$CS_BIN" -doctor 2>&1) || true
     if ! echo "$output" | grep "Statusline" | grep -q "FAIL"; then
@@ -665,12 +665,12 @@ test_doctor_statusline_caps_row_names_the_answer_or_the_ask() {
     local fake_bin="$TEST_TMPDIR/sl-bin-caps"
     local xdg="$TEST_TMPDIR/xdg-caps"
     mkdir -p "$fake_claude" "$fake_bin" "$xdg/cs"
-    printf '#!/bin/sh\n' > "$fake_bin/ags-statusline"
-    chmod +x "$fake_bin/ags-statusline"
-    printf '{"statusLine":{"type":"command","command":"%s"}}\n' "$fake_bin/ags-statusline" > "$fake_claude/settings.json"
+    printf '#!/bin/sh\n' > "$fake_bin/cs-statusline"
+    chmod +x "$fake_bin/cs-statusline"
+    printf '{"statusLine":{"type":"command","command":"%s"}}\n' "$fake_bin/cs-statusline" > "$fake_claude/settings.json"
     local output
     output=$(XDG_CONFIG_HOME="$xdg" CS_CLAUDE_DIR="$fake_claude" "$CS_BIN" -doctor 2>&1) || true
-    assert_output_contains "$output" "ags -statusline caps ask" "unanswered: doctor names the ask" || return 1
+    assert_output_contains "$output" "cs -statusline caps ask" "unanswered: doctor names the ask" || return 1
     printf 'on\n' > "$xdg/cs/statusline-caps"
     output=$(XDG_CONFIG_HOME="$xdg" CS_CLAUDE_DIR="$fake_claude" "$CS_BIN" -doctor 2>&1) || true
     assert_output_contains "$output" "caps: rounded" "answered on: doctor says rounded" || return 1
@@ -678,7 +678,7 @@ test_doctor_statusline_caps_row_names_the_answer_or_the_ask() {
 
 # One row for cs's Ctrl+X bindings: the installer's recorded answer
 # and what keybindings.json holds. A healthy state is OK; a binding the user
-# holds on ags's key or on its ctrl+x prefix, keys an older ags bound that the
+# holds on cs's key or on its ctrl+x prefix, keys an older cs bound that the
 # next update replaces, or a file Claude Code cannot read, is a WARN.
 test_doctor_rotate_wrap_keys_row_names_the_state() {
     local cfg="$TEST_TMPDIR/ok-cfg" xdg="$TEST_TMPDIR/ok-xdg" output kb
@@ -687,7 +687,7 @@ test_doctor_rotate_wrap_keys_row_names_the_state() {
     _ok_doctor() { CLAUDE_CONFIG_DIR="$cfg" XDG_CONFIG_HOME="$xdg" "$CS_BIN" -doctor 2>&1 || true; }
 
     output=$(_ok_doctor)
-    assert_output_contains "$output" "OK.*Rotate/wrap keys: not asked (run ags -update in a terminal to be asked)" \
+    assert_output_contains "$output" "OK.*Rotate/wrap keys: not asked (run cs -update in a terminal to be asked)" \
         "no answer: not asked" || return 1
 
     printf 'no\n' > "$xdg/cs/option-keys"
@@ -697,13 +697,13 @@ test_doctor_rotate_wrap_keys_row_names_the_state() {
     printf 'yes\n' > "$xdg/cs/option-keys"
     printf '%s\n' '{"bindings":[{"context":"Global","bindings":{"ctrl+x r":"command:rotate","ctrl+x w":"command:wrap","ctrl+x 1":"strip:jump1","ctrl+x 2":"strip:jump2"}}]}' > "$kb"
     output=$(_ok_doctor)
-    assert_output_contains "$output" "OK.*Rotate/wrap keys: bound (Ctrl+X R runs /rotate, Ctrl+X W runs /wrap, Ctrl+X 1 and Ctrl+X 2 press the ags band)" \
-        "every key holds ags's values: bound" || return 1
+    assert_output_contains "$output" "OK.*Rotate/wrap keys: bound (Ctrl+X R runs /rotate, Ctrl+X W runs /wrap, Ctrl+X 1 and Ctrl+X 2 press the cs band)" \
+        "every key holds cs's values: bound" || return 1
 
     printf '%s\n' '{"bindings":[{"context":"Global","bindings":{"ctrl+x r":"command:rotate","ctrl+x w":"command:wrap"}}]}' > "$kb"
     output=$(_ok_doctor)
-    assert_output_contains "$output" "WARN.*Rotate/wrap keys: ctrl+x 1 not bound (run ags -update to bind it)" \
-        "the chords an earlier ags bound, without the band's: the next update binds them" || return 1
+    assert_output_contains "$output" "WARN.*Rotate/wrap keys: ctrl+x 1 not bound (run cs -update to bind it)" \
+        "the chords an earlier cs bound, without the band's: the next update binds them" || return 1
 
     printf '%s\n' '{"bindings":[{"context":"Chat","bindings":{"ctrl+x r":"chat:submit"}},{"context":"Global","bindings":{"ctrl+x w":"command:wrap"}}]}' > "$kb"
     output=$(_ok_doctor)
@@ -722,20 +722,20 @@ test_doctor_rotate_wrap_keys_row_names_the_state() {
 
     printf '%s\n' '{"bindings":[{"context":"Global","bindings":{"ctrl+x r":"command:rotate","ctrl+x w":"command:wrap","ctrl+x 1":"strip:jump1","ctrl+x 2":"strip:jump2","alt+1":"command:rotate","alt+2":"command:wrap"}}]}' > "$kb"
     output=$(_ok_doctor)
-    assert_output_contains "$output" "WARN.*Rotate/wrap keys: alt+1, alt+2 still hold ags's earlier bindings in $kb (run ags -update to remove them)" \
-        "chords bound beside ags's alt keys: the alt keys are named" || return 1
+    assert_output_contains "$output" "WARN.*Rotate/wrap keys: alt+1, alt+2 still hold cs's earlier bindings in $kb (run cs -update to remove them)" \
+        "chords bound beside cs's alt keys: the alt keys are named" || return 1
 
     printf '%s\n' '{"bindings":[{"context":"Global","bindings":{"alt+1":"command:rotate","alt+2":"command:wrap"}}]}' > "$kb"
     output=$(_ok_doctor)
-    assert_output_contains "$output" "WARN.*Rotate/wrap keys: ctrl+x r not bound (run ags -update to bind it)" \
-        "an older ags's alt+1/alt+2: the next update binds the chords" || return 1
+    assert_output_contains "$output" "WARN.*Rotate/wrap keys: ctrl+x r not bound (run cs -update to bind it)" \
+        "an older cs's alt+1/alt+2: the next update binds the chords" || return 1
 
     printf '%s\n' '{"bindings":[{"context":"Chat","bindings":{"ctrl+x 1":"app:redraw"}},{"context":"Global","bindings":{"ctrl+x r":"command:rotate","ctrl+x w":"command:wrap","ctrl+x 2":"strip:jump2","alt+1":"command:rotate","alt+2":"command:wrap"}}]}' > "$kb"
     output=$(_ok_doctor)
     assert_output_contains "$output" "WARN.*Rotate/wrap keys: conflict on ctrl+x 1 (bound to app:redraw in $kb)" \
         "a user binding on a band chord: conflict" || return 1
-    assert_output_contains "$output" "WARN.*Rotate/wrap keys: alt+1, alt+2 still hold ags's earlier bindings in $kb (run ags -update to remove them)" \
-        "with Ctrl+X R and W bound, ags's alt keys are named even beside a band-chord conflict" || return 1
+    assert_output_contains "$output" "WARN.*Rotate/wrap keys: alt+1, alt+2 still hold cs's earlier bindings in $kb (run cs -update to remove them)" \
+        "with Ctrl+X R and W bound, cs's alt keys are named even beside a band-chord conflict" || return 1
 
     printf '%s\n' '{"bindings": [' > "$kb"
     output=$(_ok_doctor)
@@ -817,9 +817,9 @@ test_doctor_subagent_statusline_ok_when_registered_and_executable() {
     local fake_claude="$TEST_TMPDIR/ssl-claude"
     local fake_bin="$TEST_TMPDIR/ssl-bin"
     mkdir -p "$fake_claude" "$fake_bin"
-    printf '#!/bin/sh\n' > "$fake_bin/ags-subagent-statusline"
-    chmod +x "$fake_bin/ags-subagent-statusline"
-    printf '{"subagentStatusLine":{"type":"command","command":"%s"}}\n' "$fake_bin/ags-subagent-statusline" > "$fake_claude/settings.json"
+    printf '#!/bin/sh\n' > "$fake_bin/cs-subagent-statusline"
+    chmod +x "$fake_bin/cs-subagent-statusline"
+    printf '{"subagentStatusLine":{"type":"command","command":"%s"}}\n' "$fake_bin/cs-subagent-statusline" > "$fake_claude/settings.json"
     local output
     output=$(CS_CLAUDE_DIR="$fake_claude" "$CS_BIN" -doctor 2>&1) || true
     assert_output_contains "$output" "Subagent statusline" "doctor should run a Subagent statusline check" || return 1
@@ -832,7 +832,7 @@ test_doctor_subagent_statusline_ok_when_registered_and_executable() {
 test_doctor_subagent_statusline_fails_when_binary_missing() {
     local fake_claude="$TEST_TMPDIR/ssl-claude-missing"
     mkdir -p "$fake_claude"
-    printf '{"subagentStatusLine":{"type":"command","command":"%s"}}\n' "$TEST_TMPDIR/absent/ags-subagent-statusline" > "$fake_claude/settings.json"
+    printf '{"subagentStatusLine":{"type":"command","command":"%s"}}\n' "$TEST_TMPDIR/absent/cs-subagent-statusline" > "$fake_claude/settings.json"
     local output
     output=$(CS_CLAUDE_DIR="$fake_claude" "$CS_BIN" -doctor 2>&1) || true
     if ! echo "$output" | grep "Subagent statusline" | grep -q "FAIL"; then
@@ -962,7 +962,7 @@ test_doctor_spawned_by_ok_when_spawner_exists() {
 test_doctor_warns_on_unmarked_cs_tmux_session() {
     local output
     output=$(CS_TMUX_BIN="$(_doctor_tmux_fake cs '')" "$CS_BIN" -doctor 2>&1) || true
-    assert_output_contains "$output" "not cs-managed\|@cs_managed\|ags -spawn will refuse" \
+    assert_output_contains "$output" "not cs-managed\|@cs_managed\|cs -spawn will refuse" \
         "doctor should warn about a foreign tmux session named cs" || return 1
 }
 
@@ -975,37 +975,37 @@ test_doctor_no_warning_when_cs_tmux_session_managed() {
     fi
 }
 
-# The doctor checks the tmux session ags -spawn would use: with
-# CS_TMUX_SESSION=ags, a foreign 'ags' warns by that name, and stable cs's own
-# 'cs' session, which the ags profile never touches, is no concern of it.
+# The doctor checks the tmux session cs -spawn would use: with
+# CS_TMUX_SESSION=code-sessions, a foreign 'code-sessions' warns by that name, and stable cs's own
+# 'cs' session, which the code-sessions profile never touches, is no concern of it.
 test_doctor_checks_the_configured_tmux_session() {
     local output
-    output=$(CS_TMUX_SESSION=ags CS_TMUX_BIN="$(_doctor_tmux_fake ags '')" "$CS_BIN" -doctor 2>&1) || true
-    assert_output_contains "$output" "session named 'ags' exists but is not cs-managed" \
-        "doctor should warn about a foreign tmux session named ags" || return 1
+    output=$(CS_TMUX_SESSION=code-sessions CS_TMUX_BIN="$(_doctor_tmux_fake code-sessions '')" "$CS_BIN" -doctor 2>&1) || true
+    assert_output_contains "$output" "session named 'code-sessions' exists but is not cs-managed" \
+        "doctor should warn about a foreign tmux session named code-sessions" || return 1
 }
 
 test_doctor_ignores_cs_tmux_session_when_another_is_configured() {
     local output
-    output=$(CS_TMUX_SESSION=ags CS_TMUX_BIN="$(_doctor_tmux_fake cs '')" "$CS_BIN" -doctor 2>&1) || true
+    output=$(CS_TMUX_SESSION=code-sessions CS_TMUX_BIN="$(_doctor_tmux_fake cs '')" "$CS_BIN" -doctor 2>&1) || true
     if echo "$output" | grep -i "tmux" | grep -q "not cs-managed"; then
-        echo "  FAIL: a session named cs must not warn when CS_TMUX_SESSION=ags"
+        echo "  FAIL: a session named cs must not warn when CS_TMUX_SESSION=code-sessions"
         return 1
     fi
-    assert_output_contains "$output" "foreign 'ags' tmux session" \
-        "the spawn check ran, against ags" || return 1
+    assert_output_contains "$output" "foreign 'code-sessions' tmux session" \
+        "the spawn check ran, against cs" || return 1
 }
 
 # With CS_TMUX_SOCKET the spawner runs its own tmux server, and the doctor asks
-# that one: a foreign 'ags' there warns, one on the default server does not.
+# that one: a foreign 'cs' there warns, one on the default server does not.
 test_doctor_checks_the_tmux_session_on_the_configured_server() {
     local output
-    output=$(CS_TMUX_SOCKET=ags CS_TMUX_SESSION=ags CS_TMUX_BIN="$(_doctor_tmux_fake ags '' ags)" "$CS_BIN" -doctor 2>&1) || true
-    assert_output_contains "$output" "session named 'ags' exists but is not cs-managed" \
-        "doctor should warn about a foreign ags session on the ags server" || return 1
-    output=$(CS_TMUX_SOCKET=ags CS_TMUX_SESSION=ags CS_TMUX_BIN="$(_doctor_tmux_fake ags '')" "$CS_BIN" -doctor 2>&1) || true
+    output=$(CS_TMUX_SOCKET=code-sessions CS_TMUX_SESSION=code-sessions CS_TMUX_BIN="$(_doctor_tmux_fake code-sessions '' code-sessions)" "$CS_BIN" -doctor 2>&1) || true
+    assert_output_contains "$output" "session named 'code-sessions' exists but is not cs-managed" \
+        "doctor should warn about a foreign code-sessions session on the code-sessions server" || return 1
+    output=$(CS_TMUX_SOCKET=code-sessions CS_TMUX_SESSION=code-sessions CS_TMUX_BIN="$(_doctor_tmux_fake code-sessions '')" "$CS_BIN" -doctor 2>&1) || true
     if echo "$output" | grep -i "tmux" | grep -q "not cs-managed"; then
-        echo "  FAIL: an ags session on the default server is not the spawner's"
+        echo "  FAIL: a code-sessions session on the default server is not the spawner's"
         return 1
     fi
 }
@@ -1398,11 +1398,12 @@ run_test test_doctor_is_quiet_when_the_session_clone_has_the_merge_driver
 
 # Stamp the setup session the way a clean open would for alice: the merge
 # driver set, the probe files it has (CLAUDE.md, .cs/README.md) at a fixed old
-# time, the stamp a year later. Prints the ags version the stamp names.
+# time, the stamp a year later. Prints the cs version the stamp names.
 _doctor_stamp_session() {
     local dir="${CS_SESSION_DIR:-${CLAUDE_SESSION_DIR:-}}" version
     version=$("$CS_BIN" -version)
-    version=${version#ags }
+    version=${version#cs }
+    version=${version%% *}
     git -C "$dir" config merge.ours.driver true
     touch -t 202401010000 "$dir/CLAUDE.md" "$dir/.cs/README.md"
     printf '%s\talice\t0\tclaude\nCLAUDE.md\t.cs/README.md\n' "$version" > "$dir/.cs/local/migrated"
@@ -1414,7 +1415,7 @@ test_doctor_reports_a_current_migration_stamp() {
     local version output
     version=$(_doctor_stamp_session)
     output=$(CS_ACTOR=alice "$CS_BIN" -doctor 2>&1) || true
-    assert_output_contains "$output" "Migration stamp: current for ags $version; opens skip the one-time migration checks. To force them: rm .cs/local/migrated" \
+    assert_output_contains "$output" "Migration stamp: current for cs $version; opens skip the one-time migration checks. To force them: rm .cs/local/migrated" \
         "a fresh stamp reads as current and names the reset" || return 1
 }
 

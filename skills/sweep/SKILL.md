@@ -13,7 +13,7 @@ You are working in a cs session. Your task is to review the conversation in your
 Two write surfaces, deliberately DIFFERENT bars:
 
 - **The strict buckets (`.cs/memory/{user,feedback,project,reference}_*.md`) are forever** — they are the session's persistent memory and inform every future session, whichever engine runs it. **Bar: very strict. Default: write nothing.**
-- **`.cs/memory/narrative.<actor>.md` is your session-local lab notebook** (per-actor — run `ags -whoami` for your actor) — a native memory topic file, looser bar. Substantive observations welcome. Default: write if the session surfaced a non-obvious finding worth keeping.
+- **`.cs/memory/narrative.<actor>.md` is your session-local lab notebook** (per-actor — run `cs -whoami` for your actor) — a native memory topic file, looser bar. Substantive observations welcome. Default: write if the session surfaced a non-obvious finding worth keeping.
 
 Both are written in parallel from the conversation — narrative is not the upstream of the strict buckets.
 
@@ -57,10 +57,10 @@ bash <skill-dir>/scripts/memory-index-guard.sh snapshot
    - **Facts about a person MUST be keyed to that person, never asserted about whoever is present.** The durable buckets are shared by every actor on this session while only narratives are per-actor, so "the user is Dana, not Kim" is false on every other machine the moment it is written, and it reads as settled fact to the actor who loads it next. Write `actor <slug> is Dana Marsh, machine /Users/dmarsh` instead: keyed facts stay true everywhere and cannot be misapplied, because they do not claim anyone is present. This governs the `MEMORY.md` pointer line as much as the entry body — pointers load at startup while the entries they name are read lazily, so a pointer saying "session user is Dana" reaches context even when nothing opens the file. Never write an unconditional present-tense identity or presence claim in either place.
    - **Could a check carry it instead?** For a `feedback` or `project` fact that states a rule (do X, never Y, X silently fails on Y), ask whether a mechanical check could enforce it: a test, a lint or grep guard that fails CI, a hook that refuses the action, a type or schema, or a script that replaces the manual step. It counts only when all three hold: deciding compliance needs no judgment about who, when or which; the check, run against the current tree today, would match no legitimate code, so it needs no allowlist; and nothing already enforces it (search the tests, hooks and CI first). A rule that needs judgment to apply (taste, timing, what to ask the user) has no check. An entry that only describes how something behaves (a measurement, what a tool does) is not a rule, even when a defensive check could be built around it; when it also prescribes what to do, judge the prescription. When a check counts, add a task to build it and keep the memory entry as written.
 
-4. **Narrative sweep — looser bar.** Resolve `<actor>` with `ags -whoami` first, then append only to your own narrative file. If a substantive finding from this session is not yet in your narrative (`.cs/memory/narrative.<actor>.md`), append it as a dated section. Substantive = something a future session resuming this work would want to know.
+4. **Narrative sweep — looser bar.** Resolve `<actor>` with `cs -whoami` first, then append only to your own narrative file. If a substantive finding from this session is not yet in your narrative (`.cs/memory/narrative.<actor>.md`), append it as a dated section. Substantive = something a future session resuming this work would want to know.
 
 5. **Keep the index under budget.** An engine that loads `MEMORY.md` at every session start does so
-   against a hard size limit (`ags -engine supports memory_index` says whether yours does; Claude Code does);
+   against a hard size limit (`cs -engine supports memory_index` says whether yours does; Claude Code does);
    past it only part of the file loads and the entries beyond the cut are never read again. Keep the
    budget either way: the index is shared by every engine and actor on this session. After writing any pointer — and once per sweep even if you wrote none, since another
    actor may have pushed it over — check:

@@ -1035,7 +1035,7 @@ test_offer_reads_provenance_from_the_private_log() {
         "a handoff this checkout wrote carries no foreign label" || return 1
 }
 
-# A session with no recorded conversation (the first open after ags -adopt, a
+# A session with no recorded conversation (the first open after cs -adopt, a
 # clone whose .cs/local did not travel) has nothing to resume, so it starts a
 # new conversation without asking. A pending handoff is still a choice the user
 # makes: the offer is made with the rows that apply, and resume is not one.
@@ -2550,17 +2550,17 @@ test_launch_prints_the_force_notice_once_and_only_with_hooks_on() {
     out=$(env -u CLAUDE_CODE_ENABLE_FUNCTION_HOOKS -u CS_NO_FUNCTION_HOOKS XDG_CONFIG_HOME="$cfg" \
         "$CS_BIN" "notice-on" </dev/null 2>&1 || true)
     assert_output_contains "$out" "STUB_ARGS:" "the launch reached claude" || return 1
-    assert_output_contains "$out" "ags now rotates a conversation on its own" "a launch with hooks on announces the forcing" || return 1
+    assert_output_contains "$out" "cs now rotates a conversation on its own" "a launch with hooks on announces the forcing" || return 1
     assert_file_exists "$cfg/cs/rotate-force-notice" "and records it" || return 1
     out=$(env -u CLAUDE_CODE_ENABLE_FUNCTION_HOOKS -u CS_NO_FUNCTION_HOOKS XDG_CONFIG_HOME="$cfg" \
         "$CS_BIN" "notice-again" </dev/null 2>&1 || true)
     assert_output_contains "$out" "STUB_ARGS:" "the second launch reached claude" || return 1
-    assert_output_not_contains "$out" "ags now rotates" "the second launch on the machine is quiet" || return 1
+    assert_output_not_contains "$out" "cs now rotates" "the second launch on the machine is quiet" || return 1
     rm -f "$cfg/cs/rotate-force-notice"
     out=$(env -u CLAUDE_CODE_ENABLE_FUNCTION_HOOKS CS_NO_FUNCTION_HOOKS=1 XDG_CONFIG_HOME="$cfg" \
         "$CS_BIN" "notice-nohooks" </dev/null 2>&1 || true)
     assert_output_contains "$out" "STUB_ARGS:" "the opted-out launch reached claude" || return 1
-    assert_output_not_contains "$out" "ags now rotates" "a launch without function hooks announces nothing" || return 1
+    assert_output_not_contains "$out" "cs now rotates" "a launch without function hooks announces nothing" || return 1
     [ ! -f "$cfg/cs/rotate-force-notice" ] || { echo "  FAIL: the marker was spent by a launch that forces nothing"; return 1; }
 }
 

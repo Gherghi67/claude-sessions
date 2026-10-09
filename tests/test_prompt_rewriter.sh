@@ -577,7 +577,7 @@ run_test test_animated_modes_show_the_elapsed_past_five_seconds
 run_test test_a_fast_rewrite_still_paints
 run_test test_the_trace_records_which_path_was_taken
 
-# The trace is an ags file: an encrypted session keeps it behind .cs/private, and
+# The trace is a cs file: an encrypted session keeps it behind .cs/private, and
 # a locked vault gets no trace rather than a plaintext one.
 test_the_trace_goes_behind_private() {
     local dir="$TEST_TMPDIR/meta" f

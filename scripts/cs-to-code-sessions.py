@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-# ABOUTME: Gives ags its own copy of a project the stable cs adopted, with its features, Claude history and secrets.
-# ABOUTME: cs is only read; a rerun brings over what cs changed since and keeps what ags changed.
-"""Copy a cs session into ags, and bring the copy up to date with cs later.
+# ABOUTME: Gives code-sessions its own copy of a project the stable cs adopted, with its features, Claude history and secrets.
+# ABOUTME: cs is only read; a rerun brings over what cs changed since and keeps what code-sessions changed.
+"""Copy a cs session into code-sessions, and bring the copy up to date with cs later.
 
-ags refuses to adopt a folder that already has .cs/, so a project the stable
-cs adopted cannot simply be adopted again. This script gives ags a copy of
-it instead, so `ags <name>` opens it on the conversations cs left off with,
+code-sessions refuses to adopt a folder that already has .cs/, so a project the stable
+cs adopted cannot simply be adopted again. This script gives code-sessions a copy of
+it instead, so `ccs <name>` opens it on the conversations cs left off with,
 and the two never share a folder:
 
 - The project (a link in ~/.claude-sessions) is copied whole into the
   profile's sessions root: its repository, .cs/, node_modules, ignored and
   untracked files. On APFS the copy is a clone, which costs no space until
-  either side writes. From then on it is ags's own repository.
+  either side writes. From then on it is code-sessions's own repository.
 - Each feature worktree (<name>@<task>) is copied beside it as a linked
   worktree of the copy's repository, on the same branch, with its index and
   uncommitted changes.
@@ -23,29 +23,29 @@ and the two never share a folder:
   belong to no session any more; they come too, as history (--no-history
   leaves them out).
 - Trust and per-project settings in ~/.claude.json and ~/.codex/config.toml
-  are copied into the profile's under the copy's paths, while no ags session
+  are copied into the profile's under the copy's paths, while no code-sessions session
   is running.
 - Secrets are copied from the stable cs store into the profile's encrypted
-  store, through cs-secrets and ags-secrets, values on stdin only.
+  store, through each side's cs-secrets, values on stdin only.
 
-A rerun brings over what cs changed since the last one, wherever ags left
+A rerun brings over what cs changed since the last one, wherever code-sessions left
 the same thing alone: branches cs moved (fetched into the copy, also as
 refs/remotes/cs/*), a worktree's HEAD and index, files, keys of
-.cs/local/state, conversations, and features cs started. What ags changed is
-kept; something changed on both sides keeps ags's and is reported, once. A
+.cs/local/state, conversations, and features cs started. What code-sessions changed is
+kept; something changed on both sides keeps code-sessions's and is reported, once. A
 secret whose value differs is reported, never overwritten.
 
 Nothing outside the profile is written: ~/.claude-sessions, the project and
 its feature folders, ~/.claude, ~/.claude.json, ~/.codex and the keychain are
 only read, and git runs there only to read. The record of the last sync and a
-log of every change are in the profile's .cs-to-ags/.
+log of every change are in the profile's .cs-to-code-sessions/.
 
 Left behind, and said so: an encrypted session, a session cs created in its
-own folder, a feature worktree git does not list, and anything whose name ags
+own folder, a feature worktree git does not list, and anything whose name code-sessions
 already uses for something else.
 
-    scripts/cs-to-ags.py --session wap            # print what would happen; change nothing
-    scripts/cs-to-ags.py --session wap --apply    # copy; rerun to bring over what cs did since
+    scripts/cs-to-code-sessions.py --session wap            # print what would happen; change nothing
+    scripts/cs-to-code-sessions.py --session wap --apply    # copy; rerun to bring over what cs did since
 
 Paths come from HOME and the options below, never from CS_* variables: inside
 a session those name the session manager running it.
@@ -68,12 +68,12 @@ from session_transfer import (
     secret_differs, state_value, tilde, write_atomic,
 )
 
-TMP_SUFFIX = ".cs-to-ags.tmp"
-TMP_PREFIX = ".cs-to-ags."
+TMP_SUFFIX = ".cs-to-code-sessions.tmp"
+TMP_PREFIX = ".cs-to-code-sessions."
 VAULT_LINKS = ("memory", "plans", "claude-config", "private")
 SETTINGS = os.path.join(".claude", "settings.local.json")
 # What keeps a conversation open in a folder: an engine, or the session manager running one.
-ENGINES = {"claude", "codex", "cs", "ags"}
+ENGINES = {"claude", "codex", "cs", "code-sessions", "ccs"}
 # Fields of a .claude.json project entry that describe its last run, not its settings.
 VOLATILE = re.compile(r"^(last|exampleFiles)")
 SCRATCH = re.compile(r"^-private-tmp-claude-\d+-")
@@ -82,21 +82,21 @@ SCRATCHPAD = r"-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}-scratchpad(?:-|$)"
 
 
 class Session:
-    """The base or one of its feature worktrees, as cs has it and as ags will."""
+    """The base or one of its feature worktrees, as cs has it and as code-sessions will."""
 
     def __init__(self, importer, name, cs_path):
         self.name = name
         self.cs_path = cs_path
         self.source = None      # cs's folder
         self.skip = None
-        self.state = None       # free, ours (copied by an earlier run) or gone (ags removed its copy)
+        self.state = None       # free, ours (copied by an earlier run) or gone (code-sessions removed its copy)
         self.failed = False
         self.admin = None       # a feature's administrative directory in cs's repository
         self.record = None      # a base's record of the last sync
         self.is_repo = False
         self.branches = None
-        self.ags_path = os.path.join(importer.ags_root, name)
-        self.ags_physical = os.path.join(importer.ags_root_real, name)
+        self.ccs_path = os.path.join(importer.ccs_root, name)
+        self.ccs_physical = os.path.join(importer.ccs_root_real, name)
 
     @property
     def meta(self):
@@ -115,17 +115,17 @@ class Importer:
         self.codex_home = expand(args.codex_home)
         self.cs_secrets = expand(args.cs_secrets)
         self.names = args.session
-        self.ags_root = os.path.join(self.profile, "sessions")
-        if not os.path.isdir(self.ags_root):
-            raise SystemExit("No ags sessions root at %s; run setup.sh first, or pass --profile." % tilde(self.ags_root))
-        self.ags_root_real = os.path.realpath(self.ags_root)
-        self.ags_claude = os.path.join(self.profile, ".claude")
-        self.ags_secrets = os.path.join(self.profile, ".local", "bin", "ags-secrets")
-        self.ags_secrets_dir = os.path.join(self.profile, ".cs-secrets")
-        self.record_root = os.path.join(self.profile, ".cs-to-ags")
+        self.ccs_root = os.path.join(self.profile, "sessions")
+        if not os.path.isdir(self.ccs_root):
+            raise SystemExit("No code-sessions sessions root at %s; run setup.sh first, or pass --profile." % tilde(self.ccs_root))
+        self.ccs_root_real = os.path.realpath(self.ccs_root)
+        self.ccs_claude = os.path.join(self.profile, ".claude")
+        self.ccs_secrets = os.path.join(self.profile, ".local", "bin", "cs-secrets")
+        self.ccs_secrets_dir = os.path.join(self.profile, ".cs-secrets")
+        self.record_root = os.path.join(self.profile, ".cs-to-code-sessions")
         self.log_path = os.path.join(self.record_root, "log.jsonl")
         self.failed = False
-        self.syncer = Syncer("cs", "ags", self.apply, self.say, self.problem, self.log, self.log_path, TMP_SUFFIX)
+        self.syncer = Syncer("cs", "code-sessions", self.apply, self.say, self.problem, self.log, self.log_path, TMP_SUFFIX)
 
     # --- planning -------------------------------------------------------
 
@@ -157,17 +157,17 @@ class Importer:
             return base
         base.is_repo = os.path.isdir(git_dir)
         base.record = Record(os.path.join(self.record_root, name))
-        if not os.path.lexists(base.ags_path):
+        if not os.path.lexists(base.ccs_path):
             base.state = "free"
             # A record whose copy is gone is history: the next copy starts over.
             for old in list(base.record.data["sessions"]):
                 base.record.forget(old)
             base.record.data = {"sessions": {}}
-        elif (os.path.isdir(base.ags_path) and not os.path.islink(base.ags_path)
+        elif (os.path.isdir(base.ccs_path) and not os.path.islink(base.ccs_path)
               and base.record.data.get("source") == base.source):
             base.state = "ours"
         else:
-            base.skip = "ags already has a different %s; remove that one, then rerun" % name
+            base.skip = "code-sessions already has a different %s; remove that one, then rerun" % name
             return base
         if base.is_repo:
             self.plan_features(base)
@@ -201,13 +201,13 @@ class Importer:
                 feature.skip = "not a linked worktree of %s's repository" % base.name
                 continue
             feature.admin = admin
-            if not os.path.lexists(feature.ags_path):
+            if not os.path.lexists(feature.ccs_path):
                 feature.state = "gone" if entry in recorded else "free"
-            elif (os.path.isdir(feature.ags_path) and not os.path.islink(feature.ags_path)
+            elif (os.path.isdir(feature.ccs_path) and not os.path.islink(feature.ccs_path)
                   and (recorded.get(entry) or {}).get("source") == feature.source):
                 feature.state = "ours"
             else:
-                feature.skip = "ags already has a different %s; remove that one, then rerun" % entry
+                feature.skip = "code-sessions already has a different %s; remove that one, then rerun" % entry
         listed = {f.name for f in base.features}
         base.gone_in_cs = sorted(n for n in recorded if n != base.name and n not in listed)
 
@@ -255,7 +255,7 @@ class Importer:
                 out.append(name)
         return out
 
-    def ags_running(self):
+    def ccs_running(self):
         """Lines of processes run from the profile's bin, which write the files we would merge into."""
         try:
             listing = subprocess.run(["ps", "-A", "-o", "pid=", "-o", "command="], stdin=subprocess.DEVNULL,
@@ -281,25 +281,25 @@ class Importer:
             settings = json.loads(data)
         except ValueError:
             return None
-        memory = os.path.join(session.ags_path, ".cs", "memory")
+        memory = os.path.join(session.ccs_path, ".cs", "memory")
         if not isinstance(settings, dict) or settings.get("autoMemoryDirectory") in (None, memory):
             return None
         settings["autoMemoryDirectory"] = memory
         return (json.dumps(settings, indent=2) + "\n").encode()
 
     def relink(self, base):
-        """Absolute links into cs's folders of the family, pointed at ags's copies of them."""
+        """Absolute links into cs's folders of the family, pointed at code-sessions's copies of them."""
         roots = {}
         for session in [base] + [f for f in base.features if f.source and not f.skip]:
             paths = [session.cs_path, session.source, os.path.join(os.path.realpath(self.cs_root), session.name)]
             if os.path.islink(session.cs_path) and os.path.isabs(os.readlink(session.cs_path)):
                 paths.append(os.readlink(session.cs_path))
             for path in paths:
-                roots[path] = session.ags_path
+                roots[path] = session.ccs_path
         return relinker(roots)
 
     def sync(self, base, session):
-        self.syncer.session(session.name, session.source, session.ags_physical, base.source, base.ags_physical,
+        self.syncer.session(session.name, session.source, session.ccs_physical, base.source, base.ccs_physical,
                             base.record, rewrites={SETTINGS: lambda data: self.rekey_settings(data, session)},
                             relink=self.relink(base), is_repo=base.is_repo)
 
@@ -311,9 +311,9 @@ class Importer:
             write_atomic(path, changed, prefix=TMP_PREFIX)
 
     def copy_base(self, base):
-        os.makedirs(self.ags_root, exist_ok=True)
-        reap(self.ags_root, ".%s%s" % (base.name, TMP_PREFIX))
-        tmp = tempfile.mkdtemp(dir=self.ags_root, prefix=".%s%s" % (base.name, TMP_PREFIX))
+        os.makedirs(self.ccs_root, exist_ok=True)
+        reap(self.ccs_root, ".%s%s" % (base.name, TMP_PREFIX))
+        tmp = tempfile.mkdtemp(dir=self.ccs_root, prefix=".%s%s" % (base.name, TMP_PREFIX))
         os.rmdir(tmp)
         since = mark_now()
         try:
@@ -325,15 +325,15 @@ class Importer:
                 shutil.rmtree(worktrees)
             state = read_text(os.path.join(tmp, STATE))
             self.adjust(tmp, base)
-            os.rename(tmp, base.ags_path)
+            os.rename(tmp, base.ccs_path)
         except BaseException:
             shutil.rmtree(tmp, ignore_errors=True)
             raise
         base.record.data["source"] = base.source
-        base.record.data["heads"] = branch_heads(base.ags_physical) if base.is_repo else {}
-        mark_copied(base.record, base.name, base.source, since, state, base.ags_physical, base.is_repo, paths)
+        base.record.data["heads"] = branch_heads(base.ccs_physical) if base.is_repo else {}
+        mark_copied(base.record, base.name, base.source, since, state, base.ccs_physical, base.is_repo, paths)
         base.record.save()
-        self.log("copied", session=base.name, source=base.source, path=base.ags_path)
+        self.log("copied", session=base.name, source=base.source, path=base.ccs_path)
 
     def copy_feature(self, base, feature):
         """Copies a feature worktree as a linked worktree of the copy's repository.
@@ -341,15 +341,15 @@ class Importer:
         git links a worktree both ways: the worktree's .git file names an
         administrative directory in the repository (HEAD, index, per-worktree
         refs), whose gitdir file names the worktree back. The copy takes the
-        original's administrative directory into ags's repository and points
+        original's administrative directory into code-sessions's repository and points
         the two at each other.
         """
-        worktrees = os.path.join(base.ags_physical, ".git", "worktrees")
+        worktrees = os.path.join(base.ccs_physical, ".git", "worktrees")
         os.makedirs(worktrees, exist_ok=True)
-        back_link = os.path.join(feature.ags_physical, ".git") + "\n"
+        back_link = os.path.join(feature.ccs_physical, ".git") + "\n"
         admin = admin_dir_for(worktrees, os.path.basename(feature.admin), back_link)
-        reap(self.ags_root, ".%s%s" % (feature.name, TMP_PREFIX))
-        tmp = tempfile.mkdtemp(dir=self.ags_root, prefix=".%s%s" % (feature.name, TMP_PREFIX))
+        reap(self.ccs_root, ".%s%s" % (feature.name, TMP_PREFIX))
+        tmp = tempfile.mkdtemp(dir=self.ccs_root, prefix=".%s%s" % (feature.name, TMP_PREFIX))
         os.rmdir(tmp)
         since = mark_now()
         try:
@@ -361,24 +361,24 @@ class Importer:
                 f.write(back_link)
             with open(os.path.join(tmp, ".git"), "w") as f:
                 f.write("gitdir: %s\n" % admin)
-            # Staged changes may hold blobs ags's repository has not got yet.
+            # Staged changes may hold blobs code-sessions's repository has not got yet.
             copy_index(feature.source, tmp)
-            os.rename(tmp, feature.ags_path)
+            os.rename(tmp, feature.ccs_path)
         except BaseException:
             shutil.rmtree(tmp, ignore_errors=True)
             shutil.rmtree(admin, ignore_errors=True)
             raise
-        mark_copied(base.record, feature.name, feature.source, since, state, feature.ags_physical, True, paths)
+        mark_copied(base.record, feature.name, feature.source, since, state, feature.ccs_physical, True, paths)
         # After each copy, so a run stopped midway leaves a record of every copy it made.
         base.record.save()
-        self.log("copied-feature", session=feature.name, source=feature.source, path=feature.ags_path)
+        self.log("copied-feature", session=feature.name, source=feature.source, path=feature.ccs_path)
 
     # --- the rest of one session ------------------------------------------
 
     def conversations(self, old_key, new_key):
         """Merge one Claude folder and each conversation's side files; the tally and conversation count."""
         src = os.path.join(self.claude_dir, "projects", old_key)
-        tally = merge_tree(src, os.path.join(self.ags_claude, "projects", new_key), self.apply, TMP_SUFFIX)
+        tally = merge_tree(src, os.path.join(self.ccs_claude, "projects", new_key), self.apply, TMP_SUFFIX)
         count = 0
         if os.path.isdir(src):
             for name in sorted(os.listdir(src)):
@@ -387,7 +387,7 @@ class Importer:
                     conversation = name[:-len(".jsonl")]
                     for side in ("file-history", "session-env"):
                         tally.add(merge_tree(os.path.join(self.claude_dir, side, conversation),
-                                             os.path.join(self.ags_claude, side, conversation),
+                                             os.path.join(self.ccs_claude, side, conversation),
                                              self.apply, TMP_SUFFIX))
         return tally, count
 
@@ -427,7 +427,7 @@ class Importer:
     def prompt_history(self, base, paths):
         """Lines of history.jsonl for the session's paths, under the copy's paths, that the profile lacks."""
         src = os.path.join(self.claude_dir, "history.jsonl")
-        dst = os.path.join(self.ags_claude, "history.jsonl")
+        dst = os.path.join(self.ccs_claude, "history.jsonl")
         text = read_text(src)
         if not text:
             return 0
@@ -451,7 +451,7 @@ class Importer:
                 have.add(line)
                 out.append(line)
         if out and self.apply:
-            os.makedirs(self.ags_claude, exist_ok=True)
+            os.makedirs(self.ccs_claude, exist_ok=True)
             existing = read_text(dst) or ""
             with open(dst, "a") as f:
                 f.write(("\n" if existing and not existing.endswith("\n") else "") + "\n".join(out) + "\n")
@@ -461,7 +461,7 @@ class Importer:
     def project_settings(self, paths):
         """Copy each path's settings from ~/.claude.json into the profile's, under the copy's path."""
         stable = json.loads(read_text(self.claude_json) or "{}")
-        target = os.path.join(self.ags_claude, ".claude.json")
+        target = os.path.join(self.ccs_claude, ".claude.json")
         raw = read_text(target)
         profile = json.loads(raw) if raw else {}
         projects = profile.setdefault("projects", {})
@@ -510,36 +510,36 @@ class Importer:
         return added
 
     def secret_envs(self):
-        ags_env = scrubbed_env()
-        ags_env.update(CS_SECRETS_BACKEND="encrypted", CS_SECRETS_DIR=self.ags_secrets_dir)
-        return scrubbed_env(), ags_env
+        ccs_env = scrubbed_env()
+        ccs_env.update(CS_SECRETS_BACKEND="encrypted", CS_SECRETS_DIR=self.ccs_secrets_dir)
+        return scrubbed_env(), ccs_env
 
     def secrets(self, session):
-        """Names to copy, names ags already has, and any problem reading either."""
-        cs_env, ags_env = self.secret_envs()
+        """Names to copy, names code-sessions already has, and any problem reading either."""
+        cs_env, ccs_env = self.secret_envs()
         if not os.access(self.cs_secrets, os.X_OK):
             return [], [], "%s is missing; pass --cs-secrets" % tilde(self.cs_secrets)
         try:
             names = secret_names([self.cs_secrets], cs_env, session)
             if not names:
                 return [], [], None
-            if not os.access(self.ags_secrets, os.X_OK):
-                raise SecretsError("%s is missing; run setup.sh" % tilde(self.ags_secrets))
-            have = set(secret_names([self.ags_secrets], ags_env, session))
+            if not os.access(self.ccs_secrets, os.X_OK):
+                raise SecretsError("%s is missing; run setup.sh" % tilde(self.ccs_secrets))
+            have = set(secret_names([self.ccs_secrets], ccs_env, session))
         except SecretsError as error:
             return [], [], str(error)
         return [n for n in names if n not in have], [n for n in names if n in have], None
 
     def secret_differs(self, session, name):
-        cs_env, ags_env = self.secret_envs()
+        cs_env, ccs_env = self.secret_envs()
         return secret_differs([self.cs_secrets, "--session", session, "get", name], cs_env,
-                              [self.ags_secrets, "--session", session, "get", name], ags_env)
+                              [self.ccs_secrets, "--session", session, "get", name], ccs_env)
 
     def copy_secrets(self, session, names):
-        cs_env, ags_env = self.secret_envs()
+        cs_env, ccs_env = self.secret_envs()
         failed = [name for name in names
                   if not copy_secret([self.cs_secrets, "--session", session, "get", name], cs_env,
-                                     [self.ags_secrets, "--session", session, "set", name], ags_env)]
+                                     [self.ccs_secrets, "--session", session, "set", name], ccs_env)]
         if len(failed) < len(names):
             self.log("copied-secrets", session=session, names=[n for n in names if n not in failed])
         return failed
@@ -548,7 +548,7 @@ class Importer:
 
     def run(self):
         print("cs sessions: %s   Claude: %s" % (tilde(self.cs_root), tilde(self.claude_dir)))
-        print("ags profile: %s" % tilde(self.profile))
+        print("code-sessions profile: %s" % tilde(self.profile))
         bases = [self.plan(name) for name in self.names]
         for base in bases:
             print()
@@ -557,15 +557,15 @@ class Importer:
             except OSError as error:
                 self.problem("stopped: %s" % error)
             finally:
-                if self.apply and not base.skip and base.record is not None and os.path.isdir(base.ags_path):
+                if self.apply and not base.skip and base.record is not None and os.path.isdir(base.ccs_path):
                     base.record.save()
         print()
         if not self.apply:
             print("Dry run: nothing changed. Run again with --apply to copy.")
         elif self.failed:
-            print("Copied what could be; the items marked ! above were not, or were kept as ags has them.")
+            print("Copied what could be; the items marked ! above were not, or were kept as code-sessions has them.")
         else:
-            print("Done. Open it with: ags %s" % " / ags ".join(self.names))
+            print("Done. Open it with: ccs %s" % " / ccs ".join(self.names))
         return 1 if self.failed else 0
 
     def say(self, text, mark=" "):
@@ -587,9 +587,9 @@ class Importer:
         elif not tally.diverged:
             self.say("%s, %d conversation(s): nothing new" % (what, count))
         if tally.ahead:
-            self.say("%d ags file(s) went on past the cs copy; kept" % tally.ahead)
+            self.say("%d code-sessions file(s) went on past the cs copy; kept" % tally.ahead)
         for path in tally.diverged:
-            self.problem("continued in both cs and ags, left as it is: %s" % tilde(path))
+            self.problem("continued in both cs and code-sessions, left as it is: %s" % tilde(path))
 
     def handle(self, base):
         if base.skip:
@@ -604,13 +604,13 @@ class Importer:
 
         # 1. The project and its repository.
         if base.state == "free":
-            self.say("%scopy %s to %s, with a repository of its own" % (will, tilde(base.source), tilde(base.ags_path)))
+            self.say("%scopy %s to %s, with a repository of its own" % (will, tilde(base.source), tilde(base.ccs_path)))
             if self.apply:
                 self.copy_base(base)
         else:
-            self.say("in ags at %s since an earlier run; bringing over what cs changed since" % tilde(base.ags_path))
+            self.say("in code-sessions at %s since an earlier run; bringing over what cs changed since" % tilde(base.ccs_path))
             if base.is_repo:
-                base.branches = self.syncer.repo(base.name, base.source, base.ags_physical, base.record)
+                base.branches = self.syncer.repo(base.name, base.source, base.ccs_physical, base.record)
             self.sync(base, base)
 
         # 2. Feature worktrees.
@@ -619,20 +619,20 @@ class Importer:
                 self.problem("%s: not copied: %s" % (feature.name, feature.skip))
                 continue
             if feature.state == "gone":
-                self.say("%s: ags removed its copy after an earlier run; not copied again" % feature.name)
+                self.say("%s: code-sessions removed its copy after an earlier run; not copied again" % feature.name)
                 continue
             if feature.state == "ours":
                 self.sync(base, feature)
                 continue
             branch = git(feature.source, "branch", "--show-current").stdout.strip()
             if base.state == "ours":
-                feature.skip = copy_blocker(feature.source, base.ags_physical,
+                feature.skip = copy_blocker(feature.source, base.ccs_physical,
                                             due=base.branches.created + base.branches.moved)
                 if feature.skip:
                     self.problem("%s: not copied: %s" % (feature.name, feature.skip))
                     continue
-            self.say("%s: %scopy it to %s, a worktree of ags's %s on %s"
-                     % (feature.name, will, tilde(feature.ags_path), base.name, branch or "a detached HEAD"))
+            self.say("%s: %scopy it to %s, a worktree of code-sessions's %s on %s"
+                     % (feature.name, will, tilde(feature.ccs_path), base.name, branch or "a detached HEAD"))
             if self.apply:
                 try:
                     self.copy_feature(base, feature)
@@ -640,24 +640,24 @@ class Importer:
                     feature.failed = True
                     self.problem("%s: stopped: %s" % (feature.name, error))
         for name in base.gone_in_cs:
-            self.say("%s: cs no longer has it; ags keeps its copy" % name)
+            self.say("%s: cs no longer has it; code-sessions keeps its copy" % name)
         sessions = [base] + [f for f in base.features if not f.skip and not f.failed and f.state != "gone"]
 
         # 3. Claude conversations, under the folder name of each copy's path.
-        paths = {s.source: s.ags_physical for s in sessions}
+        paths = {s.source: s.ccs_physical for s in sessions}
         for session in sessions:
             tally, count = self.conversations(claude_project_key(session.source),
-                                              claude_project_key(session.ags_physical))
+                                              claude_project_key(session.ccs_physical))
             self.report_tally("Claude history of %s" % session.name, tally, count)
         copied = self.apply or base.state == "ours"
-        claude_id = state_value(os.path.join(base.ags_path if copied else base.source, ".cs"), "claude_session_id")
-        transcripts = (os.path.join(self.ags_claude, "projects", claude_project_key(base.ags_physical)),
+        claude_id = state_value(os.path.join(base.ccs_path if copied else base.source, ".cs"), "claude_session_id")
+        transcripts = (os.path.join(self.ccs_claude, "projects", claude_project_key(base.ccs_physical)),
                        os.path.join(self.claude_dir, "projects", claude_project_key(base.source)))
         if claude_id and any(os.path.isfile(os.path.join(t, claude_id + ".jsonl")) for t in transcripts):
-            self.say("ags %s resumes conversation %s" % (base.name, claude_id))
+            self.say("ccs %s resumes conversation %s" % (base.name, claude_id))
         for session in sessions:
             tally = merge_tree(os.path.join(self.claude_dir, "tasks", session.name),
-                               os.path.join(self.ags_claude, "tasks", session.name), self.apply, TMP_SUFFIX)
+                               os.path.join(self.ccs_claude, "tasks", session.name), self.apply, TMP_SUFFIX)
             if tally.pending():
                 self.say("task list of %s: %d file(s) %s"
                          % (session.name, tally.pending(), "copied" if self.apply else "to copy"))
@@ -678,10 +678,10 @@ class Importer:
         if lines:
             self.say("prompt history: %d line(s) %s" % (lines, "appended" if self.apply else "to append"))
 
-        # 4. Trust and per-project settings, which a running ags may rewrite under us.
-        running = self.ags_running()
+        # 4. Trust and per-project settings, which a running code-sessions may rewrite under us.
+        running = self.ccs_running()
         if running:
-            self.say("note: an ags session is running (%s), so .claude.json and the Codex config are left; "
+            self.say("note: a code-sessions session is running (%s), so .claude.json and the Codex config are left; "
                      "rerun once none is open" % running[0][:80])
         else:
             changed = self.project_settings(paths)
@@ -700,10 +700,10 @@ class Importer:
                 self.problem("secrets of %s: %s" % (session.name, error))
             differs = [n for n in present if self.secret_differs(session.name, n)]
             if present and len(differs) < len(present):
-                self.say("secrets of %s ags already has: %s" % (session.name, ", ".join(
+                self.say("secrets of %s code-sessions already has: %s" % (session.name, ", ".join(
                     n for n in present if n not in differs)))
             for name in differs:
-                self.problem("secret %s of %s differs between cs and ags; ags's is kept" % (name, session.name))
+                self.problem("secret %s of %s differs between cs and code-sessions; code-sessions's is kept" % (name, session.name))
             if missing:
                 self.say("secrets of %s %s: %s" % (session.name, "copied" if self.apply else "to copy",
                                                     ", ".join(missing)))
@@ -712,21 +712,21 @@ class Importer:
                         self.problem("secret %s of %s was not copied" % (name, session.name))
         if self.apply:
             self.say("cs keeps %s as it was. Rerun to bring over what cs does from here on; to go back to cs, "
-                     "run scripts/ags-to-cs.py --session %s" % (base.name, base.name))
+                     "run scripts/code-sessions-to-cs.py --session %s" % (base.name, base.name))
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description="Give ags its own copy of a session the stable cs adopted, with its feature worktrees, "
+        description="Give code-sessions its own copy of a session the stable cs adopted, with its feature worktrees, "
                     "Claude history and secrets; a rerun brings over what cs changed since.",
-        epilog="Prints what it would do unless --apply is given. Nothing outside the ags profile is written.")
+        epilog="Prints what it would do unless --apply is given. Nothing outside the code-sessions profile is written.")
     parser.add_argument("--session", action="append", required=True, metavar="NAME",
                         help="the cs session to copy (repeatable); its features come with it")
     parser.add_argument("--apply", action="store_true", help="copy; without it nothing is written")
     parser.add_argument("--no-history", action="store_true",
                         help="leave out the conversations of retired features and scratch folders")
-    parser.add_argument("--profile", default="~/.local/share/agent-sessions/home",
-                        help="the ags profile (default: %(default)s)")
+    parser.add_argument("--profile", default="~/.local/share/code-sessions/home",
+                        help="the code-sessions profile (default: %(default)s)")
     parser.add_argument("--cs-root", default="~/.claude-sessions",
                         help="the stable cs sessions root (default: %(default)s)")
     parser.add_argument("--claude-dir", default="~/.claude",
@@ -734,7 +734,7 @@ def main(argv=None):
     parser.add_argument("--claude-json", default="~/.claude.json",
                         help="Claude Code's state file beside it (default: %(default)s)")
     parser.add_argument("--codex-home", default="~/.codex",
-                        help="the Codex home outside ags (default: %(default)s)")
+                        help="the Codex home outside code-sessions (default: %(default)s)")
     parser.add_argument("--cs-secrets", default="~/.local/bin/cs-secrets",
                         help="the stable cs secrets command (default: %(default)s)")
     args = parser.parse_args(argv)

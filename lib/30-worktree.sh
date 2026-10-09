@@ -1,5 +1,5 @@
 # ABOUTME: Parallel feature worktrees: name parsing, bootstrap, create, merge, and record fusion.
-# ABOUTME: Backs 'ags <base>@<feature>' and the finish skill's integrate and retire entries.
+# ABOUTME: Backs 'cs <base>@<feature>' and the finish skill's integrate and retire entries.
 
 cs_split_worktree_name() {
     local name="$1"
@@ -372,13 +372,13 @@ create_worktree_session() {
 }
 
 # The /finish progress record: one JSON object, replaced whole at each step of
-# an integrate or a retire, that the ags mod reads to toast a start and an
+# an integrate or a retire, that the cs mod reads to toast a start and an
 # outcome and to draw a band while a gate runs (docs/session-layout.md). It
-# sits with the base's other ags files: behind .cs/private in an encrypted
+# sits with the base's other cs files: behind .cs/private in an encrypted
 # session, in .cs/local otherwise, and nowhere while the vault is locked.
 # Advisory only: a record that cannot be written costs one warning on stderr
 # and the run goes on unrecorded, since landing correctly matters more than
-# saying so. Each run has its own id; pid is this ags process, so a reader can
+# saying so. Each run has its own id; pid is this cs process, so a reader can
 # tell a step a killed run left behind from one still running. Globals,
 # because the EXIT handler that records a refusal runs after the locals are
 # gone.
@@ -387,7 +387,7 @@ _finish_progress_begin() {  # base_dir task
     _FINISH_SHA="" _FINISH_GATE_STARTED="" _FINISH_OUTCOME=""
     local dir
     if ! dir=$(cs_private_dir "$1/.cs"); then
-        warn "ags: /finish progress not recorded: .cs/private $(cs_private_state "$1/.cs")" >&2
+        warn "cs: /finish progress not recorded: .cs/private $(cs_private_state "$1/.cs")" >&2
         return 0
     fi
     mkdir -p "$dir" 2>/dev/null || true
@@ -408,7 +408,7 @@ _finish_progress_write() {  # step [key value]
             '{id: $id, pid: $pid, task: $task, sha: $sha, step: $step, ts: $ts}
              + (if $gate_started == "" then {} else {gate_started: ($gate_started | tonumber)} end)
              + (if $key == "" then {} else {($key): $value} end)' 2>/dev/null; then
-        warn "ags: /finish progress not recorded: could not write $_FINISH_PROGRESS" >&2
+        warn "cs: /finish progress not recorded: could not write $_FINISH_PROGRESS" >&2
         _FINISH_PROGRESS=""
     fi
     return 0
@@ -424,7 +424,7 @@ _finish_progress_exit() {  # exit status
     local reason="${_CS_ERROR_MESSAGE:-}"
     reason="${reason%%$'\n'*}"
     if [ -z "$reason" ]; then
-        case "$1" in 130|143) reason="interrupted" ;; *) reason="ags exited $1" ;; esac
+        case "$1" in 130|143) reason="interrupted" ;; *) reason="cs exited $1" ;; esac
     fi
     _finish_progress_write refused reason "$reason" || true
     return 0
@@ -432,7 +432,7 @@ _finish_progress_exit() {  # exit status
 
 # Retire an integrated feature worktree: fuse its session records into the
 # base (ignored mode), remove the worktree and delete its branch. Backs the
-# unadvertised `ags <base> -retire-feature <task> <sha> [--force]` that
+# unadvertised `cs <base> -retire-feature <task> <sha> [--force]` that
 # skills/finish/scripts/finish.sh drives after an integrate. It never merges:
 # <sha> is the commit /finish landed and must already be reachable from the
 # base, and the branch tip must be too, so nothing the base lacks is ever
@@ -441,7 +441,7 @@ _finish_progress_exit() {  # exit status
 # ancestor — and every other refusal still applies. Every refusal names what
 # the user has to do next, in their own words; the skill prints them verbatim.
 retire_feature_worktree() {  # base_name task sha [--force]
-    local usage="Usage: ags <base> -retire-feature <task> <sha> [--force]"
+    local usage="Usage: cs <base> -retire-feature <task> <sha> [--force]"
     [ $# -ge 3 ] || error "$usage"
     local base_name="$1" task="$2" sha="$3" force=""
     shift 3
@@ -500,7 +500,7 @@ retire_feature_worktree() {  # base_name task sha [--force]
     # inside the worktree would lose what it holds.
     local mounted
     mounted=$(_volume_mounted_under "$wt_dir") \
-        || error "ags could not read the mount table, so it cannot tell whether a volume is mounted inside $wt_dir; refusing to remove the worktree."
+        || error "cs could not read the mount table, so it cannot tell whether a volume is mounted inside $wt_dir; refusing to remove the worktree."
     [ -z "$mounted" ] \
         || error "The feature is landed, but its worktree has a volume mounted inside it at $mounted, and removing the worktree would delete what the volume holds. Unmount it, then run /finish $task here again."
 
@@ -599,11 +599,11 @@ _integrate_cleanup() {
 # worktree, run the gates there, fast-forward the base onto the result. Removes
 # nothing — the worktree, the branch and the feature session all remain until
 # retire_feature_worktree, the same skill's closing step. Backs the unadvertised
-# `ags <base> -integrate-feature <task> <sha> [--from-remote] -- <gate...>`
+# `cs <base> -integrate-feature <task> <sha> [--from-remote] -- <gate...>`
 # that skills/finish/scripts/finish.sh drives. Every refusal is an error that
 # names the next command.
 integrate_feature_worktree() {  # base_name task sha [--from-remote [--ci-green]] -- gate...
-    local usage="Usage: ags <base> -integrate-feature <task> <sha> [--from-remote [--ci-green]] -- <gate command...>"
+    local usage="Usage: cs <base> -integrate-feature <task> <sha> [--from-remote [--ci-green]] -- <gate command...>"
     [ $# -ge 3 ] || error "$usage"
     local base_name="$1" task="$2" sha="$3"
     shift 3
@@ -683,7 +683,7 @@ integrate_feature_worktree() {  # base_name task sha [--from-remote [--ci-green]
     # contends with this integrate — the feature conversation stays open and
     # keeps snapshotting throughout a gate run. An existing directory is a
     # refusal, never stolen: a stale one is the user's to inspect and remove
-    # (ags -doctor names it).
+    # (cs -doctor names it).
     local lock="$git_dir/cs/integrate.lock"
     mkdir -p "$git_dir/cs"
     # The base's own autosave takes this same lock for the length of one tree
@@ -708,7 +708,7 @@ integrate_feature_worktree() {  # base_name task sha [--from-remote [--ci-green]
     # progress handler goes first, while $? is still the exit status.
     trap '_finish_progress_exit "$?"; _integrate_cleanup' EXIT
     trap '_integrate_cleanup; exit 130' INT TERM
-    # The holder's pid, for ags -doctor's liveness check. Inside the lock, so
+    # The holder's pid, for cs -doctor's liveness check. Inside the lock, so
     # the directory and its evidence are created and removed together; the
     # autosave hook's own brief hold records nothing and releases with rmdir.
     echo "$$" > "$lock/pid"
@@ -1017,7 +1017,7 @@ run_features() {  # base_name [--porcelain]
     while [ $# -gt 0 ]; do
         case "$1" in
             --porcelain) porcelain=1; shift ;;
-            *) error "Usage: ags $base_name -features [--porcelain]" ;;
+            *) error "Usage: cs $base_name -features [--porcelain]" ;;
         esac
     done
 

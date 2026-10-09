@@ -1,8 +1,8 @@
-# ABOUTME: ags -encrypt: moves an existing, closed session's private files into an
+# ABOUTME: cs -encrypt: moves an existing, closed session's private files into an
 # ABOUTME: hdiutil-encrypted sparsebundle and links the four vault names into its mount.
 
 # Where the container lives: outside every session directory, so neither
-# ags -rm nor the autosave snapshot ever reaches it. Only -encrypt asks: an
+# cs -rm nor the autosave snapshot ever reaches it. Only -encrypt asks: an
 # open attaches the path pre-open recorded, wherever CS_DATA_DIR points now.
 _encrypt_container_path() {  # session_name
     printf '%s/vaults/%s.sparsebundle' "${CS_DATA_DIR:-$HOME/.local/share/cs}" "$1"
@@ -11,7 +11,7 @@ _encrypt_container_path() {  # session_name
 # Every precondition, checked before anything is written.
 _encrypt_refuse() {  # session_name
     local name="$1" dir meta sub container
-    [ "$(uname -s)" = "Darwin" ] || error "ags -encrypt needs macOS (hdiutil); Linux is not supported yet."
+    [ "$(uname -s)" = "Darwin" ] || error "cs -encrypt needs macOS (hdiutil); Linux is not supported yet."
     case "$name" in
         *@*) error "$name: encrypt the base session, not a feature worktree." ;;
     esac
@@ -19,7 +19,7 @@ _encrypt_refuse() {  # session_name
     dir="$SESSIONS_ROOT/$name"
     [ -e "$dir" ] || [ -L "$dir" ] || error "No such session: $name"
     [ -L "$dir" ] && error "$name: an adopted session cannot be encrypted; its .cs/ lives in the project checkout."
-    cs_interactive || error "ags -encrypt asks for the vault password; run it from a terminal."
+    cs_interactive || error "cs -encrypt asks for the vault password; run it from a terminal."
     meta="$dir/.cs"
     session_is_live "$meta" && error "$name: the session is running; close it, then encrypt."
     for sub in $CS_VAULT_LINKS; do
@@ -28,13 +28,13 @@ _encrypt_refuse() {  # session_name
     # memory and plans move into the vault; these two are only linked, so a
     # real one would take the link inside it and keep its files in plaintext.
     for sub in claude-config private; do
-        [ -e "$meta/$sub" ] && error "$name: .cs/$sub already exists and is not a link; ags -encrypt links it into the vault. Move it aside first."
+        [ -e "$meta/$sub" ] && error "$name: .cs/$sub already exists and is not a link; cs -encrypt links it into the vault. Move it aside first."
     done
-    [ -e "$meta/local/pre-open" ] && error "$name: .cs/local/pre-open already exists; ags -encrypt writes its own. Move yours aside first."
+    [ -e "$meta/local/pre-open" ] && error "$name: .cs/local/pre-open already exists; cs -encrypt writes its own. Move yours aside first."
     container=$(_encrypt_container_path "$name")
     # pre-open records this path and attaches it from the session directory.
-    case "$container" in /*) ;; *) error "CS_DATA_DIR=$CS_DATA_DIR: ags -encrypt needs an absolute path; every open attaches the container from the session directory." ;; esac
-    [ -e "$container" ] && error "$name: $container already exists; ags -encrypt will not reuse or overwrite it."
+    case "$container" in /*) ;; *) error "CS_DATA_DIR=$CS_DATA_DIR: cs -encrypt needs an absolute path; every open attaches the container from the session directory." ;; esac
+    [ -e "$container" ] && error "$name: $container already exists; cs -encrypt will not reuse or overwrite it."
     if ! _tags_has_frontmatter "$meta/README.md" || _tags_has_block_style "$meta/README.md"; then
         error "$name: .cs/README.md has no YAML frontmatter to carry the encrypted tag."
     fi
@@ -73,14 +73,14 @@ _encrypt_move_content() {  # session_name, meta_dir
     mkdir -p "$mnt/memory" "$mnt/plans"
 }
 
-# The hook ags runs before every open: attaches the vault, asking for its
+# The hook cs runs before every open: attaches the vault, asking for its
 # password each time. A mount whose session is not running is a leftover (a
 # crash, or a detach that failed), so it is detached and asked for again.
 _encrypt_write_pre_open() {  # meta_dir, container
     local hook="$1/local/pre-open"
     {
         echo '#!/bin/bash'
-        echo '# Written by ags -encrypt: mounts this session vault, asking for its password at every open.'
+        echo '# Written by cs -encrypt: mounts this session vault, asking for its password at every open.'
         echo 'set -euo pipefail'
         printf 'container=%q\n' "$2"
         cat <<'EOF'
@@ -110,12 +110,12 @@ if mounted; then
     done
     rm -f .cs/local/vault-waiter.pid .cs/local/vault-detach.pid .cs/local/vault-holders
     if mounted && ! hdiutil detach "$mnt"; then
-        echo "ags: the vault is still mounted from a conversation that ended, and it would not detach. Close whatever holds it, run: hdiutil detach $mnt" >&2
+        echo "cs: the vault is still mounted from a conversation that ended, and it would not detach. Close whatever holds it, run: hdiutil detach $mnt" >&2
         exit 1
     fi
 fi
 if ! { [ -t 0 ] || [ "${CS_ASSUME_TTY:-}" = "1" ]; }; then
-    echo "ags: this session is encrypted and needs a terminal to ask for the vault password." >&2
+    echo "cs: this session is encrypted and needs a terminal to ask for the vault password." >&2
     exit 1
 fi
 hdiutil attach -nobrowse -mountpoint "$mnt" "$container"
@@ -125,8 +125,8 @@ EOF
 }
 
 # .cs/local/vault-holders lists the pids whose life keeps the vault mounted:
-# every ags run whose pre-open attached or joined it. exec keeps the pid, so a
-# claude that replaced its ags stays a holder; an ags that ends without exec
+# every cs run whose pre-open attached or joined it. exec keeps the pid, so a
+# claude that replaced its cs stays a holder; a cs that ends without exec
 # (a refusal, a cancelled prompt, or claude run as its child) leaves, and
 # detaches the vault if it was the last live holder.
 CS_OPENED_VAULT_META=""
@@ -158,7 +158,7 @@ _arm_vault_detach() {  # session_dir
     trap _detach_opened_vault EXIT
 }
 
-# An ags that execs something other than claude stops holding the vault: its
+# A cs that execs something other than claude stops holding the vault: its
 # pid lives on in a process that never opens it. Other lines stay as they are.
 _vault_leave() {
     local meta="$CS_OPENED_VAULT_META"
@@ -182,7 +182,7 @@ _detach_opened_vault() {
 }
 
 run_encrypt() {
-    [ $# -eq 1 ] || error "Usage: ags -encrypt <name>"
+    [ $# -eq 1 ] || error "Usage: cs -encrypt <name>"
     local name="$1" meta container mnt sub
     _encrypt_refuse "$name"
     meta="$SESSIONS_ROOT/$name/.cs"
@@ -219,12 +219,12 @@ run_encrypt() {
     _encrypt_write_pre_open "$meta" "$container"
     printf '%s\n' "$container" > "$meta/local/vault"
     ( CS_SESSION_META_DIR="$meta" CLAUDE_SESSION_META_DIR="$meta" _tag_mutate add encrypted ) \
-        || error "$name: the vault is built but the encrypted tag could not be written; add it with ags $name -tag add encrypted."
+        || error "$name: the vault is built but the encrypted tag could not be written; add it with cs $name -tag add encrypted."
 
     hdiutil detach "$mnt" \
         || error "$name: encrypted, but the vault would not detach; run hdiutil detach $mnt before opening it."
     info "$name is encrypted. Every open asks for the vault password; the vault detaches when the last conversation ends."
-    echo "ags could not move copies made before today; remove them by hand if they matter:"
+    echo "cs could not move copies made before today; remove them by hand if they matter:"
     echo "  - this session's transcripts in ~/.claude/projects/"
     echo "  - its lines in ~/.claude/history.jsonl"
     echo "  - its project entries in ~/.claude.json and that file's backups"

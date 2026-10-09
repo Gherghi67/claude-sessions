@@ -14,20 +14,25 @@ test_help_no_command_substitution() {
     out=$("$CS_BIN" -help 2>&1)
     assert_output_not_contains "$out" "command not found" \
         "cs -help must not execute its own help text" || return 1
-    assert_output_contains "$out" "Usage: ags" \
-        "help must document ags as the primary command" || return 1
+    assert_output_contains "$out" "Usage: cs" \
+        "help must document cs as the primary command" || return 1
     assert_output_contains "$out" "allow-passthrough on" \
         "the literal help text must survive (not be command-substituted away)"
+}
+
+test_help_names_the_fork_and_its_launcher() {
+    local out
+    out=$("$CS_BIN" -help 2>&1)
+    assert_output_contains "$out" "code-sessions, a fork of cs" "the header names the fork" || return 1
+    assert_output_contains "$out" "starts as ccs (or code-sessions)" "and the launcher to type in a terminal" || return 1
 }
 
 test_version_prints_clean() {
     local out
     out=$("$CS_BIN" -version 2>&1)
-    assert_output_not_contains "$out" "command not found" "ags -version must be clean" || return 1
-    assert_output_contains "$out" "ags " "ags -version should print the primary version line" || return 1
-    local legacy
-    legacy=$("$SCRIPT_DIR/../bin/cs" -version 2>&1)
-    assert_eq "$out" "$legacy" "the cs compatibility alias must report the same version"
+    assert_output_not_contains "$out" "command not found" "cs -version must be clean" || return 1
+    assert_output_contains "$out" "cs " "cs -version should print the primary version line" || return 1
+    assert_output_contains "$out" "(code-sessions, a fork of cs)" "the version line names the fork" || return 1
 }
 
 echo ""
@@ -36,6 +41,7 @@ echo "====================="
 echo ""
 
 run_test test_help_no_command_substitution
+run_test test_help_names_the_fork_and_its_launcher
 run_test test_version_prints_clean
 
 report_results

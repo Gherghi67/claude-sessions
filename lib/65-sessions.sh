@@ -1,5 +1,5 @@
 # ABOUTME: Cross-session search, the session listing table, and session removal.
-# ABOUTME: Backs 'ags -search', 'ags -list', and 'ags -rm'.
+# ABOUTME: Backs 'cs -search', 'cs -list', and 'cs -rm'.
 
 search_sessions() {
     local query="" include_archived="" arg
@@ -11,7 +11,7 @@ search_sessions() {
     done
 
     if [ -z "$query" ]; then
-        error "Usage: ags -search <query> [--include-archived]"
+        error "Usage: cs -search <query> [--include-archived]"
     fi
 
     # grep exits 2 when the pattern will not compile and 1 on a clean no-match.
@@ -138,7 +138,7 @@ _session_name_for_dir() {  # dir
 }
 
 # Print every session name, one per line, as completion candidates. Symlinks
-# count: `ags -adopt` links repos that live elsewhere on disk into SESSIONS_ROOT,
+# count: `cs -adopt` links repos that live elsewhere on disk into SESSIONS_ROOT,
 # and the marker tests resolve through the link. Kept free of git and keychain
 # lookups so a TAB press stays fast.
 complete_sessions() {
@@ -165,16 +165,14 @@ cmd_complete() {
 # the menu can never name a picker that run_tui would then fail to find.
 _tui_bin() {
     local bin
-    bin="$(command -v ags-tui 2>/dev/null || command -v cs-tui 2>/dev/null || true)"
+    bin="$(command -v cs-tui 2>/dev/null || true)"
     if [ -z "$bin" ]; then
         # Not on PATH (cs may be run by explicit path with its own dir off
         # PATH, which the installer permits): probe the sibling next to this
         # script.
         local _self_dir
         _self_dir="$(dirname "$0")"
-        if [ -x "$_self_dir/ags-tui" ]; then
-            bin="$_self_dir/ags-tui"
-        elif [ -x "$_self_dir/cs-tui" ]; then
+        if [ -x "$_self_dir/cs-tui" ]; then
             bin="$_self_dir/cs-tui"
         fi
     fi
@@ -184,7 +182,7 @@ _tui_bin() {
 
 # The interactive session manager. The picker prints its choice on stdout — the
 # session name, optionally followed by flags — and cs re-enters itself with it,
-# so every launch takes the same path an explicit `ags <name>` does. Returns
+# so every launch takes the same path an explicit `cs <name>` does. Returns
 # non-zero when no picker binary is installed, leaving the caller to say so.
 run_tui() {
     local tui_bin
@@ -194,7 +192,7 @@ run_tui() {
     # a light/dark palette; reused by the session we launch next.
     _export_term_theme
     local tui_output
-    tui_output=$(CS_VERSION="$VERSION" AGS_BIN="$0" CS_BIN="$0" "$tui_bin") || exit $?
+    tui_output=$(CS_VERSION="$VERSION" CS_BIN="$0" "$tui_bin") || exit $?
     if [ -n "$tui_output" ]; then
         local selected="${tui_output%%$'\n'*}"
         if [ "$tui_output" != "$selected" ]; then
@@ -214,8 +212,8 @@ list_sessions() {
         case "$1" in
             --tag)
                 shift
-                [ -n "${1:-}" ] || error "Usage: ags -list [--archived] [--tag <tag>]"
-                # Stored tags are always lowercase (ags -tag add lowercases on
+                [ -n "${1:-}" ] || error "Usage: cs -list [--archived] [--tag <tag>]"
+                # Stored tags are always lowercase (cs -tag add lowercases on
                 # write); lowercase the filter too so it matches regardless
                 # of case, mirroring the TUI's parse_tag_query.
                 tag_filter=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
@@ -225,7 +223,7 @@ list_sessions() {
                 archived_only="true"
                 shift
                 ;;
-            *) error "Unknown list option: $1. Usage: ags -list [--archived] [--tag <tag>]" ;;
+            *) error "Unknown list option: $1. Usage: cs -list [--archived] [--tag <tag>]" ;;
         esac
     done
 
@@ -258,7 +256,7 @@ list_sessions() {
 
     # Dump the keychain once; per-session counts are computed inline in the
     # display loop. No associative array — bash 3.2 lacks `local -A`. Only
-    # when the keychain is the store ags-secrets uses: under any other
+    # when the keychain is the store cs-secrets uses: under any other
     # CS_SECRETS_BACKEND it holds another install's secrets, and counting the
     # encrypted file would take a decrypt per session, so no count shows.
     local keychain_dump=""
@@ -359,20 +357,20 @@ remove_session() {
         case "$arg" in
             --force|-f) force="true" ;;
             --delete-files) delete_files="true" ;;
-            -*) error "Unknown remove option: $arg. Usage: ags -remove <session-name>... [--force [--delete-files]]" ;;
+            -*) error "Unknown remove option: $arg. Usage: cs -remove <session-name>... [--force [--delete-files]]" ;;
             *)
-                [ -n "$arg" ] || error "Usage: ags -remove <session-name>... [--force] (empty session name)"
+                [ -n "$arg" ] || error "Usage: cs -remove <session-name>... [--force] (empty session name)"
                 names+=("$arg") ;;
         esac
     done
-    [ "${#names[@]}" -ge 1 ] || error "Usage: ags -remove <session-name>... [--force]"
+    [ "${#names[@]}" -ge 1 ] || error "Usage: cs -remove <session-name>... [--force]"
     for _name in "${names[@]}"; do
         _remove_one_session "$_name" "$force" "$delete_files"
     done
 }
 
-# Top-level entries of a session root that ags did not put there, as one
-# comma-separated line (empty when there are none). ags owns .cs/, .claude/,
+# Top-level entries of a session root that cs did not put there, as one
+# comma-separated line (empty when there are none). cs owns .cs/, .claude/,
 # the session git files and the two CLAUDE files; .DS_Store is Finder's.
 _session_foreign_entries() {  # session_dir
     local dir="$1" entry name out=""
@@ -434,7 +432,7 @@ _volume_mounted_under() {  # dir
 
 # Paths in a worktree session that git does not track (untracked or
 # ignored), as one comma-separated line; git worktree remove --force
-# deletes them with no copy on the branch. ags's own .cs/, .claude/ and
+# deletes them with no copy on the branch. cs's own .cs/, .claude/ and
 # CLAUDE.local.md, and Finder's .DS_Store, are left out.
 _worktree_untracked_entries() {  # worktree_dir
     local dir="$1" status line path top paths="" out=""
@@ -494,11 +492,11 @@ _remove_one_session() {
                     error "Session '$session_name' has encrypted storage mounted inside it: .cs/$sub points at $(readlink "$link"). Removing the session would delete what the vault holds; unmount it, then retry." ;;
             esac
         done
-        # An ags -encrypt that stopped partway leaves its volume mounted with no
+        # A cs -encrypt that stopped partway leaves its volume mounted with no
         # link yet, so the links above cannot see it; the mount table can.
         local mounted
         mounted=$(_volume_mounted_under "$session_dir") \
-            || error "ags -rm could not read the mount table, so it cannot tell whether a volume is mounted inside '$session_name'; refusing to remove it."
+            || error "cs -rm could not read the mount table, so it cannot tell whether a volume is mounted inside '$session_name'; refusing to remove it."
         [ -z "$mounted" ] \
             || error "Session '$session_name' has a volume mounted inside it at $mounted. Removing the session would delete what the volume holds; unmount it, then retry."
     fi
@@ -508,7 +506,7 @@ _remove_one_session() {
     # exited 1 with no explanation. Refuse loudly, before any mutation, unless
     # --force stands in for the confirmation or a human is actually there to answer.
     if [ -z "$force" ] && ! cs_interactive; then
-        error "ags -rm needs a terminal to confirm removing '$session_name'; use --force to skip confirmation"
+        error "cs -rm needs a terminal to confirm removing '$session_name'; use --force to skip confirmation"
     fi
 
     # Worktree sessions: unregister from git, not just delete the directory.
@@ -557,14 +555,14 @@ _remove_one_session() {
     esac
 
     # A cs-created root is also the user's workspace: rm -rf takes whatever
-    # they put beside ags's own files (an encrypted image, a checkout). Name
+    # they put beside cs's own files (an encrypted image, a checkout). Name
     # those in the confirm, and make --force ask for them by name.
     local foreign=""
     if [ ! -L "$session_dir" ]; then
         foreign=$(_session_foreign_entries "$session_dir")
     fi
     if [ -n "$foreign" ] && [ -n "$force" ] && [ -z "$delete_files" ]; then
-        error "Session '$session_name' holds files ags did not create: $foreign. Add --delete-files to remove them with --force"
+        error "Session '$session_name' holds files cs did not create: $foreign. Add --delete-files to remove them with --force"
     fi
 
     # Confirm deletion
@@ -578,7 +576,7 @@ _remove_one_session() {
     else
         # read -p only shows its prompt on a terminal; the list must reach
         # the user even when the answer is piped in.
-        [ -z "$foreign" ] || printf '%bAlso deletes files ags did not create: %s%b\n' "$RED" "$foreign" "$NC" >&2
+        [ -z "$foreign" ] || printf '%bAlso deletes files cs did not create: %s%b\n' "$RED" "$foreign" "$NC" >&2
         read -r -p $'\033[0;31mRemove session '"'$session_name'"$'? [y/N] \033[0m' confirm
     fi
     if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
@@ -617,7 +615,7 @@ _humanize_secs() {  # secs
 # List cs sessions whose process is currently alive on THIS machine.
 cmd_live() {
     if [ ! -d "$SESSIONS_ROOT" ]; then
-        echo "No other live agent-sessions sessions."
+        echo "No other live cs sessions."
         return 0
     fi
     local now current others=0
@@ -647,6 +645,6 @@ cmd_live() {
     done < <(find "$SESSIONS_ROOT" -mindepth 1 -maxdepth 1 \( -type d -o -type l \) -print0 | sort -z)
 
     if [ "$others" -eq 0 ]; then
-        echo "No other live agent-sessions sessions."
+        echo "No other live cs sessions."
     fi
 }

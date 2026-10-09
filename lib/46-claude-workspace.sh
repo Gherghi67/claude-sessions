@@ -133,7 +133,7 @@ prune_commands_artifacts() {
 # 10 and 14) and keep the two that run on every open, the binding check
 # (Phase 8) and the colour backfill (Phase 11). A call from outside
 # migrate_session runs everything. Each write here either succeeds or ends
-# ags (an error or errexit), so none needs to clear _CS_MIGRATE_CLEAN; a phase
+# cs (an error or errexit), so none needs to clear _CS_MIGRATE_CLEAN; a phase
 # added later that warns and carries on past a failed write must clear it.
 _claude_migrate_workspace() {
     local session_dir="$1" _state="$1/.cs/local/state" repair="${CS_MIGRATE_REPAIR:-all}"
@@ -188,7 +188,7 @@ _claude_migrate_session_documents() {  # session_dir
     fi
 }
 
-# Phases 9, 10 and 14: the ags sections of CLAUDE.local.md.
+# Phases 9, 10 and 14: the cs sections of CLAUDE.local.md.
 _claude_ensure_local_sections() {  # session_dir
     local session_dir="$1"
 
@@ -277,7 +277,7 @@ When the conversation reaches a natural stopping point — work shipped, a PR me
 
 Do not fire on every short affirmative ("yes", "ok", "thanks"). Fire when the *work itself* has reached a coherent stopping point, not when a single answer satisfied a single question. False positives erode the signal — be picky.
 
-To opt out, delete the prose above but keep the `cs:wrap-cues` HTML comment as a tombstone — ags treats the sentinel's presence as "managed, do not re-add."
+To opt out, delete the prose above but keep the `cs:wrap-cues` HTML comment as a tombstone — cs treats the sentinel's presence as "managed, do not re-add."
 EOF
         warn "Appended session wrap-up cues to CLAUDE.local.md"
     fi

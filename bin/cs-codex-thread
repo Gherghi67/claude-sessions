@@ -1,1 +1,253 @@
-ags-codex-thread
+#!/usr/bin/env python3
+# ABOUTME: Creates or refreshes an exact Codex thread without invoking a model.
+# ABOUTME: Persists CS context through app-server and verifies it in a fresh process.
+"""Requires Codex app-server's experimental thread/inject_items API."""
+
+import argparse
+import json
+import math
+import os
+from pathlib import Path
+import re
+import selectors
+import signal
+import subprocess
+import sys
+import time
+
+
+class BootstrapError(Exception):
+    pass
+
+
+# Codex thread IDs are UUIDs. Reject control characters and accidental selectors.
+THREAD_ID = re.compile(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\Z")
+MAX_MESSAGE = 4 * 1024 * 1024
+
+
+class AppServer:
+    def __init__(self, executable, cwd, deadline):
+        self.deadline = deadline
+        self.buffer = b""
+        self.counter = 0
+        self.selector = selectors.DefaultSelector()
+        try:
+            self.process = subprocess.Popen(
+                [executable, "app-server"], cwd=cwd,
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                # Logs can include private configuration; never forward them.
+                stderr=subprocess.DEVNULL, bufsize=0, start_new_session=True,
+            )
+        except OSError as exc:
+            self.selector.close()
+            raise BootstrapError("could not launch codex app-server") from exc
+        os.set_blocking(self.process.stdin.fileno(), False)
+        os.set_blocking(self.process.stdout.fileno(), False)
+        self.selector.register(self.process.stdout, selectors.EVENT_READ)
+
+    def remaining(self):
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            raise BootstrapError("timed out waiting for codex app-server")
+        return remaining
+
+    def send(self, message):
+        pending = memoryview((json.dumps(message) + "\n").encode("utf-8"))
+        self.selector.register(self.process.stdin, selectors.EVENT_WRITE)
+        try:
+            while pending:
+                for key, events in self.selector.select(self.remaining()):
+                    if key.fileobj is self.process.stdout:
+                        self.read_available()
+                    elif events & selectors.EVENT_WRITE:
+                        try:
+                            count = os.write(self.process.stdin.fileno(), pending)
+                        except BlockingIOError:
+                            continue
+                        pending = pending[count:]
+        except OSError as exc:
+            raise BootstrapError("codex app-server closed its input") from exc
+        finally:
+            self.selector.unregister(self.process.stdin)
+
+    def read_available(self):
+        try:
+            data = os.read(self.process.stdout.fileno(), 65536)
+        except BlockingIOError:
+            return
+        if not data:
+            # Its output stays private, but the exit status says something.
+            try:
+                status = self.process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                status = None
+            suffix = " (exit status {})".format(status) if type(status) is int else ""
+            raise BootstrapError("codex app-server exited before completing bootstrap" + suffix)
+        self.buffer += data
+        if len(self.buffer) > MAX_MESSAGE:
+            raise BootstrapError("codex app-server output exceeded the protocol limit")
+
+    def request(self, method, params):
+        self.counter += 1
+        request_id = "cs-bootstrap-" + str(self.counter)
+        self.send({"id": request_id, "method": method, "params": params})
+        while True:
+            self.remaining()
+            while b"\n" in self.buffer:
+                line, self.buffer = self.buffer.split(b"\n", 1)
+                try:
+                    message = json.loads(line)
+                except (ValueError, UnicodeError):
+                    continue  # Some launchers print diagnostic lines on stdout.
+                if not isinstance(message, dict):
+                    continue
+                if "method" in message:
+                    if "id" in message:
+                        # Never approve tools, hooks, or authentication requests.
+                        raise BootstrapError("codex app-server requested an unsupported interaction")
+                    continue
+                if message.get("id") != request_id:
+                    continue
+                if "error" in message:
+                    error = message["error"]
+                    description = error.get("message") if isinstance(error, dict) else None
+                    if isinstance(description, str) and "already has an active writer" in description:
+                        raise BootstrapError(
+                            "this thread is already open in another Codex process; "
+                            "close the existing Codex CLI or desktop session and retry"
+                        )
+                    code = error.get("code") if isinstance(error, dict) else None
+                    suffix = " (code {})".format(code) if type(code) is int else ""
+                    raise BootstrapError(
+                        "codex app-server rejected " + method + suffix
+                        + "; check Codex configuration and experimental API support"
+                    )
+                result = message.get("result")
+                if not isinstance(result, dict):
+                    raise BootstrapError("codex app-server returned an invalid " + method + " response")
+                return result
+            if self.selector.select(self.remaining()):
+                self.read_available()
+
+    def initialize(self):
+        self.request("initialize", {
+            "clientInfo": {"name": "claude_sessions", "version": "1"},
+            "capabilities": {"experimentalApi": True},
+        })
+        self.send({"method": "initialized"})
+
+    def close(self):
+        self.selector.close()
+        self.process.stdin.close()
+        try:
+            self.process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            pass
+        # Terminate the private process group, including children a launcher left.
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.killpg(self.process.pid, sig)
+            except ProcessLookupError:
+                break
+            if sig == signal.SIGTERM:
+                try:
+                    self.process.wait(timeout=0.5)
+                except subprocess.TimeoutExpired:
+                    pass
+        self.process.wait(timeout=1)
+        self.process.stdout.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.close()
+
+
+def exact_id(result, expected=None):
+    thread = result.get("thread")
+    value = thread.get("id") if isinstance(thread, dict) else None
+    if not isinstance(value, str) or not THREAD_ID.fullmatch(value):
+        raise BootstrapError("codex app-server did not return an exact thread ID")
+    if expected is not None and value != expected:
+        raise BootstrapError("codex app-server resumed a different thread")
+    if thread.get("ephemeral") is True:
+        raise BootstrapError("codex app-server returned an ephemeral thread")
+    return value
+
+
+def bootstrap(args):
+    # Codex refuses a CODEX_HOME that does not exist; name it rather than
+    # starting a server whose explanation would stay private.
+    codex_home = os.environ.get("CODEX_HOME")
+    if codex_home and not Path(codex_home).is_dir():
+        raise BootstrapError(
+            "CODEX_HOME points to " + codex_home + ", which does not exist; create it, then run codex login"
+        )
+    cwd = str(Path(args.cwd).resolve(strict=True))
+    if not Path(cwd).is_dir():
+        raise BootstrapError("cwd must be an existing directory")
+    instructions = Path(args.instructions_file).read_text(encoding="utf-8")
+    if not instructions.strip():
+        raise BootstrapError("instructions file must not be empty")
+    if len(instructions.encode("utf-8")) > MAX_MESSAGE // 2:
+        raise BootstrapError("instructions file is too large")
+    deadline = time.monotonic() + args.timeout
+    with AppServer(args.codex_bin, cwd, deadline) as server:
+        server.initialize()
+        if args.thread_id:
+            result = server.request("thread/resume", {"threadId": args.thread_id, "cwd": cwd})
+        else:
+            result = server.request("thread/start", {"cwd": cwd, "ephemeral": False})
+        thread_id = exact_id(result, args.thread_id)
+        # thread/start alone is lazy: its returned path may not exist on disk.
+        # Appending developer context materializes history without a user turn.
+        # Do not override developerInstructions: preserve the user's configuration.
+        server.request("thread/inject_items", {
+            "threadId": thread_id,
+            "items": [{"type": "message", "role": "developer", "content": [
+                {"type": "input_text", "text": instructions},
+            ]}],
+        })
+        server.request("thread/unsubscribe", {"threadId": thread_id})
+    # A successful start/injection response is insufficient proof of durability.
+    with AppServer(args.codex_bin, cwd, deadline) as server:
+        server.initialize()
+        exact_id(server.request("thread/resume", {"threadId": thread_id, "cwd": cwd}), thread_id)
+        server.request("thread/unsubscribe", {"threadId": thread_id})
+    return thread_id
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--codex-bin", required=True)
+    parser.add_argument("--cwd", required=True)
+    parser.add_argument("--instructions-file", required=True)
+    parser.add_argument("--thread-id")
+    parser.add_argument("--timeout", type=float, default=30)
+    args = parser.parse_args()
+    if not math.isfinite(args.timeout) or not 0 < args.timeout <= 300:
+        parser.error("--timeout must be between 0 and 300 seconds")
+    if args.thread_id is not None and not THREAD_ID.fullmatch(args.thread_id):
+        parser.error("--thread-id must be an exact Codex UUID")
+
+    def interrupted(_signum, _frame):
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, interrupted)
+    try:
+        thread_id = bootstrap(args)
+    except KeyboardInterrupt:
+        print("cs-codex-thread: interrupted", file=sys.stderr)
+        return 130
+    except (BootstrapError, OSError, UnicodeError) as exc:
+        # File and process errors may contain paths or server text; keep them private.
+        message = str(exc) if isinstance(exc, BootstrapError) else "could not read bootstrap inputs"
+        print("cs-codex-thread: " + message, file=sys.stderr)
+        return 1
+    print(thread_id)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -43,12 +43,12 @@ test_feature_registered_in_all_manifests() {
 }
 
 test_feature_skill_teaches_the_spawn_with_a_brief() {
-    assert_file_contains "$SKILL" "ags -spawn" "the skill runs the spawner" || return 1
+    assert_file_contains "$SKILL" "cs -spawn" "the skill runs the spawner" || return 1
     assert_file_contains "$SKILL" "\-\-brief" "the brief travels as --brief" || return 1
     assert_file_contains "$SKILL" "CS_SESSION_NAME" "the base defaults to the current session" || return 1
     assert_file_contains "$SKILL" "<base>@<feature>" "a full worktree name is accepted" || return 1
     assert_file_contains "$SKILL" "\.cs/brief\.md" "the skill says where the brief lands" || return 1
-    assert_file_contains "$SKILL" "ags -msg <spawner>" "the report-back goes to the spawning session" || return 1
+    assert_file_contains "$SKILL" "cs -msg <spawner>" "the report-back goes to the spawning session" || return 1
     assert_file_contains "$SKILL" "the two differ when" \
         "the spawner and the base are kept separate" || return 1
     assert_file_contains "$SKILL" "/finish" "the skill points at the landing ritual" || return 1
@@ -61,8 +61,8 @@ test_feature_skill_brief_is_a_temporary_file() {
     assert_file_contains "$SKILL" "rm -f" "the temp file is removed afterwards" || return 1
 }
 
-# The spawner's tmux session is 'cs' only by default (CS_TMUX_SESSION; the ags
-# profile uses ags), so the skill relays the hint -spawn prints, never a name.
+# The spawner's tmux session is 'cs' only by default (CS_TMUX_SESSION; the cs
+# profile uses cs), so the skill relays the hint -spawn prints, never a name.
 test_feature_skill_names_no_tmux_session() {
     assert_file_not_contains "$SKILL" "attach -t cs\|switch-client -t cs" \
         "the attach hint comes from the spawner's output" || return 1

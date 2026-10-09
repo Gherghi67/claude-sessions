@@ -1,6 +1,6 @@
 # Engine adapters
 
-agent-sessions (`ags`) uses a small shell interface to route engine-specific work while keeping
+cs uses a small shell interface to route engine-specific work while keeping
 session storage and launch policy in the shared command. The initial registry
 contains the built-in `claude` and `codex` adapters. It is an internal
 first-party boundary; adapters are not discovered from user files or third
@@ -44,12 +44,12 @@ The four session-manager capabilities name what the shipped skills rely on:
 | `rotation` | a fresh conversation consumes the armed handoff and the binding follows `/clear` (Claude and Codex) | the rotate skill |
 | `spawn_brief` | a spawned session's first turn reads `.cs/brief.md` | the feature skill |
 | `memory_index` | `.cs/memory/MEMORY.md` loads at every session start, against a byte budget | the sweep skill |
-| `mail_delivery` | `ags -msg` mail surfaces inside the open conversation | the feature skill |
+| `mail_delivery` | `cs -msg` mail surfaces inside the open conversation | the feature skill |
 
-`ags -engine` gives skills and scripts the same answers without sourcing the
+`cs -engine` gives skills and scripts the same answers without sourcing the
 library. It prints `engine:`, `conversation:` (the native ID the session has
 bound for that engine, through `cs_binding_read`) and `capabilities:` lines.
-`ags -engine supports <capability>` prints nothing and exits 0 when the engine
+`cs -engine supports <capability>` prints nothing and exits 0 when the engine
 declares the capability, and names both and exits 1 when it does not. The engine
 is the run's own (`CS_RUN_ENGINE`, which every launch exports into the native
 child); outside a run it is the session's saved preference.
@@ -140,8 +140,8 @@ iteration does not move the entire source tree or migrate storage formats.
 | `34-narrative-storage.sh`, `36-context.sh`: portable memory and context inventory | `42-claude-state.sh`: Claude transcript identity discovery and fresh invocation |
 | `40-state.sh`, `41-bindings.sh`: local state and engine-qualified bindings | `46-claude-workspace.sh`: Claude workspace preparation and native migrations |
 | `30-worktree.sh`, `45-migrate.sh`: shared worktree/scaffold/migration operations | `75-launch.sh`: existing Claude launch adapter and its orchestration |
-| CLI commands consume `CS_SESSION_*`, falling back to legacy aliases | `76-codex.sh`, `bin/ags-codex-thread`: Codex launch, context renderer, and protocol |
-| `78-switch.sh`: `ags -switch`, `pending-switch`, and the relaunch under the other engine | |
+| CLI commands consume `CS_SESSION_*`, falling back to legacy aliases | `76-codex.sh`, `bin/cs-codex-thread`: Codex launch, context renderer, and protocol |
+| `78-switch.sh`: `cs -switch`, `pending-switch`, and the relaunch under the other engine | |
 
 Create/adopt/migrate/worktree paths dispatch `prepare_workspace` after preparing
 portable storage. They allocate no native conversation IDs themselves. Claude adoption appends its
@@ -157,7 +157,7 @@ The installer selects first-party adapter payloads with `CS_INSTALL_ENGINES`.
 Codex-only installations omit Claude hooks, mods, statuslines,
 and settings. Skills deploy to every selected engine: the same files go to
 `~/.claude/skills/` and to `$CODEX_HOME/skills/` (default `~/.codex/skills/`),
-and uninstall removes only the names cs ships from either. Shared CLI identity resolution and ags-secrets prefer neutral
+and uninstall removes only the names cs ships from either. Shared CLI identity resolution and cs-secrets prefer neutral
 variables and accept older callers. Exported Claude aliases remain during the
 migration for shipped native hooks and commands.
 
@@ -181,16 +181,16 @@ ignores termination is killed after a bounded grace period. If the launcher is
 killed abruptly while its native child survives, the recorded child PID and
 process start time keep command-line collision checks active until it exits.
 
-New conversation records include `engine` and `run_id`. `ags -conversations`
+New conversation records include `engine` and `run_id`. `cs -conversations`
 labels each engine, counts resumes separately, and treats older records without
 an engine as Claude records. Each engine retains its own current binding.
 
 ## Switching engines
 
-`ags -switch` (lib/78-switch.sh) moves a session to the other engine through a
+`cs -switch` (lib/78-switch.sh) moves a session to the other engine through a
 rotation handoff; no transcript crosses engines. The `switch` skill writes and
 arms the handoff by the `rotate` skill's steps, then runs
-`ags -switch [claude|codex] [--resume]` from inside the conversation. The verb
+`cs -switch [claude|codex] [--resume]` from inside the conversation. The verb
 refuses, naming the fix, outside a session or a live run of it (its
 `CS_RUN_ID` must match `.cs/local/run-lease.json`), for an unknown engine or the
 current one, for a target the install did not set up or whose CLI is missing,
@@ -212,8 +212,8 @@ run=<CS_RUN_ID of the run that wrote it>
 ```
 
 and prints how to leave the CLI (`/exit` for Claude, `/quit` for Codex).
-`ags -switch cancel` removes it and leaves the handoff armed. Under Claude the
-`ags` mod reads the same file: its forced-rotation countdown runs `/exit`
+`cs -switch cancel` removes it and leaves the handoff armed. Under Claude the
+`cs` mod reads the same file: its forced-rotation countdown runs `/exit`
 instead of `/clear` while a switch is pending.
 
 `cs_launch_session` settles the switch after the CLI exits, while the run
@@ -225,7 +225,7 @@ armed and, except for the consumed case, both reopen commands printed. A switch
 file found as a run starts belongs to an earlier run that ended without
 settling it, and is dropped.
 
-Otherwise `main` re-execs `ags <name> --engine <target>` once
+Otherwise `main` re-execs `cs <name> --engine <target>` once
 `cs_launch_session` returns: with `--from-handoff` for `mode=fresh`, or with
 `--resume` for `mode=resume` when the target has a recorded conversation (a
 notice and a fresh start otherwise). The exec restores the environment, umask
@@ -262,7 +262,7 @@ core event bus yet. A full move to
 Codex native event delivery remains separate work; shared supervision does not
 provide turn-boundary observation, queue delivery, or forced rotation.
 The shipped skills deploy to Claude and Codex alike. Each one reaches its
-helpers through its own directory and checks `ags -engine supports` before an
+helpers through its own directory and checks `cs -engine supports` before an
 adapter feature. Codex declares `rotation` and none of the other three, so under
 Codex `feature` refuses before writing anything.
 Codex ignores `disable-model-invocation`, so `finish` also ships
@@ -270,13 +270,13 @@ Codex ignores `disable-model-invocation`, so `finish` also ships
 of the skill list Codex gives the model.
 
 Codex rotation runs through one hook. The installer registers
-`ags -codex-hook session-start` in `$CODEX_HOME/hooks.json`, after any groups
+`cs -codex-hook session-start` in `$CODEX_HOME/hooks.json`, after any groups
 already there, and writes its `trusted_hash` under `[hooks.state."<hooks.json
 path>:session_start:<group>:0"]` in `config.toml` in the same step: Codex skips an
 untrusted hook without a word, and keys trust by the group's position. The hash
 is the sha256 of the group as compact sorted-key JSON with Codex's defaults
 (`async: false`, `timeout: 600`). Codex fires SessionStart on a thread's first
-turn, before the model call: `resume` for every ags launch, because ags creates
+turn, before the model call: `resume` for every cs launch, because cs creates
 the thread and then resumes it, and `clear` for the first message after `/clear`,
 carrying the new thread's id. On `clear`, under the run lease, the hook rebinds
 `.cs/local/codex-thread-id`, records `rotated` and `started` events, consumes an

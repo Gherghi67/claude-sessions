@@ -1,17 +1,18 @@
-#compdef ags cs
-# ABOUTME: Zsh completion script for agent-sessions (ags command and cs alias)
+#compdef cs
+# ABOUTME: Zsh completion script for cs (Claude Code session manager)
 # ABOUTME: Provides tab-completion for session names, commands, and subcommands
 
-_ags() {
+_cs() {
     local curcontext="$curcontext" state line
     typeset -A opt_args
 
-    # Ask the command being completed so ags and its cs alias both work.
+    # Helper: get session names. cs owns the definition of a session, including
+    # which symlinks and marker directories count; asking it keeps this script
+    # from drifting out of step with `cs -list`.
     _cs_sessions() {
         local -a sessions session_descs
-        local s command
-        command=${words[1]:-ags}
-        sessions=(${(f)"$("$command" -complete sessions 2>/dev/null)"})
+        local s
+        sessions=(${(f)"$(cs -complete sessions 2>/dev/null)"})
         sessions=(${sessions:#})
         (( ${#sessions} )) || return 1
         # Use _describe so zsh shows a menu even when one name is an
@@ -102,7 +103,7 @@ _ags() {
         '-whoami:Show the current actor (multi-person sessions)'
         '-who:Show who contributed to shared memory/narrative'
         '-engine:Show the engine, conversation and capabilities of this session'
-        '-switch:Leave this CLI for the other engine; ags reopens the session there from the armed handoff'
+        '-switch:Leave this CLI for the other engine; cs reopens the session there from the armed handoff'
         '-secrets:Manage session secrets'
         '-checkpoint:Save or manage session checkpoints'
         '-narrative:Archive the oldest sections of your session narrative'
@@ -306,4 +307,4 @@ _ags() {
     return 1
 }
 
-_ags "$@"
+_cs "$@"

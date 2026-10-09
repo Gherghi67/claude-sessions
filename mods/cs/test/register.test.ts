@@ -305,7 +305,7 @@ test('the capsule is a keyed box with no border, no hover and no Claude mark', a
   expect(tree).not.toContain('"claude"')
 })
 
-// The band is the status bar's twin: a `ags` chip on the session's own colour
+// The band is the status bar's twin: a `cs` chip on the session's own colour
 // leads the capsule, as the session name leads the bar, and the keys are
 // spelled bold in that colour on the bar's surface. Armed, the chip turns
 // Claude coral, the bar's brand ink, so the armed /clear reads apart; the body
@@ -315,10 +315,10 @@ const boxes = (tree: any): any[] => {
   const own = tree.type === 'Box' ? [tree] : []
   return [...own, ...(tree.children ?? []).flatMap(boxes)]
 }
-const chip = (tree: any) => boxes(tree).find((b: any) => (b.children ?? []).some((c: any) => c?.type === 'Text' && textOf(c) === 'ags'))
-const chipText = (tree: any) => texts(chip(tree)).find((t: any) => textOf(t) === 'ags')
+const chip = (tree: any) => boxes(tree).find((b: any) => (b.children ?? []).some((c: any) => c?.type === 'Text' && textOf(c) === 'cs'))
+const chipText = (tree: any) => texts(chip(tree)).find((t: any) => textOf(t) === 'cs')
 
-test('an ags chip on the session colour leads the band, the keys bold in that colour', async () => {
+test('a cs chip on the session colour leads the band, the keys bold in that colour', async () => {
   envVars.HOME = '/home'
   envVars.CS_TERM_BG_RGB = '252;247;229'
   bindKeys({ 'ctrl+x 1': 'strip:jump1', 'ctrl+x 2': 'strip:jump2' })
@@ -332,8 +332,8 @@ test('an ags chip on the session colour leads the band, the keys bold in that co
   expect(key.props.color).toBe('rgb(220,38,38)')
   // the chip comes before every key and Button
   const order = JSON.stringify(tree)
-  expect(order.indexOf('"ags"')).toBeLessThan(order.indexOf('strip:jump1'))
-  expect(order.indexOf('"ags"')).toBeLessThan(order.indexOf('ctrl+x 1'))
+  expect(order.indexOf('"cs"')).toBeLessThan(order.indexOf('strip:jump1'))
+  expect(order.indexOf('"cs"')).toBeLessThan(order.indexOf('ctrl+x 1'))
 })
 
 test('the chip\'s white softens on a dark terminal, as the bar\'s does', async () => {
@@ -608,7 +608,7 @@ test('a forced rotation runs once per conversation, and a failed /rotate is not 
   // the marker is written before the timer is scheduled, so a rejected run stays rejected
   $.command.run = async () => { throw new Error('unknown command') }
   await fireAfter()
-  expect(toasts).toEqual(['ags: /rotate did not run: Error: unknown command'])
+  expect(toasts).toEqual(['cs: /rotate did not run: Error: unknown command'])
   await turnComplete()
   expect(timers).toHaveLength(1)
   $.command.run = async (args: any) => { ran.push(args); return { text: '' } }
@@ -782,21 +782,21 @@ test('a rejected /clear at zero shows a toast and clears nothing else', async ()
   $.command.run = async () => { throw new Error('no session') }
   await tick(GRACE_SECONDS)
   $.command.run = async (args: any) => { ran.push(args); return { text: '' } }
-  expect(toasts).toEqual(['ags: /clear did not run: Error: no session'])
+  expect(toasts).toEqual(['cs: /clear did not run: Error: no session'])
   expect(ran).toEqual([])
 })
 
 // A switch to the other engine: the switch skill arms its handoff as rotate
-// does, then `ags -switch` records the move. The mod runs only under Claude,
-// so a pending switch means leaving it: /exit, after which ags reopens the
+// does, then `cs -switch` records the move. The mod runs only under Claude,
+// so a pending switch means leaving it: /exit, after which cs reopens the
 // session under the target. A /clear would hand the handoff to Claude again.
-// ags carries out only the record of the run that just ended, and only while
+// cs carries out only the record of the run that just ended, and only while
 // the handoff it names is unconsumed, so the mod reads the record the same way.
 const SWITCH = '/work/.cs/local/pending-switch'
 const PRIVATE_SWITCH = '/work/.cs/private/pending-switch'
 const RUN = 'run-0001'
 const SWITCH_RECORD = `engine=codex\nmode=fresh\nhandoff=2026-09-15-next-step.md\nrun=${RUN}\n`
-// Recorded the way `ags -switch` leaves it, inside the run the mod belongs to.
+// Recorded the way `cs -switch` leaves it, inside the run the mod belongs to.
 const recordSwitch = (text = SWITCH_RECORD, at = SWITCH) => { files[at] = text; envVars.CS_RUN_ID = RUN }
 const EXIT = { command: 'exit', args: '' }
 
@@ -811,7 +811,7 @@ test('a pending switch turns the armed key into the exit key, naming the target 
   await button.props.onPress()
   expect(ran).toEqual([EXIT])
   expect(filled).toEqual([])
-  // the press consumes nothing: the marker and the record are ags's
+  // the press consumes nothing: the marker and the record are cs's
   expect(files[MARKER]).toBe('2026-09-15-next-step.md\n')
   expect(files[SWITCH]).toBe(SWITCH_RECORD)
 })
@@ -887,7 +887,7 @@ test('a switch recorded or cancelled mid-count decides the action at zero', asyn
   await tick(GRACE_SECONDS - 5)
   expect(ran).toEqual([EXIT])
 
-  // cancelled (`ags -switch cancel` removes the record): the /clear is back
+  // cancelled (`cs -switch cancel` removes the record): the /clear is back
   register(on as any); ran = []
   arm(); recordSwitch()
   await band(); await turnComplete()
@@ -918,7 +918,7 @@ test('a rejected /exit at zero shows a toast and runs nothing else', async () =>
   } finally {
     $.command.run = async (args: any) => { ran.push(args); return { text: '' } }
   }
-  expect(toasts).toEqual(['ags: /exit did not run: Error: no session'])
+  expect(toasts).toEqual(['cs: /exit did not run: Error: no session'])
   expect(ran).toEqual([])
 })
 
@@ -941,7 +941,7 @@ test('a record of another run, another handoff, or no usable engine leaves the /
   arm(); percent = 3
   const label = async () => findButton(await band()).props.label
   const CLEAR = '/clear and continue from the handoff'
-  // another run's record: ags would not carry it out after this one
+  // another run's record: cs would not carry it out after this one
   recordSwitch(SWITCH_RECORD.replace(`run=${RUN}`, 'run=run-older'))
   expect(await label()).toBe(CLEAR)
   // no run id to compare with: nothing proves the record is this run's
@@ -990,9 +990,9 @@ test('an encrypted session reads its switch behind .cs/private, beside its marke
   expect(findButton(await band()).props.label).toBe('/clear and continue from the handoff')
 })
 
-// ags's own reader (_switch_field in lib/78-switch.sh): the key from the first
+// cs's own reader (_switch_field in lib/78-switch.sh): the key from the first
 // column, the value verbatim after the first `=`, the first line of a key.
-test('switchFields reads key=value lines as ags does: the first of a key wins, values verbatim', () => {
+test('switchFields reads key=value lines as cs does: the first of a key wins, values verbatim', () => {
   expect(switchFields(SWITCH_RECORD)).toEqual({ engine: 'codex', mode: 'fresh', handoff: '2026-09-15-next-step.md', run: RUN })
   expect(switchFields('engine=claude\nengine=codex\n=x\nnoise\nmode=resume\n')).toEqual({ engine: 'claude', mode: 'resume' })
   expect(switchFields('handoff=a=b.md\nengine=codex \n mode=fresh\n')).toEqual({ handoff: 'a=b.md', engine: 'codex ', ' mode': 'fresh' })
@@ -1040,7 +1040,7 @@ test('a conversation met at load is forced whatever it started at; one born of a
   percent = 71
   await turnComplete(); await turnComplete()
   expect(timers).toHaveLength(1)
-  expect(toasts).toEqual(['ags: CS_ROTATE_FORCE_CTX=70 is below this conversation\'s starting context (71%); not forcing a rotation'])
+  expect(toasts).toEqual(['cs: CS_ROTATE_FORCE_CTX=70 is below this conversation\'s starting context (71%); not forcing a rotation'])
   // a teammate past the line is not the lead: no rotation, and no toast about one
   sessionId = 'uuid-teammate'
   percent = 90
@@ -1168,7 +1168,7 @@ test('a /clear the mod runs itself that is rejected leaves no birth behind: a la
   $.command.run = async () => { throw new Error('no session') }
   await tick(GRACE_SECONDS)
   $.command.run = async (args: any) => { ran.push(args); return { text: '' } }
-  expect(toasts).toEqual(['ags: /clear did not run: Error: no session'])
+  expect(toasts).toEqual(['cs: /clear did not run: Error: no session'])
   files = { '/work/.cs/local/state': 'claude_session_id: uuid-resumed\n' }
   sessionId = 'uuid-resumed'
   percent = 72
@@ -1234,7 +1234,7 @@ test('a /wrap the answer runs that the engine refuses is said once', async () =>
   $.command.run = async () => { throw new Error('no session') }
   await wrapButton(await band()).props.onPress()
   $.command.run = async (args: any) => { ran.push(args); return { text: '' } }
-  expect(toasts).toEqual(['ags: /wrap did not run: Error: no session'])
+  expect(toasts).toEqual(['cs: /wrap did not run: Error: no session'])
   expect(ran).toEqual([])
 })
 
@@ -1528,7 +1528,7 @@ test('the pane counts down on a twenty-block bar in the ramp\'s colour, beside t
   expect(JSON.stringify(await pane())).toContain('press 1 to clear now, or send a prompt to stay')
 })
 
-// /queue hands the task to `ags -queue add` by the path the launch exported,
+// /queue hands the task to `cs -queue add` by the path the launch exported,
 // which resolves this session's queue from the environment claude inherited.
 const startSession = () => hooks['session.start']($, { cwd: '/work', surface: 'terminal', isInteractive: true }, async (e) => ({ cwd: e.cwd }))
 const queue = (args: string) => hooks['command.run:queue']($, { command: 'queue', args }, async () => ({ text: 'unhandled' }))
@@ -1537,36 +1537,28 @@ test('the mod registers /queue at load, to run at once even mid-turn', async () 
   await startSession()
   expect(commands).toHaveLength(1)
   expect(commands[0]).toMatchObject({ name: 'queue', immediate: true, argumentHint: '[task]' })
-  expect(commands[0].description).toBe("Add a task to this agent-sessions workspace's walk-away queue, or list it.")
+  expect(commands[0].description).toBe("Add a task to this cs session's walk-away queue, or list it.")
 })
 
-test('/queue prefers AGS_BIN when both canonical and legacy executable paths are present', async () => {
-  envVars.AGS_BIN = '/opt/agent-sessions/bin/ags'
-  envVars.CS_BIN = '/opt/cs/bin/cs'
-  const r = await queue('do the next task')
-  expect(runs[0].argv).toEqual(['/opt/agent-sessions/bin/ags', '-queue', 'add', 'do the next task'])
-  expect(r).toEqual({ text: 'Queued: do the next task' })
-})
-
-test('/queue with a task runs ags -queue add with the task as one argument and says it is queued', async () => {
+test('/queue with a task runs cs -queue add with the task as one argument and says it is queued', async () => {
   envVars.CS_BIN = '/opt/cs/bin/cs'
   const r = await queue('fix the flaky "rotate" test; then rerun it')
   expect(runs.map(x => x.argv)).toEqual([['/opt/cs/bin/cs', '-queue', 'add', 'fix the flaky "rotate" test; then rerun it']])
   expect(r).toEqual({ text: 'Queued: fix the flaky "rotate" test; then rerun it' })
-  expect(toasts).toEqual(['ags: queued: fix the flaky "rotate" test; then rerun it'])
+  expect(toasts).toEqual(['cs: queued: fix the flaky "rotate" test; then rerun it'])
   await settle()
   expect(asks).toEqual([])
 })
 
 // The toast is one line under the prompt; a long task is cut so it fits.
 test('/queue with a long task confirms it in a toast cut to 60 characters', async () => {
-  envVars.CS_BIN = '/opt/cs/bin/ags'
+  envVars.CS_BIN = '/opt/cs/bin/cs'
   const task = 'a'.repeat(59) + 'bc' + ' tail'
   await queue(`  ${task}  `)
-  expect(toasts).toEqual([`ags: queued: ${'a'.repeat(59)}b…`])
+  expect(toasts).toEqual([`cs: queued: ${'a'.repeat(59)}b…`])
 })
 
-test('/queue with no task, or only spaces, prints ags -queue list', async () => {
+test('/queue with no task, or only spaces, prints cs -queue list', async () => {
   envVars.CS_BIN = '/opt/cs/bin/cs'
   runResult = { exitCode: 0, stdout: 'Pending:\n  1. first\n  2. second\n', stderr: '' }
   expect(await queue('')).toEqual({ text: 'Pending:\n  1. first\n  2. second' })
@@ -1595,9 +1587,9 @@ test('/queue with pending tasks offers to start them; Start while idle arms the 
 })
 
 // Start also asks how the tasks run: here, each in a subagent, or each as a
-// workflow; the answer rides on ags -queue start.
+// workflow; the answer rides on cs -queue start.
 test('Start then In subagents or As workflows arms the queue in that mode', async () => {
-  envVars.CS_BIN = '/opt/cs/bin/ags'
+  envVars.CS_BIN = '/opt/cs/bin/cs'
   runResult = LISTED
   answer = QUEUE_START
   modeAnswer = QUEUE_SUBAGENTS
@@ -1610,7 +1602,7 @@ test('Start then In subagents or As workflows arms the queue in that mode', asyn
 })
 
 test('Not yet asks nothing more', async () => {
-  envVars.CS_BIN = '/opt/cs/bin/ags'
+  envVars.CS_BIN = '/opt/cs/bin/cs'
   runResult = LISTED
   answer = 'Not yet'
   await queue('')
@@ -1621,7 +1613,7 @@ test('Not yet asks nothing more', async () => {
 // A dismissed second question starts nothing and compacts nothing, as a
 // dismissed first one does.
 test('a dismissed mode question starts nothing', async () => {
-  envVars.CS_BIN = '/opt/cs/bin/ags'
+  envVars.CS_BIN = '/opt/cs/bin/cs'
   runResult = LISTED
   modeAnswer = new Error('dismissed')
   for (const a of [QUEUE_START, QUEUE_COMPACT]) {
@@ -1634,20 +1626,20 @@ test('a dismissed mode question starts nothing', async () => {
   expect(submitted).toEqual([])
 })
 
-// Free text typed under "Other" names no mode ags knows, so nothing starts.
+// Free text typed under "Other" names no mode cs knows, so nothing starts.
 test('an answer that is no mode starts nothing and says so', async () => {
-  envVars.CS_BIN = '/opt/cs/bin/ags'
+  envVars.CS_BIN = '/opt/cs/bin/cs'
   runResult = LISTED
   answer = QUEUE_START
   modeAnswer = 'in parallel please'
   await queue('')
   await settle()
   expect(runs.map(x => x.argv[2])).toEqual(['list'])
-  expect(toasts).toEqual(["ags: 'in parallel please' is not a way to run the queue; it is not started"])
+  expect(toasts).toEqual(["cs: 'in parallel please' is not a way to run the queue; it is not started"])
 })
 
 test('Compact asks the mode before compacting, then starts in it', async () => {
-  envVars.CS_BIN = '/opt/cs/bin/ags'
+  envVars.CS_BIN = '/opt/cs/bin/cs'
   runResult = LISTED
   answer = QUEUE_COMPACT
   modeAnswer = QUEUE_WORKFLOWS
@@ -1696,7 +1688,7 @@ test('a queue already armed or draining is listed without an offer', async () =>
 })
 
 test('an encrypted session\'s queue state is read behind .cs/private', async () => {
-  envVars.CS_BIN = '/opt/cs/bin/ags'
+  envVars.CS_BIN = '/opt/cs/bin/cs'
   runResult = LISTED
   files['/work/.cs/private/queue.state'] = 'draining\n'
   await queue('')
@@ -1721,7 +1713,7 @@ test('a start cs refuses, or one that cannot run, says so and sends no prompt', 
   await settle()
   await queue('')
   await settle()
-  expect(toasts).toEqual(['ags -queue start exited 1: Error: the queue is locked', 'ags -queue start did not run: spawn ENOENT'])
+  expect(toasts).toEqual(['cs -queue start exited 1: Error: the queue is locked', 'cs -queue start did not run: spawn ENOENT'])
   expect(submitted).toEqual([])
 })
 
@@ -1736,7 +1728,7 @@ test('a prompt the engine refuses is shown, not dropped', async () => {
   } finally {
     $.prompt.submit = async (args: any) => { submitted.push(args); return {} }
   }
-  expect(toasts).toEqual(['ags: the queue is armed, but its first turn did not start: session closed'])
+  expect(toasts).toEqual(['cs: the queue is armed, but its first turn did not start: session closed'])
 })
 
 // Compact frees the context the drain will need first: the conversation is
@@ -1763,7 +1755,7 @@ test('a compaction a hook vetoes leaves the queue unarmed and says why', async (
   await settle()
   expect(runs.map(x => x.argv[2])).toEqual(['list'])
   expect(submitted).toEqual([])
-  expect(toasts).toEqual(['ags: the conversation was not compacted (a PreCompact hook blocked it); the queue is not started'])
+  expect(toasts).toEqual(['cs: the conversation was not compacted (a PreCompact hook blocked it); the queue is not started'])
 })
 
 // The engine refuses a compaction while a turn runs.
@@ -1776,7 +1768,7 @@ test('a compaction the engine refuses leaves the queue unarmed and says so', asy
   await settle()
   expect(runs.map(x => x.argv[2])).toEqual(['list'])
   expect(submitted).toEqual([])
-  expect(toasts).toEqual(['ags: the conversation was not compacted (a turn is running); the queue is not started'])
+  expect(toasts).toEqual(['cs: the conversation was not compacted (a turn is running); the queue is not started'])
 })
 
 test('a dismissed offer runs nothing more', async () => {
@@ -1795,23 +1787,23 @@ test('a refused add prints the exit code and cs\'s own stderr, verbatim', async 
   runResult = { exitCode: 1, stdout: '', stderr: "warning: an earlier line\n\nError: task bodies must be a single line (the queue's done log and listing are line-oriented)\n" }
   const r = await queue('one\ntwo')
   expect(runs[0].argv).toEqual(['/opt/cs/bin/cs', '-queue', 'add', 'one\ntwo'])
-  expect(r).toEqual({ text: "ags -queue add exited 1.\nwarning: an earlier line\nError: task bodies must be a single line (the queue's done log and listing are line-oriented)" })
+  expect(r).toEqual({ text: "cs -queue add exited 1.\nwarning: an earlier line\nError: task bodies must be a single line (the queue's done log and listing are line-oriented)" })
   expect(toasts).toEqual([])
 })
 
 test('a run that cannot start says why', async () => {
   envVars.CS_BIN = '/opt/cs/bin/cs'
   runResult = new Error('spawn ENOENT')
-  expect(await queue('')).toEqual({ text: 'ags -queue list did not run: spawn ENOENT' })
+  expect(await queue('')).toEqual({ text: 'cs -queue list did not run: spawn ENOENT' })
 })
 
-test('without executable paths /queue says the launch did not say where ags is, and runs nothing', async () => {
+test('without CS_BIN /queue says the launch did not say where cs is, and runs nothing', async () => {
   const r = await queue('something')
   expect(runs).toHaveLength(0)
-  expect(r).toEqual({ text: 'The launch did not say where ags is (AGS_BIN); run `ags -queue add "<task>"` from a shell in this session.' })
+  expect(r).toEqual({ text: 'The launch did not say where cs is (CS_BIN); run `cs -queue add "<task>"` from a shell in this session.' })
 })
 
-// /finish progress: ags writes one record per step while it integrates and
+// /finish progress: cs writes one record per step while it integrates and
 // retires; the mod reads it on a one-second watch that /finish starts.
 const RECORD = '/work/.cs/local/finish-progress.json'
 const SHA = '1234567' + 'f'.repeat(33)
@@ -1845,7 +1837,7 @@ test('a /finish that starts toasts its task once, however many steps follow', as
   await watchTick()
   record(running('fast-forward'))
   await watchTick()
-  expect(toasts).toEqual(['ags: finishing fix-auth'])
+  expect(toasts).toEqual(['cs: finishing fix-auth'])
 })
 
 test('each outcome toasts once, in its own words, and not again on the next tick', async () => {
@@ -1860,9 +1852,9 @@ test('each outcome toasts once, in its own words, and not again on the next tick
   await watchTick()
   await watchTick()
   expect(toasts).toEqual([
-    'ags: landed fix-auth 1234567 -> 89abcde',
-    'ags: /finish fix-auth refused: Base /work moved during the gates (was abc, now def); re-run /finish fix-auth',
-    'ags: retired fix-auth',
+    'cs: landed fix-auth 1234567 -> 89abcde',
+    'cs: /finish fix-auth refused: Base /work moved during the gates (was abc, now def); re-run /finish fix-auth',
+    'cs: retired fix-auth',
   ])
 })
 
@@ -1871,14 +1863,14 @@ test('a long task is cut in the toast as /queue cuts it', async () => {
   await startFinish()
   record(running('started', { task: 'a'.repeat(59) + 'bc tail' }))
   await watchTick()
-  expect(toasts).toEqual([`ags: finishing ${'a'.repeat(59)}b…`])
+  expect(toasts).toEqual([`cs: finishing ${'a'.repeat(59)}b…`])
 })
 
 test('an encrypted session\'s record is read behind .cs/private', async () => {
   await startFinish()
   record({ id: '6161-1800000002', pid: 6161, task: 'fix-auth', sha: SHA, step: 'retired', ts: NOW }, '/work/.cs/private/finish-progress.json')
   await watchTick()
-  expect(toasts).toEqual(['ags: retired fix-auth'])
+  expect(toasts).toEqual(['cs: retired fix-auth'])
 })
 
 test('while a gate runs under a live pid the band shows the task and the time since the gate started, even mid-turn', async () => {
@@ -1942,7 +1934,7 @@ test('the watch ends once the turn is over and nothing runs, and not while a ste
   expect(watches()[0].cancelled).toBe(false)
   record({ id: '6161-1800000002', pid: 6161, task: 'fix-auth', sha: SHA, step: 'retired', ts: NOW })
   await watchTick()
-  expect(toasts).toEqual(['ags: finishing fix-auth', 'ags: retired fix-auth'])
+  expect(toasts).toEqual(['cs: finishing fix-auth', 'cs: retired fix-auth'])
   expect(watches()[0].cancelled).toBe(true)
   // the next /finish watches afresh
   await startFinish()

@@ -1,10 +1,10 @@
-# ABOUTME: ags -conversations: the session's conversation chain from timeline.jsonl.
+# ABOUTME: cs -conversations: the session's conversation chain from timeline.jsonl.
 # ABOUTME: Renders started/rotated events with lineage arrows in local time.
 
 run_conversations() {
-    [ $# -eq 0 ] || error "Usage: ags -conversations"
+    [ $# -eq 0 ] || error "Usage: cs -conversations"
     if [ -z "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ]; then
-        error "ags -conversations must be run inside a cs session, or as: ags <session> -conversations"
+        error "cs -conversations must be run inside a cs session, or as: cs <session> -conversations"
     fi
     local timeline="${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/timeline.jsonl"
     if [ ! -s "$timeline" ]; then

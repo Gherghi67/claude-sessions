@@ -23,7 +23,7 @@ esac
 # Every tracked script plus the assembled binaries, which carry no .sh. NUL
 # separated, because git quotes a path holding a quote or a control character
 # and the quoted form names no file.
-files=(bin/ags bin/ags-secrets bin/ags-statusline bin/ags-subagent-statusline)
+files=(bin/cs bin/cs-secrets bin/cs-statusline bin/cs-subagent-statusline)
 while IFS= read -r -d '' f; do
     files+=("$f")
 done < <(git ls-files -z '*.sh')

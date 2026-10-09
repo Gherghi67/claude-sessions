@@ -303,7 +303,7 @@ test_cs_launch_kicks_dropped() {
     local f; f="$(proj_file projA)"
     add_msg "$f" "Continue from the pending rotation handoff: read .cs/handoffs/2026-09-28-x.md first." \
         "2026-07-01T10:00:00Z" '{"promptSource": "typed"}'
-    add_msg "$f" "Spawned by lead-session. Your walk-away queue is armed with 2 task(s); begin. Send results with: ags -msg lead-session -k result \"...\"" \
+    add_msg "$f" "Spawned by lead-session. Your walk-away queue is armed with 2 task(s); begin. Send results with: cs -msg lead-session -k result \"...\"" \
         "2026-07-01T10:00:01Z" '{"promptSource": "typed"}'
     add_msg "$f" "Your brief is .cs/brief.md: read it first. Then begin." \
         "2026-07-01T10:00:02Z" '{"promptSource": "typed"}'
@@ -326,7 +326,7 @@ test_cs_launch_kicks_dropped() {
         'handoff_arg="Continue from the pending rotation handoff\."' \
         "encrypted rotation kick wording moved; update the corpus filter" || return 1
     assert_file_contains "$SCRIPT_DIR/../lib/75-launch.sh" \
-        'spawn_kick="Spawned by $_spawner. $_work Send results with: ags -msg ' \
+        'spawn_kick="Spawned by $_spawner. $_work Send results with: cs -msg ' \
         "spawn kick wording moved; update the corpus filter" || return 1
     assert_file_contains "$SCRIPT_DIR/../lib/75-launch.sh" \
         '_work="Your brief is .cs/brief.md: read it first."' \

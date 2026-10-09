@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ABOUTME: Tests for `ags -adopt --worktrees`, which registers Claude Code's own .claude/worktrees/* as sessions.
+# ABOUTME: Tests for `cs -adopt --worktrees`, which registers Claude Code's own .claude/worktrees/* as sessions.
 # ABOUTME: Covers naming, conversation binding, the clean PR branch, idempotent re-runs, pruning and --dry-run.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -217,7 +217,7 @@ test_rerun_adopts_nothing_twice_and_keeps_the_exclude_file() {
     assert_eq "my-own-rule.tmp
 .cs/
 .claude/settings.local.json
-CLAUDE.local.md" "$(cat "$exclude")" "the user's rule stays and ags's three lines appear once" || return 1
+CLAUDE.local.md" "$(cat "$exclude")" "the user's rule stays and cs's three lines appear once" || return 1
 }
 
 test_dry_run_writes_nothing() {
@@ -301,7 +301,7 @@ test_open_leaves_a_tracked_claude_md_with_cs_markers_alone() {
     _make_repo "$repo" marked
     local wt="$repo/.claude/worktrees/marked"
     printf '# Project rules\n\n## Discovered Commands\n\n- make test\n\n<!-- cs:session-protocol -->\nold protocol text\n' > "$wt/CLAUDE.md"
-    git -C "$wt" commit -q -am "rules with old ags markers"
+    git -C "$wt" commit -q -am "rules with old cs markers"
     _seed_conversation "$wt" "$UUID_A" "Tidy the release notes"
     (cd "$repo" && "$CS_BIN" -adopt --worktrees >/dev/null 2>&1) || { echo "  FAIL: adopt should succeed"; return 1; }
     printf '#!/bin/bash\nexit 0\n' > "$TEST_TMPDIR/claude-stub"
@@ -342,12 +342,12 @@ test_a_removed_session_is_not_adopted_again() {
     _make_repo "$repo" retired
     _seed_conversation "$repo/.claude/worktrees/retired" "$UUID_A" "Retire this one later"
     (cd "$repo" && "$CS_BIN" -adopt --worktrees >/dev/null 2>&1) || { echo "  FAIL: adopt should succeed"; return 1; }
-    # ags -rm removes the link and keeps .cs/ by design.
+    # cs -rm removes the link and keeps .cs/ by design.
     rm "$CS_SESSIONS_ROOT/repo.retired"
     local output
     output=$(cd "$repo" && "$CS_BIN" -adopt --worktrees 2>&1) || true
     assert_not_exists "$CS_SESSIONS_ROOT/repo.retired" "a removed session stays removed" || return 1
-    assert_output_contains "$output" "skip retired: removed with ags -rm (delete its .cs/ to adopt it again)" "the skip says how to get it back" || return 1
+    assert_output_contains "$output" "skip retired: removed with cs -rm (delete its .cs/ to adopt it again)" "the skip says how to get it back" || return 1
 }
 
 test_plain_adopt_inside_a_linked_worktree_refuses_and_commits_nothing() {
@@ -359,7 +359,7 @@ test_plain_adopt_inside_a_linked_worktree_refuses_and_commits_nothing() {
     before=$(git -C "$wt" rev-parse HEAD)
     output=$(cd "$wt" && "$CS_BIN" -adopt linked-by-hand 2>&1) || rc=$?
     assert_eq "1" "$rc" "plain adopt inside a linked worktree exits 1" || return 1
-    assert_output_contains "$output" "ags -adopt --worktrees" "the refusal names the verb for worktrees" || return 1
+    assert_output_contains "$output" "cs -adopt --worktrees" "the refusal names the verb for worktrees" || return 1
     assert_eq "$before" "$(git -C "$wt" rev-parse HEAD)" "no commit was made on the branch" || return 1
     assert_eq "?? unrelated.txt" "$(git -C "$wt" status --porcelain)" "the unrelated file stays unstaged" || return 1
     assert_not_exists "$wt/.cs" "nothing was written" || return 1
@@ -409,7 +409,7 @@ test_a_worktree_that_tracks_a_file_cs_must_own_is_skipped() {
     assert_not_exists "$wt/.cs" "nothing is written into it" || return 1
     assert_not_exists "$CS_SESSIONS_ROOT/repo.tracked" "no session is registered" || return 1
     assert_output_contains "$output" "skip tracked: CLAUDE.local.md is tracked" "the skip names the tracked file" || return 1
-    # A tracked <file>.tmp sibling is the user's own file: ags's temp names are
+    # A tracked <file>.tmp sibling is the user's own file: cs's temp names are
     # unique, so it is neither a reason to skip nor touched by the adoption.
     git -C "$wt" rm -q --cached CLAUDE.local.md && rm "$wt/CLAUDE.local.md"
     mkdir -p "$wt/.claude" && printf '{}\n' > "$wt/.claude/settings.local.json.tmp"

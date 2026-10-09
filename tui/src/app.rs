@@ -2,7 +2,6 @@
 // ABOUTME: Tracks table selection, sort order, search filter, and modal dialog state
 
 use std::collections::{HashMap, HashSet};
-use std::ffi::OsStr;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::widgets::TableState;
@@ -10,51 +9,12 @@ use ratatui::widgets::TableState;
 use crate::session::{self, Session};
 use crate::theme::Palette;
 
-/// The ags binary to fork. The launcher exports its own path, so a binary that
-/// is not on PATH still reaches itself. Keep CS_BIN as a compatibility input.
+/// The cs binary to fork. cs exports its own path when it launches the picker,
+/// so a cs that is not on PATH still reaches itself.
 pub fn cs_bin() -> String {
-    match std::env::var("AGS_BIN") {
-        Ok(v) if !v.is_empty() => return v,
-        _ => {}
-    }
     match std::env::var("CS_BIN") {
         Ok(v) if !v.is_empty() => v,
-        _ => command_on_path("ags")
-            .or_else(|| command_on_path("cs"))
-            .unwrap_or_else(|| "ags".to_string()),
-    }
-}
-
-fn command_on_path(name: &str) -> Option<String> {
-    let path = std::env::var_os("PATH")?;
-    command_in_path(name, &path)
-}
-
-fn command_in_path(name: &str, path: &OsStr) -> Option<String> {
-    for directory in std::env::split_paths(path) {
-        let candidate = directory.join(name);
-        if is_executable(&candidate) {
-            return Some(name.to_string());
-        }
-    }
-    None
-}
-
-fn is_executable(path: &std::path::Path) -> bool {
-    let Ok(metadata) = path.metadata() else {
-        return false;
-    };
-    if !metadata.is_file() {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        return metadata.permissions().mode() & 0o111 != 0;
-    }
-    #[cfg(not(unix))]
-    {
-        true
+        _ => "cs".to_string(),
     }
 }
 
@@ -2670,7 +2630,7 @@ mod tests {
 
     #[test]
     fn empty_picker_can_create_its_first_session() {
-        let root = std::env::temp_dir().join(format!("ags-empty-picker-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("cs-empty-picker-{}", std::process::id()));
         let _root = session::test_root::scoped(root);
         let mut app = App::new(Vec::new());
         assert_eq!(app.table_state.selected(), None);
@@ -2788,38 +2748,10 @@ mod tests {
         assert_eq!(app.mode, Mode::Merge, "an empty list stays put");
     }
 
-    /// Serializes every test that changes either executable path. Cargo runs
-    /// tests on parallel threads, so unguarded env changes race cs_bin().
+    /// Serializes every test that sets, removes, or asserts on the
+    /// process-global CS_BIN env var. Cargo runs tests on parallel threads, so
+    /// an unguarded set_var races every concurrent reader of cs_bin().
     static CS_BIN_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    struct IsolatedBinaryEnv {
-        _lock: std::sync::MutexGuard<'static, ()>,
-        ags: Option<std::ffi::OsString>,
-        cs: Option<std::ffi::OsString>,
-    }
-
-    fn isolated_binary_env() -> IsolatedBinaryEnv {
-        let lock = CS_BIN_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let ags = std::env::var_os("AGS_BIN");
-        let cs = std::env::var_os("CS_BIN");
-        std::env::remove_var("AGS_BIN");
-        IsolatedBinaryEnv { _lock: lock, ags, cs }
-    }
-
-    impl Drop for IsolatedBinaryEnv {
-        fn drop(&mut self) {
-            if let Some(value) = self.ags.take() {
-                std::env::set_var("AGS_BIN", value)
-            } else {
-                std::env::remove_var("AGS_BIN")
-            }
-            if let Some(value) = self.cs.take() {
-                std::env::set_var("CS_BIN", value)
-            } else {
-                std::env::remove_var("CS_BIN")
-            }
-        }
-    }
 
     /// `sample_sessions()` has no `base@task` row. A dedicated fixture rather
     /// than a fourth entry in the shared one, so no existing test that counts
@@ -2836,7 +2768,7 @@ mod tests {
 
     #[test]
     fn m_on_a_worktree_row_opens_its_base() {
-        let _env = isolated_binary_env();
+        let _env = CS_BIN_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Point the probe at a path that cannot exist, so the fork fails the
         // same way on every machine. Without this the test forks the real cs
         // against the developer's real sessions root and its result depends on
@@ -2873,55 +2805,16 @@ mod tests {
     }
 
     #[test]
-    fn cs_bin_prefers_the_exported_path_over_bare_ags() {
-        let _env = isolated_binary_env();
-        // The launcher exports its own path. Without the seam the TUI resolves
-        // ags first, then the historical cs command for old installations.
-        std::env::remove_var("AGS_BIN");
+    fn cs_bin_prefers_the_exported_path_over_bare_cs() {
+        let _env = CS_BIN_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // cs exports its own path when it launches the picker. Without the
+        // seam the TUI forks a bare "cs" that may not be on PATH at all.
         std::env::set_var("CS_BIN", "/opt/example/bin/cs");
         assert_eq!(cs_bin(), "/opt/example/bin/cs");
-        std::env::set_var("AGS_BIN", "/opt/example/bin/ags");
-        assert_eq!(
-            cs_bin(),
-            "/opt/example/bin/ags",
-            "the canonical path wins when both are exported"
-        );
-        std::env::remove_var("AGS_BIN");
         std::env::set_var("CS_BIN", "");
-        let expected = command_on_path("ags")
-            .or_else(|| command_on_path("cs"))
-            .unwrap_or_else(|| "ags".to_string());
-        assert_eq!(cs_bin(), expected, "an empty value must fall back, not fork nothing");
+        assert_eq!(cs_bin(), "cs", "an empty value must fall back, not fork nothing");
         std::env::remove_var("CS_BIN");
-        assert_eq!(cs_bin(), expected);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn command_path_skips_non_executable_ags_and_falls_back_to_executable_cs() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let directory = std::env::temp_dir().join(format!("ags-path-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&directory);
-        std::fs::create_dir_all(&directory).expect("create path fixture");
-        let ags = directory.join("ags");
-        let cs = directory.join("cs");
-        std::fs::write(&ags, "not executable").expect("write ags fixture");
-        std::fs::write(&cs, "executable").expect("write cs fixture");
-        std::fs::set_permissions(&ags, std::fs::Permissions::from_mode(0o644))
-            .expect("set ags mode");
-        std::fs::set_permissions(&cs, std::fs::Permissions::from_mode(0o755))
-            .expect("set cs mode");
-
-        assert_eq!(command_in_path("ags", directory.as_os_str()), None);
-        let selected = command_in_path("ags", directory.as_os_str())
-            .or_else(|| command_in_path("cs", directory.as_os_str()));
-        assert_eq!(selected, Some("cs".to_string()));
-
-        std::fs::set_permissions(&ags, std::fs::Permissions::from_mode(0o755))
-            .expect("make ags executable");
-        assert_eq!(command_in_path("ags", directory.as_os_str()), Some("ags".to_string()));
-        let _ = std::fs::remove_dir_all(&directory);
+        assert_eq!(cs_bin(), "cs");
     }
 
     #[test]
@@ -4553,7 +4446,7 @@ mod tests {
     /// every platform.
     #[test]
     fn secrets_delete_keeps_the_key_when_the_helper_fails() {
-        let _env = isolated_binary_env();
+        let _env = CS_BIN_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("CS_BIN", "/nonexistent/cs");
         let mut app = App::new(sample_sessions());
         app.mode = Mode::Secrets;
@@ -4579,7 +4472,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn secrets_delete_keeps_the_key_when_the_helper_exits_nonzero() {
-        let _env = isolated_binary_env();
+        let _env = CS_BIN_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let failing = ["/usr/bin/false", "/bin/false"]
             .into_iter()
             .find(|p| std::path::Path::new(p).exists())
@@ -5400,7 +5293,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn archive_key_archives_the_selected_session() {
-        let _env = isolated_binary_env();
+        let _env = CS_BIN_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = archive_root("archive");
         let stub = archive_stub(&tmp);
         let _root = session::test_root::scoped(tmp.clone());
@@ -5430,7 +5323,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn archive_key_unarchives_a_row_that_is_already_archived() {
-        let _env = isolated_binary_env();
+        let _env = CS_BIN_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = archive_root("unarchive");
         std::fs::write(tmp.join("alpha/.cs/archived"), "archived: 2026-08-23 by test\n").unwrap();
         let stub = archive_stub(&tmp);
@@ -5462,7 +5355,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn session_menu_archive_entry_reaches_the_same_verb() {
-        let _env = isolated_binary_env();
+        let _env = CS_BIN_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = archive_root("archive-menu");
         let stub = archive_stub(&tmp);
         let _root = session::test_root::scoped(tmp.clone());
@@ -5493,7 +5386,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn r_refuses_a_locked_session() {
-        let _env = isolated_binary_env();
+        let _env = CS_BIN_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = archive_root("rotate-locked");
         let stub = rotate_stub(&tmp, "echo rotated");
         let _root = session::test_root::scoped(tmp.clone());
@@ -5522,7 +5415,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn r_asks_before_it_rotates_anything() {
-        let _env = isolated_binary_env();
+        let _env = CS_BIN_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = archive_root("rotate-confirm");
         let stub = rotate_stub(&tmp, "echo rotated");
         let _root = session::test_root::scoped(tmp.clone());
@@ -5543,7 +5436,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn declining_the_rotate_confirm_runs_nothing() {
-        let _env = isolated_binary_env();
+        let _env = CS_BIN_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = archive_root("rotate-declined");
         let stub = rotate_stub(&tmp, "echo rotated");
         let _root = session::test_root::scoped(tmp.clone());
@@ -5599,7 +5492,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn session_menu_rotate_entry_runs_the_narrative_verb() {
-        let _env = isolated_binary_env();
+        let _env = CS_BIN_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = archive_root("rotate-menu");
         let stub = rotate_stub(&tmp, "echo rotated");
         let _root = session::test_root::scoped(tmp.clone());
@@ -5633,7 +5526,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn rotate_shows_what_cs_printed_and_dismisses_back_to_the_list() {
-        let _env = isolated_binary_env();
+        let _env = CS_BIN_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = archive_root("rotate-output");
         let stub = rotate_stub(&tmp, "echo 'nothing to rotate: 3 KB (budget 128 KB)'");
         let _root = session::test_root::scoped(tmp.clone());
@@ -5663,7 +5556,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn rotate_passes_a_refusal_through_to_the_output_popup() {
-        let _env = isolated_binary_env();
+        let _env = CS_BIN_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = archive_root("rotate-refused");
         let stub = rotate_stub(&tmp, "echo 'Error: Cannot write to archive' >&2; exit 1");
         let _root = session::test_root::scoped(tmp.clone());
@@ -5689,7 +5582,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn capital_r_rotates_from_the_list_too() {
-        let _env = isolated_binary_env();
+        let _env = CS_BIN_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = archive_root("rotate-normal");
         let stub = rotate_stub(&tmp, "echo rotated");
         let _root = session::test_root::scoped(tmp.clone());
@@ -5712,7 +5605,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn rotate_drops_the_stale_preview_so_it_is_read_again() {
-        let _env = isolated_binary_env();
+        let _env = CS_BIN_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = archive_root("rotate-preview");
         let stub = rotate_stub(&tmp, "echo 'rotated 1 sections'");
         let _root = session::test_root::scoped(tmp.clone());
@@ -5746,7 +5639,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_preview_in_flight_when_rotate_runs_never_reaches_the_cache() {
-        let _env = isolated_binary_env();
+        let _env = CS_BIN_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = archive_root("rotate-inflight");
         let stub = rotate_stub(&tmp, "echo 'rotated 1 sections'");
         let _root = session::test_root::scoped(tmp.clone());
@@ -5804,7 +5697,7 @@ mod tests {
         // "-archive alpha" in that test's argv log and an archived marker in
         // its root; with nothing set it forks the real cs against the
         // developer's sessions. Neither arm's outcome is asserted here.
-        let _env = isolated_binary_env();
+        let _env = CS_BIN_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("CS_BIN", "/nonexistent/cs");
         for (i, (action, label, _)) in MENU_ITEMS.iter().enumerate() {
             let mut app = App::new(sample_sessions());
@@ -5893,7 +5786,7 @@ mod tests {
     #[test]
     fn archive_passes_cs_refusal_through_to_the_status_line() {
         use std::os::unix::fs::PermissionsExt;
-        let _env = isolated_binary_env();
+        let _env = CS_BIN_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = archive_root("archive-refused");
         let stub = tmp.join("cs-refuses");
         std::fs::write(
@@ -5929,7 +5822,7 @@ mod tests {
     #[test]
     fn archive_refusal_with_silent_stderr_still_reports() {
         use std::os::unix::fs::PermissionsExt;
-        let _env = isolated_binary_env();
+        let _env = CS_BIN_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = archive_root("archive-silent");
         let stub = tmp.join("cs-silent");
         std::fs::write(&stub, "#!/bin/sh\nexit 1\n").unwrap();
@@ -5958,7 +5851,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn archive_failure_leaves_the_row_unchanged() {
-        let _env = isolated_binary_env();
+        let _env = CS_BIN_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = archive_root("archive-fail");
         let _root = session::test_root::scoped(tmp.clone());
         std::env::set_var("CS_BIN", "/nonexistent/cs");

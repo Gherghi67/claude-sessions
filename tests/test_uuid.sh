@@ -326,7 +326,7 @@ test_project_dir_encodes_underscore_and_space_like_claude() {
         esac
         [ "$got" = "$CS_TRANSCRIPTS_DIR/$(_encode_cwd_for_claude_test "$cwd")" ] || {
             echo "  FAIL: the test seeder and _claude_project_dir disagree"
-            echo "    ags:     $got"
+            echo "    cs:     $got"
             echo "    seeder: $CS_TRANSCRIPTS_DIR/$(_encode_cwd_for_claude_test "$cwd")"
             exit 1
         }

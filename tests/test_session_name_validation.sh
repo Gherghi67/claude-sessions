@@ -22,7 +22,7 @@ test_create_rejects_dot() {
     output=$(cd "$CS_SESSIONS_ROOT" && "$CS_BIN" "." < /dev/null 2>&1) || status=$?
     # `cs .` means "the session I am standing in"; the sessions root is not one,
     # so it is refused rather than opened, created or migrated as a session '.'.
-    assert_output_contains "$output" "Not an agent-sessions session" "cs . outside a session must be refused" || return 1
+    assert_output_contains "$output" "Not a cs session" "cs . outside a session must be refused" || return 1
     assert_eq "1" "$status" "cs . outside a session must exit non-zero" || return 1
     assert_not_exists "$CS_SESSIONS_ROOT/.cs" "cs . must not migrate the sessions root" || return 1
 }
@@ -41,8 +41,8 @@ test_remove_rejects_dotdot() {
     parent="$(dirname "$CS_SESSIONS_ROOT")"
     printf 'sentinel\n' > "$parent/keepme.txt"
     output=$(printf 'y\n' | "$CS_BIN" -rm ".." 2>&1) || status=$?
-    assert_output_contains "$output" "Invalid session name" "ags -rm .. must be rejected as invalid" || return 1
-    assert_file_exists "$parent/keepme.txt" "ags -rm .. must not touch the sessions-root parent" || return 1
+    assert_output_contains "$output" "Invalid session name" "cs -rm .. must be rejected as invalid" || return 1
+    assert_file_exists "$parent/keepme.txt" "cs -rm .. must not touch the sessions-root parent" || return 1
 }
 
 # A traversal target must also be rejected (name contains a slash).
@@ -51,8 +51,8 @@ test_remove_rejects_traversal() {
     parent="$(dirname "$CS_SESSIONS_ROOT")"
     mkdir -p "$parent/victim"
     output=$(printf 'y\n' | "$CS_BIN" -rm "../victim" 2>&1) || status=$?
-    assert_output_contains "$output" "Invalid session name" "ags -rm ../victim must be rejected as invalid" || return 1
-    assert_dir "$parent/victim" "ags -rm ../victim must not delete a dir outside the sessions root" || return 1
+    assert_output_contains "$output" "Invalid session name" "cs -rm ../victim must be rejected as invalid" || return 1
+    assert_dir "$parent/victim" "cs -rm ../victim must not delete a dir outside the sessions root" || return 1
 }
 
 run_test test_create_rejects_dotdot

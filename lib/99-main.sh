@@ -7,7 +7,7 @@ main() {
     # (hooks/cs-resolve.sh preserves an inherited value rather than setting
     # one). A teammate's shell carries CS_RESOLVED_FROM=walk deliberately, so
     # without this an inherited marker rides into everything cs starts —
-    # `ags -spawn` most of all — and that session's SessionEnd reads itself as a
+    # `cs -spawn` most of all — and that session's SessionEnd reads itself as a
     # walked-in front end and declines to clear its own lock. cs never reads the
     # variable, so dropping it here costs nothing and covers every exec path.
     unset CS_RESOLVED_FROM
@@ -29,18 +29,18 @@ main() {
             # the help most.
             run_tui || show_help
         else
-            echo "ags <name>        Create or resume a session"
-            echo "ags -list         List all sessions"
-            echo "ags -search       Search across sessions"
-            echo "ags -help         Show full help"
-            echo "ags -version      Show version"
+            echo "cs <name>        Create or resume a session"
+            echo "cs -list         List all sessions"
+            echo "cs -search       Search across sessions"
+            echo "cs -help         Show full help"
+            echo "cs -version      Show version"
         fi
         exit 0
     fi
 
     local cmd="$1"
 
-    # `ags <verb> --help` before the arms: each one resolves a session or parses
+    # `cs <verb> --help` before the arms: each one resolves a session or parses
     # its own arguments first, so the flag would arrive as data. -secrets is
     # exempt because it forwards to cs-secrets, which holds the reference for
     # its own verbs; a derived usage line would answer in that reference's place.
@@ -56,16 +56,16 @@ main() {
             return 0
             ;;
         -v|-version|--version)
-            echo "ags $VERSION"
+            echo "cs $VERSION ($CS_FORK, a fork of cs)"
             return 0
             ;;
         -tui)
-            run_tui || error "The session manager (ags-tui) is not installed. Reinstall ags, or run 'ags -list'."
+            run_tui || error "The session manager (cs-tui) is not installed. Reinstall cs, or run 'cs -list'."
             return 0
             ;;
         -list|-ls)
             if _tui_bin >/dev/null 2>&1; then
-                info "Hint: run bare 'ags' for the interactive session manager"
+                info "Hint: run bare 'cs' for the interactive session manager"
             fi
             shift
             list_sessions "$@"
@@ -119,10 +119,12 @@ main() {
             return 0
             ;;
         -uninstall)
+            refuse_in_code_sessions -uninstall
             run_uninstall
             return 0
             ;;
         -update)
+            refuse_in_code_sessions -update
             local update_arg="${2:-}"
             case "$update_arg" in
                 --check|-c)
@@ -135,7 +137,7 @@ main() {
                     do_update
                     ;;
                 *)
-                    error "Unknown option: $update_arg. Use 'ags -update [--check|--force]'"
+                    error "Unknown option: $update_arg. Use 'cs -update [--check|--force]'"
                     ;;
             esac
             return 0
@@ -223,17 +225,17 @@ main() {
             return $?
             ;;
         -*)
-            error "Unknown command: $cmd. Run 'ags -help' for usage."
+            error "Unknown command: $cmd. Run 'cs -help' for usage."
             ;;
     esac
 
     # `cs .` opens the session you are standing in, under the name cs knows it
     # by (an adopted project's cs name, not its directory's). Resolved here so
-    # the lock, migration and launch are the ones `ags <name>` gets. Never
+    # the lock, migration and launch are the ones `cs <name>` gets. Never
     # adopts: a directory that is not a session is refused, not made into one.
     if [ "$cmd" = "." ]; then
         cmd=$(_session_name_for_dir "$PWD") \
-            || error "Not an agent-sessions session: $PWD. Run 'ags -adopt <name>' to make it one, or bare 'ags' to pick a session."
+            || error "Not a cs session: $PWD. Run 'cs -adopt <name>' to make it one, or bare 'cs' to pick a session."
     fi
 
     local session_name="$cmd"
@@ -241,7 +243,7 @@ main() {
     local merge_feature=""
     local explicit_engine=""
     local launch_intent=auto
-    # ags -switch (lib/78-switch.sh): set by its relaunch's hidden flag, and by
+    # cs -switch (lib/78-switch.sh): set by its relaunch's hidden flag, and by
     # _switch_settle when the run that ends here armed a switch.
     local _cs_switched_from="" _cs_switch_resume=""
     local _cs_switch_next="" _cs_switch_next_mode="" _cs_switch_prev="" _cs_switch_handoff=""
@@ -263,7 +265,7 @@ main() {
     if [ "${1:-}" = "--" ]; then
         shift
     fi
-    # `ags <name> <verb> --help` — same reasoning as the global form above,
+    # `cs <name> <verb> --help` — same reasoning as the global form above,
     # including the -secrets exemption.
     case "${1:-}" in
         -secrets) ;;
@@ -309,10 +311,10 @@ main() {
                 # A bare or lone-'log' invocation is a read attempt aimed at
                 # the send-only arm; catch it before 'log' becomes a body.
                 if [ $# -eq 0 ]; then
-                    error "ags $session_name -msg sends mail and needs a body; to read mail, run 'ags -msg' inside that session"
+                    error "cs $session_name -msg sends mail and needs a body; to read mail, run 'cs -msg' inside that session"
                 fi
                 if [ $# -eq 1 ] && [ "$1" = "log" ]; then
-                    error "ags $session_name -msg is send-only; to read the mail log, run 'ags -msg log' inside that session"
+                    error "cs $session_name -msg is send-only; to read the mail log, run 'cs -msg log' inside that session"
                 fi
                 # 'thread' names a reading command and always takes an argument,
                 # so the lone-word shape above cannot catch it: unguarded,
@@ -321,7 +323,7 @@ main() {
                 # sends it.
                 case "${1:-}" in
                     thread)
-                        error "ags $session_name -msg is send-only; to read a thread, run 'ags -msg thread ${2:-<id>}' inside that session"
+                        error "cs $session_name -msg is send-only; to read a thread, run 'cs -msg thread ${2:-<id>}' inside that session"
                         ;;
                 esac
                 run_mail "$session_name" "$@"
@@ -379,7 +381,7 @@ main() {
                 ;;
             -integrate-feature) # hidden: driven by skills/finish/scripts/finish.sh, not typed by a user
                 shift
-                [ -n "${1:-}" ] || error "Usage: ags <base> -integrate-feature <task> <sha> [--from-remote] -- <gate command...>"
+                [ -n "${1:-}" ] || error "Usage: cs <base> -integrate-feature <task> <sha> [--from-remote] -- <gate command...>"
                 # Validate <base>@<feature> the same way the launch path does, so a
                 # task name with path separators is rejected before any
                 # filesystem lookup.
@@ -389,7 +391,7 @@ main() {
                 ;;
             -retire-feature) # hidden: driven by skills/finish/scripts/finish.sh, not typed by a user
                 shift
-                [ -n "${1:-}" ] || error "Usage: ags <base> -retire-feature <task> <sha> [--force]"
+                [ -n "${1:-}" ] || error "Usage: cs <base> -retire-feature <task> <sha> [--force]"
                 # Validate <base>@<feature> the same way the launch path does,
                 # so a task name with path separators (which would build an
                 # escaping worktree path) is rejected before any filesystem
@@ -400,7 +402,7 @@ main() {
                 ;;
             -finish)
                 shift
-                [ -n "${1:-}" ] || error "Usage: ags <base> -finish <feature>"
+                [ -n "${1:-}" ] || error "Usage: cs <base> -finish <feature>"
                 # Validate the same way the launch path does, so a feature name with
                 # path separators is rejected before any filesystem lookup.
                 cs_split_worktree_name "$session_name@$1" >/dev/null
@@ -421,7 +423,7 @@ main() {
                 launch_intent=handoff
                 shift
                 ;;
-            --switched-from) # hidden: the relaunch ags -switch execs (lib/78-switch.sh), not typed by a user
+            --switched-from) # hidden: the relaunch cs -switch execs (lib/78-switch.sh), not typed by a user
                 [ $# -ge 2 ] && cs_engine_known "$2" || error "--switched-from needs claude or codex"
                 _cs_switched_from="$2"
                 shift 2
@@ -455,12 +457,12 @@ main() {
     local engine
     engine=$(_session_engine "$session_dir" "$explicit_engine")
     if [ -n "$merge_feature" ] && ! cs_engine_supports "$engine" feature_finish; then
-        error "-finish requires Claude. Use: ags $session_name --engine claude -finish $merge_feature"
+        error "-finish requires Claude. Use: cs $session_name --engine claude -finish $merge_feature"
     fi
     # The handoff lives in the session; a session that does not exist yet has
     # none, and creating one here would only refuse later.
     if [ "$launch_intent" = handoff ] && [ ! -d "$session_dir" ]; then
-        error "Cannot start from a handoff: session $session_name does not exist. Create it with: ags $session_name"
+        error "Cannot start from a handoff: session $session_name does not exist. Create it with: cs $session_name"
     fi
 
     # An explicit resume must never create a workspace or allocate a binding
@@ -503,7 +505,7 @@ main() {
         if [ ! -d "$session_dir" ]; then
             is_new="true"
             # The base's vault links are refused above, so this catches a
-            # regular file where one belongs, or plaintext ags files beside a
+            # regular file where one belongs, or plaintext cs files beside a
             # .cs/private made by hand.
             _refuse_unmounted_meta "$wt_base" "$base_dir"
             confirm_clean_worktree_base "$base_dir" "$wt_base"
@@ -571,14 +573,14 @@ $_known
             *"
 $merge_feature
 "*) ;;
-            *) error "No feature worktree '$merge_feature' of '$session_name'. List them with: ags $session_name -features" ;;
+            *) error "No feature worktree '$merge_feature' of '$session_name'. List them with: cs $session_name -features" ;;
         esac
     fi
 
     cs_launch_session "$engine" "$session_name" "$session_dir" "$is_new" "$force_flag" "$merge_feature" "$launch_intent"
-    # Reached when the run succeeded (errexit ends ags on a failed one; the
+    # Reached when the run succeeded (errexit ends cs on a failed one; the
     # switch's own notices for that case were printed as the run settled).
-    # With a switch settled, this execs ags for the target and never returns.
+    # With a switch settled, this execs cs for the target and never returns.
     _switch_relaunch "$session_name"
 }
 

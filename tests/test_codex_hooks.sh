@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ABOUTME: Tests `ags -codex-hook session-start`, the SessionStart hook ags registers for Codex.
+# ABOUTME: Tests `cs -codex-hook session-start`, the SessionStart hook cs registers for Codex.
 # ABOUTME: Feeds Codex-shaped stdin JSON under a faked run lease; no Codex process runs.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -16,7 +16,7 @@ setup() {
     mkdir -p "$SESSION/.cs/local" "$SESSION/.cs/handoffs"
     printf 'engine: codex\n' > "$SESSION/.cs/local/state"
     printf '%s\n' "$OLD_THREAD" > "$SESSION/.cs/local/codex-thread-id"
-    # The run lease a supervised ags launch holds: the hook may rebind only
+    # The run lease a supervised cs launch holds: the hook may rebind only
     # for the run that owns the session.
     printf '%s\n' "$$" > "$SESSION/.cs/session.lock"
     jq -n --arg owner "$$" '{run_id: "run-1", engine: "codex", owner_pid: ($owner | tonumber)}' \
@@ -50,7 +50,7 @@ test_clear_with_an_armed_handoff_rebinds_and_loads_it() {
     local out
     out=$(_hook clear) || { echo "  FAIL: hook exited non-zero"; return 1; }
     assert_eq "$NEW_THREAD" "$(cat "$SESSION/.cs/local/codex-thread-id")" \
-        "the next ags launch must resume the conversation /clear opened" || return 1
+        "the next cs launch must resume the conversation /clear opened" || return 1
     printf '%s' "$out" | jq -e '.hookSpecificOutput.hookEventName == "SessionStart"' >/dev/null \
         || { echo "  FAIL: not a SessionStart hook output: $out"; return 1; }
     assert_output_contains "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext')" \
@@ -96,7 +96,7 @@ test_a_stale_marker_is_dropped() {
     assert_not_exists "$SESSION/.cs/local/pending-handoff" || return 1
 }
 
-# Every ags launch reaches Codex as a resume (ags creates the thread first),
+# Every cs launch reaches Codex as a resume (cs creates the thread first),
 # and the launch owns that binding and any rotation it starts. The hook only
 # records that the conversation ran here.
 test_resume_changes_nothing_but_the_log() {
@@ -132,9 +132,9 @@ test_a_run_without_the_lease_leaves_a_stale_marker() {
     assert_file_exists "$SESSION/.cs/local/pending-handoff" "only the owning run tidies the session" || return 1
 }
 
-# A plain codex run, or a Claude conversation's environment, is not an ags
+# A plain codex run, or a Claude conversation's environment, is not a cs
 # Codex launch: the hook stays silent and touches nothing.
-test_outside_an_ags_codex_run_the_hook_is_inert() {
+test_outside_a_cs_codex_run_the_hook_is_inert() {
     local out status=0
     out=$(printf '{"session_id":"%s","source":"clear"}' "$NEW_THREAD" \
         | env -u CS_RUN_ENGINE -u CS_SESSION_DIR "$CS_BIN" -codex-hook session-start) || status=$?
@@ -151,7 +151,7 @@ test_unknown_hook_event_is_a_usage_error() {
     local status=0 out
     out=$("$CS_BIN" -codex-hook stop </dev/null 2>&1) || status=$?
     assert_eq 2 "$status" || return 1
-    assert_output_contains "$out" "Usage: ags -codex-hook session-start" || return 1
+    assert_output_contains "$out" "Usage: cs -codex-hook session-start" || return 1
 }
 
 run_test test_clear_with_an_armed_handoff_rebinds_and_loads_it
@@ -160,7 +160,7 @@ run_test test_a_stale_marker_is_dropped
 run_test test_resume_changes_nothing_but_the_log
 run_test test_a_run_without_the_lease_rebinds_nothing
 run_test test_a_run_without_the_lease_leaves_a_stale_marker
-run_test test_outside_an_ags_codex_run_the_hook_is_inert
+run_test test_outside_a_cs_codex_run_the_hook_is_inert
 run_test test_unknown_hook_event_is_a_usage_error
 
 report_results

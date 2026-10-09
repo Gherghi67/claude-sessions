@@ -425,7 +425,7 @@ test_launch_banner_shows_notes_card() {
     # rather than one literal sentence: the wording is design, the pair is the
     # contract.
     assert_output_contains "$out" "2026.99.3 available" "the row announces the version" || return 1
-    assert_output_contains "$out" "ags -update" "and names the command that gets it" || return 1
+    assert_output_contains "$out" "cs -update" "and names the command that gets it" || return 1
     assert_output_contains "$out" "2026.99.3" "card shows the newest version" || return 1
     assert_output_contains "$out" "One fix: the statusline is readable." "card shows its summary" || return 1
     assert_output_contains "$out" "and 1 earlier versions" "card shows the collapse line" || return 1
@@ -448,7 +448,7 @@ test_launch_banner_quiet_on_empty_notes_cache() {
     }
     export CS_NO_UPDATE_CHECK=1 HOME="$ORIGINAL_HOME"
     assert_output_contains "$out" "2026.99.3 available" "the row is still shown" || return 1
-    assert_output_contains "$out" "ags -update" "and still names the command" || return 1
+    assert_output_contains "$out" "cs -update" "and still names the command" || return 1
     assert_output_not_contains "$out" "One fix: the statusline is readable." \
         "no card rows from the tombstone (the populated-cache test proves this string DOES render when present)" || return 1
     assert_output_not_contains "$out" "earlier versions" "no collapse line from the tombstone" || return 1
@@ -493,7 +493,7 @@ exit 0
 SCRIPT
     chmod +x "$stub"
     local want_bin
-    want_bin="$(cd "$(dirname "$CS_BIN")" && pwd -P)/ags"
+    want_bin="$(cd "$(dirname "$CS_BIN")" && pwd -P)/cs"
     export HOME="$TEST_TMPDIR/home-export"
     mkdir -p "$HOME/.cache/cs"
     printf '%s 2026.99.3\n' "$(date +%s)" > "$HOME/.cache/cs/update-check"
@@ -506,7 +506,7 @@ SCRIPT
     }
     export CS_NO_UPDATE_CHECK=1
     assert_output_contains "$out" "UPDATE_AVAILABLE=2026.99.3" "the pending version is exported" || { export HOME="$ORIGINAL_HOME"; return 1; }
-    assert_output_contains "$out" "CS_BIN=$want_bin" "the absolute path of the running ags is exported" || { export HOME="$ORIGINAL_HOME"; return 1; }
+    assert_output_contains "$out" "CS_BIN=$want_bin" "the absolute path of the running cs is exported" || { export HOME="$ORIGINAL_HOME"; return 1; }
     # Nothing pending exports no version, even when the launching shell
     # carries a parent launch's verdict (a nested cs): it is cleared before
     # the conditional export. CS_BIN is still exported, and an inherited one
@@ -606,6 +606,27 @@ echo "cs update tests"
 echo "==============="
 echo ""
 
+# code-sessions' release URLs are the original cs's: run inside its profile,
+# -update would install the original over it, -uninstall take its commands.
+test_code_sessions_refuses_update_and_uninstall() {
+    local out status verb
+    for verb in -update -uninstall; do
+        status=0
+        out=$(CODE_SESSIONS_HOME="$TEST_TMPDIR/profile" "$CS_BIN" "$verb" </dev/null 2>&1) || status=$?
+        assert_eq 1 "$status" "$verb must refuse" || return 1
+        assert_output_contains "$out" "code-sessions updates from its checkout" "$verb names the way" || return 1
+    done
+    status=0
+    out=$(CODE_SESSIONS_HOME="$TEST_TMPDIR/profile" "$CS_BIN" -update --check 2>&1) || status=$?
+    assert_eq 1 "$status" "even a check" || return 1
+}
+
+test_without_code_sessions_home_update_is_not_refused() {
+    local out
+    out=$(env -u CODE_SESSIONS_HOME "$CS_BIN" -update --bogus 2>&1) || true
+    assert_output_contains "$out" "Unknown option: --bogus" "the update verb runs as upstream's" || return 1
+}
+
 run_test test_help_shows_update_command
 run_test test_help_shows_check_and_force
 run_test test_help_does_not_show_auto_update
@@ -631,6 +652,8 @@ run_test test_launch_banner_shows_notes_card
 run_test test_launch_banner_quiet_on_empty_notes_cache
 run_test test_launch_banner_card_yields_to_the_mod
 run_test test_launch_exports_update_verdict_to_the_mod
+run_test test_code_sessions_refuses_update_and_uninstall
+run_test test_without_code_sessions_home_update_is_not_refused
 run_test test_notify_writes_notes_cache
 run_test test_notify_writes_notes_cache_past_stale_tmp_files
 run_test test_notify_writes_empty_full_cache_when_fetch_fails

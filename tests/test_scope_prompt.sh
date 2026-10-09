@@ -536,7 +536,7 @@ test_stage_trace_records_the_run_in_order() {
         || { echo "  FAIL: elapsed column must be non-decreasing integer milliseconds"; return 1; }
 }
 
-# An encrypted session keeps its ags files behind .cs/private, a link into its
+# An encrypted session keeps its cs files behind .cs/private, a link into its
 # vault; the trace, launch mark included, goes there and never to .cs/local.
 test_stage_trace_goes_into_the_private_dir() {
     seed_repo "src/api.ts"

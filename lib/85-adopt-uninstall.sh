@@ -1,5 +1,5 @@
 # ABOUTME: Session .gitignore setup, adopting an existing project, and full uninstall.
-# ABOUTME: Backs 'ags -adopt' and 'ags -uninstall'.
+# ABOUTME: Backs 'cs -adopt' and 'cs -uninstall'.
 
 create_session_gitignore() {
     local session_dir="$1"
@@ -75,7 +75,7 @@ ENTRIES
     done <<< "$entries"
 }
 
-# Adopt an existing project directory as an agent-sessions workspace
+# Adopt an existing project directory as a cs session
 adopt_session() {
     local session_name="${1:-}" explicit_engine="" engine
     [ "$#" -eq 0 ] || shift
@@ -85,7 +85,7 @@ adopt_session() {
                 [ -n "${2:-}" ] || error "--engine needs claude or codex"
                 explicit_engine="$2"; shift 2 ;;
             --engine=*) explicit_engine="${1#*=}"; shift ;;
-            *) error "Usage: ags -adopt <name> [--engine claude|codex]" ;;
+            *) error "Usage: cs -adopt <name> [--engine claude|codex]" ;;
         esac
         cs_engine_known "$explicit_engine" || error "--engine needs claude or codex"
     done
@@ -99,7 +99,7 @@ adopt_session() {
     # read it as "not a repo", `git init` over it and `git add -A` the user's
     # PR branch. Claude Code's worktrees have their own verb.
     if [ -f "$target_dir/.git" ]; then
-        error "$target_dir is a linked git worktree. For Claude Code's worktrees run ags -adopt --worktrees from the repo; plain ags -adopt would commit into this branch."
+        error "$target_dir is a linked git worktree. For Claude Code's worktrees run cs -adopt --worktrees from the repo; plain cs -adopt would commit into this branch."
     fi
 
     # A .cs/ directory with no session link is orphaned: `cs -rm`/the TUI's `d`
@@ -119,7 +119,7 @@ adopt_session() {
         done
 
         if [ -n "$existing_name" ]; then
-            error "Directory is already adopted as session '$existing_name' (open it with: ags $existing_name)"
+            error "Directory is already adopted as session '$existing_name' (open it with: cs $existing_name)"
         fi
 
         if cs_interactive; then
@@ -230,7 +230,7 @@ adopt_session() {
 
     info "Adopted $(basename "$target_dir") as session '$session_name'"
     echo -e "${DIM}Symlink: $session_link -> $target_dir${NC}"
-    echo -e "${DIM}Resume with: ags $session_name${NC}"
+    echo -e "${DIM}Resume with: cs $session_name${NC}"
 }
 
 # Append each entry to a git exclude file once. Append only: the file may hold
@@ -281,14 +281,14 @@ EOF
 
 # Register every worktree Claude Code created under <repo>/.claude/worktrees/
 # as a session named <repo>.<worktree>, bound to the conversation it already
-# holds. One worktree is one conversation, which is ags's own model, so nothing
+# holds. One worktree is one conversation, which is cs's own model, so nothing
 # changes shape: the session link points into the repo, the state binds the
 # UUID, and the Objective is the conversation's first prompt. The checkout is
-# a live PR branch, so ags's files are hidden through the repo's common exclude
+# a live PR branch, so cs's files are hidden through the repo's common exclude
 # rather than committed, and the tracked CLAUDE.md is never touched.
 #
 # `.` separates repo and worktree because `@` already means <base>@<task> and
-# would make ags look for a base session. No cs_base is recorded: these are
+# would make cs look for a base session. No cs_base is recorded: these are
 # peers, and a base would fuse their task lists and keychain namespaces.
 #
 # A re-run adopts what is new, skips what is already a session, finishes an
@@ -299,13 +299,13 @@ adopt_worktrees() {  # [--dry-run]
     for arg in "$@"; do
         case "$arg" in
             --dry-run) dry_run=1 ;;
-            *) error "Unknown option for ags -adopt --worktrees: $arg (only --dry-run)" ;;
+            *) error "Unknown option for cs -adopt --worktrees: $arg (only --dry-run)" ;;
         esac
     done
 
     local repo
     repo=$(git rev-parse --show-toplevel 2>/dev/null) \
-        || error "ags -adopt --worktrees reads <repo>/.claude/worktrees, and $(pwd) is not inside a git repository"
+        || error "cs -adopt --worktrees reads <repo>/.claude/worktrees, and $(pwd) is not inside a git repository"
     repo=$(cd "$repo" && pwd -P)
     local wt_root="$repo/.claude/worktrees"
     [ -d "$wt_root" ] || error "No Claude Code worktrees to adopt: $wt_root does not exist"
@@ -348,14 +348,14 @@ adopt_worktrees() {  # [--dry-run]
         state="$wt_dir/.cs/local/state"
         if [ -d "$wt_dir/.cs" ]; then
             # Three kinds of .cs/ can sit here. One this command marked and
-            # linked is a session, or was one until `ags -rm` took the link
+            # linked is a session, or was one until `cs -rm` took the link
             # and left .cs/ behind as that verb does; neither is re-adopted,
             # the second is named so the user knows how to get it back. One it
             # marked and never linked died part-way and is finished below.
             # Anything else is someone's session.
             if [ "$(_read_local_state "$state" git_bookkeeping)" != "exclude" ] || [ -e "$link" ] || [ -L "$link" ]; then
                 # A run that died between ln -s and the marker left a linked
-                # session without one; without it a later ags -rm would be undone.
+                # session without one; without it a later cs -rm would be undone.
                 if [ "$(_read_local_state "$state" git_bookkeeping)" = "exclude" ] && [ -z "$(_read_local_state "$state" adopted)" ] \
                     && [ -L "$link" ] && [ "$(readlink "$link")" = "$wt_dir" ] && [ "$dry_run" != 1 ]; then
                     _set_local_state "$state" adopted "$(date '+%Y-%m-%d')"
@@ -364,7 +364,7 @@ adopt_worktrees() {  # [--dry-run]
                 continue
             fi
             if [ -n "$(_read_local_state "$state" adopted)" ]; then
-                echo -e "${DIM}skip $wt_name: removed with ags -rm (delete its .cs/ to adopt it again)${NC}"
+                echo -e "${DIM}skip $wt_name: removed with cs -rm (delete its .cs/ to adopt it again)${NC}"
                 continue
             fi
         fi
@@ -388,8 +388,8 @@ adopt_worktrees() {  # [--dry-run]
         tracked=$(_exclude_session_tracked_conflict "$wt_dir")
         if [ -n "$tracked" ]; then
             case "$tracked" in
-                *symlink) echo -e "${DIM}skip $wt_name: $tracked, and ags writes through it at every open${NC}" ;;
-                *) echo -e "${DIM}skip $wt_name: $tracked is tracked on its branch, and ags would rewrite it at every open${NC}" ;;
+                *symlink) echo -e "${DIM}skip $wt_name: $tracked, and cs writes through it at every open${NC}" ;;
+                *) echo -e "${DIM}skip $wt_name: $tracked is tracked on its branch, and cs would rewrite it at every open${NC}" ;;
             esac
             continue
         fi
@@ -417,20 +417,20 @@ adopt_worktrees() {  # [--dry-run]
         mkdir -p "$SESSIONS_ROOT"
         ln -s "$wt_dir" "$link"
         # Written last: its absence is what tells a half-done adoption apart
-        # from a session ags -rm removed.
+        # from a session cs -rm removed.
         _set_local_state "$state" adopted "$(date '+%Y-%m-%d')"
         adopted=$((adopted + 1))
         info "Adopted $wt_name as session '$session_name'"
     done
-    [ "$dry_run" = 1 ] || echo -e "${DIM}$adopted adopted; open one with: ags $repo_name.<worktree>${NC}"
+    [ "$dry_run" = 1 ] || echo -e "${DIM}$adopted adopted; open one with: cs $repo_name.<worktree>${NC}"
 }
 
 # Take back the Ctrl+X bindings the installer added, and the
-# Option+1 / Option+2 ones an earlier ags added, only where a key still holds
-# ags's value: a key bound to anything else is the user's. A Global block left
+# Option+1 / Option+2 ones an earlier cs added, only where a key still holds
+# cs's value: a key bound to anything else is the user's. A Global block left
 # empty by that goes, and so does a file left as exactly {"bindings":[]},
 # unless it is a symlink, whose target is written through instead so a
-# dotfiles manager's copy does not keep ags's keys. The recorded answer goes
+# dotfiles manager's copy does not keep cs's keys. The recorded answer goes
 # too, so a later install asks again.
 _uninstall_rotate_wrap_keys() {
     local file ours held stripped
@@ -438,7 +438,7 @@ _uninstall_rotate_wrap_keys() {
     rm -f "$(_cs_rotate_wrap_keys_answer_file)"
     [ -e "$file" ] || return 0
     if ! command -v jq >/dev/null 2>&1; then
-        warn "jq not found - cannot remove ags's rotate/wrap bindings from $file"
+        warn "jq not found - cannot remove cs's rotate/wrap bindings from $file"
         return 0
     fi
     if ! _cs_keybindings_shape_ok "$file"; then
@@ -459,13 +459,13 @@ _uninstall_rotate_wrap_keys() {
         rm -f "$file"
         info "Removed $file"
     elif cs_write_atomic "$file" jq . <<< "$stripped"; then
-        info "Removed ags's $held bindings from $file"
+        info "Removed cs's $held bindings from $file"
     else
         warn "Could not write $file; its rotate/wrap bindings were left in place"
     fi
 }
 
-# Uninstall agent-sessions and all components
+# Uninstall cs and all components
 run_uninstall() {
     local install_dir="${CS_INSTALL_DIR:-$HOME/.local/bin}"
     local install_engines install_config="${CS_INSTALL_DIR:-$HOME/.local/bin}/.cs-install-engines"
@@ -491,18 +491,18 @@ run_uninstall() {
     # outlived a full uninstall and made the next install look up to date.
     local update_cache_dir="${CS_CACHE_DIR:-$HOME/.cache/cs}"
 
-    warn "This will uninstall agent-sessions (ags) and its cs compatibility aliases:"
-    echo "  - $install_dir/ags and $install_dir/cs, plus ags/cs companion commands"
+    warn "This will uninstall cs and all its components:"
+    echo "  - $install_dir/cs, $install_dir/cs-secrets, $install_dir/cs-codex-thread, $install_dir/cs-statusline, $install_dir/cs-subagent-statusline, $install_dir/cs-tui(.exe)"
     echo "  - Hooks in $hooks_dir/"
     echo "  - Retired cs commands in $commands_dir/"
     echo "  - Skills in $skills_dir/"
     if [[ ",$install_engines," == *,codex,* ]]; then
-        echo "  - Codex skills in $codex_skills_dir/ and the ags hook in ${codex_skills_dir%/skills}/hooks.json"
+        echo "  - Codex skills in $codex_skills_dir/ and the cs hook in ${codex_skills_dir%/skills}/hooks.json"
     fi
     echo "  - Shell completions"
     echo "  - Update-check cache in $update_cache_dir/"
     echo "  - Hook entries in $settings_file"
-    echo "  - ags's rotate/wrap key bindings in $(_cs_keybindings_file)"
+    echo "  - cs's rotate/wrap key bindings in $(_cs_keybindings_file)"
     echo ""
     read -p "Continue with uninstall? [y/N] " -n 1 -r
     echo ""
@@ -512,13 +512,13 @@ run_uninstall() {
     fi
 
     echo ""
-    info "Uninstalling agent-sessions..."
+    info "Uninstalling cs..."
     echo ""
 
-    # Remove canonical commands and legacy command aliases. `-L` includes a
-    # dangling symlink left by an interrupted install or manual binary removal.
+    # Remove the commands. `-L` includes a dangling symlink left by an
+    # interrupted install or manual binary removal.
     local command_name
-    for command_name in ags cs ags-secrets cs-secrets ags-codex-thread cs-codex-thread; do
+    for command_name in cs cs-secrets cs-codex-thread; do
         if [ -e "$install_dir/$command_name" ] || [ -L "$install_dir/$command_name" ]; then
             rm -f "$install_dir/$command_name"
             info "Removed $install_dir/$command_name"
@@ -526,24 +526,23 @@ run_uninstall() {
     done
 
     if [[ ",$install_engines," == *,claude,* ]]; then
-    for command_name in ags-statusline cs-statusline ags-subagent-statusline cs-subagent-statusline; do
+    for command_name in cs-statusline cs-subagent-statusline; do
         if [ -e "$install_dir/$command_name" ] || [ -L "$install_dir/$command_name" ]; then
             rm -f "$install_dir/$command_name"
             info "Removed $install_dir/$command_name"
         fi
     done
 
-    # Remove status-line registrations only when they point at either the
-    # canonical ags helpers or their legacy cs aliases;
+    # Remove the status-line registration only when it points at cs-statusline;
     # a status line the user configured themselves is left untouched.
     if command -v jq >/dev/null 2>&1 && _strip_statusline_registration "$settings_file"; then
-        info "Removed agent-sessions statusLine registration from settings.json"
+        info "Removed cs-statusline registration from settings.json"
     fi
 
     # Remove the subagentStatusLine registration only when it points at one of
     # our helper names; a row renderer the user configured is left alone.
     if command -v jq >/dev/null 2>&1 && _strip_subagent_statusline_registration "$settings_file"; then
-        info "Removed agent-sessions subagentStatusLine registration from settings.json"
+        info "Removed cs-subagent-statusline registration from settings.json"
     fi
 
     rm -f "$(_statusline_declined_marker)"
@@ -552,7 +551,7 @@ run_uninstall() {
 
     # The .exe name is only ever a leftover from an install that predates
     # dropping Windows; remove it too so an upgrade leaves nothing behind.
-    for _tui in ags-tui cs-tui ags-tui.exe cs-tui.exe; do
+    for _tui in cs-tui cs-tui.exe; do
         if [ -f "$install_dir/$_tui" ]; then
             rm "$install_dir/$_tui"
             info "Removed $install_dir/$_tui"
@@ -631,15 +630,15 @@ run_uninstall() {
     if command -v jq >/dev/null 2>&1 \
         && grep -q -- '-codex-hook session-start' "${codex_skills_dir%/skills}/hooks.json" 2>/dev/null; then
         if _codex_hooks_unregister "${codex_skills_dir%/skills}"; then
-            info "Removed the ags hook from ${codex_skills_dir%/skills}/hooks.json"
+            info "Removed the cs hook from ${codex_skills_dir%/skills}/hooks.json"
         else
-            warn "Could not remove the ags hook from ${codex_skills_dir%/skills}/hooks.json; remove its SessionStart entry by hand"
+            warn "Could not remove the cs hook from ${codex_skills_dir%/skills}/hooks.json; remove its SessionStart entry by hand"
         fi
     fi
     fi
 
     # Remove shell completions
-    for _completion in ags.bash cs.bash; do
+    for _completion in cs.bash; do
         if [ -f "$bash_completion_dir/$_completion" ] || [ -L "$bash_completion_dir/$_completion" ]; then
             rm -f "$bash_completion_dir/$_completion"
             info "Removed $bash_completion_dir/$_completion"
@@ -648,7 +647,7 @@ run_uninstall() {
 
     local zsh_dir
     for zsh_dir in "${zsh_completion_dirs[@]}"; do
-        for _completion in _ags _cs; do
+        for _completion in _cs; do
             if [ -f "$zsh_dir/$_completion" ] || [ -L "$zsh_dir/$_completion" ]; then
                 rm -f "$zsh_dir/$_completion"
                 info "Removed $zsh_dir/$_completion"
@@ -720,7 +719,7 @@ run_uninstall() {
             if [[ $REPLY =~ ^[Yy]$ ]]; then
                 # Find cs-secrets script
                 local secrets_script=""
-                for loc in "$install_dir/ags-secrets" "$install_dir/cs-secrets" "/usr/local/bin/ags-secrets" "/usr/local/bin/cs-secrets"; do
+                for loc in "$install_dir/cs-secrets" "$install_dir/cs-secrets" "/usr/local/bin/cs-secrets" "/usr/local/bin/cs-secrets"; do
                     if [ -x "$loc" ]; then
                         secrets_script="$loc"
                         break
@@ -747,7 +746,7 @@ run_uninstall() {
         echo ""
         local mounted
         if ! mounted=$(_volume_mounted_under "$SESSIONS_ROOT"); then
-            warn "Kept $SESSIONS_ROOT: ags could not read the mount table, so it cannot tell whether a volume is mounted inside it."
+            warn "Kept $SESSIONS_ROOT: cs could not read the mount table, so it cannot tell whether a volume is mounted inside it."
         elif [ -n "$mounted" ]; then
             warn "Kept $SESSIONS_ROOT: a volume is mounted inside it at $mounted, and deleting the directory would delete what the volume holds. Unmount it before you delete $SESSIONS_ROOT."
         else

@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=tests/test_lib.sh
 source "$SCRIPT_DIR/test_lib.sh"
 
-SL="$SCRIPT_DIR/../bin/ags-statusline"
+SL="$SCRIPT_DIR/../bin/cs-statusline"
 # Every cs launch exports CS_BIN (the installed cs), so a run from inside a cs
 # session inherits one: this suite tests the checkout's cs, and setup() unsets
 # every exported CS_* variable, which would leave CS_BIN unbound. Drop the
@@ -1899,8 +1899,8 @@ test_enable_registers_both_status_lines() {
     local sl ssl
     sl=$(jq -r '.statusLine.command' "$CS_CLAUDE_DIR/settings.json")
     ssl=$(jq -r '.subagentStatusLine.command' "$CS_CLAUDE_DIR/settings.json")
-    assert_output_contains "$sl" "/ags-statusline" "statusLine registered" || return 1
-    assert_output_contains "$ssl" "/ags-subagent-statusline" "subagentStatusLine registered" || return 1
+    assert_output_contains "$sl" "/cs-statusline" "statusLine registered" || return 1
+    assert_output_contains "$ssl" "/cs-subagent-statusline" "subagentStatusLine registered" || return 1
 }
 
 test_disable_leaves_a_foreign_subagent_statusline_alone() {
@@ -1923,7 +1923,7 @@ test_enable_warns_that_a_restart_is_required() {
     assert_output_contains "$out" "restart" "enabling must mention the restart requirement" || return 1
 }
 
-# ags rewrites settings.json where it lies: a symlinked file (a dotfiles
+# cs rewrites settings.json where it lies: a symlinked file (a dotfiles
 # manager's) stays a link, and the file keeps its permission bits.
 test_enable_and_disable_rewrite_settings_in_place() {
     export CS_CLAUDE_DIR="$TEST_TMPDIR/claude"
@@ -1933,7 +1933,7 @@ test_enable_and_disable_rewrite_settings_in_place() {
     chmod 750 "$real"
     ln -s "$real" "$CS_CLAUDE_DIR/settings.json"
     for step in enable disable; do
-        bash "$CS_BIN" -statusline "$step" >/dev/null 2>&1 || { echo "  FAIL: ags -statusline $step failed"; return 1; }
+        bash "$CS_BIN" -statusline "$step" >/dev/null 2>&1 || { echo "  FAIL: cs -statusline $step failed"; return 1; }
         [ -L "$CS_CLAUDE_DIR/settings.json" ] \
             || { echo "  FAIL: $step replaced the symlinked settings.json with a plain file"; return 1; }
         assert_eq "750" "$(_file_mode "$real")" "$step keeps settings.json's mode" || return 1
@@ -2573,7 +2573,7 @@ CURL
 # Claude Code keeps one login per config dir: "Claude Code-credentials" plus
 # "-<sha256(dir)[0:8]>" once CLAUDE_CONFIG_DIR is set, with
 # CLAUDE_SECURESTORAGE_CONFIG_DIR naming the dir when set (empty: no suffix).
-# Asking for the bare item from the ags profile read the other install's login.
+# Asking for the bare item from the code-sessions profile read the other install's login.
 # $1 is the item the refresher must ask for; the caller sets the environment.
 _refresh_asks_for() {
     rm -rf "$CS_USAGE_DIR" "$TEST_TMPDIR/security-argv"

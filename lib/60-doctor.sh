@@ -1,5 +1,5 @@
 # ABOUTME: Health checks for keychain, hooks, shadow ref, memory, statusline, and tokens.
-# ABOUTME: Backs 'ags -doctor' / 'ags -diag'.
+# ABOUTME: Backs 'cs -doctor' / 'cs -diag'.
 
 _doctor_ok()   { printf "  ${GREEN}[ OK ]${NC} %s\n" "$1"; }
 _doctor_warn() { printf "  ${YELLOW}[WARN]${NC} %s\n" "$1"; DOCTOR_WARN=$((DOCTOR_WARN+1)); }
@@ -38,13 +38,13 @@ _doctor_check_settings_valid() {
 _doctor_check_keychain() {
     local script
     if ! script=$(find_secrets_script); then
-        _doctor_warn "Keychain: ags-secrets binary not found on PATH"
+        _doctor_warn "Keychain: cs-secrets binary not found on PATH"
         return
     fi
     local backend_line
     backend_line=$("$script" backend 2>/dev/null | grep '^Storage backend:' | head -1 || true)
     if [ -z "$backend_line" ]; then
-        _doctor_fail "Keychain: ags-secrets backend check failed"
+        _doctor_fail "Keychain: cs-secrets backend check failed"
         return
     fi
     _doctor_ok "Keychain: ${backend_line#Storage backend: }"
@@ -130,7 +130,7 @@ _doctor_check_hook_files_executable() {
 _doctor_check_hook_drift() {
     local hooks_dir="$HOOKS_DEPLOY_DIR"
     local skills_dir="${CS_SKILLS_DIR:-$HOME/.claude/skills}"
-    [ -d "hooks" ] && [ -f "install.sh" ] && [ -f "bin/ags" ] || return 0
+    [ -d "hooks" ] && [ -f "install.sh" ] && [ -f "bin/cs" ] || return 0
 
     # Those three names are not proof this checkout produced the install. Any
     # directory holding them passes, and a scratch copy of the repo is an
@@ -145,8 +145,8 @@ _doctor_check_hook_drift() {
     # every check after this one would silently never print. A machine with
     # nothing installed has no stamp, which is the ordinary case, not an error.
     local src_version="" deployed_version=""
-    [ -f "bin/ags" ] &&
-        src_version=$(sed -n 's/^VERSION="\([^"]*\)".*/\1/p' bin/ags 2>/dev/null | head -1)
+    [ -f "bin/cs" ] &&
+        src_version=$(sed -n 's/^VERSION="\([^"]*\)".*/\1/p' bin/cs 2>/dev/null | head -1)
     [ -f "$hooks_dir/.version" ] &&
         deployed_version=$(tr -d '[:space:]' < "$hooks_dir/.version" 2>/dev/null)
     [ -n "$src_version" ] && [ "$src_version" = "$deployed_version" ] || return 0
@@ -230,7 +230,7 @@ _doctor_check_iterm2() {
 #     that name until it is removed,
 #   - a spawned-by pointer at a deleted session sends the drain notify nowhere,
 #   - a tmux session named 'cs' (or CS_TMUX_SESSION) without the @cs_managed
-#     stamp is one ags -spawn will refuse to reuse.
+#     stamp is one cs -spawn will refuse to reuse.
 _doctor_check_spawn() {
     local spawn_dir="$SESSIONS_ROOT/.spawn"
     local stale=() orphan=() dangling=() clean=1
@@ -252,7 +252,7 @@ _doctor_check_spawn() {
         clean=0
     fi
     if [ ${#orphan[@]} -gt 0 ]; then
-        _doctor_warn "Spawn seeds: pending seed(s) with no session: ${orphan[*]} (ags -spawn refuses these names until the seed is removed)"
+        _doctor_warn "Spawn seeds: pending seed(s) with no session: ${orphan[*]} (cs -spawn refuses these names until the seed is removed)"
         clean=0
     fi
 
@@ -274,14 +274,14 @@ _doctor_check_spawn() {
     local tmux_session="${CS_TMUX_SESSION:-cs}"
     if command -v "${CS_TMUX_BIN:-tmux}" >/dev/null 2>&1 && _spawn_tmux has-session -t "=$tmux_session" 2>/dev/null; then
         if ! _cs_tmux_managed; then
-            _doctor_warn "tmux: a session named '$tmux_session' exists but is not cs-managed (@cs_managed unset); ags -spawn will refuse to use it"
+            _doctor_warn "tmux: a session named '$tmux_session' exists but is not cs-managed (@cs_managed unset); cs -spawn will refuse to use it"
             clean=0
         fi
     fi
 
     # An `if` (not `[ ... ] && ...`) so the function returns 0 even when a
     # warning fired: under `set -e` a non-zero return here would abort the
-    # whole `ags -doctor` run before its later checks and the summary.
+    # whole `cs -doctor` run before its later checks and the summary.
     if [ "$clean" = "1" ]; then
         _doctor_ok "Spawn: no stale seeds, dangling spawned-by links, or foreign '$tmux_session' tmux session"
     fi
@@ -298,7 +298,7 @@ _doctor_check_deployed_version() {
     deployed=$(cat "$stamp" 2>/dev/null || true)
     [ -n "$deployed" ] || return 0
     if [ "$deployed" = "$VERSION" ]; then
-        _doctor_ok "Deployed version: artifacts stamped $deployed match ags $VERSION"
+        _doctor_ok "Deployed version: artifacts stamped $deployed match cs $VERSION"
     else
         _doctor_warn "Deployed version: artifacts stamped $deployed but cs is $VERSION (run install.sh)"
     fi
@@ -497,14 +497,14 @@ _doctor_check_statusline() {
     # statusline itself is genuinely optional.
     local gating="context-pct is never written, so the rotation nudge and the queue context breaker stay inert"
     if [ -z "$cmd" ]; then
-        _doctor_warn "Statusline: not registered — $gating (enable with: ags -statusline enable)"
+        _doctor_warn "Statusline: not registered — $gating (enable with: cs -statusline enable)"
         return
     fi
     case "$cmd" in
-        */ags-statusline|*/cs-statusline)
+        */cs-statusline|*/cs-statusline)
             local bin="${cmd/#\~/$HOME}"
             if [ -x "$bin" ]; then
-                _doctor_ok "Statusline: ags-statusline registered and executable"
+                _doctor_ok "Statusline: cs-statusline registered and executable"
             else
                 _doctor_fail "Statusline: registered as $cmd but the binary is missing or not executable"
             fi
@@ -515,8 +515,8 @@ _doctor_check_statusline() {
             [ -f "$caps_file" ] && [ -r "$caps_file" ] && { IFS= read -r caps < "$caps_file"; } 2>/dev/null
             case "$caps" in
                 on)  _doctor_ok "Statusline caps: rounded (this machine's font has the Powerline caps)" ;;
-                off) _doctor_ok "Statusline caps: square (answered off; ags -statusline caps ask to revisit)" ;;
-                *)   _doctor_warn "Statusline caps: square until answered — run: ags -statusline caps ask" ;;
+                off) _doctor_ok "Statusline caps: square (answered off; cs -statusline caps ask to revisit)" ;;
+                *)   _doctor_warn "Statusline caps: square until answered — run: cs -statusline caps ask" ;;
             esac
             ;;
         *)
@@ -526,7 +526,7 @@ _doctor_check_statusline() {
 }
 
 # The Ctrl+X bindings the installer offers: the answer this
-# machine gave, and whether keybindings.json still holds ags's keys. Not asked
+# machine gave, and whether keybindings.json still holds cs's keys. Not asked
 # and declined are healthy; a key the user binds to something else (or a bare
 # ctrl+x a chord would shadow), a yes whose keys are gone or are still an
 # earlier cs's Option+1 / Option+2, and a file Claude Code cannot read either
@@ -556,9 +556,9 @@ _doctor_check_rotate_wrap_keys() {
     if [ "$total" -gt 0 ] && [ "$bound" = "$total" ]; then
         retired=$(_cs_keybindings_held "$CS_RETIRED_OPTION_KEYS" < "$file") || retired=""
         if [ -n "$retired" ]; then
-            _doctor_warn "Rotate/wrap keys: $retired still hold ags's earlier bindings in $file (run ags -update to remove them)"
+            _doctor_warn "Rotate/wrap keys: $retired still hold cs's earlier bindings in $file (run cs -update to remove them)"
         else
-            _doctor_ok "Rotate/wrap keys: bound (Ctrl+X R runs /rotate, Ctrl+X W runs /wrap, Ctrl+X 1 and Ctrl+X 2 press the ags band)"
+            _doctor_ok "Rotate/wrap keys: bound (Ctrl+X R runs /rotate, Ctrl+X W runs /wrap, Ctrl+X 1 and Ctrl+X 2 press the cs band)"
         fi
         return
     fi
@@ -577,23 +577,23 @@ _doctor_check_rotate_wrap_keys() {
                             _doctor_warn "Rotate/wrap keys: conflict on $key (bound to $action in $file)"
                         fi
                         ;;
-                    free) _doctor_warn "Rotate/wrap keys: $key not bound (run ags -update to bind it)" ;;
+                    free) _doctor_warn "Rotate/wrap keys: $key not bound (run cs -update to bind it)" ;;
                 esac
             done <<< "$status"
             # With /rotate and /wrap on their chords, the next update takes
-            # ags's Option keys back whatever a band chord holds.
+            # cs's Option keys back whatever a band chord holds.
             if [ "$commands_bound" = 2 ]; then
                 retired=$(_cs_keybindings_held "$CS_RETIRED_OPTION_KEYS" < "$file") || retired=""
                 if [ -n "$retired" ]; then
-                    _doctor_warn "Rotate/wrap keys: $retired still hold ags's earlier bindings in $file (run ags -update to remove them)"
+                    _doctor_warn "Rotate/wrap keys: $retired still hold cs's earlier bindings in $file (run cs -update to remove them)"
                 fi
             fi
             ;;
         no)
-            _doctor_ok "Rotate/wrap keys: declined (to be asked again, remove $answer_file and run ags -update in a terminal)"
+            _doctor_ok "Rotate/wrap keys: declined (to be asked again, remove $answer_file and run cs -update in a terminal)"
             ;;
         *)
-            _doctor_ok "Rotate/wrap keys: not asked (run ags -update in a terminal to be asked)"
+            _doctor_ok "Rotate/wrap keys: not asked (run cs -update in a terminal to be asked)"
             ;;
     esac
 }
@@ -606,14 +606,14 @@ _doctor_check_subagent_statusline() {
         cmd=$(jq -r '.subagentStatusLine.command // ""' "$settings" 2>/dev/null) || cmd=""
     fi
     if [ -z "$cmd" ]; then
-        _doctor_ok "Subagent statusline: not registered (optional; enable with: ags -statusline enable)"
+        _doctor_ok "Subagent statusline: not registered (optional; enable with: cs -statusline enable)"
         return
     fi
     case "$cmd" in
-        */ags-subagent-statusline|*/cs-subagent-statusline)
+        */cs-subagent-statusline|*/cs-subagent-statusline)
             local bin="${cmd/#\~/$HOME}"
             if [ -x "$bin" ]; then
-                _doctor_ok "Subagent statusline: ags-subagent-statusline registered and executable"
+                _doctor_ok "Subagent statusline: cs-subagent-statusline registered and executable"
             else
                 _doctor_fail "Subagent statusline: registered as $cmd but the binary is missing or not executable"
             fi
@@ -653,7 +653,7 @@ _doctor_check_auto_memory() {
     fi
 }
 
-# A narrative past CS_NARRATIVE_MAX_BYTES is what `ags -narrative rotate` exists
+# A narrative past CS_NARRATIVE_MAX_BYTES is what `cs -narrative rotate` exists
 # for; doctor only reports, it never rotates.
 _doctor_check_narrative_size() {
     local dir="${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/memory"
@@ -663,7 +663,7 @@ _doctor_check_narrative_size() {
         [ -f "$f" ] || continue
         sz=$(wc -c < "$f" 2>/dev/null | tr -d ' ' || echo 0)
         if [ "$sz" -gt "$max" ]; then
-            _doctor_warn "Narrative: $(basename "$f") is $((sz / 1024)) KB (budget $((max / 1024)) KB) — run ags -narrative rotate"
+            _doctor_warn "Narrative: $(basename "$f") is $((sz / 1024)) KB (budget $((max / 1024)) KB) — run cs -narrative rotate"
             over=$((over + 1))
         fi
     done
@@ -740,7 +740,7 @@ _doctor_check_migration_stamp() {
     state=$(_migration_stamp_state "$dir" "$(cs_actor_raw "$dir" "$dir/.cs")")
     case "$state" in
         fresh)
-            _doctor_ok "Migration stamp: current for ags $VERSION; opens skip the one-time migration checks. To force them: rm .cs/local/migrated" ;;
+            _doctor_ok "Migration stamp: current for cs $VERSION; opens skip the one-time migration checks. To force them: rm .cs/local/migrated" ;;
         narrative)
             _doctor_ok "Migration stamp: current but for MEMORY.md; the next open re-checks the narrative pointer and restamps. To force every check: rm .cs/local/migrated" ;;
         *)
@@ -748,7 +748,7 @@ _doctor_check_migration_stamp() {
     esac
 }
 
-# `ags <base> -integrate-feature` takes <git-dir>/cs/integrate.lock for the
+# `cs <base> -integrate-feature` takes <git-dir>/cs/integrate.lock for the
 # length of a landing, and the autosave hook skips its snapshot while it
 # exists. A lock left behind by a killed integrate silences this checkout's
 # autosave with nothing on screen to say why, so name it and the one command
@@ -858,7 +858,7 @@ run_doctor() {
     local DOCTOR_FAIL=0
     local DOCTOR_WARN=0
 
-    echo "ags doctor - running health checks"
+    echo "cs doctor - running health checks"
     echo ""
 
     local engine session_dir

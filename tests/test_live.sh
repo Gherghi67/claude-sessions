@@ -4,7 +4,7 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/test_lib.sh"
-CS_BIN="$SCRIPT_DIR/../bin/ags"
+CS_BIN="$SCRIPT_DIR/../bin/cs"
 
 setup() {
     TEST_TMPDIR="$(mktemp -d)"
@@ -166,7 +166,7 @@ test_live_actor_is_sessions_own_not_invoker() {
 test_live_none_message_when_no_live() {
     make_dead_session only-dead
     local out; out="$("$CS_BIN" -live 2>&1)"
-    assert_output_contains "$out" "No other live agent-sessions sessions" "prints the empty message" || return 1
+    assert_output_contains "$out" "No other live cs sessions" "prints the empty message" || return 1
 }
 
 test_live_marks_current_via_symlink() {
@@ -200,7 +200,7 @@ test_live_empty_root_message_and_exit0() {
     rm -rf "$CS_SESSIONS_ROOT"   # exercise the [ ! -d "$SESSIONS_ROOT" ] branch
     local out rc
     out="$("$CS_BIN" -live 2>&1)"; rc=$?
-    assert_output_contains "$out" "No other live agent-sessions sessions" "empty root prints the message" || return 1
+    assert_output_contains "$out" "No other live cs sessions" "empty root prints the message" || return 1
     assert_eq "0" "$rc" "empty root exits 0" || return 1
 }
 

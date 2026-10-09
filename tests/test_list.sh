@@ -35,11 +35,11 @@ _list_with_keychain_secrets() {  # backend
     )
 }
 
-# The keychain is the store ags-secrets uses, so -list counts alpha's two.
+# The keychain is the store cs-secrets uses, so -list counts alpha's two.
 test_list_counts_keychain_secrets_under_the_keychain_backend() {
     local out
     out=$(_list_with_keychain_secrets keychain) || {
-        echo "  FAIL: ags -list exited non-zero"
+        echo "  FAIL: cs -list exited non-zero"
         echo "    output: $out"
         return 1
     }
@@ -50,26 +50,26 @@ test_list_counts_keychain_secrets_under_the_keychain_backend() {
 test_list_counts_keychain_secrets_with_no_backend_set() {
     local out
     out=$(_list_with_keychain_secrets "") || {
-        echo "  FAIL: ags -list exited non-zero"
+        echo "  FAIL: cs -list exited non-zero"
         echo "    output: $out"
         return 1
     }
     assert_output_contains "$out" "alpha (⚿ 2)" "an unset backend keeps the keychain count" || return 1
 }
 
-# Under the encrypted backend (the ags profile's) the keychain holds the stable
+# Under the encrypted backend (the code-sessions profile's) the keychain holds the stable
 # install's secrets: cs:alpha:* there belongs to its alpha, not this one. -list
 # must neither read the keychain nor show that count.
 test_list_skips_the_keychain_under_the_encrypted_backend() {
     local out
     out=$(_list_with_keychain_secrets encrypted) || {
-        echo "  FAIL: ags -list exited non-zero"
+        echo "  FAIL: cs -list exited non-zero"
         echo "    output: $out"
         return 1
     }
     assert_output_contains "$out" "alpha" "alpha is still listed" || return 1
     assert_output_not_contains "$out" "⚿" "no count comes from another store" || return 1
-    assert_file_not_exists "$TEST_TMPDIR/security.log" "ags -list must not call security at all" || return 1
+    assert_file_not_exists "$TEST_TMPDIR/security.log" "cs -list must not call security at all" || return 1
 }
 
 # `cs -list` renders the session table under the current bash.
@@ -82,8 +82,8 @@ test_list_renders_sessions() {
         echo "    output: $out"
         return 1
     }
-    assert_output_contains "$out" "alpha" "ags -list should list session alpha" || return 1
-    assert_output_contains "$out" "beta" "ags -list should list session beta"
+    assert_output_contains "$out" "alpha" "cs -list should list session alpha" || return 1
+    assert_output_contains "$out" "beta" "cs -list should list session beta"
 }
 
 # `cs -list` must work under bash <4 (no associative arrays), e.g. macOS stock
@@ -105,8 +105,8 @@ test_list_runs_under_old_bash() {
         echo "    output: $out"
         return 1
     fi
-    assert_output_contains "$out" "alpha" "ags -list should list alpha under bash <4" || return 1
-    assert_output_contains "$out" "beta" "ags -list should list beta under bash <4"
+    assert_output_contains "$out" "alpha" "cs -list should list alpha under bash <4" || return 1
+    assert_output_contains "$out" "beta" "cs -list should list beta under bash <4"
 }
 
 # A non-session directory under the sessions root (editor config, an empty cs
@@ -122,9 +122,9 @@ test_list_omits_non_session_directories() {
         echo "    output: $out"
         return 1
     }
-    assert_output_contains "$out" "alpha" "ags -list should list a real session" || return 1
-    assert_output_not_contains "$out" ".obsidian" "ags -list should omit editor config" || return 1
-    assert_output_not_contains "$out" "worktrees" "ags -list should omit the empty worktrees holder" || return 1
+    assert_output_contains "$out" "alpha" "cs -list should list a real session" || return 1
+    assert_output_not_contains "$out" ".obsidian" "cs -list should omit editor config" || return 1
+    assert_output_not_contains "$out" "worktrees" "cs -list should omit the empty worktrees holder" || return 1
 }
 
 # A pre-.cs/ session keeps its state beside a root CLAUDE.md; -list still shows it.
@@ -138,7 +138,7 @@ test_list_includes_a_legacy_session() {
         echo "    output: $out"
         return 1
     }
-    assert_output_contains "$out" "legacy" "ags -list should list a pre-.cs/ session" || return 1
+    assert_output_contains "$out" "legacy" "cs -list should list a pre-.cs/ session" || return 1
 }
 
 test_tui_launch_exports_the_cs_binary_path() {

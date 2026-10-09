@@ -50,7 +50,7 @@ validate_session_name() {
 
     case "$name" in
         .|..) error "Session name cannot be '.' or '..'" ;;
-        # `ags <name>` reads a leading hyphen as a verb: a session named
+        # `cs <name>` reads a leading hyphen as a verb: a session named
         # -uninstall would run that verb rather than open, and -rm would reach
         # remove_session.
         -*) error "Session name cannot start with a hyphen" ;;

@@ -110,8 +110,8 @@ test_unregistered_session_outside_the_root_does_not_resolve() {
 _stub_picker_dir() {
     local dir="$TEST_TMPDIR/stub-bin"
     mkdir -p "$dir"
-    printf '#!/bin/sh\nprintf "PICKER_RAN\\n" >&2\nexit 0\n' > "$dir/ags-tui"
-    chmod +x "$dir/ags-tui"
+    printf '#!/bin/sh\nprintf "PICKER_RAN\\n" >&2\nexit 0\n' > "$dir/cs-tui"
+    chmod +x "$dir/cs-tui"
     printf '%s' "$dir"
 }
 
@@ -182,9 +182,9 @@ test_dot_outside_any_session_refuses() {
 
     # A literal '.' must never become a session name, and cs must not adopt the
     # directory on the user's behalf: adoption is its own verb.
-    assert_output_contains "$out" "Not an agent-sessions session: $dir" \
+    assert_output_contains "$out" "Not a cs session: $dir" \
         "cs . outside a session should say where it looked" || return 1
-    assert_output_contains "$out" "ags -adopt <name>" \
+    assert_output_contains "$out" "cs -adopt <name>" \
         "cs . outside a session should name the verb that makes one" || return 1
     assert_output_not_contains "$out" "LAUNCHED" \
         "cs . outside a session must not launch anything" || return 1
@@ -287,7 +287,7 @@ test_list_hint_names_bare_cs_from_a_session_directory() {
     out=$(_cs_in "$dir" -list)
 
     # Bare cs is the picker everywhere now, so the hint needs no second form.
-    assert_output_contains "$out" "run bare 'ags' for the interactive session manager" \
+    assert_output_contains "$out" "run bare 'cs' for the interactive session manager" \
         "the -list hint should name bare cs, even from a session directory" || return 1
 }
 
@@ -310,10 +310,10 @@ test_bare_cs_without_a_picker_falls_back_to_help() {
     # picker reachable — the test then measured the picker, not this arm.
     local slim
     slim=$(printf '%s' "$PATH" | tr ':' '\n' \
-        | while IFS= read -r d; do [ -x "$d/ags-tui" ] || [ -x "$d/cs-tui" ] || printf '%s\n' "$d"; done \
+        | while IFS= read -r d; do [ -x "$d/cs-tui" ] || printf '%s\n' "$d"; done \
         | paste -sd: -)
-    if PATH="$slim" command -v ags-tui >/dev/null 2>&1 || PATH="$slim" command -v cs-tui >/dev/null 2>&1; then
-        echo "  FAIL: harness could not build a PATH without ags-tui or cs-tui"
+    if PATH="$slim" command -v cs-tui >/dev/null 2>&1; then
+        echo "  FAIL: harness could not build a PATH without cs-tui"
         return 1
     fi
 

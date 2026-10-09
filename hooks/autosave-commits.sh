@@ -110,7 +110,7 @@ autosave_to_shadow_ref() {
     # and refuses the blanket restore.
     base=$(git rev-parse -q --verify HEAD 2>/dev/null || true)
 
-    # Serialise against `ags <base> -integrate-feature`, which holds the same
+    # Serialise against `cs <base> -integrate-feature`, which holds the same
     # directory while it merges and fast-forwards the base. Skip, never wait:
     # a snapshot taken mid-merge is garbage and the next Edit takes another.
     # Taken here, inside the backgrounded function, so there is no window

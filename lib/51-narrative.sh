@@ -1,5 +1,5 @@
 # ABOUTME: Rotates the current actor's narrative once it passes its byte budget: the
-# ABOUTME: oldest '## ' sections move verbatim to .cs/narrative-archive/. Backs 'ags -narrative'.
+# ABOUTME: oldest '## ' sections move verbatim to .cs/narrative-archive/. Backs 'cs -narrative'.
 
 # One line per '## ' heading: the heading's byte offset, a space, the heading.
 # LC_ALL=C makes awk's length() count bytes, so offsets survive multibyte text
@@ -39,7 +39,7 @@ _narrative_kept_text() {  # snap, live, head_end, cut
 # CS_NARRATIVE_MAX_BYTES, leaving a tail of about CS_NARRATIVE_KEEP_BYTES.
 rotate_narrative() {
     if [ -z "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ] || [ ! -d "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ]; then
-        error "ags -narrative rotate must be run from inside a cs session"
+        error "cs -narrative rotate must be run from inside a cs session"
     fi
     local meta_dir="${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}"
     local session_dir="${CS_SESSION_DIR:-${CLAUDE_SESSION_DIR:-$(dirname "$meta_dir")}}"
@@ -148,7 +148,7 @@ rotate_narrative() {
     if ! cmp -s <(head -c "$cut" "$snap") <(head -c "$cut" "$live"); then
         rm -f "$snap"
         [ "$created" -eq 1 ] && rm -f "$chunk"
-        error "narrative.$actor.md changed during rotation; run ags -narrative rotate again"
+        error "narrative.$actor.md changed during rotation; run cs -narrative rotate again"
     fi
     cs_write_atomic "$live" _narrative_kept_text "$snap" "$live" "$head_end" "$cut" \
         || error "could not rewrite narrative.$actor.md"
@@ -208,7 +208,7 @@ rotate_narrative() {
     echo "rotated $sections sections (${archived_kb} KB) -> $chunk_rel; live file now ${now_kb} KB"
 }
 
-# Dispatcher for ags -narrative
+# Dispatcher for cs -narrative
 run_narrative() {
     local sub="${1:-}"
     case "$sub" in
@@ -217,10 +217,10 @@ run_narrative() {
             ;;
         *)
             # Names both forms: this dispatcher is reached from inside a
-            # session AND from `ags <name> -narrative`, and a message that
+            # session AND from `cs <name> -narrative`, and a message that
             # prescribes only the first sends a caller who correctly named a
             # session off to rotate whichever one their shell is standing in.
-            error "Usage: ags -narrative rotate   |   ags <name> -narrative rotate"
+            error "Usage: cs -narrative rotate   |   cs <name> -narrative rotate"
             ;;
     esac
 }

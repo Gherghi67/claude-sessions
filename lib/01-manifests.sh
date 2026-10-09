@@ -21,7 +21,7 @@ RETIRED_HOOKS=(
     files-context.sh          # retired: PreToolUse:Read context injector that surfaced files.md token estimates
     changes-tracker.sh        # retired: PostToolUse change log re-narrating git history into .cs/changes.md; git log/diff/status is authoritative
     artifact-tracker.sh       # retired: PreToolUse:Write redirect was inert (updatedInput path rewrite is not honored by the harness); tracking removed entirely
-    prose-lint.sh             # retired with the `ags -lint` verb it called; MUST stay listed, because a deployed copy calling the removed verb reads error()'s exit 1 as "violations found" and blocks every turn-end
+    prose-lint.sh             # retired with the `cs -lint` verb it called; MUST stay listed, because a deployed copy calling the removed verb reads error()'s exit 1 as "violations found" and blocks every turn-end
     memory-index-guard.sh     # moved into the sweep skill (sweep/scripts/), so the guard travels with the skill to every engine
 )
 
@@ -143,9 +143,9 @@ _strip_hook_registration() {
     '
 }
 
-# The SessionStart hook ags registers for Codex: Codex runs the command through
+# The SessionStart hook cs registers for Codex: Codex runs the command through
 # a shell, so a path outside the plain-word alphabet is single-quoted.
-_codex_hook_command() {  # ags_path
+_codex_hook_command() {  # cs_path
     case "$1" in
         *[!A-Za-z0-9_./+-]*)
             printf "'%s' -codex-hook session-start" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")" ;;
@@ -156,7 +156,7 @@ _codex_hook_command() {  # ags_path
 # Codex skips a hook, silently, until config.toml trusts it: a table
 # [hooks.state."<hooks.json path>:session_start:<group>:<handler>"] holding the
 # sha256 of the handler group's definition, as compact sorted-key JSON with
-# Codex's defaults filled in. ags writes that hash in the same step that
+# Codex's defaults filled in. cs writes that hash in the same step that
 # registers its hook, so the hook runs without a review prompt.
 _codex_hook_trust_hash() {  # command
     local json
@@ -177,7 +177,7 @@ _codex_trust_tables_edit() {  # config, hooks_file, shift_from, keys...
     local config="$1" file="$2" shift_from="$3" tmp
     shift 3
     [ -f "$config" ] || return 0
-    tmp=$(mktemp "$config.ags.XXXXXX") || return 1
+    tmp=$(mktemp "$config.cs.XXXXXX") || return 1
     awk -v prefix="[hooks.state.\"$file:session_start:" -v shift_from="$shift_from" -v drops="$(printf '%s\n' "$@")" '
         BEGIN {
             n = split(drops, list, "\n")
@@ -203,7 +203,7 @@ _codex_trust_tables_edit() {  # config, hooks_file, shift_from, keys...
     mv "$tmp" "$config" || { rm -f "$tmp"; return 1; }
 }
 
-# Index of ags's own SessionStart group in a hooks.json document, or nothing.
+# Index of cs's own SessionStart group in a hooks.json document, or nothing.
 _codex_hook_group_index() {  # hooks.json content
     printf '%s' "$1" | jq -r '
         [(.hooks.SessionStart // [])
@@ -212,7 +212,7 @@ _codex_hook_group_index() {  # hooks.json content
          | .key] | first // empty'
 }
 
-# Register ags's SessionStart hook in <codex_dir>/hooks.json and trust it in
+# Register cs's SessionStart hook in <codex_dir>/hooks.json and trust it in
 # <codex_dir>/config.toml. A reinstall replaces the group in place and a first
 # install appends it, so the user's own groups keep their indices, and with
 # them their trust. A hooks.json that is not valid JSON is left alone.
@@ -235,7 +235,7 @@ _codex_hooks_register() {  # codex_dir, command
           else .hooks.SessionStart[($i | tonumber)] = $ours end') || return 1
     [ -n "$index" ] || index=$(printf '%s' "$doc" | jq '.hooks.SessionStart | length - 1')
     mkdir -p "$dir" || return 1
-    tmp=$(mktemp "$file.ags.XXXXXX") || return 1
+    tmp=$(mktemp "$file.cs.XXXXXX") || return 1
     printf '%s\n' "$doc" > "$tmp" && chmod 600 "$tmp" && mv "$tmp" "$file" || { rm -f "$tmp"; return 1; }
     hash=$(_codex_hook_trust_hash "$cmd") || return 1
     key="$file:session_start:$index:0"
@@ -245,7 +245,7 @@ _codex_hooks_register() {  # codex_dir, command
     printf '[hooks.state."%s"]\ntrusted_hash = "sha256:%s"\n' "$key" "$hash" >> "$config"
 }
 
-# Remove ags's SessionStart group and its trust table. Groups after it move up
+# Remove cs's SessionStart group and its trust table. Groups after it move up
 # one index, so their trust tables are renamed to match. A hooks.json left with
 # nothing in it is removed.
 _codex_hooks_unregister() {  # codex_dir
@@ -261,35 +261,35 @@ _codex_hooks_unregister() {  # codex_dir
     if [ "$doc" = '{}' ]; then
         rm -f "$file" || return 1
     else
-        tmp=$(mktemp "$file.ags.XXXXXX") || return 1
+        tmp=$(mktemp "$file.cs.XXXXXX") || return 1
         printf '%s\n' "$doc" > "$tmp" && chmod 600 "$tmp" && mv "$tmp" "$file" || { rm -f "$tmp"; return 1; }
     fi
     _codex_trust_tables_edit "$config" "$file" "$index" "$file:session_start:$index:0"
 }
 
-# The Claude Code keybindings ags offers to add. Ctrl+X R and Ctrl+X W are
+# The Claude Code keybindings cs offers to add. Ctrl+X R and Ctrl+X W are
 # "command:<name>" actions, which submit /<name>. Ctrl+X 1 and Ctrl+X 2 are
-# the engine actions the ags mod's band Buttons answer to, so they press the
+# the engine actions the cs mod's band Buttons answer to, so they press the
 # band's rotate (or /clear) and wrap keys (KEEP IN SYNC with ROTATE_ACTION
 # and WRAP_ACTION in mods/cs/hooks/register.tsx). install.sh asks once per
-# machine and binds them, ags -uninstall takes back only the keys that still
-# hold these values, and ags -doctor reports them.
+# machine and binds them, cs -uninstall takes back only the keys that still
+# hold these values, and cs -doctor reports them.
 CS_ROTATE_WRAP_KEYS='{"ctrl+x r":"command:rotate","ctrl+x w":"command:wrap","ctrl+x 1":"strip:jump1","ctrl+x 2":"strip:jump2"}'
 
-# Option+1 and Option+2 on the same two commands, as ags 2026.10.6 bound them.
+# Option+1 and Option+2 on the same two commands, as cs 2026.10.6 bound them.
 # iTerm2 selects panes with Option+number, so there they never reach Claude
 # Code. Wherever they still hold these values, an install that binds the
-# chords takes them back, and so does ags -uninstall.
-# shellcheck disable=SC2034  # read by install.sh's _bind_rotate_wrap_keys, ags -uninstall and ags -doctor
+# chords takes them back, and so does cs -uninstall.
+# shellcheck disable=SC2034  # read by install.sh's _bind_rotate_wrap_keys, cs -uninstall and cs -doctor
 CS_RETIRED_OPTION_KEYS='{"alt+1":"command:rotate","alt+2":"command:wrap"}'
 
 # The jq definitions shared by the filters below. keynorm follows Claude
-# Code's key parser (2.1.291) as far as the keys ags compares need: case
+# Code's key parser (2.1.291) as far as the keys cs compares need: case
 # ignored, control is ctrl, opt and option are alt, command, super and win
 # are cmd, esc, return and del are escape, enter and delete, modifiers in
 # any order, and a chord's keys split on any run of spaces. It keeps meta
-# apart from alt and leaves space and arrow glyphs as typed, which no ags key
-# uses. ags's own keys are already in that form. ours: whether a to_entries pair from a context block is one of
+# apart from alt and leaves space and arrow glyphs as typed, which no cs key
+# uses. cs's own keys are already in that form. ours: whether a to_entries pair from a context block is one of
 # the bindings in $cs, key and value both.
 _CS_KEYBINDING_DEFS='
     def keynorm:
@@ -307,7 +307,7 @@ _CS_KEYBINDING_DEFS='
 
 # Claude Code reads its keybindings from its config dir. Inside an encrypted
 # session that dir is the session's .cs/claude-config, which no other session
-# reads; it links the shell's keybindings.json instead, so ags's keys belong in
+# reads; it links the shell's keybindings.json instead, so cs's keys belong in
 # the shell's config dir, which launch records in
 # CLAUDE_SECURESTORAGE_CONFIG_DIR (empty for ~/.claude).
 _cs_keybindings_file() {
@@ -326,7 +326,7 @@ _cs_rotate_wrap_keys_answer_file() {
     printf '%s\n' "${XDG_CONFIG_HOME:-$HOME/.config}/cs/option-keys"
 }
 
-# Whether a keybindings file has the shape ags reads and merges into: one JSON
+# Whether a keybindings file has the shape cs reads and merges into: one JSON
 # object whose "bindings" is an array of context blocks, each an object whose
 # own "bindings", when present, is an object. Slurped, so a file holding two
 # documents is refused rather than read as two; -e turns invalid JSON, an
@@ -338,8 +338,8 @@ _cs_keybindings_shape_ok() {  # file
 }
 
 # Reads a keybindings document that passed the shape check on stdin and prints
-# one line per ags key: "bound<TAB>key" when every binding of it, in any
-# context, holds ags's value; "free<TAB>key" when nothing binds it; and
+# one line per cs key: "bound<TAB>key" when every binding of it, in any
+# context, holds cs's value; "free<TAB>key" when nothing binds it; and
 # "conflict<TAB>key<TAB>action" when something else does. A chord also
 # conflicts when its first key is bound on its own to an action, which
 # Claude Code would stop reaching once it waits for the chord's second key:

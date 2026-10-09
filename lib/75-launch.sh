@@ -160,7 +160,7 @@ _rotate_force_notice() {
     [ -n "$pct" ] || return 0
     f="$(_rotate_force_notice_file)"
     [ -f "$f" ] && return 0
-    printf '%s\n' "ags now rotates a conversation on its own once it ends a turn past ${pct}% context: it writes a handoff, then counts down 20 seconds to the /clear (press 1 to go now, type anything to stop it)."
+    printf '%s\n' "cs now rotates a conversation on its own once it ends a turn past ${pct}% context: it writes a handoff, then counts down 20 seconds to the /clear (press 1 to go now, type anything to stop it)."
     printf '%s\n' "To turn that off, export CS_ROTATE_FORCE_CTX=off; to move it, set a percentage. Said once per machine."
     mkdir -p "$(dirname "$f")" 2>/dev/null && { printf '%s\n' "notified" > "$f"; } 2>/dev/null || true
 }
@@ -254,7 +254,7 @@ _seed_session_claude_json() {  # session_config_dir, shell_claude_json
     tmp=$(mktemp "$1/.claude.json.XXXXXX") || error "could not create a temporary file in $1."
     if ! jq -e '.projects = {}' "$2" > "$tmp" 2>/dev/null; then
         rm -f "$tmp"
-        error "$2 is not a JSON object ags can copy into $1; fix it, then reopen."
+        error "$2 is not a JSON object cs can copy into $1; fix it, then reopen."
     fi
     mv "$tmp" "$dest" || { rm -f "$tmp"; error "could not write $dest."; }
 }
@@ -282,7 +282,7 @@ _cs_claude_adapter_capabilities() {
     # rotation: handoff marker consumed by SessionStart, /clear rebinds.
     # spawn_brief: a spawned session's first turn reads .cs/brief.md.
     # memory_index: .cs/memory/MEMORY.md loads at every session start.
-    # mail_delivery: hooks surface `ags -msg` mail inside the conversation.
+    # mail_delivery: hooks surface `cs -msg` mail inside the conversation.
     printf '%s\n' launch exact_resume startup_context feature_finish \
         rotation spawn_brief memory_index mail_delivery
 }
@@ -513,7 +513,6 @@ _launch_claude_bound() {
     local self_bin
     self_bin="$(cd "$(dirname "$0")" && pwd -P)/$(basename "$0")"
     export CS_BIN="$self_bin"
-    export AGS_BIN="$self_bin"
 
     # The cs-update mod draws the pending release's notes and runs the update
     # from inside the session. It gets the launch's verdict, never its own:
@@ -526,7 +525,7 @@ _launch_claude_bound() {
         export CS_UPDATE_AVAILABLE="$UPDATE_AVAILABLE"
     fi
 
-    # Spawn seed: tasks and a brief staged by ags -spawn for this session.
+    # Spawn seed: tasks and a brief staged by cs -spawn for this session.
     # Consumed here, after the already-running guard and before any exec arm,
     # so a window that died before launching self-heals on the session's next
     # open. A stale seed (>1h) is set aside with its brief, never silently
@@ -541,7 +540,7 @@ _launch_claude_bound() {
         if [ "$_age" -gt 3600 ]; then
             mv "$_seed" "$_seed.stale" 2>/dev/null || true
             [ ! -f "$_brief" ] || mv "$_brief" "$_brief.stale" 2>/dev/null || true
-            warn "Stale spawn seed set aside: $_seed.stale (re-run ags -spawn if still wanted)"
+            warn "Stale spawn seed set aside: $_seed.stale (re-run cs -spawn if still wanted)"
         else
             local _spawner="" _line _n=0 _first=1 _has_brief=0
             # The brief moves in before any task is queued, and a move that
@@ -580,7 +579,7 @@ _launch_claude_bound() {
                 fi
                 if [ -n "$_spawner" ]; then
                     printf '%s\n' "$_spawner" > "$session_dir/.cs/local/spawned-by"
-                    spawn_kick="Spawned by $_spawner. $_work Send results with: ags -msg $_spawner -k result \"...\""
+                    spawn_kick="Spawned by $_spawner. $_work Send results with: cs -msg $_spawner -k result \"...\""
                 else
                     spawn_kick="$_work"
                 fi
@@ -646,7 +645,7 @@ _launch_claude_bound() {
     local bars=("$BAR1" "$BAR2" "$BAR3" "$BAR4" "$BAR5" "$BAR6")
 
     echo ""
-    echo -e "${bars[$((bar_idx < ${#bars[@]} ? bar_idx : ${#bars[@]} - 1))]}${NC} ${ORANGE}ags${NC} ${GREEN}$VERSION${NC}"; ((++bar_idx))
+    echo -e "${bars[$((bar_idx < ${#bars[@]} ? bar_idx : ${#bars[@]} - 1))]}${NC} ${ORANGE}cs${NC} ${GREEN}$VERSION${NC}"; ((++bar_idx))
     echo -e "${bars[$((bar_idx < ${#bars[@]} ? bar_idx : ${#bars[@]} - 1))]}${NC} ${WHITE}${BOLD}$session_name${NC} ${COMMENT}($status_icon $status_text)${NC} ${DIM}${ICON_HOST} $(hostname -s)${NC}"; ((++bar_idx))
     echo -e "${bars[$((bar_idx < ${#bars[@]} ? bar_idx : ${#bars[@]} - 1))]}${NC} ${GOLD}$session_dir${NC}"; ((++bar_idx))
     # Secrets and context are one short fact each, so they share a row rather
@@ -684,7 +683,7 @@ _launch_claude_bound() {
         # The update block continues the card's bar stack rather than starting
         # its own column: same bar, same one-space gutter, so it reads as the
         # last fact about this session and not as a separate widget.
-        echo -e "${bars[$((bar_idx < ${#bars[@]} ? bar_idx : ${#bars[@]} - 1))]}${NC} ${BOLD}${YELLOW}${ICON_UP}${NC} ${BOLD}${GREEN}$UPDATE_AVAILABLE${NC} ${BOLD}${COMMENT}available${NC} ${BOLD}${DIM}(you have $VERSION — run${NC} ${BOLD}${GOLD}ags -update${NC}${BOLD}${DIM})${NC}"; ((++bar_idx))
+        echo -e "${bars[$((bar_idx < ${#bars[@]} ? bar_idx : ${#bars[@]} - 1))]}${NC} ${BOLD}${YELLOW}${ICON_UP}${NC} ${BOLD}${GREEN}$UPDATE_AVAILABLE${NC} ${BOLD}${COMMENT}available${NC} ${BOLD}${DIM}(you have $VERSION — run${NC} ${BOLD}${GOLD}cs -update${NC}${BOLD}${DIM})${NC}"; ((++bar_idx))
         local notes_cache="${CS_CACHE_DIR:-$HOME/.cache/cs}/update-notes-$UPDATE_AVAILABLE"
         # The cs-update mod draws these same notes in full inside the session
         # once function hooks are on, so printing them here too would be a
@@ -740,7 +739,7 @@ EOF
     # name hash only if no color is recorded.
     local _tab_color
     _tab_color=$(_session_color_rgb "$claude_session_color")
-    set_tab_title "ags: $session_name" "${_tab_color:-auto:$session_name}" "$session_name"
+    set_tab_title "cs: $session_name" "${_tab_color:-auto:$session_name}" "$session_name"
 
     cd "$session_dir" || return 1
 
@@ -756,7 +755,7 @@ EOF
     # The answer sets the id to resume; it goes to claude as one quoted argument.
     # An existing session with no recorded conversation has nothing to resume:
     # an engine's first open in an existing workspace, the first open after
-    # ags -adopt, or records whose machine-local state did not travel. It takes
+    # cs -adopt, or records whose machine-local state did not travel. It takes
     # the fresh answer without asking, unless a rotation handoff is pending:
     # that is the user's call, so the offer is made with the rows that apply.
     # An explicit --fresh asks nothing.
@@ -803,7 +802,7 @@ EOF
         # of parking the tmux window on an interactive ask. So is an explicit
         # --resume, and an open with no terminal to ask on. Unbound, the
         # default is fresh, and a pending handoff waits for an attended open.
-        # --from-handoff (and the relaunch of an ags -switch) is the r answer,
+        # --from-handoff (and the relaunch of a cs -switch) is the r answer,
         # unasked; a switch relaunched with --resume resumes, and its handoff
         # rides along as the first message (lib/78-switch.sh).
         if [ "$intent" = handoff ]; then
@@ -870,7 +869,7 @@ EOF
                     # over resuming; a merge armed moments earlier must not
                     # silently override the choice they just made.
                     if [ -n "$merge_kick" ]; then
-                        warn "Rotation handoff takes this launch; re-run: ags $session_name -finish $merge_feature"
+                        warn "Rotation handoff takes this launch; re-run: cs $session_name -finish $merge_feature"
                     fi
                     _exec_fresh_rebind "$session_dir" handoff "$(basename "$pending_handoff")" "$spawn_kick" ""
                     return $?
@@ -921,7 +920,7 @@ EOF
         # shellcheck disable=SC2086
         cs_run_child $CLAUDE_CODE_BIN --name "$session_name" --resume "$resume_id" ${launch_prompt:+"$launch_prompt"} || rc=$?
         if [ "$rc" -ne 0 ]; then
-            printf 'Could not resume the recorded Claude conversation; binding preserved. Retry or run: ags %s --engine claude --fresh\n' "$session_name" >&2
+            printf 'Could not resume the recorded Claude conversation; binding preserved. Retry or run: cs %s --engine claude --fresh\n' "$session_name" >&2
         fi
         return "$rc"
     else
@@ -950,11 +949,11 @@ EOF
     fi
 }
 
-# A resume may run in place of ags when it is sure to land and ags has nothing
-# to do after it: claude reads its transcripts from where ags looks (no
+# A resume may run in place of cs when it is sure to land and cs has nothing
+# to do after it: claude reads its transcripts from where cs looks (no
 # CLAUDE_CONFIG_DIR set at all, even empty), the transcript holds a whole
 # top-level user record (a torn line, or a user message nested inside
-# another record, does not count), and no vault waits on ags to detach it
+# another record, does not count), and no vault waits on cs to detach it
 # when claude ends without its hooks. Without jq the resume stays a child.
 _resume_lands_in_place() {  # session_dir, conversation id
     local file

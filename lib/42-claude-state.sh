@@ -166,7 +166,7 @@ _discover_worktree_uuid_in() {  # parent_project_dir, wt_dir
 # Stage a replacement UUID and launch it under the core controller.
 # SessionStart promotes the candidate only after verifying this run and lead.
 # Failure preserves the prior binding and the pending transition for inspection.
-# With no recorded conversation to leave (the first open after ags -adopt, a
+# With no recorded conversation to leave (the first open after cs -adopt, a
 # clone without its machine-local state) this is the session's first
 # conversation, not a rotation: no CS_FRESH_REBIND.
 _exec_fresh_rebind() {
