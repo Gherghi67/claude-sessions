@@ -127,10 +127,10 @@ _tag_validate() {
 
 # Resolve the README path for the ambient session, erroring outside one.
 _tag_target_readme() {
-    if [ -z "${CLAUDE_SESSION_META_DIR:-}" ]; then
+    if [ -z "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ]; then
         error "In-session only; use 'cs <name> -tag ...' from outside a session"
     fi
-    printf '%s/README.md' "$CLAUDE_SESSION_META_DIR"
+    printf '%s/README.md' "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}"
 }
 
 _tag_mutate() {

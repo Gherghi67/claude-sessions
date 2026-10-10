@@ -297,7 +297,7 @@ test_human_prompt_sources_kept() {
 
 # cs launches claude with a kick as its positional prompt, and Claude Code
 # stamps that record promptSource "typed". The fixtures copy the kick texts
-# built in lib/40-state.sh (rotation handoff) and lib/75-launch.sh (spawn);
+# built in lib/42-claude-state.sh (rotation handoff) and lib/75-launch.sh (spawn);
 # the pins below fail when either wording moves without the filter.
 test_cs_launch_kicks_dropped() {
     local f; f="$(proj_file projA)"
@@ -319,10 +319,10 @@ test_cs_launch_kicks_dropped() {
         "stats should count the launch kicks as machine-authored" || return 1
     assert_file_contains "$(corpus_path)" "Continue from where we stopped" \
         "a typed message sharing the opening words must be kept" || return 1
-    assert_file_contains "$SCRIPT_DIR/../lib/40-state.sh" \
+    assert_file_contains "$SCRIPT_DIR/../lib/42-claude-state.sh" \
         'handoff_arg="Continue from the pending rotation handoff: read .cs/handoffs/' \
         "rotation kick wording moved; update the corpus filter" || return 1
-    assert_file_contains "$SCRIPT_DIR/../lib/40-state.sh" \
+    assert_file_contains "$SCRIPT_DIR/../lib/42-claude-state.sh" \
         'handoff_arg="Continue from the pending rotation handoff\."' \
         "encrypted rotation kick wording moved; update the corpus filter" || return 1
     assert_file_contains "$SCRIPT_DIR/../lib/75-launch.sh" \

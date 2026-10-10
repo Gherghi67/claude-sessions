@@ -10,8 +10,13 @@ begins. Landing the work later is `/finish <feature>` from the base session.
 
 ## Prerequisites
 
-Only works in a cs session: check that `$CLAUDE_SESSION_NAME` has a value.
+Only works in a cs session: check that `$CS_SESSION_NAME` has a value.
 If empty, tell the user starting a feature needs a cs session and stop.
+
+The new session reads its brief at its first turn only where the engine's
+adapter hands it over: run `cs -engine supports spawn_brief`. If it exits
+non-zero, print its line and stop; a spawned session there would open
+without the brief. Today only the Claude adapter declares `spawn_brief`.
 
 The base must be a git repository (`git rev-parse --git-dir` from the
 workspace succeeds). A session that is not a repo has no branch to fork; say
@@ -23,11 +28,11 @@ The user gives a feature name, optionally with a base: `fix-auth` or
 `myproj@fix-auth`.
 
 - A name with `@` names both halves outright, `<base>@<feature>`.
-- A bare name is the feature; the base is `$CLAUDE_SESSION_NAME`. If this
+- A bare name is the feature; the base is `$CS_SESSION_NAME`. If this
   session is itself a feature worktree (its name contains `@`), the base is
   the part before the `@`: features fork from the base, never from each
   other.
-- No name at all: ask for one (AskUserQuestion is fine) before writing
+- No name at all: ask for one (AskUserQuestion on Claude Code) before writing
   anything. Kebab-case, no spaces.
 
 ## Write the brief
@@ -54,14 +59,15 @@ cs -msg <spawner> -k result "<what landed, what is left>"
 The base session <base> then lands the work with /finish <feature>.
 ```
 
-`<spawner>` is `$CLAUDE_SESSION_NAME`, this session, whatever its name: the
+`<spawner>` is `$CS_SESSION_NAME`, this session, whatever its name: the
 result comes back here, to the conversation that asked for the feature.
 `<base>` is the repository the feature forks from, and the two differ when
 this session is itself a feature worktree. cs writes the same recipient into the new
 session's wake-up line, so the brief and the kick agree.
 
-Keep it to what the new session needs; it has the repo, CLAUDE.md and the
-session's own docs, so do not repeat those. If the user's request is too
+Keep it to what the new session needs; it has the repo, its project
+instructions (CLAUDE.md, AGENTS.md) and the session's own docs, so do not
+repeat those. If the user's request is too
 thin to write a "Done when", ask one question first rather than inventing
 outcomes.
 
@@ -88,9 +94,13 @@ a different name on your own.
 
 ## Report
 
-Print the spawner's output: the tmux window and the attach hint (`tmux
-attach -t cs`, or `tmux switch-client -t cs` from inside tmux). Then tell the
+Print the spawner's output: the tmux window and the attach hint as printed
+(`tmux attach -t <session>`, or `tmux switch-client -t <session>` from inside
+tmux; the session is `cs` unless `CS_TMUX_SESSION` names another, and a
+`CS_TMUX_SOCKET` server adds `-L <socket>`). Then tell the
 user, in one or two lines, that the feature session reads its brief at
 `.cs/brief.md` and begins, that its result arrives here as mail from
-`cs -msg`, and that `/finish <feature>` lands it. This session continues with
-its own work.
+`cs -msg`, and that `/finish <feature>` lands it. The mail surfaces in this
+conversation by itself only where `cs -engine supports mail_delivery`
+succeeds; elsewhere, say the user reads it with `cs -msg` themselves. This
+session continues with its own work.

@@ -606,6 +606,27 @@ echo "cs update tests"
 echo "==============="
 echo ""
 
+# code-sessions' release URLs are the original cs's: run inside its profile,
+# -update would install the original over it, -uninstall take its commands.
+test_code_sessions_refuses_update_and_uninstall() {
+    local out status verb
+    for verb in -update -uninstall; do
+        status=0
+        out=$(CODE_SESSIONS_HOME="$TEST_TMPDIR/profile" "$CS_BIN" "$verb" </dev/null 2>&1) || status=$?
+        assert_eq 1 "$status" "$verb must refuse" || return 1
+        assert_output_contains "$out" "code-sessions updates from its checkout" "$verb names the way" || return 1
+    done
+    status=0
+    out=$(CODE_SESSIONS_HOME="$TEST_TMPDIR/profile" "$CS_BIN" -update --check 2>&1) || status=$?
+    assert_eq 1 "$status" "even a check" || return 1
+}
+
+test_without_code_sessions_home_update_is_not_refused() {
+    local out
+    out=$(env -u CODE_SESSIONS_HOME "$CS_BIN" -update --bogus 2>&1) || true
+    assert_output_contains "$out" "Unknown option: --bogus" "the update verb runs as upstream's" || return 1
+}
+
 run_test test_help_shows_update_command
 run_test test_help_shows_check_and_force
 run_test test_help_does_not_show_auto_update
@@ -631,6 +652,8 @@ run_test test_launch_banner_shows_notes_card
 run_test test_launch_banner_quiet_on_empty_notes_cache
 run_test test_launch_banner_card_yields_to_the_mod
 run_test test_launch_exports_update_verdict_to_the_mod
+run_test test_code_sessions_refuses_update_and_uninstall
+run_test test_without_code_sessions_home_update_is_not_refused
 run_test test_notify_writes_notes_cache
 run_test test_notify_writes_notes_cache_past_stale_tmp_files
 run_test test_notify_writes_empty_full_cache_when_fetch_fails

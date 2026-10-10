@@ -1,4 +1,6 @@
 ---
+name: summary
+description: Generate an intelligent summary of this cs session by synthesizing its documentation (README, narratives, timeline) into .cs/summary.md, then gate the prose with an independent critic. Invoke when the user asks for a session summary.
 model: opus
 ---
 
@@ -21,7 +23,7 @@ You are working in a cs session. Your task is to summarize the entire session by
    - List notable files or outputs produced — bound the git log to this session with the earliest `started` event's timestamp in `.cs/timeline.jsonl` (e.g. `git log --since=<that timestamp> --stat`), so you attribute only this session's work
    - Conclude with the outcome and results
 
-3. **Write the summary to .cs/summary.md** in the session metadata directory. If `.cs/summary.md` already exists, replace it — this command always writes the canonical current summary. Use this structure:
+3. **Write the summary to .cs/summary.md** in the session metadata directory. If `.cs/summary.md` already exists, replace it — this skill always writes the canonical current summary. Use this structure:
 
 ```markdown
 # Session Summary: [SESSION_NAME]
@@ -64,9 +66,10 @@ You are working in a cs session. Your task is to summarize the entire session by
 
 5. **Gate the prose on quality before finalizing:**
    - **Independent judge:** spawn a subagent as an impartial prose critic of `.cs/summary.md`:
-     - **Spawn:** Task tool, `model: opus`, `subagent_type: general-purpose`. Put every requirement below verbatim in its prompt — it starts with no context: the absolute paths to both `.cs/summary.md` and the skill, "judge only, never edit", and the exact final-message contract (scores, then the numbered violation list, nothing else).
-     - **Reading:** it MUST read `~/.claude/skills/prose-hygiene/SKILL.md` and apply EVERY rule (the full taxonomy of phrases, structures, voice rules, and the scoring rubric).
+     - **Spawn:** your harness's subagent tool, on its strongest model (Claude Code: the Agent tool, `model: opus`, `subagent_type: general-purpose`). Put every requirement below verbatim in its prompt — it starts with no context: the absolute paths to both `.cs/summary.md` and the skill, "judge only, never edit", and the exact final-message contract (scores, then the numbered violation list, nothing else).
+     - **Reading:** it MUST read the prose-hygiene skill, `../prose-hygiene/SKILL.md` from this skill's directory (give the critic the resolved absolute path), and apply EVERY rule (the full taxonomy of phrases, structures, voice rules, and the scoring rubric).
      - **Judge only, never edit.** Its final message contains only the deliverable: the per-dimension scores and total from the skill's rubric, then a numbered list giving, for every violation, the quoted text, the rule it breaks, and a concrete rewrite. No verdict line: the critic scores, it does not decide, so the pass criterion never reaches its prompt. No preamble, nothing else.
+     - **No subagent tool:** if your harness cannot spawn one, skip this step and say in step 6 that the prose gate did not run. Never judge your own draft in its place: the gate exists because the writer is not impartial.
      - **Decide, apply, re-run:** compare its total with the skill's revise threshold yourself. Apply every rewrite it returns to `.cs/summary.md`. If the total was below the threshold, run the critic once more after applying them; after that second run, apply its rewrites and stop regardless of the total.
 
 6. **Inform the user** when the summary is complete and where it was saved.

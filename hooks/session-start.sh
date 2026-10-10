@@ -87,6 +87,13 @@ cs_resolve_session "$INPUT" || exit 0
 SESSION_DIR="${CLAUDE_SESSION_DIR:-}"
 META_DIR="${CLAUDE_SESSION_META_DIR:-$SESSION_DIR/.cs}"
 
+# A forced successor owns this workspace now. An inherited run token is not
+# authority to mutate its bindings or consume its pending handoff.
+if [ -n "${CS_RUN_ID:-}" ]; then
+    command -v cs_run_lease_owned >/dev/null 2>&1 || exit 0
+    cs_run_lease_owned "$META_DIR" || exit 0
+fi
+
 # Build the surface-once digest from unseen inbox lines. Sets DIGEST (may be
 # empty) and DIGEST_PENDING, the cursor value that _commit_digest spends once
 # the digest has actually been printed — surfacing is at-most-once even when
@@ -365,9 +372,17 @@ EOF
 # README). Replaces any existing line for the key, collapses duplicates.
 # Atomic and serialised against cs's own writer through cs_local_state_set.
 STATE_FILE="$META_DIR/local/state"
-local_state_set() {
-    mkdir -p "$META_DIR/local"
+_cs_hook_local_state_set() {
+    mkdir -p "$META_DIR/local" || return 1
     cs_local_state_set "$STATE_FILE" "$1" "$2"
+}
+
+local_state_set() {
+    if [ -n "${CS_RUN_ID:-}" ]; then
+        cs_run_with_lease "$META_DIR" _cs_hook_local_state_set "$@"
+    else
+        _cs_hook_local_state_set "$@"
+    fi
 }
 
 # Bind claude_session_id in local state to the live conversation.
@@ -426,19 +441,35 @@ UUID_RE='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F
 # slot leaves `cs <name>` resuming a conversation nobody opened, and stamps the
 # timeline with a lineage that never happened.
 #
-# cs_is_lead (cs-resolve.sh) says which claude is the launch; the resume arm's
-# claude is cs's child because it needs the exit status to fall through to a
-# fresh rebind when there is nothing to resume. Without the library nothing is
-# the lead: declining the slot is the safe side.
+# cs_is_lead validates native process ancestry and, for supervised launches,
+# the current run lease. The guarded acknowledgement checks ownership again
+# while holding the same lock used by a forced successor.
 IS_LEAD=0
 if command -v cs_is_lead >/dev/null 2>&1 && cs_is_lead; then
     IS_LEAD=1
 fi
-if [ "$IS_LEAD" = 1 ] && [[ "$SESSION_ID" =~ $UUID_RE ]]; then
+_cs_acknowledge_claude_binding() {
     RECORDED_UUID=$(awk '/^claude_session_id:/ { print $2; exit }' "$STATE_FILE" 2>/dev/null || true)
-    if [ "$RECORDED_UUID" != "$SESSION_ID" ]; then
-        local_state_set claude_session_id "$SESSION_ID" \
-            && echo "$(date '+%Y-%m-%d %H:%M:%S') - Rebound claude_session_id: ${RECORDED_UUID:-none} -> $SESSION_ID" >> "$SESSION_LOG"
+    local pending="$META_DIR/local/pending-binding-claude.json" pending_match=0
+    local transition_reason="rebind" transition_handoff="$ROTATION_HANDOFF"
+    local transition_from="$RECORDED_UUID" lineage_recorded=0
+    [ -z "$transition_handoff" ] || transition_reason="handoff"
+    if [ -n "${CS_RUN_ID:-}" ] && [ -f "$pending" ]; then
+        if jq -e --arg run "$CS_RUN_ID" '.run_id == $run' "$pending" >/dev/null 2>&1; then
+            # Native SessionStart is the acknowledgement, not a successful
+            # process spawn. Refuse mismatched IDs or an intervening rebind.
+            jq -e --arg id "$SESSION_ID" --arg old "$RECORDED_UUID" \
+                '.engine == "claude" and .candidate_id == $id and (.previous_id == $old or .candidate_id == $old)' \
+                "$pending" >/dev/null 2>&1 || return 1
+            pending_match=1
+            transition_from=$(jq -r .previous_id "$pending") || return 1
+            transition_reason=$(jq -r '.reason' "$pending") || return 1
+            transition_handoff=$(jq -r '.handoff // ""' "$pending") || return 1
+        fi
+    fi
+    if [ "$RECORDED_UUID" != "$SESSION_ID" ] || [ "$pending_match" = 1 ]; then
+        _cs_hook_local_state_set claude_session_id "$SESSION_ID" || return 2
+        echo "$(date '+%Y-%m-%d %H:%M:%S') - Rebound claude_session_id: ${RECORDED_UUID:-none} -> $SESSION_ID" >> "$SESSION_LOG"
         # Named literally: TIMELINE_FILE is not assigned until further down.
         _cs_terminate_jsonl "$META_DIR/timeline.jsonl" 2>/dev/null || true
         # Durable lineage: a UUID change the launch path did not pre-record.
@@ -448,17 +479,34 @@ if [ "$IS_LEAD" = 1 ] && [[ "$SESSION_ID" =~ $UUID_RE ]]; then
         # different conversation. Shape shared with bin/cs's _timeline_rotated.
         # An encrypted session's handoff name is its topic: the plaintext
         # timeline records that a handoff rotated, never which.
-        _public_handoff="$ROTATION_HANDOFF"
-        [ "$HANDOFF_REL" = ".cs/handoffs" ] || _public_handoff=""
+        [ "$HANDOFF_REL" = ".cs/handoffs" ] || transition_handoff=""
+        # Replay after an interrupted binding write must neither lose nor
+        # duplicate its lineage. The pending record keeps the predecessor.
+        if [ "$pending_match" = 1 ] && [ -f "$META_DIR/timeline.jsonl" ]; then
+            if jq -eRs --arg run "$CS_RUN_ID" --arg to "$SESSION_ID" '
+                [split("\n")[] | fromjson? | select(.event == "rotated" and
+                 .engine == "claude" and .run_id == $run and .to == $to)] | length > 0
+            ' "$META_DIR/timeline.jsonl" >/dev/null 2>&1; then lineage_recorded=1; fi
+        fi
+        # A launch that staged the session's first conversation (none was
+        # recorded: the first open after cs -adopt, Claude's first open of a
+        # workspace) rotates from nothing, so it records no rotation.
+        if [ "$pending_match" = 1 ] && [ -z "$transition_from" ]; then lineage_recorded=1; fi
+        if [ "$lineage_recorded" = 0 ]; then
         { jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-               --arg from "${RECORDED_UUID:-}" \
+               --arg from "$transition_from" \
                --arg to "$SESSION_ID" \
-               --arg handoff "$ROTATION_HANDOFF" \
-               --arg name "$_public_handoff" \
-               '{ts: $ts, event: "rotated", from: $from, to: $to,
-                 reason: (if $handoff == "" then "rebind" else "handoff" end)}
-                + (if $name == "" then {} else {handoff: $name} end)' \
-            >> "$META_DIR/timeline.jsonl"; } 2>/dev/null || true
+               --arg handoff "$transition_handoff" --arg reason "$transition_reason" \
+               --arg run_id "${CS_RUN_ID:-}" \
+               '{ts: $ts, event: "rotated", engine: "claude", run_id: $run_id, from: $from, to: $to,
+                 reason: $reason}
+                + (if $handoff == "" then {} else {handoff: $handoff} end)' \
+            >> "$META_DIR/timeline.jsonl"; } 2>/dev/null || {
+                # Keep an acknowledged pending transition until its lineage
+                # is durable; the next acknowledgement can finish it.
+                [ "$pending_match" = 0 ] || return 1
+            }
+        fi
         # Follow the autosave ref to the new UUID so a future crash of this
         # (continued) conversation is recoverable under its live identity. A
         # rebind is a clean continuation, so there is no crash to recover here.
@@ -485,6 +533,23 @@ if [ "$IS_LEAD" = 1 ] && [[ "$SESSION_ID" =~ $UUID_RE ]]; then
             fi
         fi
     fi
+    _cs_hook_local_state_set engine claude || return 2
+    if [ "$pending_match" = 1 ]; then
+        rm -f "$pending" || return 1
+    fi
+    return 0
+}
+# A refused acknowledgement (another run's conversation, a stale rebind) ends
+# the hook with nothing added. A state write that failed (2) was reported by
+# the writer and is not a refusal: the conversation still gets its context.
+if [ "$IS_LEAD" = 1 ] && [[ "$SESSION_ID" =~ $UUID_RE ]]; then
+    _cs_ack_status=0
+    if [ -n "${CS_RUN_ID:-}" ]; then
+        cs_run_with_lease "$META_DIR" _cs_acknowledge_claude_binding || _cs_ack_status=$?
+    else
+        _cs_acknowledge_claude_binding || _cs_ack_status=$?
+    fi
+    [ "$_cs_ack_status" = 0 ] || [ "$_cs_ack_status" = 2 ] || exit 0
 fi
 
 # Append structured event to timeline.jsonl (machine-readable narrative log).
@@ -498,7 +563,8 @@ _cs_terminate_jsonl "$TIMELINE_FILE" 2>/dev/null || true
        --arg source "$SOURCE" \
        --arg session_id "$SESSION_ID" \
        --arg branch "$TIMELINE_BRANCH" \
-       '{ts: $ts, event: $event, source: $source, session_id: $session_id, branch: $branch}' \
+       --arg run_id "${CS_RUN_ID:-}" --arg role "$(if [ "$IS_LEAD" = 1 ]; then echo lead; else echo external; fi)" \
+       '{ts: $ts, event: $event, engine: "claude", run_id: $run_id, role: $role, source: $source, session_id: $session_id, branch: $branch}' \
     >> "$TIMELINE_FILE"; } 2>/dev/null || true
 
 # Update last_resumed in local state on resume

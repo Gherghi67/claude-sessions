@@ -11,7 +11,7 @@ _cs_completions() {
     }
 
     # Global flags
-    local global_flags="-tui -list -ls -adopt -remove -rm -whoami -who -secrets -checkpoint -narrative -queue -msg -spawn -conversations -search -statusline -detect-theme -doctor -diag -update -uninstall -help -h -version -v -live -usage -status -tag -archive -unarchive -encrypt"
+    local global_flags="-tui -list -ls -adopt -remove -rm -whoami -who -engine -switch -secrets -checkpoint -narrative -queue -msg -spawn -conversations -search -statusline -detect-theme -doctor -diag -update -uninstall -help -h -version -v -live -usage -status -tag -archive -unarchive -encrypt"
 
     # Secrets subcommands
     local secrets_cmds="set store get list ls delete rm purge export export-file import-file migrate migrate-backend backend age"
@@ -30,7 +30,8 @@ _cs_completions() {
     local update_cmds="--check -c --force -f"
 
     # Session-level options
-    local session_opts="-secrets -queue -msg -narrative -conversations -usage -tag -features -finish --force"
+    local session_opts="-secrets -queue -msg -narrative -conversations -usage -tag -features -finish --engine --fresh --resume --from-handoff --force"
+    local engine_values="claude codex"
 
     # Get list of session names. cs owns the definition of a session, including
     # which symlinks and marker directories count; asking it keeps this script
@@ -62,12 +63,20 @@ _cs_completions() {
     local in_tag=false
     local in_list=false
     local has_session=false
+    local expect_engine=false
     local after_remove=false
     local after_adopt=false
     local after_archive=false
 
     for ((i=1; i < cword; i++)); do
+        if $expect_engine; then
+            expect_engine=false
+            continue
+        fi
         case "${words[i]}" in
+            --engine)
+                expect_engine=true
+                ;;
             -secrets)
                 in_secrets=true
                 in_update=false
@@ -152,6 +161,12 @@ _cs_completions() {
         esac
     done
 
+    # Context: after the session engine option, complete supported engines.
+    if $expect_engine; then
+        COMPREPLY=($(compgen -W "$engine_values" -- "$cur"))
+        return
+    fi
+
     # Context: global `cs -msg <session>` / `cs -spawn <session>` — the first arg
     # is a session name (the mail target, or the session to open in tmux). Only
     # the first positional; later -msg args are free-text body.
@@ -167,7 +182,7 @@ _cs_completions() {
     fi
 
     # Context: after -adopt. A new session name completes nothing; the options
-    # register Claude Code's worktrees instead.
+    # choose the engine, or register Claude Code's worktrees instead.
     if $after_adopt; then
         COMPREPLY=()
         case "$cur" in
@@ -175,7 +190,7 @@ _cs_completions() {
                 if [[ "${words[cword-1]}" == "--worktrees" ]]; then
                     COMPREPLY=($(compgen -W "--dry-run" -- "$cur"))
                 else
-                    COMPREPLY=($(compgen -W "--worktrees" -- "$cur"))
+                    COMPREPLY=($(compgen -W "--worktrees --engine" -- "$cur"))
                 fi
                 ;;
         esac
@@ -264,5 +279,4 @@ _cs_completions() {
     COMPREPLY=()
 }
 
-# Register the completion function
 complete -F _cs_completions cs

@@ -885,7 +885,7 @@ test_autosave_logs_per_actor_narrative_edit() {
 # target elsewhere in the tree. The fixture writes no cs .gitignore on purpose:
 # older and adopted sessions lack the ignore entry, so the hook must hold alone.
 test_autosave_never_stages_encrypted_storage() {
-    local s="$CLAUDE_SESSION_DIR" uuid=44444444-4444-4444-4444-444444444444
+    local s="${CS_SESSION_DIR:-${CLAUDE_SESSION_DIR:-}}" uuid=44444444-4444-4444-4444-444444444444
     local stray="vault stray $RANDOM$RANDOM" inner="vault private $RANDOM$RANDOM"
     local stray_blob inner_blob narr_blob objects
     mkdir -p "$s/.cs/vault-mnt" "$s/enc/private"

@@ -306,8 +306,10 @@ test_clone_with_a_readme_id_that_is_not_a_uuid_starts_fresh() {
     launches=$(cat "$TEST_TMPDIR/claude-args" 2>/dev/null)
     assert_eq "1" "$(printf '%s\n' "$launches" | grep -c .)" "claude launches exactly once" || return 1
     assert_output_not_contains "$launches" '--dangerously-skip-permissions' "the README's words never reach claude's argv" || return 1
-    recorded=$(_extract_state_value "$session_dir/.cs/local/state" claude_session_id)
-    _assert_uuid "$recorded" "the open records a real conversation id" || return 1
+    # The launch stages the id it starts; SessionStart, which this stub never
+    # runs, commits it to state.
+    recorded=$(jq -r '.candidate_id // empty' "$session_dir/.cs/local/pending-binding-claude.json" 2>/dev/null)
+    _assert_uuid "$recorded" "the open stages a real conversation id" || return 1
     assert_output_contains "$launches" "<--session-id><$recorded>" "claude starts the recorded conversation" || return 1
     _assert_readme_clean "$session_dir/.cs/README.md" || return 1
 }
@@ -353,8 +355,12 @@ test_launch_ignores_a_recorded_id_that_is_not_a_uuid() {
     local launches recorded
     launches=$(cat "$TEST_TMPDIR/claude-args" 2>/dev/null)
     assert_output_not_contains "$launches" '--dangerously-skip-permissions' "the recorded words never reach claude's argv" || return 1
-    recorded=$(_extract_state_value "$session_dir/.cs/local/state" claude_session_id)
-    _assert_uuid "$recorded" "a real id replaces the recorded words" || return 1
+    # The launch stages the id it starts; SessionStart, which this stub never
+    # runs, commits it to state.
+    recorded=$(jq -r '.candidate_id // empty' "$session_dir/.cs/local/pending-binding-claude.json" 2>/dev/null)
+    _assert_uuid "$recorded" "a real id is staged in place of the recorded words" || return 1
+    assert_eq "" "$(_extract_state_value "$session_dir/.cs/local/state" claude_session_id)" \
+        "the recorded words leave state" || return 1
     assert_output_contains "$launches" "<--session-id><$recorded>" "claude starts the recorded conversation" || return 1
     # The words named no conversation, so there was none to rotate from.
     if grep -q '"event":"rotated"' "$session_dir/.cs/timeline.jsonl" 2>/dev/null; then
@@ -427,7 +433,8 @@ test_launch_stops_loudly_when_state_cannot_be_written() {
     chmod 755 "$session_dir/.cs/local"
 
     [ "$rc" -ne 0 ] || { echo "  FAIL: a failed state write must end the launch"; return 1; }
-    assert_output_contains "$output" "Error: could not write $state" "the failure names the file" || return 1
+    # cs's first write there is the run guard beside the state file.
+    assert_output_contains "$output" "Error: could not write $session_dir/.cs/local/" "the failure names the file" || return 1
     assert_output_not_contains "$output" "Permission denied" "no bare shell error" || return 1
     [ ! -f "$TEST_TMPDIR/claude-args" ] || { echo "  FAIL: claude must not launch unrecorded"; return 1; }
 }
@@ -465,7 +472,9 @@ test_state_and_gitattributes_rewrites_leave_tmp_siblings_alone_and_keep_modes() 
     assert_file_not_contains "$session_dir/.gitattributes" "logs/session.log merge=union" "the union rule was stripped" || return 1
     assert_eq "USER-OWNED-GA" "$(cat "$session_dir/.gitattributes.tmp")" ".gitattributes.tmp is untouched" || return 1
     assert_eq "750" "$(_file_mode "$session_dir/.gitattributes")" ".gitattributes keeps its mode" || return 1
-    assert_file_contains "$state" "^claude_session_id:" "the launch recorded its conversation" || return 1
+    # cs stages the conversation id until SessionStart acknowledges it; the
+    # engine it records after the run is its write to this file.
+    assert_file_contains "$state" "^engine: claude" "the launch wrote the state file" || return 1
     assert_eq "USER-OWNED-STATE" "$(cat "$state.tmp")" "state.tmp is untouched" || return 1
     assert_eq "750" "$(_file_mode "$state")" "state keeps its mode" || return 1
 }
@@ -591,7 +600,7 @@ test_state_write_takes_over_a_dead_holders_lock() {
 
     "$CS_BIN" stale-lock <<< "" >/dev/null 2>&1 || true
 
-    assert_file_contains "$state" "^claude_session_id:" "the write went through" || return 1
+    assert_file_contains "$state" "^engine: claude" "the write went through" || return 1
     # A waited-out deadline leaves the dead lock in place; a takeover removes it
     # and the writer then releases its own, so the directory's absence is the
     # takeover, with no clock involved.

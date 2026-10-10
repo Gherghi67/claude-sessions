@@ -160,13 +160,13 @@ agent_state_of() {  # table, name
 
 # Dispatcher for 'cs -status'. In-session only (ambient env), like run_queue.
 run_status() {
-    if [ -z "${CLAUDE_SESSION_META_DIR:-}" ]; then
+    if [ -z "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ]; then
         error "cs -status must be run inside a cs session"
     fi
-    local meta_dir="$CLAUDE_SESSION_META_DIR"
+    local meta_dir="${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}"
     if [ $# -eq 0 ]; then
         local session_dir status
-        session_dir="${CLAUDE_SESSION_DIR:-$(dirname "$meta_dir")}"
+        session_dir="${CS_SESSION_DIR:-${CLAUDE_SESSION_DIR:-$(dirname "$meta_dir")}}"
         status="$(session_status "$session_dir")"
         if [ -n "$status" ]; then printf '%s\n' "$status"; else echo "(none)"; fi
         return 0

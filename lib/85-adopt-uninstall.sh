@@ -77,11 +77,23 @@ ENTRIES
 
 # Adopt an existing project directory as a cs session
 adopt_session() {
-    local session_name="$1"
+    local session_name="${1:-}" explicit_engine="" engine
+    [ "$#" -eq 0 ] || shift
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --engine)
+                [ -n "${2:-}" ] || error "--engine needs claude or codex"
+                explicit_engine="$2"; shift 2 ;;
+            --engine=*) explicit_engine="${1#*=}"; shift ;;
+            *) error "Usage: cs -adopt <name> [--engine claude|codex]" ;;
+        esac
+        cs_engine_known "$explicit_engine" || error "--engine needs claude or codex"
+    done
     local target_dir
     target_dir="$(pwd -P)"
 
     validate_session_name "$session_name"
+    engine=$(_session_engine "$target_dir" "$explicit_engine")
 
     # A linked git worktree keeps a `.git` FILE, so the init path below would
     # read it as "not a repo", `git init` over it and `git add -A` the user's
@@ -131,9 +143,9 @@ adopt_session() {
     # create_session_structure writes CLAUDE.local.md, never CLAUDE.md — a
     # project's own CLAUDE.md is left untouched.
     #
-    # It also stages a conversation id and a colour for a brand-new session's
-    # first launch. An adopted directory already exists, so its first open is
-    # a reopen: a first adoption keeps no id (the launch records one when it
+    # It also stages a Claude id and a colour for a brand-new session's first
+    # launch. An adopted directory already exists, so its first open is a
+    # reopen: a first adoption keeps no id (the launch records one when it
     # starts the first conversation), and re-adopted records keep the
     # conversation and the colour they name. Only a UUID names a conversation
     # and only one of claude's colours is a colour; anything else is dropped,
@@ -141,7 +153,7 @@ adopt_session() {
     local prior_binding prior_color
     prior_binding=$(_read_local_state "$target_dir/.cs/local/state" claude_session_id)
     prior_color=$(_read_local_state "$target_dir/.cs/local/state" claude_session_color)
-    create_session_structure "$target_dir"
+    create_session_structure "$target_dir" "$engine"
     if _is_uuid "$prior_binding"; then
         _set_local_state "$target_dir/.cs/local/state" claude_session_id "$prior_binding"
     else
@@ -153,6 +165,7 @@ adopt_session() {
     elif [ -n "$prior_color" ]; then
         warn "ignoring claude_session_color in .cs/local/state: not one of claude's colours"
     fi
+    _set_local_state "$target_dir/.cs/local/state" engine "$engine"
 
     # An adopted session's name is the link's, not the directory's, and the link
     # is the only place it lives — so a hook that resolves this project by
@@ -177,8 +190,10 @@ adopt_session() {
     mkdir -p "$SESSIONS_ROOT"
     ln -s "$target_dir" "$session_link"
 
-    # Initialize git if not already a repo
-    if [ ! -d "$target_dir/.git" ]; then
+    # Initialize git if not already a repo. A linked worktree or submodule has
+    # a .git file, not a directory; reading that as "no repo" ran the fresh-repo
+    # path in the user's checkout (template .gitignore, branch renamed to main).
+    if [ ! -e "$target_dir/.git" ]; then
         (
             cd "$target_dir" || exit 0
             create_session_gitignore "$target_dir"
@@ -452,11 +467,14 @@ _uninstall_rotate_wrap_keys() {
 
 # Uninstall cs and all components
 run_uninstall() {
-    local install_dir="$HOME/.local/bin"
+    local install_dir="${CS_INSTALL_DIR:-$HOME/.local/bin}"
+    local install_engines install_config="${CS_INSTALL_DIR:-$HOME/.local/bin}/.cs-install-engines"
+    install_engines=$(cat "$install_config" 2>/dev/null) || install_engines=claude,codex
     local hooks_parent_dir="$HOME/.claude/hooks"
     local hooks_dir="$hooks_parent_dir/cs"
     local commands_dir="$HOME/.claude/commands"
     local skills_dir="$HOME/.claude/skills"
+    local codex_skills_dir="${CODEX_HOME:-$HOME/.codex}/skills"
     local settings_file="${CS_CLAUDE_DIR:-$HOME/.claude}/settings.json"
     local bash_completion_dir="$HOME/.bash_completion.d"
     # install.sh picks the zsh completion dir from the user's fpath line: its
@@ -471,13 +489,16 @@ run_uninstall() {
     local zsh_completion_dirs=("$HOME/.zsh/completions" "$HOME/.zsh/completion")
     # check_update_notify stamps update-check and update-notes-* here; they
     # outlived a full uninstall and made the next install look up to date.
-    local update_cache_dir="$HOME/.cache/cs"
+    local update_cache_dir="${CS_CACHE_DIR:-$HOME/.cache/cs}"
 
     warn "This will uninstall cs and all its components:"
-    echo "  - $install_dir/cs, $install_dir/cs-secrets, $install_dir/cs-statusline, $install_dir/cs-subagent-statusline, $install_dir/cs-tui(.exe)"
+    echo "  - $install_dir/cs, $install_dir/cs-secrets, $install_dir/cs-codex-thread, $install_dir/cs-statusline, $install_dir/cs-subagent-statusline, $install_dir/cs-tui(.exe)"
     echo "  - Hooks in $hooks_dir/"
-    echo "  - Commands in $commands_dir/"
+    echo "  - Retired cs commands in $commands_dir/"
     echo "  - Skills in $skills_dir/"
+    if [[ ",$install_engines," == *,codex,* ]]; then
+        echo "  - Codex skills in $codex_skills_dir/ and the cs hook in ${codex_skills_dir%/skills}/hooks.json"
+    fi
     echo "  - Shell completions"
     echo "  - Update-check cache in $update_cache_dir/"
     echo "  - Hook entries in $settings_file"
@@ -494,40 +515,39 @@ run_uninstall() {
     info "Uninstalling cs..."
     echo ""
 
-    # Remove binaries
-    if [ -f "$install_dir/cs" ]; then
-        rm "$install_dir/cs"
-        info "Removed $install_dir/cs"
-    fi
+    # Remove the commands. `-L` includes a dangling symlink left by an
+    # interrupted install or manual binary removal.
+    local command_name
+    for command_name in cs cs-secrets cs-codex-thread; do
+        if [ -e "$install_dir/$command_name" ] || [ -L "$install_dir/$command_name" ]; then
+            rm -f "$install_dir/$command_name"
+            info "Removed $install_dir/$command_name"
+        fi
+    done
 
-    if [ -f "$install_dir/cs-secrets" ]; then
-        rm "$install_dir/cs-secrets"
-        info "Removed $install_dir/cs-secrets"
-    fi
+    if [[ ",$install_engines," == *,claude,* ]]; then
+    for command_name in cs-statusline cs-subagent-statusline; do
+        if [ -e "$install_dir/$command_name" ] || [ -L "$install_dir/$command_name" ]; then
+            rm -f "$install_dir/$command_name"
+            info "Removed $install_dir/$command_name"
+        fi
+    done
 
-    if [ -f "$install_dir/cs-statusline" ]; then
-        rm "$install_dir/cs-statusline"
-        info "Removed $install_dir/cs-statusline"
-    fi
-
-    if [ -f "$install_dir/cs-subagent-statusline" ]; then
-        rm "$install_dir/cs-subagent-statusline"
-        info "Removed $install_dir/cs-subagent-statusline"
-    fi
-
-    # Remove the statusLine registration only when it points at cs-statusline;
+    # Remove the status-line registration only when it points at cs-statusline;
     # a status line the user configured themselves is left untouched.
     if command -v jq >/dev/null 2>&1 && _strip_statusline_registration "$settings_file"; then
         info "Removed cs-statusline registration from settings.json"
     fi
 
-    # Remove the subagentStatusLine registration only when it points at
-    # cs-subagent-statusline; a row renderer the user configured is left alone.
+    # Remove the subagentStatusLine registration only when it points at one of
+    # our helper names; a row renderer the user configured is left alone.
     if command -v jq >/dev/null 2>&1 && _strip_subagent_statusline_registration "$settings_file"; then
         info "Removed cs-subagent-statusline registration from settings.json"
     fi
 
     rm -f "$(_statusline_declined_marker)"
+
+    fi
 
     # The .exe name is only ever a leftover from an install that predates
     # dropping Windows; remove it too so an upgrade leaves nothing behind.
@@ -538,6 +558,7 @@ run_uninstall() {
         fi
     done
 
+    if [[ ",$install_engines," == *,claude,* ]]; then
     # Remove hooks from both deployment layouts (subdirectory and flat)
     local hook dir
     for hook in "${CS_HOOKS[@]}" "${CS_HOOK_LIBS[@]}"; do
@@ -562,8 +583,8 @@ run_uninstall() {
     rm -f "$hooks_dir/.version"
     rmdir "$hooks_dir" 2>/dev/null || true
 
-    # Remove commands
-    for cmd in "${CS_COMMANDS[@]}"; do
+    # Remove the slash commands earlier versions shipped (now skills)
+    for cmd in "${RETIRED_COMMANDS[@]}"; do
         if [ -f "$commands_dir/$cmd" ]; then
             rm "$commands_dir/$cmd"
             info "Removed $commands_dir/$cmd"
@@ -593,16 +614,39 @@ run_uninstall() {
         fi
     done
 
+    fi
+
+    # Remove the Codex copies of the skills. Only the names cs ships: the rest
+    # of Codex's skills directory is the user's, and RETIRED_SKILLS never
+    # deployed there.
+    if [[ ",$install_engines," == *,codex,* ]]; then
+    local skill
+    for skill in "${CS_SKILLS[@]}"; do
+        if [ -d "$codex_skills_dir/$skill" ]; then
+            rm -rf "${codex_skills_dir:?}/$skill"
+            info "Removed $codex_skills_dir/$skill/"
+        fi
+    done
+    if command -v jq >/dev/null 2>&1 \
+        && grep -q -- '-codex-hook session-start' "${codex_skills_dir%/skills}/hooks.json" 2>/dev/null; then
+        if _codex_hooks_unregister "${codex_skills_dir%/skills}"; then
+            info "Removed the cs hook from ${codex_skills_dir%/skills}/hooks.json"
+        else
+            warn "Could not remove the cs hook from ${codex_skills_dir%/skills}/hooks.json; remove its SessionStart entry by hand"
+        fi
+    fi
+    fi
+
     # Remove shell completions
-    if [ -f "$bash_completion_dir/cs.bash" ]; then
-        rm "$bash_completion_dir/cs.bash"
+    if [ -f "$bash_completion_dir/cs.bash" ] || [ -L "$bash_completion_dir/cs.bash" ]; then
+        rm -f "$bash_completion_dir/cs.bash"
         info "Removed $bash_completion_dir/cs.bash"
     fi
 
     local zsh_dir
     for zsh_dir in "${zsh_completion_dirs[@]}"; do
-        if [ -f "$zsh_dir/_cs" ]; then
-            rm "$zsh_dir/_cs"
+        if [ -f "$zsh_dir/_cs" ] || [ -L "$zsh_dir/_cs" ]; then
+            rm -f "$zsh_dir/_cs"
             info "Removed $zsh_dir/_cs"
         fi
     done
@@ -613,12 +657,13 @@ run_uninstall() {
     fi
 
     # The launch's hard links named claude, one whole binary per version.
-    local claude_links_dir="$HOME/.local/share/cs/claude"
+    local claude_links_dir="${CS_DATA_DIR:-$HOME/.local/share/cs}/claude"
     if [ -d "$claude_links_dir" ]; then
         rm -rf "$claude_links_dir"
         info "Removed $claude_links_dir"
     fi
 
+    if [[ ",$install_engines," == *,claude,* ]]; then
     # Clean up settings.json (remove cs hooks, preserve others)
     if [ -f "$settings_file" ] && command -v jq >/dev/null 2>&1; then
         local settings
@@ -650,6 +695,8 @@ run_uninstall() {
     fi
 
     _uninstall_rotate_wrap_keys
+    fi
+    rm -f "$install_config"
 
     # Ask about secrets in keychain
     if [ -d "$SESSIONS_ROOT" ]; then
@@ -668,7 +715,7 @@ run_uninstall() {
             if [[ $REPLY =~ ^[Yy]$ ]]; then
                 # Find cs-secrets script
                 local secrets_script=""
-                for loc in "$install_dir/cs-secrets" "/usr/local/bin/cs-secrets"; do
+                for loc in "$install_dir/cs-secrets" "$install_dir/cs-secrets" "/usr/local/bin/cs-secrets" "/usr/local/bin/cs-secrets"; do
                     if [ -x "$loc" ]; then
                         secrets_script="$loc"
                         break

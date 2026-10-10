@@ -28,7 +28,7 @@ lock beside `.cs/local/state` so cs and session-start.sh take turns, the vault h
 build-sync job fails on a `hooks/cs-shared.sh` that differs from the build. A hook sources
 it under the same guard as `cs-resolve.sh`, and carries no copy of its own: without it,
 session-start.sh names the actor `unknown` and says the library is missing and that
-`./install.sh` (or `cs -update`) redeploys the hooks, and neither hook measures narratives
+`sh ./setup.sh` redeploys the code-sessions profile's hooks, and neither hook measures narratives
 against a budget it does not have. The state writers are missing too, so session-start.sh
 records no `claude_session_id` or `last_resumed` and says so. An armed queue does not drain.
 
@@ -117,7 +117,7 @@ Runs when Claude Code starts a session:
 - Does NOT surface the cross-session mail digest: that lives only in scope-prompt.sh now (it fires on every prompt), so duplicating it here would double-inject the same unread bodies on every startup and resume
 - On all sources: names the current actor and its narrative file in the injected context, and states that the durable memory buckets are shared while only narratives are per-actor, so an entry naming someone else as the user was written by or for another actor. `.cs/memory/` is one store for every actor on a git-synced session, so a `type: user` entry written as an unconditional claim loads for all of them and reads as settled fact; a bare identity line is not enough, because a global instruction naming the right person was already in context and lost to such an entry. The actor precedence (`$CS_ACTOR`, then `.cs/local/identity`, then git `user.email`/`user.name`) is `cs_actor_raw` from `cs-shared.sh`, the same function `cs -whoami` runs; shelling out to `cs` instead would make the hook depend on `cs` being on `PATH`
 - On all sources, every actor: measures each `.cs/memory/narrative.*.md` against `CS_NARRATIVE_MAX_BYTES` (default 229376, from `cs-shared.sh`, the same value `cs -narrative rotate` uses) and, for any over budget, adds a `NARRATIVE OVER BUDGET` block naming the file and its size. For the actor's own file it says run `cs -narrative rotate` before the full read; a teammate's is theirs to rotate, so it says read only from the line the digest names. The Read tool refuses a file over 256 KiB, and the protocol's "read it in full" would otherwise send the model straight into that refusal. The hook rotates nothing: rotation commits, and cs never commits on its own
-- On all sources, for the launched conversation only: sets the tab title back to `cs: <name>`. cs sets it once at launch and cannot reset it, since cs execs into claude, so a second `cs other` on the same terminal would otherwise leave its name on this tab. Inside tmux it goes through the server: `select-pane -T` titles the pane with this session alone, and the window is named after every cs session running in its panes, `cs: a | b` in pane order, each pane recording its own in the `@cs_session` pane option. iTerm's tmux integration keeps the tab's title itself and never takes it from a tmux rename, so when `LC_TERMINAL` is `iTerm2` (and `CS_NO_ITERM2` is unset) every claim and release also starts `cs-iterm-tab.py` in the background, which sets the tab showing this window to the same `cs: a | b` through iTerm's Python API (the `iterm2` module, on the first `python3` in `PATH`). A tab counts only when iTerm's attachment answers for the same tmux server (`#{pid}` and `#{socket_path}`), since window numbers repeat across servers; if the last session leaves while the title is being set, the helper hands the window back to `automatic-rename` as the release did. Nothing waits on it and its output is discarded, so without iTerm's API or the module the tab keeps its last title and nothing else changes. Every claim turns `allow-rename` and `allow-set-title` off again, so a window a `/clear` briefly released does not rename itself after the running program. Outside it the hook writes the OSC 0 escape to the terminal device, and a front end with no terminal skips it
+- On all sources, for the launched conversation only: sets the tab title back to `cs: <name>`. cs sets it at launch and restores it on exit; the hook also restores it after in-process transitions such as `/clear`. Inside tmux it goes through the server: `select-pane -T` titles the pane with this session alone, and the window is named after every cs session running in its panes, `cs: a | b` in pane order, each pane recording its own in the `@cs_session` pane option. iTerm's tmux integration keeps the tab's title itself and never takes it from a tmux rename, so when `LC_TERMINAL` is `iTerm2` (and `CS_NO_ITERM2` is unset) every claim and release also starts `cs-iterm-tab.py` in the background, which sets the tab showing this window to the same `cs: a | b` through iTerm's Python API (the `iterm2` module, on the first `python3` in `PATH`). A tab counts only when iTerm's attachment answers for the same tmux server (`#{pid}` and `#{socket_path}`), since window numbers repeat across servers; if the last session leaves while the title is being set, the helper hands the window back to `automatic-rename` as the release did. Nothing waits on it and its output is discarded, so without iTerm's API or the module the tab keeps its last title and nothing else changes. Every claim turns `allow-rename` and `allow-set-title` off again, so a window a `/clear` briefly released does not rename itself after the running program. Outside it the hook writes the OSC 0 escape to the terminal device, and a front end with no terminal skips it
 - On all sources: exports session environment variables, injects session context into Claude's system prompt
 
 ## autosave-commits.sh (PostToolUse on Write/Edit)
@@ -171,7 +171,7 @@ On `Stop`, also:
 Runs when Claude Code session ends:
 - Logs session end time and the end reason Claude Code sends (`clear`, `resume`, `logout`, `prompt_input_exit` or `other`; `missing` when the payload has none) and appends an `ended` event to `.cs/timeline.jsonl`
 - Deletes only the ending conversation's own shadow ref (`refs/worktree/cs/session/<conversation-uuid>`); a concurrent sibling's ref is left untouched
-- Cleans up `.cs/session.lock`, but only one this launch owns. Only `cs` writes a lock, so a hook that resolved by walking the directory belongs to another front end: closing a desktop conversation on a directory a CLI session is live in would otherwise strip that session's lock, letting `cs <name>` open a duplicate with no collision menu. A walked-in hook still clears a lock whose process is gone, so a crashed session is never left locked out. A `/clear` or `/resume` keeps the lock, because the claude that holds it keeps running
+- Leaves supervised `.cs/session.lock` and its run lease to the launcher, including during `/clear` and `/resume`. An ending child or stale hook cannot unlock a successor. For an older PID-only lock, cleanup removes only a demonstrably stale PID; inherited session environment alone never permits deleting a live lock.
 - For a session `cs -encrypt` built (`.cs/local/vault` names its container), an end other than `/clear` or `/resume` in the launched conversation leaves a background waiter (`.cs/local/vault-waiter.pid`). Once that Claude Code exits, the waiter detaches the vault with a plain `hdiutil detach` (`.cs/local/vault-detach.pid` while it runs), unless the session reopened or a pid in `.cs/local/vault-holders` is still alive. See [Encrypting a session with cs -encrypt](session-layout.md#encrypting-a-session-with-cs--encrypt)
 - Regenerates the sessions index (`<sessions-root>/index.md`) — a table of every session's status, objective, and created date. Written only where sessions actually live: the session's own directory must sit under the sessions root, compared physically on both sides so a `$HOME` reached through a symlink still matches. An adopted session, whose directory is an unrelated project path, writes no index beside that project
 - Inside tmux, for the launched conversation only (`cs_is_lead`): releases this pane's `@cs_session` and renames the window, and the iTerm tab, after the cs sessions still running there; with none left the window names itself again (`automatic-rename on`). A `claude -p` run inside the session inherits `TMUX_PANE`, so without the lead check its end would release the lead's claim. A `/clear` ends here too, and its SessionStart claims the pane back. If cs's launch exits without reaching claude (a cancelled resume prompt), its cleanup trap releases the pane the same way
@@ -296,7 +296,7 @@ A run that overruns the hook's timeout leaves a trail that stops mid-run, which 
 
 ## memory-index-guard.sh (not a hook — run by `/sweep`)
 
-Ships in `hooks/` and deploys alongside the hooks as a library, never registered against an event. It sources `cs-shared.sh` for the snapshot's location and exits 2 when that file is missing. `/sweep` runs it from the session root to check its own rewrites of `.cs/memory/MEMORY.md`:
+Ships inside the sweep skill (`skills/sweep/scripts/`) and deploys with it, so it reaches every engine the skill does; earlier versions deployed it with the hooks, and the installer removes that copy (`RETIRED_HOOKS`). It is never registered against an event. It sources `cs-shared.sh` for the snapshot's location and exits 2 when that file is missing. `/sweep` runs it from the session root to check its own rewrites of `.cs/memory/MEMORY.md`:
 
 - `snapshot` copies `MEMORY.md` to `.cs/local/memory-index.snapshot` (`.cs/private/` in an encrypted session, exit 2 while its vault is locked), before the sweep edits anything. Claude Code writes `MEMORY.md` with the first memory entry, so in a session that has none yet it records an empty snapshot; outside a session root (no `.cs/memory`) it exits 2.
 - `check` exits 1 and names each problem when a pointer in the snapshot is gone, when an entry in the four memory buckets (`user_`, `feedback_`, `project_`, `reference_`) has no pointer, or when the file is over the 24400-byte budget. A pointer is a line opening with `- [title](file)`; a link later on that line is supporting text. It always prints the size against the budget. With no snapshot, an unreadable one, or no `MEMORY.md` it exits 2, so a skipped snapshot never passes as a clean rewrite. The bucket check covers entries written after the snapshot and a second sweep that snapshotted an index the first had already damaged; the snapshot itself is one per session, so two concurrent sweeps share it.
@@ -374,6 +374,14 @@ appears only for a marker the hook accepts: a bare basename, a file in
 `.cs/handoffs/`, frontmatter still `status: unconsumed`. An empty marker, or one
 an aborted rotation left naming a handoff since consumed or gone, leaves the
 rotate button in place.
+
+The `switch` skill arms the same marker and then records where the session goes
+next with `cs -switch` (`.cs/local/pending-switch`, or `.cs/private/pending-switch`
+in an encrypted session). While that record is there, the armed button reads
+`/exit and continue in codex` and pressing it (or Ctrl+X 1) runs `/exit`, not `/clear`: a
+`/clear` would hand the handoff to Claude again, while the exit lets cs reopen
+the session under Codex from it. The grace below counts the same way and reads
+`/exit in 20s`.
 
 The mod presses the button for you by default. The forcing is **on at 80%**;
 `CS_ROTATE_FORCE_CTX=<percent>` in the shell that launches cs moves it,
@@ -482,7 +490,7 @@ a Claude Code that no longer loads mods behind the flag). Doctor reads the
 heartbeat rather than the directory because a machine's policy can load a mod
 and never run it. Doctor says nothing when the mod is not installed, or outside
 a session. The deploy-drift check compares the deployed files against `mods/`
-in the checkout the way it does hooks, commands and skills.
+in the checkout the way it does hooks and skills.
 
 Two facts about the plugin runtime shape the code. A module reads the
 environment through `$.env.get` with a literal name, which `claude plugin
@@ -582,8 +590,9 @@ and does not match, so it gets no pane of its own.
 
 The launch pane opens once per load of the mod (a launch, or a plugin
 reload), never again for the same conversation, whether or not the update key
-was pressed. `/cs-update`, which the mod registers at every load, opens the
-same pane on demand: after a dismiss, with the `/config` row off, or with
+was pressed. `/cs-update`, which the mod registers as its primary slash
+command, opens the same pane on demand; `/cs-update` remains a compatibility
+alias. Use it after a dismiss, with the `/config` row off, or with
 nothing else having shown it. Run from a teammate it says the pane belongs to
 the conversation cs launched; run with nothing pending it says so instead of
 opening an empty pane.

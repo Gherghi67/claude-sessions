@@ -1,8 +1,8 @@
 /* @jsxRuntime classic */
 /* @jsx h */
 /* @jsxFrag Fragment */
-// ABOUTME: cs mod: keys above the prompt: rotate past the threshold, wrap up, or /clear once a handoff is armed.
-// ABOUTME: A turn ending past CS_ROTATE_FORCE_CTX (default 80, off disables) runs /rotate itself, then counts down to the /clear (session colour, amber, crit); session.start writes a heartbeat for doctor.
+// ABOUTME: cs mod: keys above the prompt: rotate past the threshold, wrap up, or /clear once a handoff is armed (/exit while `cs -switch` has a move to the other engine pending).
+// ABOUTME: A turn ending past CS_ROTATE_FORCE_CTX (default 80, off disables) runs /rotate itself, then counts down to the /clear or the switch's /exit (session colour, amber, crit); session.start writes a heartbeat for doctor.
 // ABOUTME: /queue adds a task to the session's walk-away queue through `cs -queue add`, at once even mid-turn; bare, it prints `cs -queue list`. /finish toasts its start and outcome and, while its gate runs, draws a band with the elapsed time.
 import type { On, EngineInterface } from 'claude-code'
 
@@ -116,6 +116,17 @@ export const HANDOFFS = '.cs/handoffs'
 export const PRIVATE_MARKER = '.cs/private/pending-handoff'
 export const PRIVATE_HANDOFFS = '.cs/private/handoffs'
 
+// The switch skill arms its handoff as rotate does, then `cs -switch` records
+// the move here: key=value lines naming the target `engine`, the `mode`, the
+// `handoff` it continues from and the `run` that wrote it. The mod runs only
+// under Claude, so a pending switch means leaving Claude: the key and the count
+// run /exit instead of /clear, and cs, waiting on the CLI in the same
+// terminal, reopens the session under the target from that handoff. A /clear
+// would hand the handoff to this engine instead. An encrypted session keeps
+// the record behind .cs/private, beside its marker.
+export const SWITCH = '.cs/local/pending-switch'
+export const PRIVATE_SWITCH = '.cs/private/pending-switch'
+
 // The conversation a forced rotation already ran /rotate for, by id. Written
 // BEFORE the run is scheduled: a rotation that fails must not be retried at
 // the end of every turn. Module state would not do: it survives a /clear
@@ -124,8 +135,8 @@ export const PRIVATE_HANDOFFS = '.cs/private/handoffs'
 export const FORCED = '.cs/local/cs.forced'
 
 // Once the forced rotation has armed its handoff, how long the band counts
-// down before the mod runs the /clear itself. Pressing the button or sending a
-// prompt stops it.
+// down before the mod runs the /clear (or a pending switch's /exit) itself.
+// Pressing the button or sending a prompt stops it.
 export const GRACE_SECONDS = 20
 // The percentage a turn must end past for the mod to rotate on its own. Above
 // the 65% nudge, so the ladder stays suggest -> offer -> force, and below where
@@ -240,7 +251,7 @@ export function register(on: On) {
       registered = true
       await $.command.register({ name: 'queue', description: "Add a task to this cs session's walk-away queue, or list it.", argumentHint: '[task]', immediate: true })
     }
-    // Only a cs session has .cs/local; anywhere else the mod stays silent.
+    // Only a registered session has .cs/local; anywhere else the mod stays silent.
     const local = `${e.cwd}/.cs/local`
     if (await $.fs.exists(local)) {
       await $.fs.write(`${e.cwd}/${HEARTBEAT}`, `${new Date().toISOString()}\n`)
@@ -252,7 +263,7 @@ export function register(on: On) {
   // `/queue` alone runs `cs -queue list`. The child inherits the claude
   // process's environment, and CLAUDE_SESSION_META_DIR there picks the queue.
   // Registered immediate, so the hook may run while a turn streams: it reads
-  // nothing of the turn. cs is the judge of the task: whatever it refuses
+  // nothing of the turn. cs validates the task: whatever it refuses
   // (an empty or multi-line body) comes back as its own stderr.
   on('command.run', { command: 'queue' }, async ($, e) => {
     const task = e.args.trim()
@@ -345,6 +356,8 @@ export function register(on: On) {
     if (!armed && (percent === undefined || percent < (await threshold($)))) return drawn
     if (!(await ownsRotation($))) return drawn
     const wrapped = !armed && (await wrapFinished($))
+    // An armed handoff with a switch pending leaves by /exit, never /clear.
+    const target = armed ? await pendingSwitch($) : undefined
     const fill = surfaceColor(await $.env.get("CS_TERM_BG_RGB"))
     const chords = await boundChords($)
     const own = paletteColor(await sessionColor($))
@@ -384,17 +397,18 @@ export function register(on: On) {
             <Box key="cs-rotate-band-body" paddingX={1} backgroundColor={fill}>
             {key(ROTATE_ACTION)}
             {armed
-              ? <Button key="cs-rotate" action={ROTATE_ACTION} plain label="/clear and continue from the handoff"
-                        onPress={() => clearAndContinue($)} />
+              ? <Button key="cs-rotate" action={ROTATE_ACTION} plain
+                        label={target === undefined ? '/clear and continue from the handoff' : `/exit and continue in ${target}`}
+                        onPress={() => (target === undefined ? clearAndContinue($) : exitAndContinue($))} />
               : <Button key="cs-rotate" action={ROTATE_ACTION} plain label="rotate this conversation"
                         onPress={() => rotate($)} />}
             {/* a Button is a block: nested in a Text the engine refuses the whole tree (measured), so the separator stands beside it */}
             {!armed && !wrapped && <Text dimColor>{'  \u00b7  '}</Text>}
             {!armed && !wrapped && key(WRAP_ACTION)}
             {!armed && !wrapped && <Button key="cs-wrap" action={WRAP_ACTION} plain label="wrap up this session" onPress={() => askToWrap($)} />}
-            {/* the forced rotation's grace: the seconds left before the mod runs the /clear itself */}
+            {/* the forced rotation's grace: the seconds left before the mod runs the /clear (or the switch's /exit) itself */}
             {armed && left !== undefined && <Text dimColor>{'  \u00b7  '}</Text>}
-            {armed && left !== undefined && <Text bold color={await rampColor($, left)}>{`/clear in ${left}s`}</Text>}
+            {armed && left !== undefined && <Text bold color={await rampColor($, left)}>{`${countVerb(target)} in ${left}s`}</Text>}
             </Box>
             {caps && <Text color={fill}>{CAP_RIGHT}</Text>}
           </Box>
@@ -412,6 +426,7 @@ export function register(on: On) {
     // own, in the session's colour; the step is drawn as a reply's markdown is.
     const own = paletteColor(await sessionColor($))
     const color = left === undefined ? undefined : await rampColor($, left)
+    const target = left === undefined ? undefined : await pendingSwitch($)
     return (
       <Box flexDirection="column" paddingX={1}>
         <Text key="header" bold color={own}>Handoff</Text>
@@ -424,9 +439,11 @@ export function register(on: On) {
             <Box>
               <Text key="bar" color={color}>{countdownBar(left)}</Text>
               <Text>{'  '}</Text>
-              <Text key="count" bold color={color}>{`/clear in ${left}s`}</Text>
+              <Text key="count" bold color={color}>{`${countVerb(target)} in ${left}s`}</Text>
             </Box>
-            <Text dimColor>press 1 to clear now, or send a prompt to stay</Text>
+            <Text dimColor>{target === undefined
+              ? 'press 1 to clear now, or send a prompt to stay'
+              : `press 1 to exit now and continue in ${target}, or send a prompt to stay`}</Text>
           </Box>
         )}
       </Box>
@@ -503,7 +520,8 @@ async function forceRotation($: EngineInterface) {
 // must see the press and the prompt that stop it, so nothing here is cached.
 // At zero the /clear runs only where the band would draw the button: the band
 // idle, the handoff still armed, this the lead; otherwise the count stops and
-// the button stays for the person.
+// the button stays for the person. A switch pending at zero (read then, so one
+// recorded or cancelled mid-count counts) makes it /exit instead.
 function startCountdown($: EngineInterface) {
   left = GRACE_SECONDS
   if (!previewShown) {
@@ -522,9 +540,12 @@ function startCountdown($: EngineInterface) {
     // landing meanwhile stops it (left becomes undefined), and this tick
     // then does nothing, so nothing clears twice or behind a new turn.
     const idle = bandIdle && (await handoffArmed($)) && (await ownsRotation($))
+    const target = idle ? await pendingSwitch($) : undefined
     if (left !== 0) return
     stopCountdown($)
-    if (idle) await clearAndContinue($).catch(err => $.ui.toast(`cs: /clear did not run: ${String(err)}`))
+    if (!idle) return
+    if (target === undefined) await clearAndContinue($).catch(err => $.ui.toast(`cs: /clear did not run: ${String(err)}`))
+    else await exitAndContinue($).catch(err => $.ui.toast(`cs: /exit did not run: ${String(err)}`))
   })
 }
 
@@ -628,6 +649,59 @@ async function armedHandoff($: EngineInterface): Promise<string | undefined> {
   return undefined
 }
 
+// The engine a pending switch moves to, or undefined when none is pending for
+// the armed handoff. A record pairs with its own store's marker only, as each
+// marker pairs with its own store, and must name the handoff that marker
+// names: cs reopens the target only while that handoff is unconsumed. It must
+// name this run too: cs carries out only the record of the run that just
+// ended, so one another run left behind must not make this one exit for
+// nothing. A record that cannot be read (absent, or behind a locked vault) is
+// no switch, and the count keeps its /clear.
+async function pendingSwitch($: EngineInterface): Promise<string | undefined> {
+  const cwd = await $.session.cwd()
+  for (const [record, marker] of [[PRIVATE_SWITCH, PRIVATE_MARKER], [SWITCH, MARKER]]) {
+    let fields: Record<string, string>
+    try {
+      fields = switchFields(await $.fs.read(`${cwd}/${record}`))
+    } catch {
+      continue
+    }
+    let armed: string
+    try {
+      armed = (await $.fs.read(`${cwd}/${marker}`)).trim()
+    } catch {
+      return undefined
+    }
+    const run = (await $.env.get("CS_RUN_ID"))?.trim()
+    const engine = fields.engine ?? ''
+    if (!/^[a-z][a-z0-9-]*$/.test(engine)) return undefined
+    if (run === undefined || run === '' || fields.run !== run) return undefined
+    return armed !== '' && fields.handoff === armed ? engine : undefined
+  }
+  return undefined
+}
+
+// A pending-switch record's `key=value` lines, read as cs reads them (KEEP IN
+// SYNC with _switch_field in lib/78-switch.sh): the key from the line's first
+// column, the value verbatim after the first `=`, the first line of a key
+// winning. Untrimmed, so a value cs would refuse (`codex ` is no engine)
+// never turns the count into an /exit that reopens nothing.
+export function switchFields(text: string): Record<string, string> {
+  const fields: Record<string, string> = {}
+  for (const line of text.split('\n')) {
+    const eq = line.indexOf('=')
+    if (eq <= 0) continue
+    const key = line.slice(0, eq)
+    if (!(key in fields)) fields[key] = line.slice(eq + 1)
+  }
+  return fields
+}
+
+// What the count says it will run when it reaches zero.
+export function countVerb(target: string | undefined): string {
+  return target === undefined ? '/clear' : '/exit'
+}
+
 // The hook's own rule (_handoff_is_unconsumed in hooks/session-start.sh): a
 // frontmatter block opened by `---` on the first line and CLOSED by the next
 // `---`, carrying `status: unconsumed` between them. A file the closing line
@@ -710,9 +784,9 @@ async function readState($: EngineInterface): Promise<string | undefined> {
   }
 }
 
-// Only the lead conversation of a cs session may be offered a rotation. The
-// rotate skill refuses outside a cs session, .cs/local/disabled opts a
-// directory out of cs entirely, and the handoff it writes carries the UUID in
+// Only the lead conversation of a registered session may be offered a rotation. The
+// rotate skill refuses outside a session, .cs/local/disabled opts a
+// directory out entirely, and the handoff it writes carries the UUID in
 // .cs/local/state, which belongs to the one conversation cs launched: a
 // teammate claude in the same directory would arm the lead's marker under the
 // lead's identity. The checks run only once the band has a button to draw.
@@ -843,12 +917,12 @@ async function offerToStart($: EngineInterface, bin: string, count: number) {
   try {
     result = await $.process.run([bin, '-queue', verb, ...mode])
   } catch (err) {
-    $.ui.toast(`cs: cs -queue ${verb} did not run: ${String(err instanceof Error ? err.message : err)}`)
+    $.ui.toast(`cs -queue ${verb} did not run: ${String(err instanceof Error ? err.message : err)}`)
     return
   }
   if (result.exitCode !== 0) {
     const tail = result.stderr.split('\n').filter(l => l.trim() !== '').slice(-1)[0] ?? ''
-    $.ui.toast(`cs: cs -queue ${verb} exited ${result.exitCode}${tail === '' ? '' : `: ${tail}`}`)
+    $.ui.toast(`cs -queue ${verb} exited ${result.exitCode}${tail === '' ? '' : `: ${tail}`}`)
     return
   }
   if (verb !== 'start' || turnRunning) return
@@ -859,7 +933,7 @@ async function offerToStart($: EngineInterface, bin: string, count: number) {
   }
 }
 
-// /clear ends this conversation, and cs's SessionStart hook then starts the
+// /clear ends this conversation, and the session-start hook then starts the
 // armed handoff's next step in the new one.
 // Measured: the run resolves once the screen has cleared and a new transcript
 // is open; the marker is the hook's to consume.
@@ -872,6 +946,17 @@ async function clearAndContinue($: EngineInterface) {
     clearSeen = false
     throw err
   }
+}
+
+// /exit ends the CLI; cs, waiting on it in the same terminal, consumes the
+// pending switch and reopens the session under the target engine from the
+// armed handoff. The marker and the record are cs's to consume, so nothing
+// here touches either. `$.command.run` runs any slash command the person could
+// type (the contract rejects only an unknown name, and a call inside a hook the
+// turn waits on); a run that ends the process may never resolve.
+async function exitAndContinue($: EngineInterface) {
+  if (ticker) stopCountdown($)
+  await $.command.run({ command: 'exit', args: '' })
 }
 
 // Starts the /finish watch. Whatever the record holds now belongs to an

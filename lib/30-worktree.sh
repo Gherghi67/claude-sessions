@@ -280,7 +280,7 @@ confirm_clean_worktree_base() {
 # The caller gates dirty base state via confirm_clean_worktree_base. Prints
 # the new worktree path.
 create_worktree_session() {
-    local base_dir="$1" base_name="$2" task="$3"
+    local base_dir="$1" base_name="$2" task="$3" engine="${4:-claude}"
     local wt_dir="$SESSIONS_ROOT/$base_name@$task"
     local branch="cs/$task"
 
@@ -311,17 +311,6 @@ create_worktree_session() {
     if [ -z "$(git -C "$base_dir" ls-files -- .cs 2>/dev/null)" ]; then
         mode="ignored"
         bootstrap_worktree_meta "$wt_dir" "$base_name" "$task"
-    fi
-
-    # The protocol file is normally gitignored, so no worktree inherits it
-    # through git in either mode; write this worktree's own copy. The FILE
-    # only — never touch a .gitignore here (ignored-mode worktrees check out
-    # project repos whose .gitignore is theirs). Guarded: a repo that
-    # (against CC convention) TRACKS CLAUDE.local.md checks its own copy
-    # into the worktree; only overwrite when absent or already cs's own.
-    if [ ! -f "$wt_dir/CLAUDE.local.md" ] \
-        || grep -q 'cs:session-protocol' "$wt_dir/CLAUDE.local.md"; then
-        write_session_claude_md "$wt_dir"
     fi
 
     # Cover the protocol file via the clone-local info/exclude in BOTH
@@ -364,13 +353,12 @@ create_worktree_session() {
     fi
 
     local state="$wt_dir/.cs/local/state"
-    _set_local_state "$state" claude_session_id "$(_alloc_uuid)"
-    _set_local_state "$state" claude_session_color "$(_alloc_random_color)"
     _set_local_state "$state" task_branch "$branch"
     _set_local_state "$state" cs_mode "$mode"
     _set_local_state "$state" cs_base "$base_name"
 
-    setup_auto_memory "$wt_dir"
+    mkdir -p "$wt_dir/.cs"/{memory,plans}
+    cs_engine_call "$engine" prepare_workspace "$wt_dir" worktree || return $?
 
     # A feature worktree is a full cs session holding the same narrative, plans
     # and machine-local state as its base, so it gets the same privacy. cs
@@ -442,6 +430,16 @@ _finish_progress_exit() {  # exit status
     return 0
 }
 
+# How the user asks for finish, in the engine a session last ran under (its
+# .cs/local/state; Claude when none is recorded): Codex names a skill with $,
+# Claude Code with /. The refusals below are printed to the user verbatim.
+_finish_command() {  # session_dir
+    case "$(_read_local_state "$1/.cs/local/state" engine)" in
+        codex) printf '%s' '$finish' ;;
+        *) printf '%s' /finish ;;
+    esac
+}
+
 # Retire an integrated feature worktree: fuse its session records into the
 # base (ignored mode), remove the worktree and delete its branch. Backs the
 # unadvertised `cs <base> -retire-feature <task> <sha> [--force]` that
@@ -471,10 +469,16 @@ retire_feature_worktree() {  # base_name task sha [--force]
     [ -d "$base_dir" ] || error "Base session not found: $base_name"
     [ -d "$wt_dir" ] || error "No worktree for feature '$task' (expected $wt_dir)"
     _finish_progress_begin "$base_dir" "$task"
+    local fin wt_engine=Claude wt_quit=/exit
+    fin=$(_finish_command "$base_dir")
+    if [ "$(_read_local_state "$wt_dir/.cs/local/state" engine)" = codex ]; then
+        wt_engine=Codex
+        wt_quit=/quit
+    fi
 
     local wt_name="$base_name@$task"
-    if [ "${CLAUDE_SESSION_NAME:-}" = "$wt_name" ]; then
-        error "This is the '$wt_name' conversation itself, and a worktree can't remove the directory it is running in. Close this session, then run /finish $task in '$base_name'."
+    if [ "${CS_SESSION_NAME:-${CLAUDE_SESSION_NAME:-}}" = "$wt_name" ]; then
+        error "This is the '$wt_name' conversation itself, and a worktree can't remove the directory it is running in. Close this session, then run $fin $task in '$base_name'."
     fi
 
     sha=$(git -C "$base_dir" rev-parse -q --verify "$sha^{commit}" 2>/dev/null) \
@@ -489,23 +493,23 @@ retire_feature_worktree() {  # base_name task sha [--force]
     # deleting the branch would lose it.
     if [ -z "$force" ]; then
         git -C "$base_dir" merge-base --is-ancestor "$sha" HEAD 2>/dev/null \
-            || error "$sha is not integrated into $base_name; run /finish $task before retiring"
+            || error "$sha is not integrated into $base_name; run $fin $task before retiring"
     fi
     if ! git -C "$base_dir" merge-base --is-ancestor "$tip" "$sha" 2>/dev/null \
         && { [ -n "$force" ] || ! git -C "$base_dir" merge-base --is-ancestor "$tip" HEAD 2>/dev/null; }; then
         local n_after
         n_after=$(git -C "$wt_dir" rev-list --count "$sha..HEAD" 2>/dev/null || echo "?")
-        error "$n_after commit(s) on $branch after $sha are not integrated; run /finish $task again before retiring"
+        error "$n_after commit(s) on $branch after $sha are not integrated; run $fin $task again before retiring"
     fi
 
     local pid
     pid=$(_foreign_live_lock_pid "$wt_name" "$wt_dir/.cs/session.lock")
     if [ -n "$pid" ]; then
-        error "The feature is landed, but its worktree is still here: the '$wt_name' conversation is open in it (PID $pid), and a directory can't be removed from under a running Claude. Close that session yourself (/exit there), then run /finish $task here again and it will be removed."
+        error "The feature is landed, but its worktree is still here: the '$wt_name' conversation is open in it (PID $pid), and a directory can't be removed from under a running $wt_engine. Close that session yourself ($wt_quit there), then run $fin $task here again and it will be removed."
     fi
     pid=$(_foreign_live_lock_pid "$base_name" "$base_dir/.cs/session.lock")
     if [ -n "$pid" ]; then
-        error "Base session '$base_name' is open elsewhere (PID $pid); run /finish $task from that conversation"
+        error "Base session '$base_name' is open elsewhere (PID $pid); run $fin $task from that conversation"
     fi
 
     # git worktree remove --force recurses into a mount, so a volume mounted
@@ -514,7 +518,7 @@ retire_feature_worktree() {  # base_name task sha [--force]
     mounted=$(_volume_mounted_under "$wt_dir") \
         || error "cs could not read the mount table, so it cannot tell whether a volume is mounted inside $wt_dir; refusing to remove the worktree."
     [ -z "$mounted" ] \
-        || error "The feature is landed, but its worktree has a volume mounted inside it at $mounted, and removing the worktree would delete what the volume holds. Unmount it, then run /finish $task here again."
+        || error "The feature is landed, but its worktree has a volume mounted inside it at $mounted, and removing the worktree would delete what the volume holds. Unmount it, then run $fin $task here again."
 
     if _tree_is_dirty "$wt_dir"; then
         error "Worktree has uncommitted changes; commit them in $wt_dir first (cs never commits for you)"
@@ -640,6 +644,8 @@ integrate_feature_worktree() {  # base_name task sha [--from-remote [--ci-green]
     [ -d "$base_dir" ] || error "Base session not found: $base_name"
     [ -d "$wt_dir" ] || error "No worktree for feature '$task' (expected $wt_dir)"
     _finish_progress_begin "$base_dir" "$task"
+    local fin
+    fin=$(_finish_command "$base_dir")
     # Herestring, not a pipe: grep -q's early exit would SIGPIPE the writer
     # and pipefail would read that as "not registered".
     local features
@@ -652,7 +658,7 @@ integrate_feature_worktree() {  # base_name task sha [--from-remote [--ci-green]
     # conversation is a refusal, never a wait.
     local pid
     pid=$(_foreign_live_lock_pid "$base_name" "$base_dir/.cs/session.lock")
-    [ -z "$pid" ] || error "Base session '$base_name' is open elsewhere (PID $pid); run /finish $task from that conversation"
+    [ -z "$pid" ] || error "Base session '$base_name' is open elsewhere (PID $pid); run $fin $task from that conversation"
 
     sha=$(git -C "$base_dir" rev-parse -q --verify "$sha^{commit}" 2>/dev/null) \
         || error "Commit not found in $base_name: $sha"
@@ -739,6 +745,8 @@ integrate_feature_worktree() {  # base_name task sha [--from-remote [--ci-green]
 _integrate_in_temp() {  # base_dir wt_dir task sha common from_remote ci_green gate...
     local base_dir="$1" wt_dir="$2" task="$3" sha="$4" common="$5" from_remote="$6" ci_green="$7"
     shift 7
+    local fin
+    fin=$(_finish_command "$base_dir")
 
     local B
     B=$(git -C "$base_dir" rev-parse HEAD)
@@ -797,9 +805,9 @@ _integrate_in_temp() {  # base_dir wt_dir task sha common from_remote ci_green g
             # Nothing of the feature's is in this conflict: it is the base's
             # own commits against what origin carries, so the feature worktree
             # is the wrong place to fix it.
-            advice="Resolve it in the base (git -C \"$base_dir\" merge origin/$base_branch): the conflict is between $base_dir's local commits and origin's $base_branch, not with the feature. Then re-run /finish $task"
+            advice="Resolve it in the base (git -C \"$base_dir\" merge origin/$base_branch): the conflict is between $base_dir's local commits and origin's $base_branch, not with the feature. Then re-run $fin $task"
         else
-            advice="Resolve on the feature branch (git merge $base_branch in $wt_dir), then re-run /finish $task"
+            advice="Resolve on the feature branch (git merge $base_branch in $wt_dir), then re-run $fin $task"
         fi
         error "Merge of $sha conflicts with $base_dir at $B; base untouched. Conflicting paths:
 ${conflicts:-(none reported; see git -C \"$tmp\" status)}
@@ -823,7 +831,7 @@ $advice"
         rmdir "$no_hooks"
         error "Untracked files in $base_dir collide with paths the feature adds; base untouched. Colliding paths:
 $collisions
-Move or delete these untracked files in $base_dir, then re-run /finish $task"
+Move or delete these untracked files in $base_dir, then re-run $fin $task"
     fi
     # Submodules after the merge, so the gates see the MERGED gitlinks: a
     # feature that adds or bumps a submodule is otherwise gated against
@@ -891,7 +899,7 @@ $gate_dirt"
     if [ -n "$tampered" ]; then
         error "The gate changed the temp checkout; base $base_dir untouched at $B. What the gate changed:
 $tampered
-Commit the generated output on the feature branch, then re-run /finish $task"
+Commit the generated output on the feature branch, then re-run $fin $task"
     fi
 
     # Re-verify the base immediately before landing. --ff-only alone is not
@@ -900,10 +908,10 @@ Commit the generated output on the feature branch, then re-run /finish $task"
     # window between this check and the merge is the one race left; the
     # mutex keeps cs's own writer (the autosave hook) out of it.
     if [ "$(git -C "$base_dir" rev-parse HEAD)" != "$B" ]; then
-        error "Base $base_dir moved during the gates (was $B, now $(git -C "$base_dir" rev-parse --short HEAD)); re-run /finish $task"
+        error "Base $base_dir moved during the gates (was $B, now $(git -C "$base_dir" rev-parse --short HEAD)); re-run $fin $task"
     fi
     if _tree_is_dirty "$base_dir" || git -C "$base_dir" rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1; then
-        error "Base $base_dir changed during the gates (uncommitted changes or a merge in progress); commit or abort, then re-run /finish $task"
+        error "Base $base_dir changed during the gates (uncommitted changes or a merge in progress); commit or abort, then re-run $fin $task"
     fi
     # Fast-forward BEFORE removing the temp: until then the merge commit is
     # reachable only from the temp's detached HEAD.
@@ -912,7 +920,7 @@ Commit the generated output on the feature branch, then re-run /finish $task"
     _finish_progress_write fast-forward
     ff_err=$(git -C "$base_dir" merge --ff-only "$R" 2>&1 >/dev/null) || ff_status=$?
     if [ "$ff_status" != 0 ]; then
-        error "Base $base_dir moved or changed during the gates (was $B); re-run /finish $task
+        error "Base $base_dir moved or changed during the gates (was $B); re-run $fin $task
 ${ff_err:-(no output from git merge --ff-only)}"
     fi
     # The base's landing is the one merge that runs with the project's hooks

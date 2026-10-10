@@ -2,7 +2,7 @@
 /* @jsx h */
 /* @jsxFrag Fragment */
 // ABOUTME: cs-update mod: when a cs launch found a newer release, one pane per load with its release notes, `1` to install it in place, Esc for later.
-// ABOUTME: Reads the launch's verdict from CS_UPDATE_AVAILABLE, the cs path from CS_BIN, and the span cs cached; /cs-update reopens the pane; session.start writes a heartbeat for doctor.
+// ABOUTME: Reads the launch's verdict from CS_UPDATE_AVAILABLE, the cs path from CS_BIN, and the span cs cached (under CS_CACHE_DIR when the launch names one); /cs-update reopens the pane; session.start writes a heartbeat for doctor.
 import type { On, EngineInterface, PluginOptions } from 'claude-code'
 
 declare const h: any
@@ -26,7 +26,7 @@ export const DONE = '.cs/local/cs-update.done'
 export const STATE = '.cs/local/state'
 // KEEP IN SYNC with check_update_notify in lib/20-update.sh: the file cs
 // caches the pending release's changelog span in, keyed by that version.
-export const NOTES = (home: string, version: string) => `${home}/.cache/cs/update-notes-full-${version}`
+export const NOTES = (cacheDir: string, version: string) => `${cacheDir}/update-notes-full-${version}`
 // How long `cs -update` may take: the download, the checksum, the signature.
 export const UPDATE_TIMEOUT_MS = 600000
 
@@ -193,9 +193,12 @@ async function sessionColor($: EngineInterface, cwd: string): Promise<string | u
 async function openPane($: EngineInterface, cwd: string, pending: string) {
   version = pending
   accent = await sessionColor($, cwd)
+  // A launch with its own cache (code-sessions' profile) exports CS_CACHE_DIR;
+  // otherwise the stable install's cache under HOME.
   const home = await $.env.get('HOME')
+  const cacheDir = (await $.env.get('CS_CACHE_DIR')) || (home ? `${home}/.cache/cs` : '')
   let text = ''
-  try { text = home ? await $.fs.read(NOTES(home, pending)) : '' } catch { text = '' }
+  try { text = cacheDir ? await $.fs.read(NOTES(cacheDir, pending)) : '' } catch { text = '' }
   sections = parseSpan(text)
   // focus is a request the surface grants only over an idle, empty composer;
   // without it the keys stay with the prompt and `1` does nothing.

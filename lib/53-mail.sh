@@ -27,8 +27,8 @@ _mail_dir() {  # meta_dir
 # The current session's own mailbox, or the error that its vault is locked.
 # Callers capture it, so error only ends their subshell: each one exits after.
 _mail_own_dir() {
-    _mail_dir "$CLAUDE_SESSION_META_DIR" \
-        || error "this session keeps its mail in encrypted storage that is not mounted (.cs/private $(cs_private_state "$CLAUDE_SESSION_META_DIR")). Mount it, then retry."
+    _mail_dir "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" \
+        || error "this session keeps its mail in encrypted storage that is not mounted (.cs/private $(cs_private_state "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}")). Mount it, then retry."
 }
 
 # Thread ids are 6 hex digits because an agent has to retype them. RANDOM is 15
@@ -55,9 +55,9 @@ _mail_new_thread() {  # maildir
 # already said. Best-effort by design: the message is already delivered, and a
 # failure to file the copy must never report the send as failed.
 _mail_keep_sent() {  # line, fname
-    [ -n "${CLAUDE_SESSION_META_DIR:-}" ] || return 0
+    [ -n "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ] || return 0
     local mine
-    mine=$(_mail_dir "$CLAUDE_SESSION_META_DIR") || return 0
+    mine=$(_mail_dir "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}") || return 0
     _mail_ensure_maildir "$mine" 2>/dev/null || return 0
     if ! { { printf '%s\n' "$1" > "$mine/tmp/$2"; } 2>/dev/null \
             && mv "$mine/tmp/$2" "$mine/out/$2" 2>/dev/null; }; then
@@ -115,7 +115,7 @@ _mail_send() {  # target, [--kind|-k KIND] [--reply THREAD] body
         shift
     done
     if [ -n "$reply_thread" ]; then
-        [ -n "${CLAUDE_SESSION_META_DIR:-}" ] \
+        [ -n "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ] \
             || error "cs -msg --reply resolves the thread from a session's mailbox; run it inside a session"
         local pair derived rc=0 mine
         mine=$(_mail_own_dir) || exit 1
@@ -143,7 +143,7 @@ _mail_send() {  # target, [--kind|-k KIND] [--reply THREAD] body
     validate_session_ref "$target"
     local target_dir="$SESSIONS_ROOT/$target"
     is_session_dir "$target_dir" || error "No such session: $target"
-    if [ "$target" = "${CLAUDE_SESSION_NAME:-}" ]; then
+    if [ "$target" = "${CS_SESSION_NAME:-${CLAUDE_SESSION_NAME:-}}" ]; then
         error "Refusing to send mail to the current session"
     fi
     case "$kind" in notify|task|text|result) : ;; *) error "Unknown kind: $kind (notify|task|text|result)";; esac
@@ -199,8 +199,8 @@ _mail_send() {  # target, [--kind|-k KIND] [--reply THREAD] body
         thread="$reply_thread"
     else
         local roots="$maildir"
-        if [ -n "${CLAUDE_SESSION_META_DIR:-}" ]; then
-            roots=$(_mail_dir "$CLAUDE_SESSION_META_DIR") || roots="$maildir"
+        if [ -n "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ]; then
+            roots=$(_mail_dir "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}") || roots="$maildir"
         fi
         thread="$(_mail_new_thread "$roots")"
     fi
@@ -210,7 +210,7 @@ _mail_send() {  # target, [--kind|-k KIND] [--reply THREAD] body
     # byte for byte, and printf adds nothing to it.
     if ! line=$(printf '%s' "$body" | jq -cRs --arg id "$id" --argjson ts "$now" \
         --arg thread "$thread" --arg to "$target" --arg parent "$reply_parent" \
-        --arg from "${CLAUDE_SESSION_NAME:-}" --arg actor "$(cs_actor_slug)" \
+        --arg from "${CS_SESSION_NAME:-${CLAUDE_SESSION_NAME:-}}" --arg actor "$(cs_actor_slug)" \
         --arg kind "$kind" \
         '{id:$id, ts:$ts, thread:$thread,
           in_reply_to:(if $parent == "" then null else $parent end),
@@ -245,7 +245,7 @@ _mail_send() {  # target, [--kind|-k KIND] [--reply THREAD] body
 # The thread id is rendered because an agent cannot reply into a thread whose id
 # it was never shown.
 _mail_print_files() {  # file...
-    cat "$@" | jq -rR --arg me "${CLAUDE_SESSION_NAME:-}" '
+    cat "$@" | jq -rR --arg me "${CS_SESSION_NAME:-${CLAUDE_SESSION_NAME:-}}" '
         fromjson? // empty |
         (if $me != "" and (.from // "") == $me then "->" else "<-" end) as $dir |
         (if $dir == "->" then (.to // "?")
@@ -406,11 +406,11 @@ run_mail() {
     local first="${1:-}"
     case "$first" in
         ""|log)
-            [ -n "${CLAUDE_SESSION_META_DIR:-}" ] || error "cs -msg reads the current session's mail; run it inside a session"
+            [ -n "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ] || error "cs -msg reads the current session's mail; run it inside a session"
             if [ "$first" = "log" ]; then _mail_log; else _mail_read; fi;;
         thread)
             shift
-            [ -n "${CLAUDE_SESSION_META_DIR:-}" ] || error "cs -msg thread reads the current session's mail; run it inside a session"
+            [ -n "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ] || error "cs -msg thread reads the current session's mail; run it inside a session"
             _mail_thread "${1:-}";;
         --reply|-r)
             # No target stated: it comes from the thread. The flag stays in the

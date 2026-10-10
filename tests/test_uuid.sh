@@ -5,6 +5,7 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=tests/test_lib.sh
 source "$SCRIPT_DIR/test_lib.sh"
+export CS_ASSUME_TTY=1
 
 
 # Override teardown to also unset cs session env vars (matches test_auto_memory.sh pattern)
@@ -15,6 +16,27 @@ teardown() {
     unset CS_SESSIONS_ROOT CLAUDE_CODE_BIN CS_TRANSCRIPTS_DIR
     unset CLAUDE_SESSION_NAME CLAUDE_SESSION_DIR CLAUDE_SESSION_META_DIR 2>/dev/null || true
     unset CS_CLAUDE_SESSION_ID 2>/dev/null || true
+}
+
+_make_ack_stub() {
+    local stub="$TEST_TMPDIR/claude-ack"
+    export CS_TEST_START_HOOK="$SCRIPT_DIR/../hooks/session-start.sh"
+    cat > "$stub" <<'STUB'
+#!/bin/bash
+args="$*"
+uuid=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in --session-id|--resume) uuid="$2"; shift 2 ;; *) shift ;; esac
+done
+if [ -n "$uuid" ]; then
+    jq -nc --arg session_id "$uuid" --arg cwd "$CS_SESSION_DIR" \
+        '{session_id:$session_id,cwd:$cwd,source:"startup"}' \
+        | CLAUDE_PID=$$ bash "$CS_TEST_START_HOOK" >/dev/null
+fi
+printf '%s\n' "$args"
+STUB
+    chmod +x "$stub"
+    printf '%s\n' "$stub"
 }
 
 # UUID v4 regex: 8-4-4-4-12 hex, version nibble = 4, variant nibble in 8-b.
@@ -100,6 +122,9 @@ test_resume_uses_recorded_uuid() {
 # ============================================================================
 
 test_lazy_migration_backfills_uuid() {
+    export CS_TEST_START_HOOK="$SCRIPT_DIR/../hooks/session-start.sh"
+    CLAUDE_CODE_BIN=$(_make_ack_stub) || return 1
+    export CLAUDE_CODE_BIN
     # Build a "legacy" session — has .cs/README.md with frontmatter but no
     # claude_session_id (created on a cs version before this feature).
     local session_dir="$CS_SESSIONS_ROOT/legacy-session"
@@ -221,7 +246,7 @@ test_lazy_migration_binds_to_existing_transcript() {
 # transcript by rewriting it to the most-recent real transcript.
 # ============================================================================
 
-test_lazy_migration_self_heals_orphan_uuid() {
+test_lazy_migration_preserves_missing_transcript_binding() {
     local orphan_uuid="00000000-0000-4000-8000-000000000000"
     local session_dir
     session_dir=$(_seed_legacy_session "legacy-session" "$orphan_uuid")
@@ -233,15 +258,15 @@ test_lazy_migration_self_heals_orphan_uuid() {
 
     local recorded
     recorded=$(_extract_session_uuid "$session_dir/.cs/local/state")
-    assert_eq "$real_uuid" "$recorded" \
-        "self-heal should rewrite orphan claude_session_id to the existing transcript UUID" || return 1
+    assert_eq "$orphan_uuid" "$recorded" \
+        "missing transcript must preserve the recorded native identity" || return 1
 
     # Idempotent: a second resume must not flip the value back.
     "$CS_BIN" legacy-session <<< "" >/dev/null 2>&1 || true
     local after
     after=$(_extract_session_uuid "$session_dir/.cs/local/state")
-    assert_eq "$real_uuid" "$after" \
-        "second resume must keep the healed UUID stable" || return 1
+    assert_eq "$orphan_uuid" "$after" \
+        "second resume must preserve the original recorded identity" || return 1
 }
 
 test_lazy_migration_preserves_uuid_when_transcript_matches() {
@@ -280,6 +305,8 @@ test_project_dir_encodes_underscore_and_space_like_claude() {
         source "$SCRIPT_DIR/../lib/05-term.sh"
         # shellcheck source=lib/40-state.sh
         source "$SCRIPT_DIR/../lib/40-state.sh"
+        # shellcheck source=lib/42-claude-state.sh
+        source "$SCRIPT_DIR/../lib/42-claude-state.sh"
         local got
         got=$(_claude_project_dir "$cwd")
         case "$got" in
@@ -339,7 +366,7 @@ run_test test_new_session_allocates_and_records_uuid
 run_test test_resume_uses_recorded_uuid
 run_test test_lazy_migration_backfills_uuid
 run_test test_lazy_migration_binds_to_existing_transcript
-run_test test_lazy_migration_self_heals_orphan_uuid
+run_test test_lazy_migration_preserves_missing_transcript_binding
 run_test test_lazy_migration_preserves_uuid_when_transcript_matches
 
 # ============================================================================
@@ -358,20 +385,14 @@ test_decline_resume_rebinds_to_fresh_uuid() {
     local output
     output=$("$CS_BIN" test-session <<< "n" 2>&1) || true
 
-    local recorded
+    local recorded candidate
     recorded=$(_extract_session_uuid "$session_dir/.cs/local/state")
+    candidate=$(jq -r '.candidate_id' "$session_dir/.cs/local/pending-binding-claude.json")
+    assert_eq "$old_uuid" "$recorded" "unacknowledged fresh launch preserves old binding" || return 1
+    [[ "$candidate" =~ $UUID_V4_RE ]] || { echo "  FAIL: candidate is not a UUID: $candidate"; return 1; }
+    [ "$candidate" != "$old_uuid" ] || { echo '  FAIL: fresh candidate reused old binding'; return 1; }
+    assert_output_contains "$output" "--session-id $candidate" "native launch uses staged candidate" || return 1
 
-    if [ "$recorded" = "$old_uuid" ]; then
-        echo "  FAIL: declining resume should rewrite claude_session_id"
-        echo "    recorded still: $recorded"
-        return 1
-    fi
-    if [[ ! "$recorded" =~ $UUID_V4_RE ]]; then
-        echo "  FAIL: rewritten UUID is not a valid v4 UUID: '$recorded'"
-        return 1
-    fi
-    assert_output_contains "$output" "--session-id $recorded" \
-        "claude spawn after N should pass --session-id <new-uuid>" || return 1
 }
 
 run_test test_decline_resume_rebinds_to_fresh_uuid
@@ -433,7 +454,7 @@ test_launch_exports_lead_pid_of_the_claude_process() {
     local stub="$TEST_TMPDIR/claude-pid-stub"
     cat > "$stub" << 'STUB_EOF'
 #!/usr/bin/env bash
-echo "CS_LEAD_PID_SEEN=${CS_LEAD_PID:-unset} LAUNCHED_PID=$$"
+echo "CS_LEAD_PID_SEEN=${CS_LEAD_PID:-unset} LAUNCHED_PID=$PPID"
 STUB_EOF
     chmod +x "$stub"
     export CLAUDE_CODE_BIN="$stub"
@@ -451,10 +472,10 @@ STUB_EOF
     fi
 
     assert_eq "$launched" "$exported" \
-        "CS_LEAD_PID must be the pid the launched claude runs under" || return 1
+        "CS_LEAD_PID must be the supervising parent of launched Claude" || return 1
 }
 
-test_self_heals_a_slot_taken_by_a_subdirectory_claude() {
+test_preserves_binding_with_subdirectory_transcript() {
     # A claude working in a SUBDIRECTORY of a session writes its transcript
     # under that subdirectory's project dir, never the session's. A conversation
     # like that could take the session's recorded slot, leaving a uuid that
@@ -475,11 +496,11 @@ test_self_heals_a_slot_taken_by_a_subdirectory_claude() {
 
     "$CS_BIN" legacy-session <<< "" >/dev/null 2>&1 || true
 
-    assert_eq "$real_uuid" "$(_extract_session_uuid "$session_dir/.cs/local/state")" \
-        "a slot taken by a subdirectory's claude must heal to the session's own conversation" || return 1
+    assert_eq "$intruder" "$(_extract_session_uuid "$session_dir/.cs/local/state")" \
+        "a transcript in another directory must not authorize a new binding" || return 1
 }
 
-run_test test_self_heals_a_slot_taken_by_a_subdirectory_claude
+run_test test_preserves_binding_with_subdirectory_transcript
 
 test_resume_reports_a_newer_conversation_than_the_recorded_one() {
     # The recorded conversation still resolves, so `claude --resume` SUCCEEDS
@@ -709,8 +730,8 @@ test_orphan_repair_never_binds_a_headless_transcript() {
 
     "$CS_BIN" legacy-session <<< "" >/dev/null 2>&1 || true
 
-    assert_eq "$own" "$(_extract_session_uuid "$session_dir/.cs/local/state")" \
-        "an orphaned slot heals to the session's own conversation, not the headless run beside it" || return 1
+    assert_eq "$orphan" "$(_extract_session_uuid "$session_dir/.cs/local/state")" \
+        "a missing recorded transcript must never cause discovery to replace its identity" || return 1
 }
 
 run_test test_orphan_repair_never_binds_a_headless_transcript
@@ -1274,4 +1295,43 @@ run_test test_resume_launch_passes_color_slash_command
 run_test test_decline_resume_launch_passes_color_slash_command
 run_test test_color_persists_across_resumes
 run_test test_legacy_session_backfills_color_on_next_launch
+test_explicit_fresh_is_available_without_a_terminal() {
+    local old_uuid=abcd1234-5678-4abc-9def-fedcba987654 session_dir output candidate
+    session_dir=$(_seed_legacy_session test-session "$old_uuid")
+    output=$(CS_ASSUME_TTY=0 "$CS_BIN" test-session --fresh </dev/null 2>&1) || { echo "$output"; return 1; }
+    candidate=$(jq -r '.candidate_id' "$session_dir/.cs/local/pending-binding-claude.json")
+    assert_eq "$old_uuid" "$(_extract_session_uuid "$session_dir/.cs/local/state")" "no ack leaves prior binding" || return 1
+    assert_output_contains "$output" "--session-id $candidate" "fresh intent skips interactive menu" || return 1
+    assert_output_not_contains "$output" 'Continue previous conversation?' || return 1
+}
+
+test_failed_resume_keeps_binding_and_native_status() {
+    local old_uuid=abcd1234-5678-4abc-9def-fedcba987654 session_dir output status=0
+    session_dir=$(_seed_legacy_session test-session "$old_uuid")
+    printf 'claude_session_id: %s\n' "$old_uuid" > "$session_dir/.cs/local/state"
+    local stub="$TEST_TMPDIR/fail-resume"
+    printf '#!/bin/bash\necho "attempt: $*"\nexit 17\n' > "$stub"
+    chmod +x "$stub"
+    output=$(CLAUDE_CODE_BIN="$stub" "$CS_BIN" test-session --resume </dev/null 2>&1) || status=$?
+    assert_eq 17 "$status" "native resume status preserved" || return 1
+    assert_eq "$old_uuid" "$(_extract_session_uuid "$session_dir/.cs/local/state")" "resume failure does not replace binding" || return 1
+    assert_output_contains "$output" "--resume $old_uuid" || return 1
+    assert_output_not_contains "$output" '--session-id' "no automatic fresh fallback" || return 1
+    assert_not_exists "$session_dir/.cs/local/pending-binding-claude.json" "no replacement staged" || return 1
+    assert_not_exists "$session_dir/.cs/session.lock" "failed resume releases lease" || return 1
+}
+
+test_malformed_claude_binding_refuses_native_invocation() {
+    local session_dir output status=0
+    session_dir=$(_seed_legacy_session test-session 'invalid --dangerously-skip-permissions')
+    printf 'claude_session_id: invalid --dangerously-skip-permissions\n' > "$session_dir/.cs/local/state"
+    output=$("$CS_BIN" test-session --resume </dev/null 2>&1) || status=$?
+    assert_eq 1 "$status" "malformed native ID rejected" || return 1
+    assert_output_contains "$output" 'Invalid Claude conversation binding' || return 1
+    assert_not_exists "$session_dir/.cs/local/pending-binding-claude.json" || return 1
+}
+
+run_test test_explicit_fresh_is_available_without_a_terminal
+run_test test_failed_resume_keeps_binding_and_native_status
+run_test test_malformed_claude_binding_refuses_native_invocation
 report_results

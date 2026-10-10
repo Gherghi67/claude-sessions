@@ -514,8 +514,12 @@ _notify_spawner() {  # message
     [ -s "$LOCAL/spawned-by" ] || return 0
     local spawner=""
     IFS= read -r spawner < "$LOCAL/spawned-by" || true
-    if [ -n "$spawner" ] && command -v cs >/dev/null 2>&1; then
-        cs -msg "$spawner" -k notify "$1" >/dev/null 2>&1 || true
+    local session_bin="${CS_BIN:-}"
+    if [ -z "$session_bin" ]; then
+        session_bin=$(command -v cs 2>/dev/null || true)
+    fi
+    if [ -n "$spawner" ] && [ -n "$session_bin" ]; then
+        "$session_bin" -msg "$spawner" -k notify "$1" >/dev/null 2>&1 || true
     fi
 }
 

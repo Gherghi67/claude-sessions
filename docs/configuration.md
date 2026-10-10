@@ -6,7 +6,7 @@ runs with sensible defaults out of the box — but you can set any of these in
 
 This lists every variable a user would set, plus the ones cs exports for hooks
 and helper binaries. It deliberately excludes test seams and internal state —
-values cs computes and passes to itself, which change without notice and are
+values cs computes and passes to its own helpers, which change without notice and are
 documented in the code that reads them.
 
 ## Environment variables you set
@@ -14,6 +14,28 @@ documented in the code that reads them.
 ```bash
 # Sessions directory (default: ~/.claude-sessions)
 export CS_SESSIONS_ROOT="/path/to/sessions"
+
+# Where cs's own configuration and caches live (defaults: $XDG_CONFIG_HOME/cs or
+# ~/.config/cs, and $XDG_CACHE_HOME/cs or ~/.cache/cs). The code-sessions launcher
+# sets both so a session never touches the original install's files.
+export CS_CONFIG_DIR="$HOME/.config/cs"
+export CS_CACHE_DIR="$HOME/.cache/cs"
+
+# Where cs -encrypt makes new containers, under vaults/, and where a launch
+# under tmux in iTerm2 keeps its hard links named claude, under claude/
+# (default: ~/.local/share/cs, whatever XDG_DATA_HOME says). The profile
+# launcher sets it to the profile's own, so a session the stable install also
+# has never shares its container, and neither install prunes the other's links. An encrypted session opens the container it recorded, so
+# changing this later moves no existing vault. cs -encrypt refuses a relative
+# path: every open attaches the container from the session directory.
+export CS_DATA_DIR="$HOME/.local/share/cs"
+
+# Where the deployed cs executables and the installer's adapter record live
+# (default: ~/.local/bin). The profile launcher sets it to the profile's own.
+export CS_INSTALL_DIR="$HOME/.local/bin"
+
+# Where the encrypted-file secrets backend keeps its store (default: ~/.cs-secrets).
+export CS_SECRETS_DIR="$HOME/.cs-secrets"
 
 # The actor name that shared memory and narratives are attributed to. Highest
 # precedence in the chain $CS_ACTOR > .cs/local/identity > git user.email >
@@ -30,11 +52,26 @@ export CS_NO_UPDATE_CHECK="1"
 # Legacy password for secrets sync (age encryption preferred - see secrets.md)
 export CS_SECRETS_PASSWORD="your-secure-password"
 
-# Override secrets backend (keychain or encrypted)
+# Override secrets backend (keychain or encrypted). cs -list and the picker
+# count secrets from the keychain, so under any other backend they show none.
 export CS_SECRETS_BACKEND="keychain"
+
+# Keychain items are named <prefix>:<session>:<name> (default prefix: cs).
+# The code-sessions launcher sets code-sessions, apart from the original cs.
+export CS_SECRETS_KEYCHAIN_PREFIX="cs"
 
 # Override Claude Code binary (default: claude)
 export CLAUDE_CODE_BIN="claude"
+
+# Default runtime for sessions without a saved engine preference.
+# Legacy/dual installs default to Claude; a sole Codex install defaults to Codex.
+# A session's saved engine choice takes precedence; `--engine` on the `cs` command
+# takes precedence over both. Codex launches require CODEX_BIN and Python 3.
+export CS_DEFAULT_ENGINE="codex"   # claude | codex
+
+# Override the Codex CLI executable used by `cs <name> --engine codex`
+# (default: codex). This is one executable path, without extra arguments.
+export CODEX_BIN="/path/to/codex"
 
 # Nerd Font icons in cs banners and session listings (lock, host);
 # the status line uses standard Unicode and is unaffected by this
@@ -242,6 +279,19 @@ export CS_NO_FUNCTION_HOOKS="1"
 # Override the tmux binary cs -spawn uses (default: tmux on PATH)
 export CS_TMUX_BIN="/opt/homebrew/bin/tmux"
 
+# The tmux session cs -spawn opens its windows in (default: cs). The
+# code-sessions launcher sets code-sessions. A name with ':' or '.' is refused: tmux would not keep it.
+export CS_TMUX_SESSION="cs"
+
+# The tmux server cs -spawn and the doctor's spawn check use, as a tmux -L
+# socket name (default: unset, the default server). A window runs with its
+# server's environment, not the spawner's, so the code-sessions launcher sets code-sessions:
+# on the default server a spawned profile session would run as the stable
+# install, and a server the profile started would hand the profile's
+# variables to every later window. The attach hint names it
+# (tmux -L code-sessions attach -t code-sessions).
+export CS_TMUX_SOCKET="code-sessions"
+
 # Force the detected platform instead of probing for it; any other
 # value is rejected. Read by cs -secrets only, to choose between the
 # macOS keychain and the encrypted file
@@ -321,13 +371,115 @@ the mod shows the full notes in the session.
 These are exported automatically when you start a session, so the Claude Code
 process and its hooks can find the session:
 
-- `CLAUDE_SESSION_NAME` - The session name (e.g., `myproject`)
+- `CS_SESSION_NAME` - The session name (e.g., `myproject`); legacy `CLAUDE_SESSION_NAME` is accepted
 - `CS_CLAUDE_SESSION_ID` - The conversation UUID cs launched or resumed, exported so hooks can tell the launched conversation from any other claude that resolves the same session
 - `CS_REAL_EDITOR` - Your own `$EDITOR`, captured before cs repoints `EDITOR`/`VISUAL` at the prompt-rewriter shim. The shim hands every file that is not a composer buffer back to it, so `/memory` and commit messages still open your editor. Set it yourself to pin which editor that is
 - `CS_SECRETS_SESSION` - For a worktree session, the base session its secrets key to, so a feature worktree reads the same store as its parent (see [secrets.md](secrets.md))
-- `CLAUDE_SESSION_DIR` - Full path to the session directory (workspace root)
-- `CLAUDE_SESSION_META_DIR` - Path to the `.cs/` metadata directory
+- `CS_SESSION_DIR` - Full path to the session directory (workspace root)
+- `CS_SESSION_META_DIR` - Path to the `.cs/` metadata directory
 - `CLAUDE_CODE_TASK_LIST_ID` - Set to the session name for task list persistence; a feature worktree gets its own list under its `base@task` name, not the base's
 - `CLAUDE_CODE_AUTO_MEMORY_PATH` / `CLAUDE_COWORK_MEMORY_PATH_OVERRIDE` - Redirect Claude Code's auto-memory writer into `<session>/.cs/memory/`
 - `CS_BIN` - Exported by every cs launch, never set by hand: the absolute path of the running cs, replacing any value inherited from a parent launch. The mods run cs through it (`cs -update`, `/queue`), since the claude process's `PATH` is not the launching shell's
+- `CODE_SESSIONS_HOME` - Exported by the code-sessions launcher, never set by hand: the profile's path. It tells a cs run, and tools such as branch-out, that the fork is the one running. With it set, `cs -update` and `cs -uninstall` refuse: the fork updates from its checkout with `sh setup.sh`, and its release URLs are the original cs's
 - `CS_UPDATE_AVAILABLE` - Exported by a cs launch, never set by hand: the version a newer cs was found at. The cs-update mod reads it to draw the release-notes pane. Absent when nothing is pending
+
+## Adapter installation
+
+`CS_INSTALL_ENGINES=claude|codex|claude,codex` selects installer payloads. With
+no explicit selection, install.sh reads `$HOME/.local/bin/.cs-install-engines`
+or defaults to both adapters for legacy compatibility. The file contains plain
+engine identifiers; it is never executed as shell code. Previously installed
+adapters remain recorded so future updates maintain their deployed integrations.
+See [Migration](migration.md) for the compatibility policy.
+
+`CS_HOOK_PATHS=absolute` makes install.sh register its hook commands in
+`settings.json` by absolute path instead of `~/.claude/hooks/cs/...`. setup.sh
+sets it for the profile, whose launcher keeps the user's HOME: a tilde there
+would run the stable install's hooks.
+
+## Your own setup in the code-sessions profile
+
+setup.sh ends by running `scripts/carry-over.sh`, which brings your own
+Claude and Codex setup from `~/.claude`, `~/.claude.json` and `~/.codex` into
+the profile at `~/.local/share/code-sessions/home`. It reads those and writes
+only inside the profile. Every path comes from `HOME`: inside a code-sessions session
+`CLAUDE_CONFIG_DIR`, `CODEX_HOME` and the `CS_*` variables name the profile.
+
+- **Linked**, one symlink per entry, so an edit in `~/.claude` or `~/.codex`
+  shows in code-sessions at once: `CLAUDE.md`, `keybindings.json`, and the entries of
+  `agents/`, `commands/`, `skills/`, `workflows/`, `themes/` and
+  `output-styles/`; for Codex, `AGENTS.md` and the entries of `skills/` and
+  `agents/`. A skill directory holding `.claude-plugin/`, such as the Agents
+  sidebar's, loads there as a plugin too.
+- **Skipped**: every name the install puts there itself, read from the installer's own
+  lists (the skills, mods, retired skills and retired commands that uninstall
+  removes), Claude Code's `skills/synced`, dot entries, and backups
+  (`*.pre-*`, `*.before-*`).
+- **Merged** into the profile's own files, adding what is missing and never
+  replacing or removing what the profile has: hooks in `settings.json` (except
+  cs's own under `~/.claude/hooks/cs/`), `enabledPlugins`,
+  `extraKnownMarketplaces`, `permissions` (lists are joined), `modelSettings`,
+  `env` and your other preference keys; `mcpServers` in the profile's
+  `.claude.json`; for Codex, `hooks.json`, the `[mcp_servers.*]` tables and
+  `[sandbox_workspace_write]` in `config.toml`. A profile value of another
+  shape than yours (a string where you have a list) stays as it is. A Codex
+  MCP server you defined inline (`mcp_servers.x = {...}`) cannot be copied as
+  a table; every run names it so you can copy it by hand.
+- **Hooks** are told apart by event, matcher and command, so one command under
+  two matchers is two hooks. The hooks a run adds are listed in
+  `.carried-hooks.json` beside `settings.json` and `hooks.json`. One you
+  later change or remove in `~/.claude` or `~/.codex` leaves the profile on
+  the next run, so an old and a new version never both run. A hook the profile
+  had before is never removed.
+- **Left as the profile's**: `model`, `theme`, `tui` (setup carries that once
+  itself), `statusLine`, `subagentStatusLine`, `disableAllHooks`, the login
+  helpers (`apiKeyHelper`, `awsAuthRefresh`, `awsCredentialExport`,
+  `gcpAuthRefresh`, `otelHeadersHelper`, `forceLoginMethod`,
+  `forceLoginOrgUUID`), project-scoped MCP servers and plugins, and Codex's
+  top-level keys and other tables.
+- **Plugins**: each enabled plugin you installed at user scope is copied from
+  `~/.claude/plugins/cache` into the profile's cache (a clone on APFS, so it
+  takes no space), with its marketplace when the profile lacks it, and recorded
+  in the profile's `installed_plugins.json`. Nothing is downloaded, and the
+  profile updates them on its own from then on.
+- **Codex hooks** are added after cs's own and trusted in the profile's
+  `config.toml` only when `~/.codex/config.toml` trusts the definition the
+  profile holds. One you never reviewed stays untrusted, and Codex skips it
+  until you do. Codex keys trust by a hook's position, so when a carried hook
+  leaves, the trust of the hooks after it moves with them. `hooks.json` is
+  written only together with a `config.toml` that parses.
+- **The Agents sidebar**: when your `statusLine` is the sidebar's
+  `statusline-bridge.sh`, the profile's status line moves inside the bridge
+  too, and the profile's own line (`cs-statusline`) is kept in
+  `agents-sidebar-status/original-statusline` inside the profile's `.claude`.
+  The bridge draws that line when `CLAUDE_CONFIG_DIR`, or in an encrypted
+  session `CLAUDE_SECURESTORAGE_CONFIG_DIR`, names the profile; a bridge
+  without that check draws the line `~/.claude` displaced instead. The wrap
+  happens once: a status line you give the profile later stays (answer `y`
+  when setup offers cs-statusline, or run `cs -statusline enable`); delete
+  that file to wrap it again.
+
+A rerun adds what is new and changes nothing else: a file whose content would
+not change is not rewritten, and the first change to each profile file leaves a
+copy at `<file>.pre-carry-over`. A link or a carried hook whose entry you
+removed from `~/.claude` or `~/.codex` goes with it. An MCP server, plugin or
+preference you remove or change there stays in the profile as it was; change
+it in the profile by hand.
+
+Remote MCP servers sign in per configuration directory, so one you authorised in
+`~/.claude` or `~/.codex` asks again in the profile: `/mcp` in a code-sessions
+Claude session, or `CODEX_HOME=~/.local/share/code-sessions/home/.codex codex mcp login <name>`
+for Codex. Run the carry-over with no code-sessions Claude session open: a running
+session can save its own copy of `.claude.json` over the merged servers, and a
+rerun puts them back.
+
+```bash
+bash scripts/carry-over.sh --dry-run   # what it would change; writes nothing
+bash scripts/carry-over.sh                 # run it alone, without reinstalling
+sh ./setup.sh --no-carry-over              # install without it; or CS_CARRY_OVER=0
+```
+
+Before it installs, setup.sh also runs `scripts/carry-over.sh --prune`,
+with or without the opt-out. It removes the carried links that dangle, or that
+a name the install now puts there shadows, so the install never copies cs's files
+through a link into your own directories.

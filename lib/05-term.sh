@@ -1,12 +1,6 @@
 # ABOUTME: Terminal helpers: color palette, OSC/tab-title escapes, session-color RGB.
 # ABOUTME: Also the error/info/warn output primitives used across cs.
 
-_claude_encode_path() {
-    local p="$1"
-    p="${p//[^A-Za-z0-9]/-}"
-    printf '%s' "$p"
-}
-
 # Minisign public key for verifying signed releases
 CS_SIGN_PUBKEY="RWQvs3IVdvrS8PJs0V0gwdJGPw/x5waQ6z6iqPQm90JfpxfcsSy9b9Vo"
 # Colors - Claude warm palette (rust → orange → gold). Theme-aware: the dark

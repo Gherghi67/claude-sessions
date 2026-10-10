@@ -108,22 +108,22 @@ test_never_blocks_exit_zero() {
 # vault; the command log is the file that most needs it.
 test_logs_into_the_private_dir() {
     mkdir -p "$TEST_TMPDIR/vault/private"
-    ln -s "$TEST_TMPDIR/vault/private" "$CLAUDE_SESSION_META_DIR/private"
+    ln -s "$TEST_TMPDIR/vault/private" "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/private"
     send_bash "echo private words"
     grep -q "BASH: echo private words" "$TEST_TMPDIR/vault/private/session.log" \
         || { echo "  FAIL: command not in the private log"; return 1; }
-    assert_file_not_exists "$CLAUDE_SESSION_META_DIR/local/session.log" \
+    assert_file_not_exists "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/session.log" \
         "nothing may be logged in plaintext" || return 1
 }
 
 # A locked vault leaves the link dangling: the command still runs, and the log
 # line is dropped rather than written anywhere else.
 test_locked_private_dir_logs_nothing() {
-    ln -s "$TEST_TMPDIR/unmounted/private" "$CLAUDE_SESSION_META_DIR/private"
+    ln -s "$TEST_TMPDIR/unmounted/private" "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/private"
     local rc=0
     send_bash "echo private words" || rc=$?
     assert_eq "0" "$rc" "the hook must not block the command" || return 1
-    assert_file_not_exists "$CLAUDE_SESSION_META_DIR/local/session.log" \
+    assert_file_not_exists "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/session.log" \
         "nothing may be logged in plaintext" || return 1
     assert_not_exists "$TEST_TMPDIR/unmounted" "nothing may be created where the vault mounts" || return 1
 }

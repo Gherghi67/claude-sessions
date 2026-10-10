@@ -10,7 +10,9 @@ from a distilled profile document, never from improvisation.
 
 - Profile: `${CS_SESSIONS_ROOT:-$HOME/.claude-sessions}/.voice/profile.md`
 - Corpus: `${CS_SESSIONS_ROOT:-$HOME/.claude-sessions}/.voice/corpus.md`
-- Builder: `~/.claude/skills/write-as-me/scripts/build-corpus.sh`
+- Builder: `scripts/build-corpus.sh` in this skill's directory (the folder this SKILL.md was
+  loaded from). It reads Claude Code transcripts (`${CS_TRANSCRIPTS_DIR:-$HOME/.claude/projects}`);
+  other engines' transcripts are not read yet.
 - Supplementary sources: `${CS_SESSIONS_ROOT:-$HOME/.claude-sessions}/.voice/sources/*.md`
   — writing no transcript holds (an exported chat, sent mail), kept by hand.
   Entries mirror the corpus: `[tag, YYYY-MM-DD]`, the text, then `---`. The

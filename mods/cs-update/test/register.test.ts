@@ -229,6 +229,15 @@ test('a missing notes file reads as the tombstone', async () => {
   expect(texts(await draw()).join('\n')).toContain('could not be fetched')
 })
 
+test('CS_CACHE_DIR names the notes cache ahead of HOME', async () => {
+  envVars.CS_CACHE_DIR = '/profile/.cache/cs'
+  files['/profile/.cache/cs/update-notes-full-2026.99.3'] = SPAN
+  delete files['/home/u/.cache/cs/update-notes-full-2026.99.3']
+  await start()
+  expect(opens()).toHaveLength(1)
+  expect(texts(await draw()).join('\n')).toContain('One fix: the statusline is readable on light terminals.')
+})
+
 test('another pane id is not the mod\'s to draw', async () => {
   await start()
   expect(await hooks['ui.render:Pane']($, { requestId: 'someone-else' }, async () => 'other')).toBe('other')

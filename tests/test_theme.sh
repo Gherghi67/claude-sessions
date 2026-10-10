@@ -243,8 +243,9 @@ test_export_term_theme_user_pin_passes_through() {
 # tmux CLIENT tty instead — the identity any pane on that client can ask for —
 # so an agent-teams teammate stops falling back to dark on a light terminal.
 test_export_term_theme_caches_under_the_client_tty() {
-    ( _load_cs_functions
+    ( # HOME before the load: the header pins CS_CACHE_DIR as the functions load.
       local home; home=$(mktemp -d); export HOME="$home"
+      _load_cs_functions
       unset CS_TERM_THEME CS_TERM_THEME_AUTO CS_TERM_BG_RGB 2>/dev/null || true
       export TMUX="/tmp/fake,1,0"
       tmux() { printf '/dev/ttys002\n'; }
@@ -265,8 +266,9 @@ test_export_term_theme_caches_under_the_client_tty() {
 # Outside tmux the terminal is cs's own tty, and that is the key a later render
 # in the same terminal would look under.
 test_export_term_theme_caches_under_its_own_tty_outside_tmux() {
-    ( _load_cs_functions
+    ( # HOME before the load: the header pins CS_CACHE_DIR as the functions load.
       local home; home=$(mktemp -d); export HOME="$home"
+      _load_cs_functions
       unset CS_TERM_THEME CS_TERM_THEME_AUTO CS_TERM_BG_RGB TMUX 2>/dev/null || true
       tty() { printf '/dev/ttys007\n'; }
       detect_term_theme_and_bg() { echo "dark 20;20;20"; }

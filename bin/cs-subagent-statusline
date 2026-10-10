@@ -5,7 +5,11 @@
 # cs-statusline owns the palette, the color ladder, and width measurement.
 # Sourcing it in library mode defines them without rendering the main bar, so
 # the two scripts cannot drift. It also applies `set -uo pipefail`.
-CS_STATUSLINE_LIB=1 . "$(dirname "$0")/cs-statusline" 2>/dev/null || exit 0
+_STATUSLINE_DIR="$(dirname "${BASH_SOURCE[0]:-$0}")"
+_STATUSLINE_LIB="$_STATUSLINE_DIR/cs-statusline"
+[ -f "$_STATUSLINE_LIB" ] || _STATUSLINE_LIB="$_STATUSLINE_DIR/cs-statusline"
+# shellcheck source=bin/cs-statusline
+CS_STATUSLINE_LIB=1 . "$_STATUSLINE_LIB" 2>/dev/null || exit 0
 
 # U+2937 arrow pointing rightwards then curving downwards: the row hangs off the
 # main thread. ICON_MODEL (✦), the ctx pies and _ctx_pie, and ICON_5H (◷) come from the source.

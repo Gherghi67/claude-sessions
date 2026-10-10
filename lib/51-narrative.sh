@@ -38,11 +38,11 @@ _narrative_kept_text() {  # snap, live, head_end, cut
 # Archive the oldest sections of this actor's narrative when the file is over
 # CS_NARRATIVE_MAX_BYTES, leaving a tail of about CS_NARRATIVE_KEEP_BYTES.
 rotate_narrative() {
-    if [ -z "${CLAUDE_SESSION_META_DIR:-}" ] || [ ! -d "${CLAUDE_SESSION_META_DIR}" ]; then
+    if [ -z "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ] || [ ! -d "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ]; then
         error "cs -narrative rotate must be run from inside a cs session"
     fi
-    local meta_dir="$CLAUDE_SESSION_META_DIR"
-    local session_dir="${CLAUDE_SESSION_DIR:-$(dirname "$meta_dir")}"
+    local meta_dir="${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}"
+    local session_dir="${CS_SESSION_DIR:-${CLAUDE_SESSION_DIR:-$(dirname "$meta_dir")}}"
     local actor
     actor=$(cs_actor_slug "$session_dir")
     local live="$meta_dir/memory/narrative.$actor.md"

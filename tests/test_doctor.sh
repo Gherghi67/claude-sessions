@@ -273,20 +273,6 @@ test_doctor_drift_skipped_outside_checkout() {
     fi
 }
 
-test_doctor_warns_on_command_drift() {
-    local checkout="$TEST_TMPDIR/checkout" deployed_cmds="$TEST_TMPDIR/commands"
-    make_fake_checkout "$checkout" "$TEST_TMPDIR/deployed-hooks"
-    mkdir -p "$checkout/commands" "$deployed_cmds" "$TEST_TMPDIR/deployed-hooks"
-    echo 'source version' > "$checkout/commands/summary.md"
-    echo 'deployed version' > "$deployed_cmds/summary.md"
-
-    local output
-    output=$(cd "$checkout" && CS_HOOKS_DIR="$TEST_TMPDIR/deployed-hooks" \
-        CS_COMMANDS_DIR="$deployed_cmds" "$CS_BIN" -doctor 2>&1) || true
-    assert_output_contains "$output" "Command drift" \
-        "doctor should warn when a deployed command differs from checkout source" || return 1
-}
-
 test_doctor_warns_on_skill_script_drift() {
     local checkout="$TEST_TMPDIR/checkout" deployed_skills="$TEST_TMPDIR/skills"
     make_fake_checkout "$checkout" "$TEST_TMPDIR/deployed-hooks"
@@ -316,6 +302,41 @@ test_doctor_warns_on_skill_drift() {
         CS_SKILLS_DIR="$deployed_skills" "$CS_BIN" -doctor 2>&1) || true
     assert_output_contains "$output" "Skill drift" \
         "doctor should warn when a deployed skill differs from checkout source" || return 1
+}
+
+# Codex gets the same skill files in its own home, agents/openai.yaml
+# included, so an edit the installer has not copied there is drift too.
+test_doctor_warns_on_codex_skill_drift() {
+    local checkout="$TEST_TMPDIR/codexco" codex_home="$TEST_TMPDIR/codex-home" claude_skills="$TEST_TMPDIR/claude-skills"
+    make_fake_checkout "$checkout" "$TEST_TMPDIR/deployed-hooks"
+    mkdir -p "$checkout/skills/finish/agents" "$codex_home/skills/finish/agents" "$claude_skills/finish/agents"
+    echo 'skill' > "$checkout/skills/finish/SKILL.md"
+    echo 'policy: source' > "$checkout/skills/finish/agents/openai.yaml"
+    cp "$checkout/skills/finish/SKILL.md" "$codex_home/skills/finish/SKILL.md"
+    echo 'policy: deployed' > "$codex_home/skills/finish/agents/openai.yaml"
+    cp -R "$checkout/skills/finish/." "$claude_skills/finish/"
+
+    local output
+    output=$(cd "$checkout" && CS_HOOKS_DIR="$TEST_TMPDIR/deployed-hooks" CS_SKILLS_DIR="$claude_skills" \
+        CODEX_HOME="$codex_home" "$CS_BIN" -doctor 2>&1) || true
+    assert_output_contains "$output" "Codex skill drift: deployed copy differs from source: finish/agents/openai.yaml" \
+        "an undeployed edit to Codex's copy is drift" || return 1
+    assert_output_not_contains "$output" "Skill drift: deployed copy differs" \
+        "Claude's copy is in sync" || return 1
+
+    cp "$checkout/skills/finish/agents/openai.yaml" "$codex_home/skills/finish/agents/openai.yaml"
+    output=$(cd "$checkout" && CS_HOOKS_DIR="$TEST_TMPDIR/deployed-hooks" CS_SKILLS_DIR="$claude_skills" \
+        CODEX_HOME="$codex_home" "$CS_BIN" -doctor 2>&1) || true
+    assert_output_contains "$output" "Deploy drift" "the scan ran to its verdict" || return 1
+    assert_output_not_contains "$output" "Codex skill drift" "in sync: silent" || return 1
+
+    # A Codex-free install has no Codex copies to compare.
+    mkdir -p "$TEST_TMPDIR/bin"
+    printf 'claude\n' > "$TEST_TMPDIR/bin/.cs-install-engines"
+    rm "$codex_home/skills/finish/SKILL.md"
+    output=$(cd "$checkout" && CS_HOOKS_DIR="$TEST_TMPDIR/deployed-hooks" CS_SKILLS_DIR="$claude_skills" \
+        CODEX_HOME="$codex_home" CS_INSTALL_DIR="$TEST_TMPDIR/bin" "$CS_BIN" -doctor 2>&1) || true
+    assert_output_not_contains "$output" "Codex skill drift" "Codex is not installed here" || return 1
 }
 
 test_doctor_warns_on_version_mismatch() {
@@ -840,14 +861,19 @@ test_doctor_subagent_statusline_no_fail_when_not_registered() {
 # that cs did not create.
 
 # Minimal tmux fake for the doctor's spawn tmux check.
-#   arg1: "cs" if a session named cs exists, "" otherwise
+#   arg1: name of the one tmux session that exists (e.g. "cs"), "" for none;
+#         has-session answers only for its exact-match target
 #   arg2: value returned for @cs_managed (e.g. "1" or "")
-_doctor_tmux_fake() {  # has_cs managed
+#   arg3: the -L socket that session's server runs on, "" (default) for the
+#         default server; a call to any other server finds no session
+_doctor_tmux_fake() {  # existing_session managed [socket]
     local fake="$TEST_TMPDIR/fake-tmux"
     {
         printf '#!/usr/bin/env bash\n'
+        printf 'sock=""; [ "$1" = -L ] && { sock=$2; shift 2; }\n'
+        printf '[ "$sock" = "%s" ] || exit 1\n' "${3:-}"
         printf 'case "$1" in\n'
-        printf '  has-session) [ "%s" = cs ]; exit $? ;;\n' "$1"
+        printf '  has-session) [ -n "%s" ] && [ "$3" = "=%s" ]; exit $? ;;\n' "$1" "$1"
         printf '  show-option) printf "%%s" "%s" ;;\n' "$2"
         printf 'esac\n'
         printf 'exit 0\n'
@@ -949,6 +975,41 @@ test_doctor_no_warning_when_cs_tmux_session_managed() {
     fi
 }
 
+# The doctor checks the tmux session cs -spawn would use: with
+# CS_TMUX_SESSION=code-sessions, a foreign 'code-sessions' warns by that name, and stable cs's own
+# 'cs' session, which the code-sessions profile never touches, is no concern of it.
+test_doctor_checks_the_configured_tmux_session() {
+    local output
+    output=$(CS_TMUX_SESSION=code-sessions CS_TMUX_BIN="$(_doctor_tmux_fake code-sessions '')" "$CS_BIN" -doctor 2>&1) || true
+    assert_output_contains "$output" "session named 'code-sessions' exists but is not cs-managed" \
+        "doctor should warn about a foreign tmux session named code-sessions" || return 1
+}
+
+test_doctor_ignores_cs_tmux_session_when_another_is_configured() {
+    local output
+    output=$(CS_TMUX_SESSION=code-sessions CS_TMUX_BIN="$(_doctor_tmux_fake cs '')" "$CS_BIN" -doctor 2>&1) || true
+    if echo "$output" | grep -i "tmux" | grep -q "not cs-managed"; then
+        echo "  FAIL: a session named cs must not warn when CS_TMUX_SESSION=code-sessions"
+        return 1
+    fi
+    assert_output_contains "$output" "foreign 'code-sessions' tmux session" \
+        "the spawn check ran, against cs" || return 1
+}
+
+# With CS_TMUX_SOCKET the spawner runs its own tmux server, and the doctor asks
+# that one: a foreign 'cs' there warns, one on the default server does not.
+test_doctor_checks_the_tmux_session_on_the_configured_server() {
+    local output
+    output=$(CS_TMUX_SOCKET=code-sessions CS_TMUX_SESSION=code-sessions CS_TMUX_BIN="$(_doctor_tmux_fake code-sessions '' code-sessions)" "$CS_BIN" -doctor 2>&1) || true
+    assert_output_contains "$output" "session named 'code-sessions' exists but is not cs-managed" \
+        "doctor should warn about a foreign code-sessions session on the code-sessions server" || return 1
+    output=$(CS_TMUX_SOCKET=code-sessions CS_TMUX_SESSION=code-sessions CS_TMUX_BIN="$(_doctor_tmux_fake code-sessions '')" "$CS_BIN" -doctor 2>&1) || true
+    if echo "$output" | grep -i "tmux" | grep -q "not cs-managed"; then
+        echo "  FAIL: a code-sessions session on the default server is not the spawner's"
+        return 1
+    fi
+}
+
 echo "Running doctor tests..."
 run_test test_doctor_subcommand_exists
 run_test test_doctor_runs_default_checks_from_session
@@ -966,9 +1027,9 @@ run_test test_doctor_warns_on_undeployed_hook
 run_test test_doctor_drift_silent_when_in_sync
 run_test test_doctor_warns_on_mod_drift
 run_test test_doctor_drift_skipped_outside_checkout
-run_test test_doctor_warns_on_command_drift
 run_test test_doctor_warns_on_skill_script_drift
 run_test test_doctor_warns_on_skill_drift
+run_test test_doctor_warns_on_codex_skill_drift
 run_test test_doctor_warns_on_version_mismatch
 run_test test_doctor_version_silent_without_stamp
 run_test test_doctor_runs_without_session
@@ -1006,6 +1067,9 @@ run_test test_doctor_warns_on_dangling_spawned_by
 run_test test_doctor_spawned_by_ok_when_spawner_exists
 run_test test_doctor_warns_on_unmarked_cs_tmux_session
 run_test test_doctor_no_warning_when_cs_tmux_session_managed
+run_test test_doctor_checks_the_configured_tmux_session
+run_test test_doctor_ignores_cs_tmux_session_when_another_is_configured
+run_test test_doctor_checks_the_tmux_session_on_the_configured_server
 
 # --- Checks that must not report green on the state they exist to catch ---
 # Every fixture below is in the BROKEN state. A green-path test proves nothing
@@ -1336,12 +1400,13 @@ run_test test_doctor_is_quiet_when_the_session_clone_has_the_merge_driver
 # driver set, the probe files it has (CLAUDE.md, .cs/README.md) at a fixed old
 # time, the stamp a year later. Prints the cs version the stamp names.
 _doctor_stamp_session() {
-    local dir="$CLAUDE_SESSION_DIR" version
+    local dir="${CS_SESSION_DIR:-${CLAUDE_SESSION_DIR:-}}" version
     version=$("$CS_BIN" -version)
     version=${version#cs }
+    version=${version%% *}
     git -C "$dir" config merge.ours.driver true
     touch -t 202401010000 "$dir/CLAUDE.md" "$dir/.cs/README.md"
-    printf '%s\talice\t0\nCLAUDE.md\t.cs/README.md\n' "$version" > "$dir/.cs/local/migrated"
+    printf '%s\talice\t0\tclaude\nCLAUDE.md\t.cs/README.md\n' "$version" > "$dir/.cs/local/migrated"
     touch -t 202501010000 "$dir/.cs/local/migrated"
     echo "$version"
 }
@@ -1357,7 +1422,7 @@ test_doctor_reports_a_current_migration_stamp() {
 test_doctor_reports_a_stale_migration_stamp() {
     local output
     _doctor_stamp_session > /dev/null
-    touch -t 202601010000 "$CLAUDE_SESSION_DIR/CLAUDE.md"
+    touch -t 202601010000 "${CS_SESSION_DIR:-${CLAUDE_SESSION_DIR:-}}/CLAUDE.md"
     output=$(CS_ACTOR=alice "$CS_BIN" -doctor 2>&1) || true
     assert_output_contains "$output" "Migration stamp: stale (CLAUDE.md changed after the stamp); the next open runs the full migration and restamps. Reset by hand: rm .cs/local/migrated" \
         "a stale stamp names what changed and the reset" || return 1

@@ -1,4 +1,4 @@
-# ABOUTME: Auto-memory setup, per-actor narrative files, and the session CLAUDE.md template.
+# ABOUTME: Claude adapter auto-memory setup and native instruction template.
 # ABOUTME: Seeds and maintains a session's documentation scaffolding.
 
 setup_auto_memory() {
@@ -39,106 +39,14 @@ SETTINGS
     real_path="$(cd "$session_dir" 2>/dev/null && pwd -P)"
     local encoded_path
     encoded_path=$(_claude_encode_path "$real_path")
-    local old_memory_dir="$HOME/.claude/projects/${encoded_path}/memory"
+    # Claude's projects directory as this launch sees it (CS_TRANSCRIPTS_DIR when
+    # the profile launcher or a test relocates it), never the user's stable one:
+    # the migration deletes the source once copied.
+    local old_memory_dir="${CS_TRANSCRIPTS_DIR:-$HOME/.claude/projects}/${encoded_path}/memory"
     if [ -d "$old_memory_dir" ] && [ "$(ls -A "$old_memory_dir" 2>/dev/null)" ]; then
         cp -n "$old_memory_dir"/* "$session_dir/.cs/memory/" 2>/dev/null || true
         rm -rf "$old_memory_dir"
     fi
-}
-
-# Ensure the session narrative topic file and its MEMORY.md index pointer exist.
-# The narrative is the looser-bar lab notebook, held as a native memory topic
-# file so it inherits lazy-load and /memory tooling. Idempotent: creates the
-# stub on first run and re-adds the index pointer if a memory write dropped it.
-# A caller that has already resolved the actor's slug passes it.
-ensure_narrative_file() {  # session_dir, [actor_slug]
-    local session_dir="$1"
-    local mem_dir="$session_dir/.cs/memory"
-    local index="$mem_dir/MEMORY.md"
-    mkdir -p "$mem_dir"
-
-    local actor="${2:-}"
-    if [ -z "$actor" ]; then
-        actor=$(cs_actor_slug "$session_dir")
-    fi
-    local narrative="$mem_dir/narrative.$actor.md"
-
-    # One-time migration: a pre-per-actor narrative.md becomes this actor's file.
-    if [ -f "$mem_dir/narrative.md" ] && [ ! -f "$narrative" ]; then
-        mv "$mem_dir/narrative.md" "$narrative"
-    fi
-
-    if [ ! -f "$narrative" ]; then
-        cat > "$narrative" << EOF
----
-name: session-narrative-$actor
-description: Session lab-notebook and work-in-progress narrative for $actor. Looser bar than durable memory. Its owner reads it in full on resume; anyone else reads only the lines the resume digest names. Older sections are archived under .cs/narrative-archive/.
-type: narrative
----
-# Session narrative ($actor)
-
-EOF
-    fi
-
-    # Drop the legacy single-narrative index pointer if a migration left it stale.
-    # Through a temp file instead of sed -i: the BSD `sed -i ''` form errors on
-    # GNU sed and would abort session resume on Linux under set -e.
-    if [ -f "$index" ] && grep -q '(narrative\.md)' "$index" 2>/dev/null; then
-        cs_write_atomic "$index" sed '/(narrative\.md)/d' "$index" \
-            || { warn "could not rewrite $index; the stale narrative.md pointer stays"; _CS_MIGRATE_CLEAN=0; }
-    fi
-
-    if [ ! -f "$index" ] || ! grep -q "(narrative\.$actor\.md)" "$index" 2>/dev/null; then
-        printf -- '- [Session narrative — %s (lab notebook)](narrative.%s.md): looser-bar work-in-progress; its owner reads it in full on resume, anyone else only the lines the resume digest names; older sections under .cs/narrative-archive/\n' "$actor" "$actor" >> "$index"
-    fi
-}
-
-# Fold a legacy discoveries.md (and its compact companion) into the narrative
-# topic file, then consume the originals so the fold runs at most once. A
-# header-only or empty discoveries.md is ignored. Runs on resume of sessions
-# that predate the narrative relocation.
-migrate_discoveries_to_narrative() {
-    local session_dir="$1"
-    local meta="$session_dir/.cs"
-    local disc="$meta/discoveries.md"
-    local compact="$meta/discoveries.compact.md"
-
-    [ -f "$disc" ] || return 0
-    local disc_body compact_body
-    disc_body=$(grep -vE '^# Discoveries & Notes$|^[[:space:]]*$' "$disc" 2>/dev/null || true)
-    compact_body=""
-    [ -f "$compact" ] && compact_body=$(grep -vE '^[[:space:]]*$' "$compact" 2>/dev/null || true)
-    if [ -z "$disc_body" ] && [ -z "$compact_body" ]; then
-        rm -f "$disc" "$compact"
-        return 0
-    fi
-
-    ensure_narrative_file "$session_dir"
-    local narrative="$meta/memory/narrative.$(cs_actor_slug "$session_dir").md"
-    # Date the fold from shared git history, not the local clock: two clones
-    # folding the same legacy file must produce byte-identical blocks so a
-    # later merge collapses them instead of conflicting.
-    local fold_date
-    fold_date=$(git -C "$session_dir" log -1 --format=%as -- .cs/discoveries.md 2>/dev/null || true)
-    {
-        if [ -n "$disc_body" ]; then
-            echo ""
-            if [ -n "$fold_date" ]; then
-                echo "## Folded from discoveries.md ($fold_date)"
-            else
-                echo "## Folded from discoveries.md"
-            fi
-            echo ""
-            cat "$disc"
-        fi
-        if [ -n "$compact_body" ]; then
-            echo ""
-            echo "## Folded from discoveries.compact.md"
-            echo ""
-            cat "$compact"
-        fi
-    } >> "$narrative"
-    rm -f "$disc" "$compact"
 }
 
 # Emit the cs memory disclosure note (cs:memory-note section).
@@ -180,7 +88,12 @@ EOF
 # the create path (overwrite) and the migrate path (guarded append) detect
 # whether the protocol is already present.
 _emit_session_claude_md() {
-    cat << 'EOF'
+    cs_session_context "" "" '<actor>' _claude_emit_session_context
+}
+
+# Render the shared file inventory within Claude's existing native protocol.
+_claude_emit_session_context() {
+    cat << EOF
 <!-- cs:session-protocol -->
 # Session Documentation Protocol
 
@@ -190,31 +103,33 @@ This is a Claude Code session managed by the cs tool. Session metadata lives in 
 
 At the start of every conversation in this session, read the following files to restore context (any conversation after the first is a resume; on a true first run they are stubs). Skip any that don't exist yet — they are created as the session progresses.
 
-1. **.cs/summary.md** - If exists, read first for previous session overview
-2. **.cs/README.md** - Session objective, environment, and outcome
-3. **.cs/memory/narrative.<actor>.md** - Per-actor lab notebooks: findings, in-progress state, observations. Yours in full; a teammate's only where the resume digest says it grew
+1. **$CS_CONTEXT_SUMMARY** - If exists, read first for previous session overview
+2. **$CS_CONTEXT_OBJECTIVE** - Session objective, environment, and outcome
+3. **$CS_CONTEXT_NARRATIVE** - Per-actor lab notebooks: findings, in-progress state, observations. Yours in full; a teammate's only where the resume digest says it grew
 
 Narratives are per-actor (narrative.<actor>.md) so co-developers never conflict.
 Append only to your own; on resume read your own in full, and a teammate narrative only
 from the line the resume digest names for it (nothing, when it names none). Older sections
-sit under .cs/narrative-archive/<actor>/ — grep on demand, never preload.
+sit under $CS_CONTEXT_ARCHIVE/ — grep on demand, never preload.
 
 ## Documentation Discipline
 
 Update the markdown documentation files throughout the session:
 
-1. **Once the objective is clear** (from the first substantive request): fill in the .cs/README.md objective and environment — don't block the user's first answer on this; on resume, update the existing text rather than overwriting it
-2. **As you work:** Update your narrative (.cs/memory/narrative.<actor>.md) with findings
-3. **End of session:** Complete the .cs/README.md outcome section
+1. **Once the objective is clear** (from the first substantive request): fill in the $CS_CONTEXT_OBJECTIVE objective and environment — don't block the user's first answer on this; on resume, update the existing text rather than overwriting it
+2. **As you work:** Update your narrative ($CS_CONTEXT_NARRATIVE) with findings
+3. **End of session:** Complete the $CS_CONTEXT_OBJECTIVE outcome section
 
 Treat these files as a lab notebook - document as you go, not just at the end.
 
 ## Wrap-up Command
 
-When the session is complete, use the `/wrap` command to distill durable memory entries and generate an intelligent summary of the entire session (.cs/summary.md). Use `/summary` for the narrative alone, or `/sweep` for the memory pass alone. Mid-session, use `/checkpoint <label>` to snapshot git state and the narrative — e.g. before a risky refactor or destructive operation, and after reaching a green milestone (tests passing, a feature working) — saved under .cs/checkpoints/.
+When the session is complete, use the \`/wrap\` command to distill durable memory entries and generate an intelligent summary of the entire session ($CS_CONTEXT_SUMMARY). Use \`/summary\` for the narrative alone, or \`/sweep\` for the memory pass alone. Mid-session, use \`/checkpoint <label>\` to snapshot git state and the narrative — e.g. before a risky refactor or destructive operation, and after reaching a green milestone (tests passing, a feature working) — saved under $CS_CONTEXT_CHECKPOINTS/.
 
-When a conversation's context grows heavy or a work phase completes, invoke the `rotate` skill: it writes a handoff to .cs/handoffs/ and arms it, so the user can run `/clear` to continue in a fresh conversation without leaving Claude Code (exiting and answering `r` at the next launch does the same). `cs -conversations` shows the session's conversation chain.
+When a conversation's context grows heavy or a work phase completes, invoke the \`rotate\` skill: it writes a handoff to $CS_CONTEXT_HANDOFFS/ and arms it, so the user can run \`/clear\` to continue in a fresh conversation without leaving Claude Code (exiting and answering \`r\` at the next launch does the same). \`cs -conversations\` shows the session's conversation chain.
 
+EOF
+    cat << 'EOF'
 ## Secure Secrets Handling
 
 Secrets live in the cs session store, never in a project file. `cs -secrets set`

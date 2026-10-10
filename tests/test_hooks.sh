@@ -606,7 +606,7 @@ EOF
     chmod +x "$FAKE_PY_PATH/python3"
 }
 _tt_tab_hook() {  # hook, pane, session name, LC_TERMINAL, CS_NO_ITERM2; prints the hook's output
-    echo '{"session_id":"s","source":"startup","cwd":"'"$CLAUDE_SESSION_DIR"'","hook_event_name":"x"}' \
+    echo '{"session_id":"s","source":"startup","cwd":"'"${CS_SESSION_DIR:-${CLAUDE_SESSION_DIR:-}}"'","hook_event_name":"x"}' \
         | env -u CS_NO_ITERM2 ${5:+CS_NO_ITERM2="$5"} PATH="$FAKE_PY_PATH:$PATH" CS_HOOKS_DIR="$HOOKS_DIR" \
           TMUX="$TT_SOCK,1,0" TMUX_PANE="$2" CLAUDE_SESSION_NAME="$3" LC_TERMINAL="$4" \
           bash "$HOOKS_DIR/$1" 2>&1
@@ -2213,11 +2213,11 @@ test_session_end_generates_index_with_many_changes() {
 # writes a plaintext copy into .cs/local.
 test_lifecycle_hooks_log_into_the_private_dir() {
     index_setup
-    rm "$CLAUDE_SESSION_META_DIR/local/session.log"
+    rm "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/session.log"
     mkdir -p "$TEST_TMPDIR/vault/private"
-    ln -s "$TEST_TMPDIR/vault/private" "$CLAUDE_SESSION_META_DIR/private"
+    ln -s "$TEST_TMPDIR/vault/private" "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/private"
 
-    echo '{"session_id":"test-123","source":"startup","cwd":"'"$CLAUDE_SESSION_DIR"'","hook_event_name":"SessionStart"}' \
+    echo '{"session_id":"test-123","source":"startup","cwd":"'"${CS_SESSION_DIR:-${CLAUDE_SESSION_DIR:-}}"'","hook_event_name":"SessionStart"}' \
         | bash "$HOOKS_DIR/session-start.sh" >/dev/null 2>&1
     echo '{"tool_name":"Bash","error":"Command failed with exit code 1"}' \
         | bash "$HOOKS_DIR/tool-failure-logger.sh"
@@ -2230,7 +2230,7 @@ test_lifecycle_hooks_log_into_the_private_dir() {
         "tool-failure-logger should log into the private dir" || { index_teardown; return 1; }
     assert_file_contains "$log" "Session ended (source: clear, ID: test-123)" \
         "session-end should log into the private dir" || { index_teardown; return 1; }
-    assert_file_not_exists "$CLAUDE_SESSION_META_DIR/local/session.log" \
+    assert_file_not_exists "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/session.log" \
         "nothing may be logged in plaintext" || { index_teardown; return 1; }
     index_teardown
 }
@@ -2239,14 +2239,14 @@ test_lifecycle_hooks_log_into_the_private_dir() {
 # log anywhere.
 test_lifecycle_hooks_log_nothing_while_locked() {
     index_setup
-    rm "$CLAUDE_SESSION_META_DIR/local/session.log"
-    ln -s "$TEST_TMPDIR/unmounted/private" "$CLAUDE_SESSION_META_DIR/private"
+    rm "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/session.log"
+    ln -s "$TEST_TMPDIR/unmounted/private" "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/private"
 
     echo '{"tool_name":"Bash","error":"Command failed with exit code 1"}' \
         | bash "$HOOKS_DIR/tool-failure-logger.sh"
     echo '{"session_id":"test-123","reason":"clear"}' | bash "$HOOKS_DIR/session-end.sh" >/dev/null 2>&1
 
-    assert_file_not_exists "$CLAUDE_SESSION_META_DIR/local/session.log" \
+    assert_file_not_exists "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/session.log" \
         "nothing may be logged in plaintext" || { index_teardown; return 1; }
     assert_not_exists "$TEST_TMPDIR/unmounted" "nothing may be created where the vault mounts" \
         || { index_teardown; return 1; }
@@ -2813,27 +2813,27 @@ test_session_start_does_not_arm_the_watcher_for_a_teammate() {
 test_session_start_arms_the_vault_maildir() {
     session_start_setup
     mkdir -p "$TEST_TMPDIR/vault/private"
-    ln -s "$TEST_TMPDIR/vault/private" "$CLAUDE_SESSION_META_DIR/private"
+    ln -s "$TEST_TMPDIR/vault/private" "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/private"
     local output wp rc=0
-    output=$(echo '{"session_id":"s","source":"startup","cwd":"'"$CLAUDE_SESSION_DIR"'","hook_event_name":"SessionStart"}' \
+    output=$(echo '{"session_id":"s","source":"startup","cwd":"'"${CS_SESSION_DIR:-${CLAUDE_SESSION_DIR:-}}"'","hook_event_name":"SessionStart"}' \
         | bash "$HOOKS_DIR/session-start.sh" 2>/dev/null)
     wp=$(echo "$output" | jq -r '.hookSpecificOutput.watchPaths[0] // ""')
-    assert_eq "$CLAUDE_SESSION_META_DIR/private/mail/new" "$wp" "the watch is on the vault's maildir" || rc=1
+    assert_eq "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/private/mail/new" "$wp" "the watch is on the vault's maildir" || rc=1
     assert_dir "$TEST_TMPDIR/vault/private/mail/new" "created before it is armed" || rc=1
-    assert_not_exists "$CLAUDE_SESSION_META_DIR/local/mail" "no plaintext maildir" || rc=1
+    assert_not_exists "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/mail" "no plaintext maildir" || rc=1
     session_start_teardown
     return $rc
 }
 
 test_session_start_arms_no_watch_on_a_locked_vault() {
     session_start_setup
-    ln -s "$TEST_TMPDIR/unmounted/private" "$CLAUDE_SESSION_META_DIR/private"
+    ln -s "$TEST_TMPDIR/unmounted/private" "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/private"
     local output wp rc=0
-    output=$(echo '{"session_id":"s","source":"startup","cwd":"'"$CLAUDE_SESSION_DIR"'","hook_event_name":"SessionStart"}' \
+    output=$(echo '{"session_id":"s","source":"startup","cwd":"'"${CS_SESSION_DIR:-${CLAUDE_SESSION_DIR:-}}"'","hook_event_name":"SessionStart"}' \
         | bash "$HOOKS_DIR/session-start.sh" 2>/dev/null)
     wp=$(echo "$output" | jq -r '.hookSpecificOutput.watchPaths // "none"')
     assert_eq "none" "$wp" "a locked vault arms no watch" || rc=1
-    assert_not_exists "$CLAUDE_SESSION_META_DIR/local/mail" "no plaintext maildir" || rc=1
+    assert_not_exists "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/mail" "no plaintext maildir" || rc=1
     session_start_teardown
     return $rc
 }
@@ -2942,10 +2942,9 @@ test_session_end_survives_an_unset_home() {
 
 run_test test_session_end_survives_an_unset_home
 
-# Before hooks resolved a session from the directory, a second front end never
-# reached SessionEnd for a session it did not launch. Now closing a desktop
-# conversation on a directory a CLI session is live in would remove that
-# session's lock, so `cs <name>` opens a duplicate with no collision menu.
+# Exported session identity alone does not prove its launcher has exited. A
+# second front end can inherit these variables while the live run still owns
+# the lock, so SessionEnd must leave that PID for launcher cleanup.
 test_session_end_spares_a_live_sessions_lock() {
     local proj="$TEST_TMPDIR/lockheld"
     mkdir -p "$proj/.cs/local"
@@ -2953,9 +2952,12 @@ test_session_end_spares_a_live_sessions_lock() {
     # $$ is this test runner: a PID that is definitely alive.
     printf '%s\n' "$$" > "$proj/.cs/session.lock"
 
-    # The real scenario: another front end resolves by WALKING the directory,
-    # so no session env is set. A cs launch (env path) still clears its own lock.
-    env -i PATH="$PATH" HOME="$TEST_TMPDIR" CLAUDE_PROJECT_DIR="$proj" \
+    # Model an env-resolved hook without the launcher's token sidecar. The
+    # numeric PID is live; SessionEnd cannot use its own environment as proof
+    # that the session has ended.
+    env -i PATH="$PATH" HOME="$TEST_TMPDIR" \
+        CLAUDE_SESSION_NAME=lockheld CLAUDE_SESSION_DIR="$proj" \
+        CLAUDE_SESSION_META_DIR="$proj/.cs" \
         /bin/bash "$HOOKS_DIR/session-end.sh" \
         <<< "{\"session_id\":\"11111111-2222-4333-8444-555555555555\",\"cwd\":\"$proj\",\"source\":\"user_exit\"}" \
         >/dev/null 2>&1 || true

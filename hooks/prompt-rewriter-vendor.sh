@@ -99,7 +99,7 @@ SYS
 # and agy takes the cwd as its workspace. Launched from the user's checkout, the
 # rewrite inherits that project's instructions — the same leak prompt-rewriter-model.sh
 # closed for `claude -p` by running from a directory that holds nothing.
-_cfg="${XDG_CACHE_HOME:-$HOME/.cache}/cs/rewrite-config"
+_cfg="${CS_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/cs}/rewrite-config"
 mkdir -p "$_cfg" 2>/dev/null || exit 1
 
 # A hung rewrite freezes the whole TUI, because Claude Code spawns the editor

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ABOUTME: Tests for the cs mod under mods/cs (a Claude Code function-hooks plugin).
-# ABOUTME: Pins the manifest shape and the default threshold; runs the bun unit tests and plugin validate when present.
+# ABOUTME: Pins the manifest shape, the default threshold and the pending-switch record cs writes; runs the bun unit tests and plugin validate when present.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/test_lib.sh"
@@ -112,6 +112,42 @@ test_mod_is_deployed_by_the_installer_and_enabled_at_launch() {
     assert_file_contains "$SCRIPT_DIR/../lib/75-launch.sh" "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS" "launch exports the loader flag" || return 1
 }
 
+# `cs -switch` writes the pending switch (lib/) and the mod reads it to turn
+# the armed key and the count into an /exit. The record's two places and the
+# keys the mod reads are literals in two languages (KEEP IN SYNC), so this
+# holds them together: a key renamed on one side would quietly leave the
+# /clear in place, handing the handoff to the engine being left.
+test_mod_reads_the_switch_record_cs_writes() {
+    local mod="$MOD/hooks/register.tsx" key fragment
+    local -a writers=()
+    grep -qxF "export const SWITCH = '.cs/local/pending-switch'" "$mod" \
+        || { echo "  FAIL: the mod no longer reads .cs/local/pending-switch"; return 1; }
+    grep -qxF "export const PRIVATE_SWITCH = '.cs/private/pending-switch'" "$mod" \
+        || { echo "  FAIL: the mod no longer reads .cs/private/pending-switch"; return 1; }
+    while IFS= read -r fragment; do
+        writers+=("$fragment")
+    done < <(grep -lF 'pending-switch' "$SCRIPT_DIR"/../lib/*.sh 2>/dev/null || true)
+    [ "${#writers[@]}" -gt 0 ] \
+        || { echo "  FAIL: no lib/ fragment names pending-switch, the record cs -switch writes"; return 1; }
+    for key in engine handoff run; do
+        grep -qF "fields.$key" "$mod" \
+            || { echo "  FAIL: the mod no longer reads the record's $key="; return 1; }
+        # A writer spells the key at the start of a quoted string or after a
+        # \n in a printf format; a reader's ^key= or ${line#key=} does not.
+        grep -qE "(['\"]|\\\\n)$key=" "${writers[@]}" \
+            || { echo "  FAIL: no lib/ fragment naming pending-switch writes $key=; the mod reads it"; return 1; }
+    done
+}
+
+# The switch skill tells the person what the key reads while a switch is
+# pending; the mod draws it. One wording, in two files.
+test_mod_switch_key_matches_the_switch_skill() {
+    grep -qF '`/exit and continue in ${target}`' "$MOD/hooks/register.tsx" \
+        || { echo "  FAIL: the mod no longer labels the key '/exit and continue in <engine>'"; return 1; }
+    assert_file_contains "$SCRIPT_DIR/../skills/switch/SKILL.md" '`/exit and continue in codex`' \
+        "the switch skill quotes the key the mod draws" || return 1
+}
+
 test_mod_unit_tests_pass_under_bun() {
     if ! command -v bun >/dev/null 2>&1; then
         echo "    SKIP: bun not on PATH"
@@ -145,13 +181,13 @@ test_mod_validate_inventories_the_hooks_and_calls() {
     fi
     assert_output_contains "$out" "hooks: session.start, command.run{command=queue}, turn.complete, skill.prompt{skill=finish}, prompt.submit, command.run{command=clear}, turn.start, ui.render{component=AbovePrompt}, ui.render{component=Pane}" "all nine hooks inventoried" || return 1
     assert_output_not_contains "$out" '$.prompt.fill' "nothing fills the composer any more" || return 1
-    assert_output_contains "$out" 'env reads: CLAUDE_CONFIG_DIR, CS_BIN, CS_ROTATE_BUTTON_CTX, CS_ROTATE_FORCE_CTX, CS_STATUSLINE_CAPS, CS_STATUSLINE_CTX_WARN, CS_TERM_BG_RGB, CS_TERM_THEME, HOME, XDG_CONFIG_HOME' "the cs path, the two thresholds, the bar's warn band, the measured background, the theme, the caps consent and where keybindings.json and the caps answer live are read from the environment" || return 1
-    assert_output_contains "$out" '$.process.run, $.prompt.submit (via offerToStart), $.session.compact (via offerToStart), $.session.cwd' "/queue runs cs from its own hook and its start offer, which alone submits a prompt and compacts; the /finish watch runs kill -0 to ask after cs's pid" || return 1
-    assert_output_contains "$out" '$.command.run (via askToWrap, clearAndContinue, rotate)' "the keys run their commands, and nothing else runs one" || return 1
+    assert_output_contains "$out" 'env reads: CLAUDE_CONFIG_DIR, CS_BIN, CS_ROTATE_BUTTON_CTX, CS_ROTATE_FORCE_CTX, CS_RUN_ID, CS_STATUSLINE_CAPS, CS_STATUSLINE_CTX_WARN, CS_TERM_BG_RGB, CS_TERM_THEME, HOME, XDG_CONFIG_HOME' "the canonical and legacy executable paths, the run id a pending switch is checked against, the two thresholds, the bar's warn band, the measured background, the theme, the caps consent and where keybindings.json and the caps answer live are read from the environment" || return 1
+    assert_output_contains "$out" '$.process.run, $.prompt.submit (via offerToStart), $.session.compact (via offerToStart), $.session.cwd' "/queue runs cs from its own hook and its start offer, which alone submits a prompt and compacts; nothing else runs a process" || return 1
+    assert_output_contains "$out" '$.command.run (via askToWrap, clearAndContinue, exitAndContinue, rotate)' "the keys run their commands (a pending switch's /exit among them), and nothing else runs one" || return 1
     assert_output_contains "$out" '$.clock.after (via forceRotation, startCountdown), $.clock.every (via startCountdown, watchFinish), $.clock.now (via withGateBand)' "the forced /rotate and the pane's open are one-shot timers, the grace and the /finish watch tickers, and the gate band alone reads the time" || return 1
     assert_output_contains "$out" '$.ui.ask (via askToWrap, offerToStart)' "the wrap key and the /queue start offer ask through the engine's own dialog" || return 1
     assert_output_contains "$out" '$.ui.close (via openPreview, stopCountdown)' "the handoff pane closes where the count ends, and where it lands after one" || return 1
-    assert_output_contains "$out" '$.fs.read (via armedHandoff, boundChords, capsWanted, forceRotation, queueRunning, readFinish, readState, readWrapped)' "the wrap marker, the state, the queue's state, the /finish record, keybindings.json and the caps answer are read, never a file's age" || return 1
+    assert_output_contains "$out" '$.fs.read (via armedHandoff, boundChords, capsWanted, forceRotation, pendingSwitch, queueRunning, readFinish, readState, readWrapped)' "the wrap marker, the state, the pending switch, the queue's state, the /finish record, keybindings.json and the caps answer are read, never a file's age" || return 1
     assert_output_not_contains "$out" '$.fs.stat' "no rule hangs on a modification time" || return 1
     assert_output_contains "$out" '$.ui.open (via openPreview)' "and opens in one place" || return 1
 }
@@ -162,6 +198,8 @@ run_test test_mod_force_default_matches_the_launch_notice
 run_test test_mod_surface_shade_matches_the_statusline_shade
 run_test test_mod_ramp_inks_match_the_statusline
 run_test test_mod_is_deployed_by_the_installer_and_enabled_at_launch
+run_test test_mod_reads_the_switch_record_cs_writes
+run_test test_mod_switch_key_matches_the_switch_skill
 run_test test_mod_unit_tests_pass_under_bun
 run_test test_mod_validate_inventories_the_hooks_and_calls
 

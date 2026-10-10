@@ -40,8 +40,10 @@ jobs:
       - name: Verify the built files are in sync with lib/ and install.sh.in
         run: |
           bash build.sh
-          git diff --exit-code bin/cs hooks/cs-shared.sh install.sh \
-            || { echo "::error::bin/cs, hooks/cs-shared.sh or install.sh is out of sync with lib/ or install.sh.in. Run ./build.sh and commit all three."; exit 1; }
+          git diff --exit-code bin/cs bin/cs-secrets bin/cs-codex-thread \
+            bin/cs-statusline bin/cs-subagent-statusline hooks/cs-shared.sh \
+            skills/sweep/scripts/cs-shared.sh install.sh \
+            || { echo "::error::bin/cs or its helpers, hooks/cs-shared.sh, or install.sh is out of sync with lib/ or install.sh.in. Run ./build.sh and commit the generated files."; exit 1; }
 
   shellcheck:
     runs-on: ubuntu-latest
@@ -89,4 +91,3 @@ jobs:
 
       - name: Run TUI tests
         run: cargo test --manifest-path tui/Cargo.toml
-

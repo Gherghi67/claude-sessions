@@ -81,16 +81,16 @@ test_hooks_doc_states_both_resolution_arms() {
 # live narratives" false too (one teammate file measured 801 KB): a resume reads
 # its own narrative in full and a teammate's only from the line the digest
 # names. No user-facing surface may say otherwise: the lib templates, the
-# hooks, the commands, README and docs.
-# lib/45-migrate.sh is exempt: migrate_narrative_resume_wording's grep/sed/awk
+# hooks, the skills, README and docs.
+# Core/Claude migration fragments are exempt: migrate_narrative_resume_wording's grep/sed/awk
 # patterns must name the dead sentence verbatim to find and rewrite it in files
 # cs already wrote. That is a matcher, not a surface telling anyone to read
 # every narrative.
 test_no_surface_tells_a_resume_to_read_every_narrative() {
     local hits
     hits=$(grep -rniE "read all narrative|read all of them|reads all of them|everyone reads all|read the live narrative|reads the live files|read the live files|read all the session documentation" \
-        "$REPO/lib" "$REPO/hooks" "$REPO/commands" "$REPO/README.md" "$REPO/docs"/*.md 2>/dev/null \
-        | grep -v '/lib/45-migrate\.sh:' || true)
+        "$REPO/lib" "$REPO/hooks" "$REPO/skills" "$REPO/README.md" "$REPO/docs"/*.md 2>/dev/null \
+        | grep -vE '/lib/(45-migrate|46-claude-workspace)\.sh:' || true)
     if [ -n "$hits" ]; then
         echo "  FAIL: these surfaces still tell a resume to read every narrative:"
         printf '    %s\n' "$hits"
@@ -181,6 +181,32 @@ test_no_skip_counts_as_a_pass() {
     }
 }
 
+test_code_sessions_is_a_fork_started_as_ccs() {
+    assert_file_contains "$REPO/README.md" '^\*\*code-sessions\*\* is a fork of' \
+        "README must say code-sessions is a fork of cs" || return 1
+    assert_file_contains "$REPO/README.md" 'start it as `code-sessions`, or `ccs`' \
+        "README must name the launchers" || return 1
+    assert_file_contains "$REPO/README.md" 'docs/getting-started.md' \
+        "README must link the practical getting-started guide" || return 1
+    assert_file_contains "$REPO/docs/migration.md" 'Launchers: `code-sessions` and `ccs`' \
+        "migration policy must name the launchers" || return 1
+    assert_file_not_contains "$REPO/README.md" '`ags' "README still names the ags command" || return 1
+    assert_file_not_contains "$REPO/docs/getting-started.md" '`ags' "the guide still names the ags command"
+}
+
+test_getting_started_covers_main_workflows_and_codex_limit() {
+    local guide="$REPO/docs/getting-started.md"
+    for heading in '## Install this checkout' '## Adopt a project or create a workspace' \
+        '## Resume and switch engines' '## Work in a parallel feature worktree' \
+        '## Save a manual checkpoint' '## Current Codex limits'; do
+        assert_file_contains "$guide" "$heading" "getting-started guide must include $heading" || return 1
+    done
+    assert_file_contains "$guide" 'unpublished' \
+        "guide must warn that the fork is unpublished" || return 1
+}
+
+run_test test_code_sessions_is_a_fork_started_as_ccs
+run_test test_getting_started_covers_main_workflows_and_codex_limit
 run_test test_configuration_documents_every_env_var_the_readme_names
 run_test test_every_backend_the_code_accepts_is_documented
 run_test test_hooks_doc_states_both_resolution_arms

@@ -1,23 +1,19 @@
 #!/usr/bin/env bash
-# ABOUTME: Claude Code session manager with git-synced isolated workspaces
+# ABOUTME: code-sessions, a fork of cs: Claude and Codex session manager with git-synced isolated workspaces
 # ABOUTME: Creates isolated session workspaces with automatic documentation and file organization
 
 set -euo pipefail
 
 # Configuration
 VERSION="2026.10.7"
+# This build is code-sessions, a fork of cs. It runs as cs inside its own
+# profile; outside, the code-sessions (ccs) launcher starts it and cs is the
+# original. install.sh greps this line to tell its own build from the original.
+# shellcheck disable=SC2034  # read by cs -version in lib/99-main.sh
+CS_FORK="code-sessions"
 SESSIONS_ROOT="${CS_SESSIONS_ROOT:-$HOME/.claude-sessions}"
 CLAUDE_CODE_BIN="${CLAUDE_CODE_BIN:-claude}"
-
-# Claude Code downgrades its branding (logo, "thinking" animation) and statusline
-# truecolor to a muted palette when it detects tmux, regardless of actual color
-# support (anthropics/claude-code#35148). cs owns the environment before it execs
-# claude, so it restores the documented override here for every launch path,
-# unless the user has already set the variable themselves. (`if`, not `[ ] &&`,
-# so the false branch does not trip `set -e` at top level.)
-if [ -z "${CLAUDE_CODE_TMUX_TRUECOLOR+x}" ]; then
-    export CLAUDE_CODE_TMUX_TRUECOLOR=1
-fi
+CODEX_BIN="${CODEX_BIN:-codex}"
 
 REPO_URL="https://github.com/hex/claude-sessions"
 RELEASES_BASE="https://github.com/hex/claude-sessions/releases"
@@ -26,7 +22,14 @@ CHANGELOG_RAW_URL="https://raw.githubusercontent.com/hex/claude-sessions/main/CH
 # Deployed-hooks directory; CS_HOOKS_DIR overrides it for tests.
 HOOKS_DEPLOY_DIR="${CS_HOOKS_DIR:-$HOME/.claude/hooks/cs}"
 
-# Encode an absolute filesystem path the way Claude Code does for project
-# directory names under ~/.claude/projects/ (each `/` and `.` becomes `-`).
-# Used by setup_auto_memory and _doctor_check_token_cost to locate the
-# transcript directory for a given workspace.
+# Deployed executables, cs's own configuration and cs's caches. The profile
+# launcher points these into its tree while leaving HOME alone; the defaults
+# are where a plain install.sh puts them. Exported so the hooks, statusline
+# and mods a launch spawns read the same places. Each use site spells its own
+# plain-HOME default too: tests source single fragments without this header.
+export CS_INSTALL_DIR="${CS_INSTALL_DIR:-$HOME/.local/bin}"
+export CS_CONFIG_DIR="${CS_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/cs}"
+export CS_CACHE_DIR="${CS_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/cs}"
+# And cs's data, the -encrypt containers. No XDG_DATA_HOME: they were always
+# made under ~/.local/share/cs, and a new one belongs beside the old ones.
+export CS_DATA_DIR="${CS_DATA_DIR:-$HOME/.local/share/cs}"

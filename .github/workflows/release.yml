@@ -1,4 +1,4 @@
-# ABOUTME: Builds cs-tui for macOS (arm64, amd64) and Linux (amd64) on version tags
+# ABOUTME: Builds ags-tui for macOS (arm64, amd64) and Linux (amd64) on version tags
 # ABOUTME: Creates a GitHub Release with signed, checksummed binaries for each platform
 
 name: Release
@@ -42,17 +42,17 @@ jobs:
         if: contains(matrix.platform, 'linux')
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
-      - name: Build cs-tui
+      - name: Build ags-tui
         run: cargo build --release --manifest-path tui/Cargo.toml --target ${{ matrix.target }}
 
       - name: Rename binary
         shell: bash
-        run: cp "tui/target/${{ matrix.target }}/release/cs-tui${{ matrix.ext }}" "cs-tui-${{ matrix.platform }}${{ matrix.ext }}"
+        run: cp "tui/target/${{ matrix.target }}/release/ags-tui${{ matrix.ext }}" "ags-tui-${{ matrix.platform }}${{ matrix.ext }}"
 
       - uses: actions/upload-artifact@v6
         with:
-          name: cs-tui-${{ matrix.platform }}
-          path: cs-tui-${{ matrix.platform }}${{ matrix.ext }}
+          name: ags-tui-${{ matrix.platform }}
+          path: ags-tui-${{ matrix.platform }}${{ matrix.ext }}
 
   release:
     needs: build
@@ -76,9 +76,9 @@ jobs:
         run: |
           echo "$MINISIGN_KEY" > /tmp/minisign.key
 
-          minisign -Sm install.sh -s /tmp/minisign.key -t "cs ${GITHUB_REF_NAME}" -W
-          for bin in cs-tui-*; do
-            minisign -Sm "$bin" -s /tmp/minisign.key -t "cs ${GITHUB_REF_NAME}" -W
+          minisign -Sm install.sh -s /tmp/minisign.key -t "agent-sessions ${GITHUB_REF_NAME}" -W
+          for bin in ags-tui-*; do
+            minisign -Sm "$bin" -s /tmp/minisign.key -t "agent-sessions ${GITHUB_REF_NAME}" -W
           done
 
           rm -f /tmp/minisign.key
@@ -86,7 +86,7 @@ jobs:
       - name: Generate checksums
         run: |
           sha256sum install.sh > install.sh.sha256
-          for bin in cs-tui-*; do
+          for bin in ags-tui-*; do
             [[ "$bin" == *.minisig ]] && continue
             sha256sum "$bin" > "${bin}.sha256"
           done
@@ -98,7 +98,7 @@ jobs:
             install.sh
             install.sh.minisig
             install.sh.sha256
-            cs-tui-*
+            ags-tui-*
           generate_release_notes: true
           # A hyphenated tag (v1.2.3-rc1, v0.0.0-smoke) is a pre-release: it must
           # never become the repo's Latest, which is what installers resolve.

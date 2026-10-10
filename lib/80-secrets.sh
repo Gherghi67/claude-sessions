@@ -16,7 +16,7 @@ find_secrets_script() {
     local script_dir
     script_dir="$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")"
 
-    for loc in "$script_dir/cs-secrets" "$HOME/.local/bin/cs-secrets" "/usr/local/bin/cs-secrets"; do
+    for loc in "$script_dir/cs-secrets" "${CS_INSTALL_DIR:-$HOME/.local/bin}/cs-secrets" "/usr/local/bin/cs-secrets" "$script_dir/cs-secrets" "${CS_INSTALL_DIR:-$HOME/.local/bin}/cs-secrets" "/usr/local/bin/cs-secrets"; do
         if [ -x "$loc" ]; then
             echo "$loc"
             return 0

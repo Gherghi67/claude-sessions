@@ -1,4 +1,6 @@
 ---
+name: sweep
+description: Distill the current cs session into durable memory entries under .cs/memory/ with a strict bar, append looser-bar findings to the actor's narrative, and keep the MEMORY.md index under budget. Invoke when the user asks to sweep or distill the session into memory.
 model: opus
 ---
 
@@ -10,7 +12,7 @@ You are working in a cs session. Your task is to review the conversation in your
 
 Two write surfaces, deliberately DIFFERENT bars:
 
-- **The strict buckets (`.cs/memory/{user,feedback,project,reference}_*.md`) are forever** — they sit in Claude's persistent memory and inform every future session. **Bar: very strict. Default: write nothing.**
+- **The strict buckets (`.cs/memory/{user,feedback,project,reference}_*.md`) are forever** — they are the session's persistent memory and inform every future session, whichever engine runs it. **Bar: very strict. Default: write nothing.**
 - **`.cs/memory/narrative.<actor>.md` is your session-local lab notebook** (per-actor — run `cs -whoami` for your actor) — a native memory topic file, looser bar. Substantive observations welcome. Default: write if the session surfaced a non-obvious finding worth keeping.
 
 Both are written in parallel from the conversation — narrative is not the upstream of the strict buckets.
@@ -18,10 +20,11 @@ Both are written in parallel from the conversation — narrative is not the upst
 ## Steps
 
 Before anything else, from the session root, snapshot the index so step 5 can check this sweep's
-rewrites against it:
+rewrites against it. The guard ships with this skill: `<skill-dir>` below is this skill's directory,
+the folder this SKILL.md was loaded from.
 
 ```sh
-bash ~/.claude/hooks/cs/memory-index-guard.sh snapshot
+bash <skill-dir>/scripts/memory-index-guard.sh snapshot
 ```
 
 1. **Review the conversation in your context.** Look at what the user has said and what was decided or learned across this whole session — not just the most recent turn.
@@ -56,13 +59,14 @@ bash ~/.claude/hooks/cs/memory-index-guard.sh snapshot
 
 4. **Narrative sweep — looser bar.** Resolve `<actor>` with `cs -whoami` first, then append only to your own narrative file. If a substantive finding from this session is not yet in your narrative (`.cs/memory/narrative.<actor>.md`), append it as a dated section. Substantive = something a future session resuming this work would want to know.
 
-5. **Keep the index under budget.** `MEMORY.md` loads in full at every session start against a hard
-   size limit; past it Claude Code loads only part of the file and the entries beyond the cut are never
-   read again. After writing any pointer — and once per sweep even if you wrote none, since another
+5. **Keep the index under budget.** An engine that loads `MEMORY.md` at every session start does so
+   against a hard size limit (`cs -engine supports memory_index` says whether yours does; Claude Code does);
+   past it only part of the file loads and the entries beyond the cut are never read again. Keep the
+   budget either way: the index is shared by every engine and actor on this session. After writing any pointer — and once per sweep even if you wrote none, since another
    actor may have pushed it over — check:
 
    ```sh
-   bash ~/.claude/hooks/cs/memory-index-guard.sh check             # size against the byte budget
+   bash <skill-dir>/scripts/memory-index-guard.sh check            # size against the byte budget
    awk '/^- \[/{print length($0)"\t"$0}' .cs/memory/MEMORY.md \
      | sort -rn | awk -F'\t' '$1>200' | cut -c1-120                # every over-long pointer, with its text
    ```
@@ -91,7 +95,7 @@ bash ~/.claude/hooks/cs/memory-index-guard.sh snapshot
    ask; do not resolve it by dropping entries.
 
    Put a removed pointer back by rewriting it. If the index is past repair, run
-   `bash ~/.claude/hooks/cs/memory-index-guard.sh restore` to return it to the snapshot, then redo this
+   `bash <skill-dir>/scripts/memory-index-guard.sh restore` to return it to the snapshot, then redo this
    sweep's pointer edits. Never finish a sweep with `check` failing.
 
    **After rewriting, verify twice.** Re-run `check` to confirm the file still fits and every link survived, and re-read each

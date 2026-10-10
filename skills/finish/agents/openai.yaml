@@ -1,0 +1,5 @@
+# Codex reads this beside SKILL.md. It accepts SKILL.md's
+# disable-model-invocation and ignores it, so finish would run whenever the
+# model judged a feature done; this keeps it to an explicit $finish.
+policy:
+  allow_implicit_invocation: false

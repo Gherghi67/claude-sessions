@@ -657,7 +657,7 @@ test_no_session_errors() {
         echo "  FAIL: Should fail without session name"
         return 1
     fi
-    assert_output_contains "$output" "No session specified. Set CLAUDE_SESSION_NAME or use --session" || return 1
+    assert_output_contains "$output" "No session specified. Set CS_SESSION_NAME or use --session" || return 1
 }
 
 test_picker_selects_numbered_session() {
@@ -732,7 +732,7 @@ test_picker_eof_aborts_despite_default() {
             echo "  FAIL: EOF should abort even with a CWD default"
             exit 1
         fi
-        assert_output_contains "$out" "No session specified. Set CLAUDE_SESSION_NAME or use --session" || exit 1
+        assert_output_contains "$out" "No session specified. Set CS_SESSION_NAME or use --session" || exit 1
     ) || return 1
 }
 
@@ -756,12 +756,12 @@ test_picker_rejects_invalid_choice() {
         echo "  FAIL: out-of-range choice should error"
         return 1
     fi
-    assert_output_contains "$out" "No session specified. Set CLAUDE_SESSION_NAME or use --session" || return 1
+    assert_output_contains "$out" "No session specified. Set CS_SESSION_NAME or use --session" || return 1
     if out=$(printf '\n' | CS_ASSUME_TTY=1 "$CS_SECRETS_BIN" list 2>&1); then
         echo "  FAIL: empty input with no default should error"
         return 1
     fi
-    assert_output_contains "$out" "No session specified. Set CLAUDE_SESSION_NAME or use --session" || return 1
+    assert_output_contains "$out" "No session specified. Set CS_SESSION_NAME or use --session" || return 1
 }
 
 test_picker_empty_root_errors() {
@@ -771,7 +771,7 @@ test_picker_empty_root_errors() {
         echo "  FAIL: empty sessions root should error"
         return 1
     fi
-    assert_output_contains "$out" "No session specified. Set CLAUDE_SESSION_NAME or use --session" || return 1
+    assert_output_contains "$out" "No session specified. Set CS_SESSION_NAME or use --session" || return 1
     assert_output_not_contains "$out" "Pick one" || return 1
 }
 
@@ -945,6 +945,47 @@ test_export_refuses_colliding_exported_names() {
     emitted=$("$CS_SECRETS_BIN" export 2>/dev/null)
     assert_eq "" "$emitted" "a refused export must emit no assignments at all" || return 1
 }
+
+# code-sessions, a fork of cs installed beside it, files its keychain items as
+# code-sessions:<session>:<name>. One keychain then holds two installs' secrets
+# for a session both have, and neither reads, lists or purges the other's.
+# A subshell body: this suite's teardown does not restore the fake's PATH.
+test_keychain_prefix_keeps_two_installs_apart() (
+    use_fake_keychain
+    export CS_SECRETS_BACKEND=keychain
+    printf 'original' | "$CS_SECRETS_BIN" set API_KEY >/dev/null || exit 1
+    printf 'fork' | CS_SECRETS_KEYCHAIN_PREFIX=code-sessions "$CS_SECRETS_BIN" set API_KEY >/dev/null || exit 1
+    printf 'fork-only' | CS_SECRETS_KEYCHAIN_PREFIX=code-sessions "$CS_SECRETS_BIN" set TOKEN >/dev/null || exit 1
+    assert_eq "code-sessions:test-session:API_KEY"$'\n'"code-sessions:test-session:TOKEN"$'\n'"cs:test-session:API_KEY" \
+        "$(fake_keychain_items)" || exit 1
+    assert_eq original "$("$CS_SECRETS_BIN" get API_KEY)" || exit 1
+    assert_eq fork "$(CS_SECRETS_KEYCHAIN_PREFIX=code-sessions "$CS_SECRETS_BIN" get API_KEY)" || exit 1
+    local listed
+    listed=$("$CS_SECRETS_BIN" list)
+    assert_output_contains "$listed" "API_KEY" || exit 1
+    assert_output_not_contains "$listed" "TOKEN" "the original listed the fork's secret" || exit 1
+    CS_SECRETS_KEYCHAIN_PREFIX=code-sessions "$CS_SECRETS_BIN" purge >/dev/null || exit 1
+    assert_eq "cs:test-session:API_KEY" "$(fake_keychain_items)" "a purge reached the other install's items" || exit 1
+)
+
+# The prefix goes into grep patterns; a '.' there would match other prefixes.
+test_keychain_prefix_refuses_pattern_characters() (
+    use_fake_keychain
+    local out rc=0
+    out=$(CS_SECRETS_BACKEND=keychain CS_SECRETS_KEYCHAIN_PREFIX='c.s' "$CS_SECRETS_BIN" list 2>&1) || rc=$?
+    [ "$rc" -ne 0 ] || { echo "  FAIL: a prefix with '.' was accepted"; exit 1; }
+    assert_output_contains "$out" "Invalid CS_SECRETS_KEYCHAIN_PREFIX" || exit 1
+    assert_eq "" "$(fake_keychain_items)" || exit 1
+)
+
+test_backend_names_the_keychain_prefix() (
+    use_fake_keychain
+    local out
+    out=$(CS_SECRETS_BACKEND=keychain CS_SECRETS_KEYCHAIN_PREFIX=code-sessions "$CS_SECRETS_BIN" backend 2>&1)
+    assert_output_contains "$out" "code-sessions:<session>:<name>" || exit 1
+    out=$(CS_SECRETS_BACKEND=keychain "$CS_SECRETS_BIN" backend 2>&1)
+    assert_output_contains "$out" "cs:<session>:<name>" || exit 1
+)
 
 # migrate writes to a backend without passing through the entry validation that
 # guards set and import-file, so it must validate too.
@@ -1512,6 +1553,18 @@ echo "================"
 echo ""
 
 # Backend
+test_neutral_session_name_takes_precedence_with_legacy_fallback() {
+    export CS_SESSION_NAME=neutral-session
+    "$CS_SECRETS_BIN" set neutral-key neutral-value >/dev/null 2>&1 || return 1
+    assert_eq neutral-value "$("$CS_SECRETS_BIN" get neutral-key)" || return 1
+    unset CS_SESSION_NAME
+    local output
+    output=$("$CS_SECRETS_BIN" list 2>&1) || return 1
+    assert_output_not_contains "$output" neutral-key 'neutral and legacy session stores must stay separate' || return 1
+    "$CS_SECRETS_BIN" set legacy-key legacy-value >/dev/null 2>&1 || return 1
+    assert_eq legacy-value "$("$CS_SECRETS_BIN" get legacy-key)"
+}
+
 run_test test_backend_shows_encrypted
 run_test test_backend_override_via_env
 run_test test_backend_wsl_defaults_encrypted_not_keychain
@@ -1596,6 +1649,11 @@ run_test test_import_file_stores_when_secret_absent_and_user_unset
 run_test test_keychain_export_file_aborts_on_jq_failure
 run_test test_keychain_list_loud_on_extraction_failure
 
+# Keychain prefix
+run_test test_keychain_prefix_keeps_two_installs_apart
+run_test test_keychain_prefix_refuses_pattern_characters
+run_test test_backend_names_the_keychain_prefix
+
 # Unknown backend guard
 run_test test_unknown_backend_guard
 run_test test_unknown_backend_display_is_loud
@@ -1623,4 +1681,5 @@ run_test test_export_file_atomic_preserves_prior_on_encrypt_failure
 run_test test_encrypted_stale_lock_fails_loud_not_reaped
 run_test test_keychain_export_does_not_require_cs_secrets_dir
 
+run_test test_neutral_session_name_takes_precedence_with_legacy_fallback
 report_results

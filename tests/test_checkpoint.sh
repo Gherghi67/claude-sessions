@@ -230,23 +230,23 @@ run_test test_help_shows_checkpoint
 _vault_session() {
     VAULT="$TEST_TMPDIR/vault"
     mkdir -p "$VAULT"
-    mv "$CLAUDE_SESSION_META_DIR/memory" "$VAULT/memory"
-    ln -s "$VAULT/memory" "$CLAUDE_SESSION_META_DIR/memory"
+    mv "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/memory" "$VAULT/memory"
+    ln -s "$VAULT/memory" "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/memory"
 }
 
 test_checkpoint_of_an_encrypted_session_stays_in_the_vault() {
     _vault_session
     mkdir -p "$VAULT/private"
-    ln -s "$VAULT/private" "$CLAUDE_SESSION_META_DIR/private"
+    ln -s "$VAULT/private" "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/private"
     "$CS_BIN" -checkpoint "sealed topic" > /dev/null 2>&1 || return 1
     local saved name
     saved=$(ls "$VAULT/private/checkpoints"/*-sealed-topic.md 2>/dev/null | head -1)
     [ -n "$saved" ] || { echo "  FAIL: the checkpoint belongs in .cs/private/checkpoints"; return 1; }
     assert_file_contains "$saved" "Moved JWT validation" "it snapshots the vault narrative" || return 1
-    assert_not_exists "$CLAUDE_SESSION_META_DIR/checkpoints" "nothing in plaintext .cs/checkpoints" || return 1
-    jq -e 'select(.event == "checkpoint")' "$CLAUDE_SESSION_META_DIR/timeline.jsonl" > /dev/null \
+    assert_not_exists "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/checkpoints" "nothing in plaintext .cs/checkpoints" || return 1
+    jq -e 'select(.event == "checkpoint")' "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/timeline.jsonl" > /dev/null \
         || { echo "  FAIL: the timeline still records that a checkpoint was taken"; return 1; }
-    assert_file_not_contains "$CLAUDE_SESSION_META_DIR/timeline.jsonl" "sealed" "no label or file name on the timeline" || return 1
+    assert_file_not_contains "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/timeline.jsonl" "sealed" "no label or file name on the timeline" || return 1
     name=$(basename "$saved" .md)
     assert_output_contains "$("$CS_BIN" -checkpoint list 2>&1)" "$name" "list reads the vault" || return 1
     assert_output_contains "$("$CS_BIN" -checkpoint show "$name" 2>&1)" "Checkpoint: sealed topic" "show reads the vault" || return 1
@@ -259,8 +259,8 @@ test_checkpoint_refuses_an_encrypted_narrative_without_private() {
     assert_eq "1" "$rc" "the checkpoint refuses" || return 1
     assert_output_contains "$output" "this session's narrative lives on encrypted storage (.cs/memory is a link), and .cs/private is not there to hold the checkpoint" \
         "names the missing link" || return 1
-    assert_not_exists "$CLAUDE_SESSION_META_DIR/checkpoints" "nothing in plaintext .cs/checkpoints" || return 1
-    assert_not_exists "$CLAUDE_SESSION_META_DIR/timeline.jsonl" "no timeline event" || return 1
+    assert_not_exists "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/checkpoints" "nothing in plaintext .cs/checkpoints" || return 1
+    assert_not_exists "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/timeline.jsonl" "no timeline event" || return 1
 }
 
 run_test test_checkpoint_of_an_encrypted_session_stays_in_the_vault

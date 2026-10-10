@@ -20,8 +20,17 @@ then rebuild and commit the regenerated `bin/cs`:
 CI rebuilds and fails if the committed `bin/cs` is out of sync with `lib/`. Each
 fragment has a numeric prefix (`00`, `05`, …, `99`) that fixes its position; the
 `bin/cs` blob stays byte-identical whether you edit a fragment or the assembled
-file, so a build is transparent. Hooks live in `hooks/`, commands in `commands/`,
-and tests in `tests/`.
+file, so a build is transparent. Hooks live in `hooks/`, skills (the former
+slash commands included) in `skills/`, and tests in `tests/`.
+
+This checkout is code-sessions, a fork of cs that follows hex/claude-sessions.
+It keeps upstream's names: the command is `cs`, its companions are `cs-*`, and
+it builds to `bin/cs`. `setup.sh` installs it into a profile of its own and puts
+the launchers `code-sessions` and `ccs` on PATH, so `cs` on PATH stays the
+original; `lib/00-header.sh` marks the build with `CS_FORK`. Shared workspace/storage/context
+fragments and namespaced adapter fragments are described in
+[Engine adapters](docs/engine-adapters.md). Keep native configuration and parsers
+inside their adapter; build.sh still produces a standalone shell executable.
 
 ## Running Tests
 
@@ -124,17 +133,19 @@ masked; `run_all.sh` reports every failing suite.
 
 5. **Write tests** in `tests/` — create a test file or add to an existing one. Use `test_lib.sh` for setup/teardown.
 
-## Adding a Command
-
-1. **Create `commands/name.md`** with YAML frontmatter specifying `allowed-tools` (hyphen — Claude Code ignores the `allowed_tools` underscore form).
-
-2. **Add the filename to the `CS_COMMANDS` array** in `lib/01-manifests.sh`, then run `./build.sh`, which folds it into `bin/cs` and splices it into `install.sh`. Install (download + copy), `run_uninstall()`, and doctor all loop over the array, so no per-command variable or cleanup edit is needed. `tests/test_install.sh` fails if the array disagrees with the actual `commands/` files.
-
 ## Adding a Skill
 
-1. **Create `skills/name/SKILL.md`** with the skill's frontmatter (`name`, `description`) and instructions. Copy an existing skill (e.g., `skills/store-secret/`) as a template.
+cs ships no slash commands: a skill answers `/name` in Claude Code and is the
+one format Codex reads too. The four former commands (`checkpoint`, `summary`,
+`sweep`, `wrap`) are skills, and `RETIRED_COMMANDS` in `lib/01-manifests.sh`
+lists the command files the installer and uninstaller delete.
 
-2. **Add the directory name to the `CS_SKILLS` array** in `lib/01-manifests.sh`, then run `./build.sh` — install, `run_uninstall()`, and doctor all loop over it. `tests/test_install.sh` fails if the array disagrees with the `skills/` directory contents.
+1. **Create `skills/name/SKILL.md`** with the skill's frontmatter (`name`, `description`, and `allowed-tools` with the hyphen if it needs one — Claude Code ignores the `allowed_tools` underscore form) and instructions. Copy an existing skill (e.g., `skills/store-secret/`) as a template.
+   - Reach a helper the skill ships through its own directory (`scripts/x.sh` relative to the folder the SKILL.md was loaded from) or a `cs` verb, never a `~/.claude/...` path: under the code-sessions profile that path is the original cs install, and under Codex it is no install at all. List each helper in `CS_SKILL_FILES`. `tests/test_commands.sh` fails on a `~/.claude/` path in any SKILL.md.
+   - Before relying on an adapter feature (rotation, a spawned session's brief, mail delivery, the memory index at session start), check `cs -engine supports <capability>` and refuse cleanly when it fails.
+   - A skill only the user may start sets `disable-model-invocation: true`. Codex accepts that key and ignores it, so ship `agents/openai.yaml` beside the SKILL.md with `allow_implicit_invocation: false` under `policy:`, and list it in `CS_SKILL_FILES` (see `skills/finish/`). `tests/test_commands.sh` fails when the pair is incomplete.
+
+2. **Add the directory name to the `CS_SKILLS` array** in `lib/01-manifests.sh`, then run `./build.sh` — install, `run_uninstall()`, and doctor all loop over it. The installer copies the same files into each selected engine's skills directory: `~/.claude/skills/` for Claude, `$CODEX_HOME/skills/` (default `~/.codex/skills/`) for Codex. `tests/test_install.sh` fails if the array disagrees with the `skills/` directory contents.
 
 ## Code Style
 
@@ -147,6 +158,36 @@ masked; `run_all.sh` reports every failing suite.
 - No emojis in code or documentation (unless part of a functional emoji set).
 - No temporal names (`NewAPI`, `LegacyHandler`, `ImprovedParser`). Name things for what they do, not their history.
 - Test output must be clean. If a test intentionally triggers errors, capture and validate them.
+
+## Merging upstream releases
+
+code-sessions follows hex/claude-sessions (`origin`), which often ships several releases a day. Merge them one at a time, as they come:
+
+```bash
+scripts/sync-upstream.py status       # the releases this branch lacks, oldest first, and what the next one conflicts in
+scripts/sync-upstream.py catch-up     # merge them in order
+# it stops at the first release that needs a person; resolve it in the sync worktree it prints, then, there:
+scripts/sync-upstream.py continue
+scripts/sync-upstream.py catch-up     # back in this checkout: lands that one and goes on with the rest
+```
+
+`status` fetches, lists the missing releases and dry-runs the next merge without writing anything; it exits 1 while a release is missing, so a script can use it as a check (`--brief` skips the dry run). `catch-up` merges each missing release on its own: one that needs no person is built, tested, committed and fast-forwarded into this branch, and its worktree removed. To merge a single release by hand instead:
+
+```bash
+scripts/sync-upstream.py start        # newest v* tag on origin/main; --to <tag> for another
+# resolve what it reports in the sync worktree it prints, then, there:
+scripts/sync-upstream.py continue
+git merge --ff-only sync/<tag>        # back in this checkout
+```
+
+Commit your work first: the merge starts from the last commit, and git only recognises a moved file once it is committed. `start` makes a worktree beside this checkout (outside any repository that encloses it) on a `sync/<tag>` branch and records a real merge with both parents. Before merging, it rewrites upstream into this fork's dialect, so the fork's reshaping does not conflict:
+
+- Variables: `$CLAUDE_SESSION_*` becomes `${CS_SESSION_*:-${CLAUDE_SESSION_*:-}}`, on the lines the fork rewrote and the lines upstream adds; a line the fork kept stays as upstream wrote it. Command names are upstream's on both sides and need no rewriting.
+- Functions: a function the fork keeps in another `lib/` fragment gets upstream's change there.
+- Files: an upstream file the fork moved (`commands/*.md` to `skills/*/SKILL.md`) merges into the moved file.
+- Generated files (`bin/cs`, `hooks/cs-shared.sh`, `install.sh`) are never merged; `continue` rebuilds them.
+
+Prose (README, `docs/`, CHANGELOG) merges plainly, since the fork's prose is its own. What is left is where both sides changed the same lines. `continue` refuses while a conflict marker remains or a function is defined in two fragments, then runs `build.sh` and `tests/run_all.sh` (`--skip-tests` skips them) and commits. Nothing is pushed. When the fork rewrites another upstream form, add the rule to `rename()` in the script so the next merge applies it.
 
 ## Releasing
 

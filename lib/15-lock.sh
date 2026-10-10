@@ -96,55 +96,65 @@ _lock_collision_menu() {
     esac
 }
 
-# Acquire a PID-based session lock to prevent concurrent access
-acquire_session_lock() {
-    local meta_dir="$1"
-    local force="${2:-}"
-    local session_name="$3"
-    local lock_file="$meta_dir/session.lock"
-
-    if [ -f "$lock_file" ]; then
-        local lock_pid
-        lock_pid=$(cat "$lock_file" 2>/dev/null || echo "")
-
-        if [ -n "$lock_pid" ] && kill -0 "$lock_pid" 2>/dev/null; then
-            # PID is alive — session is in use
-            if [ "$force" = "true" ]; then
-                warn "Overriding active session lock (PID $lock_pid)"
-            elif cs_interactive; then
-                _lock_collision_menu "$session_name" "$lock_pid"
-                # The menu returns only when the user chose force. Record the
-                # choice so the rest of the launch (live-duplicate UUID guard
-                # included) honors it exactly like an explicit --force.
-                CS_COLLISION_FORCE=1
-                warn "Overriding active session lock (PID $lock_pid)"
-            else
-                echo -e "${RED}Error: Session is already open (PID $lock_pid)${NC}" >&2
-                echo -e "${DIM}Use --force to override: cs $session_name --force${NC}" >&2
-                exit 1
-            fi
-        else
-            # PID is dead — stale lock
-            warn "Removing stale session lock (PID ${lock_pid:-unknown})"
-            rm -f "$lock_file"
+# The numeric lock remains the compatibility liveness view. A modern launch
+# also has a token-qualified lease; publish and release both under one guard.
+_cs_acquire_session_lock_guarded() {  # meta_dir, force
+    local meta="$1" force="$2" lock_pid="" lease_tmp="" lock_tmp=""
+    lock_pid=$(_cs_session_live_pid "$meta") || lock_pid=""
+    if [ -n "$lock_pid" ] && [ "$force" != true ]; then return 73; fi
+    umask 077
+    lock_tmp=$(mktemp "$meta/local/.session-lock.XXXXXX") || return 1
+    printf '%s\n' "$$" > "$lock_tmp" || { rm -f "$lock_tmp"; return 1; }
+    if [ -n "${CS_RUN_ID:-}" ]; then
+        lease_tmp=$(mktemp "$meta/local/.run-lease.XXXXXX") || { rm -f "$lock_tmp"; return 1; }
+        if ! jq -nc --arg id "$CS_RUN_ID" --arg engine "$CS_RUN_ENGINE" \
+            --argjson owner "$$" --arg started "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{run_id: $id, engine: $engine, owner_pid: $owner, started_at: $started}' > "$lease_tmp"; then
+            rm -f "$lock_tmp" "$lease_tmp"
+            return 1
         fi
+        mv "$lease_tmp" "$meta/local/run-lease.json" || { rm -f "$lock_tmp" "$lease_tmp"; return 1; }
+    else
+        rm -f "$meta/local/run-lease.json" || { rm -f "$lock_tmp"; return 1; }
     fi
-
-    echo "$$" > "$lock_file"
+    mv "$lock_tmp" "$meta/session.lock" || { rm -f "$lock_tmp"; return 1; }
 }
 
-# Release session lock if owned by current process
-release_session_lock() {
-    local meta_dir="$1"
-    local lock_file="$meta_dir/session.lock"
-
-    if [ -f "$lock_file" ]; then
-        local lock_pid
-        lock_pid=$(cat "$lock_file" 2>/dev/null || echo "")
-        if [ "$lock_pid" = "$$" ]; then
-            rm -f "$lock_file"
+acquire_session_lock() {  # meta_dir, force, session_name
+    local meta="$1" force="${2:-}" session_name="$3" status=0 lock_pid=""
+    while :; do
+        status=0
+        cs_run_guarded "$meta" _cs_acquire_session_lock_guarded "$meta" "$force" || status=$?
+        [ "$status" -ne 0 ] || return 0
+        [ "$status" -eq 73 ] || return "$status"
+        lock_pid=$(_cs_session_live_pid "$meta") || lock_pid=""
+        if cs_interactive; then
+            # Never hold the ownership guard while waiting for user input.
+            _lock_collision_menu "$session_name" "$lock_pid"
+            CS_COLLISION_FORCE=1
+            force=true
+            warn "Overriding active session lock (PID $lock_pid)"
+        else
+            printf 'Error: Session is already open (PID %s)\n' "$lock_pid" >&2
+            printf 'Use --force to override: cs %s --force\n' "$session_name" >&2
+            return 1
         fi
+    done
+}
+
+_cs_release_session_lock_guarded() {  # meta_dir
+    local meta="$1" lock_pid=""
+    if [ -f "$meta/local/run-lease.json" ]; then
+        cs_run_lease_owned "$meta" || return 0
+        rm -f "$meta/session.lock" "$meta/local/run-lease.json"
+    elif [ -z "${CS_RUN_ID:-}" ]; then
+        { IFS= read -r lock_pid < "$meta/session.lock"; } 2>/dev/null || return 0
+        [ "$lock_pid" != "$$" ] || rm -f "$meta/session.lock"
     fi
+}
+
+release_session_lock() {  # meta_dir
+    cs_run_guarded "$1" _cs_release_session_lock_guarded "$1"
 }
 
 # Print the PID recorded in a session's lock file (empty if none). Arg: meta_dir.
@@ -156,10 +166,28 @@ read_lock_pid() {  # meta_dir
 
 # True (exit 0) when a session's process is currently alive on this machine.
 # Arg: meta_dir (the session's .cs dir).
+# A SIGKILL can end the supervising shell before its native child. Preserve
+# that child's exclusion until it exits; its start time distinguishes a reused
+# PID. If process metadata is unavailable, conservatively keep the live lock.
+_cs_session_live_pid() {  # meta_dir
+    local meta="$1" owner="" native="" signature="" actual=""
+    owner=$(read_lock_pid "$meta")
+    case "$owner" in ''|*[!0-9]*) return 1 ;; esac
+    if kill -0 "$owner" 2>/dev/null; then printf '%s\n' "$owner"; return 0; fi
+    native=$(jq -er --arg owner "$owner" \
+        'select((.owner_pid | tostring) == $owner) | .native_pid | select(type == "number" and . > 1)' \
+        "$meta/local/run-lease.json" 2>/dev/null) || return 1
+    kill -0 "$native" 2>/dev/null || return 1
+    signature=$(jq -r '.native_started // ""' "$meta/local/run-lease.json" 2>/dev/null) || signature=""
+    if [ -n "$signature" ]; then
+        actual=$(LC_ALL=C "${CS_PS_BIN:-ps}" -o lstart= -p "$native" 2>/dev/null | sed 's/^[[:space:]]*//') || actual=""
+        [ -z "$actual" ] || [ "$actual" = "$signature" ] || return 1
+    fi
+    printf '%s\n' "$native"
+}
+
 session_is_live() {  # meta_dir
-    local pid
-    pid="$(read_lock_pid "$1")"
-    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+    _cs_session_live_pid "$1" >/dev/null
 }
 
 # True when target_pid is this cs process or one of its live ancestors. A cs
@@ -198,8 +226,8 @@ _pid_is_self_or_ancestor() {  # target_pid
 # exemption; ancestry prevents a stale lock whose PID was reused by an
 # unrelated live process from borrowing the name.
 session_lock_owned_by_invoker() {  # session_name, lock_pid
-    [ -n "${CLAUDE_SESSION_NAME:-}" ] \
-        && [ "$CLAUDE_SESSION_NAME" = "$1" ] \
+    [ -n "${CS_SESSION_NAME:-${CLAUDE_SESSION_NAME:-}}" ] \
+        && [ "${CS_SESSION_NAME:-${CLAUDE_SESSION_NAME:-}}" = "$1" ] \
         && _pid_is_self_or_ancestor "$2"
 }
 

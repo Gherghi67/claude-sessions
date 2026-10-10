@@ -46,7 +46,7 @@ _encrypt() {  # name -> runs cs -encrypt as a human at a terminal would
 }
 
 _vault_path() {  # name
-    printf '%s/.local/share/cs/vaults/%s.sparsebundle' "$HOME" "$1"
+    printf '%s/vaults/%s.sparsebundle' "${CS_DATA_DIR:-$HOME/.local/share/cs}" "$1"
 }
 
 # A refusal writes nothing: no hdiutil call, no vault links, no pre-open.
@@ -187,6 +187,33 @@ test_encrypt_refuses_an_existing_container() {
     assert_eq "" "$(cat "$FAKE_HDIUTIL_LOG")" "hdiutil never called" || return 1
 }
 
+# The code-sessions profile points CS_DATA_DIR into its own tree; the refusal looks there.
+test_encrypt_refuses_an_existing_container_under_cs_data_dir() {
+    _stubs
+    local CS_DATA_DIR="$TEST_TMPDIR/profile/.local/share/cs"
+    export CS_DATA_DIR
+    create_test_session enc >/dev/null
+    mkdir -p "$CS_DATA_DIR/vaults/enc.sparsebundle"
+    local out rc=0
+    out=$(_encrypt enc 2>&1) || rc=$?
+    assert_eq "1" "$rc" "non-zero exit" || return 1
+    assert_output_contains "$out" "enc: $CS_DATA_DIR/vaults/enc.sparsebundle already exists; cs -encrypt will not reuse or overwrite it." "names the container under CS_DATA_DIR" || return 1
+    assert_eq "" "$(cat "$FAKE_HDIUTIL_LOG")" "hdiutil never called" || return 1
+}
+
+# pre-open records the container's path and attaches it from the session
+# directory, so a relative CS_DATA_DIR would make a vault no open could find.
+test_encrypt_refuses_a_relative_cs_data_dir() {
+    _stubs
+    create_test_session enc >/dev/null
+    local out rc=0
+    out=$(cd "$TEST_TMPDIR" && CS_DATA_DIR=rel/data _encrypt enc 2>&1) || rc=$?
+    assert_eq "1" "$rc" "non-zero exit" || return 1
+    assert_output_contains "$out" "CS_DATA_DIR=rel/data: cs -encrypt needs an absolute path" "names the variable" || return 1
+    _assert_nothing_written enc || return 1
+    assert_not_exists "$TEST_TMPDIR/rel" "no container made beside the caller" || return 1
+}
+
 # A closed session holding one of everything the vault takes, plus files that stay.
 _populated_session() {  # name
     local s="$CS_SESSIONS_ROOT/$1/.cs"
@@ -254,6 +281,26 @@ test_encrypt_builds_a_session_never_opened_on_this_machine() {
     [ -x "$s/local/pre-open" ] || { echo "  FAIL: pre-open missing or not executable"; return 1; }
     assert_eq "$(_vault_path enc)" "$(cat "$s/local/vault")" ".cs/local/vault names the container" || return 1
     assert_file_contains "$s/README.md" "^tags: \[encrypted\]$" "tagged encrypted" || return 1
+}
+
+# Stable cs keeps its containers in ~/.local/share/cs/vaults, named after the
+# session alone. Under the code-sessions profile (CS_DATA_DIR set) a session stable cs
+# also has is neither refused for that container nor given it.
+test_encrypt_builds_the_container_under_cs_data_dir() {
+    _stubs
+    _populated_session enc
+    local CS_DATA_DIR="$TEST_TMPDIR/profile/.local/share/cs"
+    export CS_DATA_DIR
+    local s="$CS_SESSIONS_ROOT/enc/.cs" stable="$HOME/.local/share/cs/vaults/enc.sparsebundle" out rc=0
+    mkdir -p "$stable"
+    out=$(_encrypt enc 2>&1) || rc=$?
+    assert_eq "0" "$rc" "exit 0 (output: $out)" || return 1
+    local c="$CS_DATA_DIR/vaults/enc.sparsebundle"
+    assert_dir "$c" "the container is made under CS_DATA_DIR" || return 1
+    assert_eq "$c" "$(cat "$s/local/vault")" ".cs/local/vault names it" || return 1
+    assert_file_contains "$s/local/pre-open" "^container=$c$" "pre-open attaches it" || return 1
+    assert_output_contains "$(cat "$FAKE_HDIUTIL_LOG")" "-volname cs-enc $c" "hdiutil creates it there" || return 1
+    assert_eq "" "$(ls -A "$stable")" "stable cs's container is untouched" || return 1
 }
 
 # An open while cs -encrypt asks for passwords would race its moves; the
@@ -433,6 +480,18 @@ test_pre_open_attaches_with_a_prompt() {
     assert_eq "attach -nobrowse -mountpoint $FAKE_MNT $(_vault_path enc)" "$(cat "$FAKE_HDIUTIL_LOG")" "one attach, no -stdinpass" || return 1
 }
 
+# An open attaches the container pre-open recorded; CS_DATA_DIR only places
+# new ones, so a changed or unset value never loses an existing vault.
+test_pre_open_attaches_the_recorded_container_whatever_cs_data_dir_says() {
+    local CS_DATA_DIR="$TEST_TMPDIR/profile/.local/share/cs"
+    export CS_DATA_DIR
+    _encrypted_session enc || return 1
+    local c="$CS_DATA_DIR/vaults/enc.sparsebundle" rc=0
+    _pre_open enc CS_ASSUME_TTY=1 CS_DATA_DIR="$TEST_TMPDIR/elsewhere" >/dev/null 2>&1 || rc=$?
+    assert_eq "0" "$rc" "exit 0" || return 1
+    assert_eq "attach -nobrowse -mountpoint $FAKE_MNT $c" "$(cat "$FAKE_HDIUTIL_LOG")" "attaches the recorded container" || return 1
+}
+
 # An open that stops before claude runs detaches the vault its pre-open
 # mounted; a vault a running conversation holds stays mounted.
 _open() {  # name [answers] -> opens the session as a human at a terminal would; the mount stub tracks attach/detach
@@ -536,26 +595,31 @@ test_open_resuming_keeps_the_vault_while_claude_runs() {
 detach $FAKE_MNT" "$(cat "$FAKE_HDIUTIL_LOG")" "detached after claude exits" || return 1
 }
 
-# Fresh, cs execs claude: cs is gone, and the SessionEnd waiter owns the detach.
-test_open_fresh_leaves_the_detach_to_the_waiter() {
+# cs runs claude as its child on every path, a fresh start included, so it
+# holds the vault while claude runs and detaches it once claude exits (upstream
+# cs execs claude there and leaves the detach to the SessionEnd waiter).
+test_open_fresh_detaches_after_claude_exits() {
     _encrypted_session enc || return 1
     _bind_conversation enc
     local out rc=0
     out=$(CLAUDE_CODE_BIN="$(_claude_snapshot)" _open enc "n
 " 2>&1) || rc=$?
     assert_eq "0" "$rc" "the open reaches claude: $out" || return 1
-    assert_eq "attach -nobrowse -mountpoint $FAKE_MNT $(_vault_path enc)" "$(cat "$FAKE_HDIUTIL_LOG")" "no detach from cs" || return 1
+    assert_eq "attach -nobrowse -mountpoint $FAKE_MNT $(_vault_path enc)" "$(cat "$TEST_TMPDIR/during" 2>/dev/null)" "mounted, no detach while claude runs" || return 1
+    assert_eq "attach -nobrowse -mountpoint $FAKE_MNT $(_vault_path enc)
+detach $FAKE_MNT" "$(cat "$FAKE_HDIUTIL_LOG")" "detached after claude exits" || return 1
 }
 
-# A first open with no conversation to resume execs claude as a fresh start
-# does, so the detach is the waiter's there too.
-test_first_open_leaves_the_detach_to_the_waiter() {
+# A first open with no conversation to resume runs claude as a child too.
+test_first_open_detaches_after_claude_exits() {
     _encrypted_session enc || return 1
     local out rc=0
     out=$(CLAUDE_CODE_BIN="$(_claude_snapshot)" _open enc 2>&1) || rc=$?
     assert_eq "0" "$rc" "the open reaches claude without asking: $out" || return 1
     assert_output_not_contains "$out" "Continue previous conversation?" "nothing to resume, so no prompt" || return 1
-    assert_eq "attach -nobrowse -mountpoint $FAKE_MNT $(_vault_path enc)" "$(cat "$FAKE_HDIUTIL_LOG")" "no detach from cs" || return 1
+    assert_eq "attach -nobrowse -mountpoint $FAKE_MNT $(_vault_path enc)" "$(cat "$TEST_TMPDIR/during" 2>/dev/null)" "mounted, no detach while claude runs" || return 1
+    assert_eq "attach -nobrowse -mountpoint $FAKE_MNT $(_vault_path enc)
+detach $FAKE_MNT" "$(cat "$FAKE_HDIUTIL_LOG")" "detached after claude exits" || return 1
 }
 
 # SessionEnd leaves a waiter that detaches the vault once the lead claude
@@ -678,8 +742,11 @@ run_test test_encrypt_refuses_when_any_vault_link_exists
 run_test test_encrypt_refuses_a_real_claude_config_or_private
 run_test test_encrypt_refuses_an_existing_pre_open
 run_test test_encrypt_refuses_an_existing_container
+run_test test_encrypt_refuses_an_existing_container_under_cs_data_dir
+run_test test_encrypt_refuses_a_relative_cs_data_dir
 run_test test_encrypt_builds_the_vault_and_detaches
 run_test test_encrypt_builds_a_session_never_opened_on_this_machine
+run_test test_encrypt_builds_the_container_under_cs_data_dir
 run_test test_encrypt_holds_the_session_lock_while_it_works
 run_test test_encrypt_releases_the_session_lock_when_it_stops
 run_test test_encrypt_refuses_a_readme_it_cannot_tag
@@ -693,14 +760,15 @@ run_test test_pre_open_detaches_a_leftover_mount_and_asks_again
 run_test test_pre_open_refuses_a_leftover_mount_that_will_not_detach
 run_test test_pre_open_refuses_without_a_terminal
 run_test test_pre_open_attaches_with_a_prompt
+run_test test_pre_open_attaches_the_recorded_container_whatever_cs_data_dir_says
 run_test test_open_that_stops_detaches_the_vault_it_mounted
 run_test test_open_that_stops_leaves_a_running_session_vault_mounted
 run_test test_open_cancelled_at_a_prompt_detaches_the_vault_it_mounted
 run_test test_open_that_stops_leaves_a_vault_another_holder_keeps
 run_test test_open_handing_off_to_the_session_manager_leaves_the_holders
 run_test test_open_resuming_keeps_the_vault_while_claude_runs
-run_test test_open_fresh_leaves_the_detach_to_the_waiter
-run_test test_first_open_leaves_the_detach_to_the_waiter
+run_test test_open_fresh_detaches_after_claude_exits
+run_test test_first_open_detaches_after_claude_exits
 run_test test_session_end_detaches_after_the_lead_exits
 run_test test_session_end_leaves_the_vault_for_clear_resume_and_non_leads
 run_test test_session_end_ignores_a_session_cs_did_not_encrypt

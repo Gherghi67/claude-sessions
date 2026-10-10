@@ -475,8 +475,8 @@ _digest_exit() {
 _obj_readme="${CLAUDE_SESSION_META_DIR:-}/README.md"
 if [ "${CS_OBJECTIVE_CAPTURE_DISABLE:-}" != "1" ] \
     && [ -n "${CLAUDE_SESSION_META_DIR:-}" ] \
-    && ! [ -L "$CLAUDE_SESSION_META_DIR/private" ] \
-    && ! [ -e "$CLAUDE_SESSION_META_DIR/private" ] \
+    && ! [ -L "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/private" ] \
+    && ! [ -e "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/private" ] \
     && [ -f "$_obj_readme" ] \
     && awk '
         /^## / { in_obj = ($0 ~ /^## Objective/) }

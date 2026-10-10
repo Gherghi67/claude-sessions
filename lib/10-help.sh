@@ -3,7 +3,8 @@
 
 show_help() {
     cat << EOF
-cs $VERSION - Claude Code session manager
+cs $VERSION - code-sessions, a fork of cs: Claude and Codex session manager
+Outside a session it starts as ccs (or code-sessions); there cs is the original.
 
 Usage: cs                             Open the session manager
        cs .                           Open the session you are standing in
@@ -13,7 +14,11 @@ Usage: cs                             Open the session manager
 
 Commands:
   <name>              Create or resume session <name> (locks session)
+  <name> --fresh      Start a fresh conversation after native acknowledgement
+  <name> --resume     Resume the exact recorded conversation without prompting
+  <name> --from-handoff  Start a fresh conversation from the pending rotation handoff without prompting
   <name> --force      Override active session lock
+  <name> --engine <claude|codex>  Select and remember this session's runtime
   <base>@<feature>    Open a parallel feature worktree of session <base>
   <base> -features          List a base's feature worktrees and their merge readiness
   <base> -finish <feature>  Open <base> and run /finish for <feature> (integrate, then retire the worktree)
@@ -35,17 +40,19 @@ Commands:
   -msg                Read this session's unread mail
   -msg log            Show this session's full mail history
   -msg thread <id>    Show one thread as a conversation, oldest first
-  -spawn <name>       Open a session in the cs tmux session (--brief <file> hands it a brief; --task "..." seeds and arms its queue)
+  -spawn <name>       Open a session in the session manager’s tmux session (--brief <file> hands it a brief; --task "..." seeds and arms its queue)
   -conversations      Show the session's conversation chain (rotations, lineage)
   -doctor, -diag      Run health checks (Keychain, hooks, memory, audit, tokens)
   -statusline <cmd>   enable|disable the cs status line; caps on|off|ask records whether your font has the rounded caps
   -detect-theme       Show the detected terminal theme (light|dark)
   -tui                Open the interactive session manager (bare 'cs' does too)
   -list, -ls          List sessions (--tag <tag> filters; --archived shows only archived)
-  -adopt <name>       Adopt current directory as a cs session
+  -adopt <name> [--engine claude|codex]  Adopt current directory as a session
   -adopt --worktrees  Register Claude Code's .claude/worktrees/* here as <repo>.<worktree> sessions (--dry-run previews)
   -whoami             Show the current actor (for shared, multi-person sessions)
   -who                Show who contributed to shared memory/narrative (git history)
+  -engine [supports <capability>]  Show this session's engine, conversation and capabilities
+  -switch [claude|codex] [--resume]  From inside a conversation with a handoff armed: on exit, cs reopens the session under the other engine from it (--check tests it; -switch cancel drops it)
   -live               List sessions running right now on this machine
   -usage              Per-session token usage over the 5h/weekly rate-limit windows
   -tag add|rm <tag>   Tag the current session (frontmatter); -tag list [<name>] to view
@@ -54,7 +61,7 @@ Commands:
   -encrypt <name>     Move a closed session's private files into an encrypted vault (macOS; asks for a password at every open)
   -status "<text>"    Set this session's advertised status (also: -status, -status --clear/-c)
   -remove, -rm <name>... [--force [--delete-files]]  Remove sessions (each asks its own confirm and names files cs did not create; --force if live; --delete-files lets --force remove those files)
-  -secrets <cmd>      Manage current session secrets (requires CLAUDE_SESSION_NAME)
+  -secrets <cmd>      Manage current session secrets (requires CS_SESSION_NAME)
   -update             Update cs to latest version
     --check, -c       Check for updates without installing
     --force, -f       Force reinstall even if up to date
@@ -77,7 +84,9 @@ Secrets Commands:
 Environment:
   CS_SESSIONS_ROOT    Override sessions directory (default: ~/.claude-sessions)
   CLAUDE_CODE_BIN     Override claude binary name (default: claude)
-  CLAUDE_SESSION_NAME Current session name (set automatically)
+  CODEX_BIN           Override Codex executable path (default: codex)
+  CS_DEFAULT_ENGINE   Runtime for sessions without a preference (legacy default: claude)
+  CS_SESSION_NAME    Current session name (legacy CLAUDE_SESSION_NAME accepted)
   CS_SECRETS_PASSWORD Master password for encrypted secrets backend
   CS_NERD_FONTS       Set to 1 for Nerd Font icons (default: Unicode)
   NO_COLOR            Disable all colors (see no-color.org)
@@ -148,4 +157,3 @@ warn() {
 cs_interactive() {
     [ -t 0 ] || [ "${CS_ASSUME_TTY:-}" = "1" ]
 }
-

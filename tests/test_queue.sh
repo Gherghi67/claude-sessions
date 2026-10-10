@@ -131,12 +131,12 @@ test_queue_start_sets_armed() {
 # the choice beside the state, and a plain start runs the tasks here again.
 test_queue_start_records_how_the_tasks_run() {
     "$CS_BIN" -queue start subagents >/dev/null 2>&1 || return 1
-    assert_eq "subagents" "$(cat "$CLAUDE_SESSION_META_DIR/local/queue.mode" 2>/dev/null)" "start subagents records the mode" || return 1
+    assert_eq "subagents" "$(cat "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/queue.mode" 2>/dev/null)" "start subagents records the mode" || return 1
     "$CS_BIN" -queue start workflow >/dev/null 2>&1 || return 1
-    assert_eq "workflow" "$(cat "$CLAUDE_SESSION_META_DIR/local/queue.mode" 2>/dev/null)" "start workflow records the mode" || return 1
+    assert_eq "workflow" "$(cat "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/queue.mode" 2>/dev/null)" "start workflow records the mode" || return 1
     "$CS_BIN" -queue start >/dev/null 2>&1 || return 1
-    assert_file_not_exists "$CLAUDE_SESSION_META_DIR/local/queue.mode" "a plain start runs the tasks in the conversation" || return 1
-    assert_file_contains "$CLAUDE_SESSION_META_DIR/local/queue.state" "armed" "each start arms" || return 1
+    assert_file_not_exists "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/queue.mode" "a plain start runs the tasks in the conversation" || return 1
+    assert_file_contains "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/queue.state" "armed" "each start arms" || return 1
 }
 
 test_queue_start_refuses_an_unknown_mode() {
@@ -144,14 +144,14 @@ test_queue_start_refuses_an_unknown_mode() {
     out=$("$CS_BIN" -queue start teammates 2>&1) || rc=$?
     assert_eq "1" "$rc" "an unknown mode fails" || return 1
     assert_output_contains "$out" "cs -queue start takes subagents or workflow, not 'teammates'" "the error names the value" || return 1
-    assert_file_not_exists "$CLAUDE_SESSION_META_DIR/local/queue.state" "a refused start does not arm" || return 1
+    assert_file_not_exists "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/queue.state" "a refused start does not arm" || return 1
 }
 
 test_queue_clear_forgets_the_mode() {
     "$CS_BIN" -queue add "x" >/dev/null 2>&1
     "$CS_BIN" -queue start workflow >/dev/null 2>&1 || return 1
     "$CS_BIN" -queue clear >/dev/null 2>&1
-    assert_file_not_exists "$CLAUDE_SESSION_META_DIR/local/queue.mode" "clear forgets how the run was to go" || return 1
+    assert_file_not_exists "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/queue.mode" "clear forgets how the run was to go" || return 1
 }
 
 test_queue_defer_writes_declined_epoch() {
@@ -163,16 +163,16 @@ test_queue_defer_writes_declined_epoch() {
 # cs and the file it is writing: every write goes through a uniquely named temp
 # file. A directory at the fixed name fails any writer that still uses it.
 test_queue_start_ignores_a_stale_state_tmp() {
-    mkdir "$CLAUDE_SESSION_META_DIR/local/queue.state.tmp"
+    mkdir "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/queue.state.tmp"
     "$CS_BIN" -queue start >/dev/null 2>&1 || true
-    assert_eq "armed" "$(cat "$CLAUDE_SESSION_META_DIR/local/queue.state" 2>/dev/null)" \
+    assert_eq "armed" "$(cat "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/queue.state" 2>/dev/null)" \
         "start arms past a stale queue.state.tmp" || return 1
 }
 
 test_queue_defer_ignores_a_stale_declined_tmp() {
-    mkdir "$CLAUDE_SESSION_META_DIR/local/queue.declined.tmp"
+    mkdir "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/queue.declined.tmp"
     "$CS_BIN" -queue defer >/dev/null 2>&1 || true
-    assert_file_exists "$CLAUDE_SESSION_META_DIR/local/queue.declined" \
+    assert_file_exists "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/queue.declined" \
         "defer stamps declined past a stale queue.declined.tmp" || return 1
 }
 
@@ -800,7 +800,7 @@ run_test test_queue_log_strips_control_bytes
 # write the task beside it in plaintext.
 _make_private_queue() {
     mkdir -p "$TEST_TMPDIR/vault/private"
-    ln -s "$TEST_TMPDIR/vault/private" "$CLAUDE_SESSION_META_DIR/private"
+    ln -s "$TEST_TMPDIR/vault/private" "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/private"
 }
 
 test_queue_in_an_encrypted_session_lives_in_its_vault() {
@@ -817,12 +817,12 @@ test_queue_in_an_encrypted_session_lives_in_its_vault() {
     assert_eq "armed" "$(cat "$TEST_TMPDIR/vault/private/queue.state")" "start arms the vault's queue" || return 1
     local f
     for f in queue queue.tmp queue.state queue.declined notifications.jsonl; do
-        assert_not_exists "$CLAUDE_SESSION_META_DIR/local/$f" "no plaintext $f" || return 1
+        assert_not_exists "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/$f" "no plaintext $f" || return 1
     done
 }
 
 test_queue_in_a_locked_session_is_refused() {
-    ln -s "$TEST_TMPDIR/unmounted/private" "$CLAUDE_SESSION_META_DIR/private"
+    ln -s "$TEST_TMPDIR/unmounted/private" "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/private"
     local out rc=0
     out=$("$CS_BIN" -queue add "sealed task" 2>&1) || rc=$?
     assert_eq "1" "$rc" "add exits 1" || return 1
@@ -834,7 +834,7 @@ test_queue_in_a_locked_session_is_refused() {
     assert_eq "1" "$rc" "the session-scoped arm exits 1" || return 1
     assert_output_contains "$out" "keeps its queue in encrypted storage that is not mounted" \
         "the session-scoped arm names the locked vault" || return 1
-    assert_not_exists "$CLAUDE_SESSION_META_DIR/local/queue" "no plaintext queue" || return 1
+    assert_not_exists "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/queue" "no plaintext queue" || return 1
 }
 
 run_test test_queue_in_an_encrypted_session_lives_in_its_vault

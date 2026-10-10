@@ -122,6 +122,21 @@ test_adopt_relinks_orphaned_records_interactively() {
     assert_eq "$before" "$after" "narrative file should be byte-identical after re-adopt" || return 1
 }
 
+# A first adoption stages no Claude conversation (there is none to continue),
+# but re-adopting orphaned records keeps the conversation they name.
+test_readopt_keeps_the_recorded_conversation() {
+    local project_dir="$TEST_TMPDIR/bound-project" recorded=11111111-2222-4333-8444-555555555555
+    mkdir -p "$project_dir"
+    (cd "$project_dir" && "$CS_BIN" -adopt first-name >/dev/null 2>&1) || return 1
+    local state="$project_dir/.cs/local/state"
+    { grep -v '^claude_session_id:' "$state" || true; printf 'claude_session_id: %s\n' "$recorded"; } > "$state.new"
+    mv "$state.new" "$state"
+    rm "$CS_SESSIONS_ROOT/first-name"
+    (cd "$project_dir" && printf 'y\n' | CS_ASSUME_TTY=1 "$CS_BIN" -adopt second-name >/dev/null 2>&1) || return 1
+    assert_eq "$recorded" "$(awk '/^claude_session_id:/ { print $2; exit }' "$project_dir/.cs/local/state")" \
+        "re-adoption keeps the recorded conversation" || return 1
+}
+
 test_adopt_orphaned_records_noninteractive_hints() {
     local project_dir="$TEST_TMPDIR/my-project"
     mkdir -p "$project_dir"
@@ -427,6 +442,18 @@ _adopt_state_id() {  # project_dir
     awk '/^claude_session_id:/ { print $2; exit }' "$1/.cs/local/state" 2>/dev/null
 }
 
+# The conversation a launch handed claude. cs stages it and SessionStart,
+# which the stub never runs, commits it to state.
+_adopt_launched_id() {  # project_dir
+    jq -r '.candidate_id // empty' "$1/.cs/local/pending-binding-claude.json" 2>/dev/null
+}
+
+# Commit a staged conversation the way SessionStart acknowledges it.
+_adopt_acknowledge_launch() {  # project_dir
+    _adopt_write_state "$1" claude_session_id "$(_adopt_launched_id "$1")"
+    rm -f "$1/.cs/local/pending-binding-claude.json"
+}
+
 _adopt_state_color() {  # project_dir
     awk '/^claude_session_color:/ { print $2; exit }' "$1/.cs/local/state" 2>/dev/null
 }
@@ -460,8 +487,8 @@ test_first_launch_after_adopt_starts_fresh_without_asking() {
     local launches recorded
     launches=$(cat "$TEST_TMPDIR/claude-args" 2>/dev/null)
     assert_eq "1" "$(printf '%s\n' "$launches" | grep -c .)" "claude launches exactly once" || return 1
-    recorded=$(_adopt_state_id "$project_dir")
-    [ -n "$recorded" ] || { echo "  FAIL: the launch must record the conversation it starts"; return 1; }
+    recorded=$(_adopt_launched_id "$project_dir")
+    [ -n "$recorded" ] || { echo "  FAIL: the launch must stage the conversation it starts"; return 1; }
     assert_output_contains "$launches" "<--session-id><$recorded>" "claude starts the recorded conversation" || return 1
     assert_output_contains "$launches" "<--name><probe>" "the conversation is named after the session" || return 1
     assert_output_not_contains "$launches" "<--resume>" "nothing to resume" || return 1
@@ -484,7 +511,7 @@ test_first_launch_after_adopt_offers_the_projects_newest_conversation() {
     _adopt_claude_stub
 
     local output
-    output=$("$CS_BIN" probe <<< "y" 2>&1) || true
+    output=$(CS_ASSUME_TTY=1 "$CS_BIN" probe <<< "y" 2>&1) || true
     assert_output_contains "$output" "Continue previous conversation?" "an existing conversation is offered" || return 1
     assert_output_contains "$(head -1 "$TEST_TMPDIR/claude-args")" "<--resume><$UUID_PRIOR>" \
         "the answer resumes the project's conversation" || return 1
@@ -577,6 +604,7 @@ test_second_launch_after_adopt_asks_and_resumes() {
     (cd "$project_dir" && "$CS_BIN" -adopt probe >/dev/null 2>&1)
     _adopt_claude_stub
     "$CS_BIN" probe <<< "" >/dev/null 2>&1 || true
+    _adopt_acknowledge_launch "$project_dir"
     local first
     first=$(_adopt_state_id "$project_dir")
     # Claude writes the transcript once the conversation talks; without it
@@ -588,7 +616,7 @@ test_second_launch_after_adopt_asks_and_resumes() {
     : > "$TEST_TMPDIR/claude-args"
 
     local output
-    output=$("$CS_BIN" probe <<< "y" 2>&1) || true
+    output=$(CS_ASSUME_TTY=1 "$CS_BIN" probe <<< "y" 2>&1) || true
     assert_output_contains "$output" "Continue previous conversation?" "a bound session still asks" || return 1
     assert_output_contains "$(cat "$TEST_TMPDIR/claude-args")" "<--resume><$first>" \
         "the answer resumes the conversation the first launch recorded" || return 1
@@ -613,7 +641,7 @@ test_readopt_keeps_the_prior_conversation_binding() {
 
     _adopt_claude_stub
     local output
-    output=$("$CS_BIN" new-name <<< "y" 2>&1) || true
+    output=$(CS_ASSUME_TTY=1 "$CS_BIN" new-name <<< "y" 2>&1) || true
     assert_output_contains "$output" "Continue previous conversation?" "the kept binding still asks" || return 1
     assert_output_contains "$(head -1 "$TEST_TMPDIR/claude-args")" "<--resume><$UUID_PRIOR>" \
         "the answer resumes the kept conversation" || return 1
@@ -634,8 +662,8 @@ test_readopt_without_local_state_starts_fresh_without_asking() {
     local output
     output=$("$CS_BIN" new-name <<< "" 2>&1) || true
     assert_output_not_contains "$output" "Continue previous conversation" "records with no binding offer nothing to resume" || return 1
-    assert_output_contains "$(cat "$TEST_TMPDIR/claude-args")" "<--session-id><$(_adopt_state_id "$project_dir")>" \
-        "claude starts the recorded conversation" || return 1
+    assert_output_contains "$(cat "$TEST_TMPDIR/claude-args")" "<--session-id><$(_adopt_launched_id "$project_dir")>" \
+        "claude starts the staged conversation" || return 1
 }
 
 # A project that commits .cs/ brings its README frontmatter along. Adopt leaves
@@ -659,9 +687,9 @@ test_adopt_ignores_a_committed_readme_id_that_is_not_a_uuid() {
     launches=$(cat "$TEST_TMPDIR/claude-args" 2>/dev/null)
     assert_eq "1" "$(printf '%s\n' "$launches" | grep -c .)" "claude launches exactly once" || return 1
     assert_output_not_contains "$launches" "dangerously-skip-permissions" "the README's words never reach claude's argv" || return 1
-    recorded=$(_adopt_state_id "$project_dir")
+    recorded=$(_adopt_launched_id "$project_dir")
     [[ "$recorded" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] \
-        || { echo "  FAIL: the open must record a real conversation id: '$recorded'"; return 1; }
+        || { echo "  FAIL: the open must stage a real conversation id: '$recorded'"; return 1; }
     assert_output_contains "$launches" "<--session-id><$recorded>" "claude starts the recorded conversation" || return 1
 }
 
@@ -702,6 +730,7 @@ run_test test_adopt_creates_claude_local_md_when_none_exists
 run_test test_adopt_leaves_existing_claude_md_untouched
 run_test test_adopt_refuses_a_directory_already_linked
 run_test test_adopt_relinks_orphaned_records_interactively
+run_test test_readopt_keeps_the_recorded_conversation
 run_test test_adopt_orphaned_records_noninteractive_hints
 run_test test_adopt_orphaned_records_decline_cancels
 run_test test_adopt_fails_if_session_name_exists

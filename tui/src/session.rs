@@ -80,10 +80,20 @@ pub fn lock_marker() -> &'static str {
     let config = std::env::var("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|_| std::env::var("HOME").map(|h| PathBuf::from(h).join(".config")));
-    let answer = config
-        .ok()
-        .and_then(|dir| fs::read_to_string(dir.join("cs/statusline-caps")).ok());
+    let answer = cs_dir_or(std::env::var("CS_CONFIG_DIR").ok(), config.ok().map(|dir| dir.join("cs")))
+        .and_then(|dir| fs::read_to_string(dir.join("statusline-caps")).ok());
     lock_marker_for(env.as_deref(), answer.as_deref())
+}
+
+/// cs's directory for one kind of file: the CS_* override when it is set and
+/// not empty, as lib/00-header.sh reads it, else `default`. cs exports
+/// CS_CONFIG_DIR and CS_CACHE_DIR to the picker, and the code-sessions profile points
+/// them away from the stable install's ~/.config/cs and ~/.cache/cs.
+fn cs_dir_or(overridden: Option<String>, default: Option<PathBuf>) -> Option<PathBuf> {
+    match overridden {
+        Some(dir) if !dir.is_empty() => Some(PathBuf::from(dir)),
+        _ => default,
+    }
 }
 
 fn lock_marker_for(env: Option<&str>, caps_file: Option<&str>) -> &'static str {
@@ -153,11 +163,11 @@ pub(crate) fn home_dir() -> Option<String> {
 }
 
 /// The pending-update notice for this process: cs exports CS_VERSION at
-/// launch and its own update check maintains ~/.cache/cs.
+/// launch and its own update check maintains CS_CACHE_DIR (~/.cache/cs).
 pub fn update_notice() -> Option<UpdateNotice> {
     let installed = std::env::var("CS_VERSION").ok()?;
-    let home = home_dir()?;
-    update_notice_in(&PathBuf::from(home).join(".cache").join("cs"), &installed)
+    let home = home_dir().map(|h| PathBuf::from(h).join(".cache").join("cs"));
+    update_notice_in(&cs_dir_or(std::env::var("CS_CACHE_DIR").ok(), home)?, &installed)
 }
 
 pub struct SessionPreview {
@@ -1301,10 +1311,16 @@ fn extract_user_repo(url: &str) -> Option<String> {
 /// Only macOS ships the `security` tool and a keychain; on Linux the TUI's
 /// keychain panel is empty by design (secrets there live in the encrypted-file
 /// backend, which this view does not enumerate). Gated to macOS so non-macOS
-/// builds don't spawn a missing binary on every refresh.
+/// builds don't spawn a missing binary on every refresh. Skipped too when
+/// CS_SECRETS_BACKEND names another store; see `keychain_is_secrets_store`.
 #[cfg(target_os = "macos")]
 fn count_secrets_from_keychain() -> HashMap<String, u32> {
     let mut counts = HashMap::new();
+
+    let backend = std::env::var("CS_SECRETS_BACKEND").ok();
+    if !keychain_is_secrets_store(backend.as_deref()) {
+        return counts;
+    }
 
     let output = std::process::Command::new("security")
         .args(["dump-keychain"])
@@ -1312,15 +1328,8 @@ fn count_secrets_from_keychain() -> HashMap<String, u32> {
         .output();
 
     if let Ok(output) = output {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        for line in stdout.lines() {
-            // Match: "svce"<blob>="cs:session_name:secret_name"
-            if let Some(rest) = line.strip_prefix("    \"svce\"<blob>=\"cs:") {
-                if let Some(session) = rest.split(':').next() {
-                    *counts.entry(session.to_string()).or_insert(0) += 1;
-                }
-            }
-        }
+        let prefix = keychain_prefix(std::env::var("CS_SECRETS_KEYCHAIN_PREFIX").ok());
+        counts = count_keychain_items(&String::from_utf8_lossy(&output.stdout), &prefix);
     }
 
     counts
@@ -1331,6 +1340,46 @@ fn count_secrets_from_keychain() -> HashMap<String, u32> {
 #[cfg(not(target_os = "macos"))]
 fn count_secrets_from_keychain() -> HashMap<String, u32> {
     HashMap::new()
+}
+
+/// Whether the keychain is the store `cs-secrets` uses, given its
+/// CS_SECRETS_BACKEND override (unset or empty: the keychain, on macOS).
+/// Under any other backend the keychain holds another install's secrets, and
+/// a count read from it would land beside a session that merely shares the
+/// name. KEEP IN SYNC with detect_backend in bin/cs-secrets and the dump in
+/// list_sessions (lib/65-sessions.sh).
+#[cfg(any(target_os = "macos", test))]
+fn keychain_is_secrets_store(backend: Option<&str>) -> bool {
+    matches!(backend, None | Some("") | Some("keychain"))
+}
+
+/// cs-secrets names a keychain item <prefix>:<session>:<name>. code-sessions
+/// sets CS_SECRETS_KEYCHAIN_PREFIX to a prefix of its own, so a session it
+/// shares a name with in the original cs keeps its secrets apart; empty reads
+/// as unset, as in bash.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn keychain_prefix(var: Option<String>) -> String {
+    match var {
+        Some(prefix) if !prefix.is_empty() => prefix,
+        _ => "cs".to_string(),
+    }
+}
+
+/// Per-session item counts from a `security dump-keychain` listing, for the
+/// items filed under `prefix`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn count_keychain_items(dump: &str, prefix: &str) -> HashMap<String, u32> {
+    let mut counts = HashMap::new();
+    // Match: "svce"<blob>="<prefix>:session_name:secret_name"
+    let marker = format!("    \"svce\"<blob>=\"{}:", prefix);
+    for line in dump.lines() {
+        if let Some(rest) = line.strip_prefix(marker.as_str()) {
+            if let Some(session) = rest.split(':').next() {
+                *counts.entry(session.to_string()).or_insert(0) += 1;
+            }
+        }
+    }
+    counts
 }
 
 #[cfg(test)]
@@ -2535,6 +2584,54 @@ mod tests {
         assert!(counts.is_empty());
         #[cfg(target_os = "macos")]
         let _ = counts; // content depends on the login keychain; only assert no panic
+    }
+
+    // The code-sessions profile keeps its caps answer and update cache under its own
+    // home; read from ~/.config/cs and ~/.cache/cs, the picker showed the
+    // stable install's.
+    #[test]
+    fn a_cs_dir_override_wins_over_the_default() {
+        let default = Some(PathBuf::from("/home/u/.cache/cs"));
+        assert_eq!(
+            cs_dir_or(Some("/profile/.cache/cs".to_string()), default.clone()),
+            Some(PathBuf::from("/profile/.cache/cs"))
+        );
+        assert_eq!(cs_dir_or(Some(String::new()), default.clone()), default, "empty reads as unset, as in bash");
+        assert_eq!(cs_dir_or(None, default.clone()), default);
+    }
+
+    // Under CS_SECRETS_BACKEND=encrypted the keychain holds another store's
+    // items. Counted, they showed against any session of the same name.
+    #[test]
+    fn keychain_counts_only_when_the_keychain_is_the_secrets_store() {
+        assert!(keychain_is_secrets_store(None), "unset picks the keychain");
+        assert!(keychain_is_secrets_store(Some("")), "detect_backend reads empty as unset");
+        assert!(keychain_is_secrets_store(Some("keychain")));
+        assert!(!keychain_is_secrets_store(Some("encrypted")));
+        assert!(!keychain_is_secrets_store(Some("bogus")), "cs-secrets refuses it; no keychain count either");
+    }
+
+    // The code-sessions profile files its keychain items as
+    // code-sessions:<session>:*, beside the original cs's cs:<session>:*.
+    // Each install counts only its own, also for a session both have.
+    #[test]
+    fn keychain_counts_only_the_items_under_this_installs_prefix() {
+        let dump = concat!(
+            "keychain: \"/Users/u/Library/Keychains/login.keychain-db\"\n",
+            "    \"svce\"<blob>=\"cs:wap:API_KEY\"\n",
+            "    \"svce\"<blob>=\"cs:wap:DB_PASS\"\n",
+            "    \"svce\"<blob>=\"code-sessions:wap:API_KEY\"\n",
+            "    \"svce\"<blob>=\"code-sessions:ask:TOKEN\"\n",
+            "    \"svce\"<blob>=\"Claude Code-credentials\"\n",
+        );
+        let ours = count_keychain_items(dump, &keychain_prefix(Some("code-sessions".to_string())));
+        assert_eq!(ours.get("wap"), Some(&1));
+        assert_eq!(ours.get("ask"), Some(&1));
+        assert_eq!(ours.len(), 2);
+        let original = count_keychain_items(dump, &keychain_prefix(None));
+        assert_eq!(original.get("wap"), Some(&2));
+        assert_eq!(original.len(), 1);
+        assert_eq!(keychain_prefix(Some(String::new())), "cs", "empty reads as unset, as in bash");
     }
 
     #[test]

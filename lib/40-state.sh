@@ -1,4 +1,4 @@
-# ABOUTME: Machine-local session state: UUID/color allocation, local-state read/write, actor identity.
+# ABOUTME: Provider-neutral local-state read/write, JSONL records, and actor identity.
 # ABOUTME: Backs 'cs -whoami' and 'cs -who'.
 
 _alloc_uuid() {
@@ -20,11 +20,6 @@ _is_uuid() {
     [[ "$1" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]
 }
 
-# The 8 colors claude's /color slash command accepts (verified against the
-# binary's own error message in claude 2.1.162). Anything else errors with
-# "Invalid color X". Notably absent: teal, magenta, white, black, gray, hex.
-CS_VALID_COLORS=(red blue green yellow purple orange pink cyan)
-
 # True when $1 is one of CS_VALID_COLORS. The recorded colour becomes claude's
 # first prompt (`/color <value>`), so every reader checks it here before building
 # that prompt: a README frontmatter travels with a clone or an adopted project,
@@ -35,14 +30,6 @@ _is_session_color() {
         [ "$1" = "$c" ] && return 0
     done
     return 1
-}
-
-# Pick a random color from CS_VALID_COLORS. Used at session creation to give
-# each cs session a distinct prompt-bar accent without user choice. Claude
-# defaults to teal; cs randomizes so parallel sessions are visually distinct
-# at a glance.
-_alloc_random_color() {
-    echo "${CS_VALID_COLORS[$((RANDOM % ${#CS_VALID_COLORS[@]}))]}"
 }
 
 # Machine-local session state lives in .cs/local/state as 'key: value' lines
@@ -80,164 +67,63 @@ _read_local_state() {
 # Write 'key: value' into a machine-local state file, replacing any existing
 # line for that key. Creates .cs/local/ and the file on first write. Atomic
 # and serialised against the SessionStart hook's writer (cs_local_state_set),
-# idempotent. A write that fails (permissions, a full disk) ends cs with the
-# file named: the launch has already told the user what it was about to
-# start, and a silent miss leaves the next open resuming nothing.
-_set_local_state() {
+# idempotent. A write that fails (permissions, a full disk) names the file and
+# returns non-zero; the locking wrappers below then end cs: the launch has
+# already told the user what it was about to start, and a silent miss leaves
+# the next open resuming nothing.
+_cs_set_local_state_unlocked() {
     local state="$1" key="$2" value="$3"
-    mkdir -p "$(dirname "$state")" 2>/dev/null || error "could not create $(dirname "$state")"
-    cs_local_state_set "$state" "$key" "$value" 2>/dev/null || error "could not write $state"
+    mkdir -p "$(dirname "$state")" 2>/dev/null || { _cs_state_write_failed "$(dirname "$state")" create; return 1; }
+    cs_local_state_set "$state" "$key" "$value" 2>/dev/null || { _cs_state_write_failed "$state"; return 1; }
+}
+
+# Name the file a machine-local state write could not create or replace, as
+# error() would, but without exiting: a lease callback returns and its caller
+# decides; the wrappers below end cs.
+_cs_state_write_failed() {  # path [verb]
+    printf "${RED}Error: could not %s %s${NC}\n" "${2:-write}" "$1" >&2
+}
+
+_set_local_state() {
+    # Even pre-launch migration must serialize the whole read/modify/write,
+    # otherwise a color/name update can overwrite a newly acknowledged ID.
+    # Run-owned callers already holding a lease use the raw helper above.
+    case "$1" in
+        */local/state)
+            cs_run_guarded "${1%/local/state}" _cs_set_local_state_unlocked "$@"
+            ;;
+        *) _cs_set_local_state_unlocked "$@" ;;
+    esac || exit 1
+}
+
+_cs_set_local_state_if_absent_unlocked() {
+    [ -z "$(_read_local_state "$1" "$2")" ] || return 0
+    _cs_set_local_state_unlocked "$@"
+}
+
+_set_local_state_if_absent() {
+    case "$1" in
+        */local/state)
+            cs_run_guarded "${1%/local/state}" _cs_set_local_state_if_absent_unlocked "$@"
+            ;;
+        *) _cs_set_local_state_if_absent_unlocked "$@" ;;
+    esac || exit 1
 }
 
 # Remove a key's line from a machine-local state file. A missing file or key is
 # a no-op. Atomic and locked like _set_local_state, and loud on the same
 # failures.
+_cs_unset_local_state_unlocked() {
+    cs_local_state_unset "$1" "$2" 2>/dev/null || { _cs_state_write_failed "$1"; return 1; }
+}
+
 _unset_local_state() {
-    local state="$1" key="$2"
-    cs_local_state_unset "$state" "$key" 2>/dev/null || error "could not write $state"
-}
-
-# Return the path to claude's per-cwd transcript directory. Symlinks in the
-# input are resolved via `pwd -P` so the encoding matches claude's own —
-# macOS mktemp returns /var/folders/... which is a symlink to
-# /private/var/folders/... and claude realpaths cwd before encoding.
-# CS_TRANSCRIPTS_DIR overrides the base for tests (also used by doctor).
-# A session with .cs/claude-config runs Claude Code on that config dir, so its
-# transcripts live in the dir's projects/. A dangling link (vault locked) still
-# names that base: the shared one never holds the session's conversations.
-_claude_project_dir() {
-    local cwd="$1"
-    local resolved base="${CS_TRANSCRIPTS_DIR:-$HOME/.claude/projects}"
-    resolved=$( (cd "$cwd" 2>/dev/null && pwd -P) || printf '%s' "$cwd" )
-    if [ -e "$cwd/.cs/claude-config" ] || [ -L "$cwd/.cs/claude-config" ]; then
-        base="$cwd/.cs/claude-config/projects"
-    fi
-    printf '%s/%s\n' "$base" "$(_claude_encode_path "$resolved")"
-}
-
-# Discover claude's most-recently-modified transcript UUID under a project
-# directory, or empty string if none. The newest transcript is what
-# `claude --continue` would resume, so binding the session's recorded UUID
-# to it makes `--resume <uuid>` equivalent to `--continue` on first contact.
-# Takes the project dir (not cwd) so callers that already computed it via
-# _claude_project_dir can avoid a second symlink resolution.
-# True when a transcript shares the session's project dir without being a
-# conversation of the session: an agent-team teammate's, or a headless run's.
-# A teammate started with the session as its working directory
-# writes a top-level transcript into the same project dir as the lead, so the
-# filename cannot tell them apart — and it is routinely the newest, because the
-# teammate outlives the turn that spawned it.
-#
-# What separates them is WHERE the teammate frame appears, not whether it does.
-# A teammate's brief IS its first user turn. A lead that merely receives
-# teammate reports carries the same frame mid-file, because Claude Code injects
-# an inbound message as "Another Claude session sent a message:
-# <teammate-message ...>" — so testing the whole file would classify every
-# team-using lead as a teammate, which is exactly the population this serves.
-#
-# Reads the file directly rather than `head -c N | grep -q`: an early-exiting
-# pipe consumer SIGPIPEs its producer, and transcripts run to megabytes. `-m1`
-# also stops at the first user turn instead of scanning a whole transcript to
-# prove a marker absent.
-#
-# A headless run is the other occupant of the project dir: an Agent SDK call
-# or a `claude -p` with the session as its working directory. Claude Code stamps
-# every user line with the entrypoint that produced it, and the headless ones
-# seen so far all begin `sdk-` (`sdk-py`, and `sdk-cli` for `claude -p`), while a
-# person's conversation reads `cli` or `claude-desktop`. Measured over 5522
-# transcripts on one machine: 4670 began headless, 842 `cli`, 6 `claude-desktop`.
-#
-# The first line alone does not settle it: `claude --resume` on a run a script
-# started makes it a person's conversation, first line unchanged. So a file is a
-# headless run only when it opens with an `sdk-` entrypoint AND no later user
-# line carries a different value (any string that does not start `sdk-`, the
-# empty string included). An opening line with no entrypoint at all, or one
-# with a value Claude Code has not invented yet, counts as a conversation
-# (unless that value itself begins `sdk-`): a
-# wrongly skipped conversation leaves a session resuming nothing, which is
-# worse than a wrongly named one. The second read happens only for files that
-# open headless; a purely headless one is read to its end. The prompt text
-# shares the line with the field, but JSON escapes its quotes, so a prompt that
-# quotes the pattern cannot match it.
-_is_bystander_transcript() {  # transcript_file
-    local first
-    first=$(grep -m1 '"type":"user"' "$1" 2>/dev/null) || return 1
-    case "$first" in
-        *teammate-message*) return 0 ;;
-        *'"entrypoint":"sdk-'*)
-            # Any entrypoint value that does not begin `sdk-`.
-            grep -m1 -E '"entrypoint":"([^s"]|"|s[^d"]|s"|sd[^k"]|sd"|sdk[^-"]|sdk")' "$1" >/dev/null 2>&1 \
-                && return 1
-            return 0 ;;
-    esac
-    return 1
-}
-
-# Bystanders are skipped rather than merely deprioritised: naming one is wrong
-# for every caller — as a rebind target it would bind the session to a
-# reviewer's or a script's conversation, and as a resume suggestion it would
-# offer to continue one.
-_discover_session_uuid_in() {
-    local proj="$1"
-    [ -d "$proj" ] || return 0
-    # Collect first, then iterate a here-string. A `while read` fed by a pipe
-    # would SIGPIPE `ls` on the early return — the same trap the direct file
-    # read above avoids.
-    local listing
-    listing=$(ls -t "$proj"/*.jsonl 2>/dev/null) || true
-    [ -n "$listing" ] || return 0
-    local f
-    while IFS= read -r f; do
-        [ -n "$f" ] || continue
-        if ! _is_bystander_transcript "$f"; then
-            basename "$f" .jsonl
-            return 0
-        fi
-    done <<< "$listing"
-    return 0
-}
-
-# The conversation of a Claude Code worktree (`claude --worktree`) once it has
-# exited. While it runs, its transcript sits under the worktree's own project
-# dir like any other; at exit Claude Code relocates the file into the PARENT
-# repo's project dir (2.1.289), beside the parent's own conversations, and the
-# worktree's dir is left empty. The moved file keeps a `worktree-state` record
-# naming the worktree path, which is what tells it apart from the parent's
-# conversations: the newest file in that dir is whatever was last opened on
-# the parent, not this worktree. A parent conversation that stepped into the
-# worktree with the EnterWorktree tool gains the same record, so the record
-# alone does not make a file the worktree's: its first prompt must also be
-# stamped with the worktree as cwd, which is where a `claude --worktree`
-# session starts and where a parent conversation never does. Newest-first, the
-# first non-bystander file that passes both is the worktree's conversation.
-# Empty when none does.
-_discover_worktree_uuid_in() {  # parent_project_dir, wt_dir
-    local proj="$1" wt_real
-    [ -d "$proj" ] || return 0
-    wt_real=$( (cd "$2" 2>/dev/null && pwd -P) || printf '%s' "$2" )
-    # The record is a JSON string, so a `\` or `"` in the path is escaped there;
-    # escape the same way before matching, or such a repo never matches.
-    wt_real=$(printf '%s' "$wt_real" | sed 's/\\/\\\\/g; s/"/\\"/g')
-    local listing
-    listing=$(ls -t "$proj"/*.jsonl 2>/dev/null) || true
-    [ -n "$listing" ] || return 0
-    local f first
-    while IFS= read -r f; do
-        [ -n "$f" ] || continue
-        # The closing quote pins the whole path: a worktree named `wt` must not
-        # claim `wt2`'s conversation.
-        grep -m1 -F "\"worktreePath\":\"$wt_real\"" "$f" >/dev/null 2>&1 || continue
-        first=$(grep -m1 '"type":"user"' "$f" 2>/dev/null) || continue
-        case "$first" in
-            *"\"cwd\":\"$wt_real\""*) ;;
-            *) continue ;;
-        esac
-        if ! _is_bystander_transcript "$f"; then
-            basename "$f" .jsonl
-            return 0
-        fi
-    done <<< "$listing"
-    return 0
+    case "$1" in
+        */local/state)
+            cs_run_guarded "${1%/local/state}" _cs_unset_local_state_unlocked "$@"
+            ;;
+        *) _cs_unset_local_state_unlocked "$@" ;;
+    esac || exit 1
 }
 
 # The first prompt somebody typed into a conversation, as an Objective line:
@@ -308,80 +194,30 @@ _terminate_jsonl() {  # file
 # Append a rotated event to the tracked timeline: the durable link between
 # the conversation being left and the one about to start. Shape shared with
 # hooks/session-start.sh's rebind emitter (hooks cannot source bin/cs).
-# Best-effort — a timeline failure must never break a launch.
+# Report append failure so acknowledged transitions keep their recovery record.
 _timeline_rotated() {  # session_dir, from, to, reason, [handoff]
-    local session_dir="$1" from="$2" to="$3" reason="$4" handoff="${5:-}"
+    local session_dir="$1" from="$2" to="$3" reason="$4" handoff="${5:-}" engine="${6:-claude}"
     _terminate_jsonl "$session_dir/.cs/timeline.jsonl"
     { jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
            --arg from "$from" \
            --arg to "$to" \
            --arg reason "$reason" \
            --arg handoff "$handoff" \
-           '{ts: $ts, event: "rotated", from: $from, to: $to, reason: $reason}
+           --arg engine "$engine" --arg run_id "${CS_RUN_ID:-}" \
+           '{ts: $ts, event: "rotated", engine: $engine, run_id: $run_id, from: $from, to: $to, reason: $reason}
             + (if $handoff == "" then {} else {handoff: $handoff} end)' \
-        >> "$session_dir/.cs/timeline.jsonl"; } 2>/dev/null || true
+        >> "$session_dir/.cs/timeline.jsonl"; } 2>/dev/null
 }
 
-# Allocate a fresh UUID, rewrite the local state's claude_session_id to it, export
-# CS_CLAUDE_SESSION_ID + CS_FRESH_REBIND, and exec claude --session-id <new>.
-# Used on the "user declined resume" path and the "resume failed" fallback
-# so cs's recorded UUID always tracks the conversation claude is about to
-# create — never orphaned. The CS_FRESH_REBIND signal lets session-start.sh
-# tailor its additionalContext (the user is starting fresh, not cold-booting).
-# With no recorded conversation to leave (the first open after cs -adopt, a
-# clone without its machine-local state) this is the session's first
-# conversation, not a rotation: no timeline event, no CS_FRESH_REBIND.
-_exec_fresh_rebind() {
-    local session_dir="$1"
-    local reason="${2:-declined-resume}"
-    local handoff="${3:-}"
-    local spawn_kick="${4:-}"
-    local merge_kick="${5:-}"
-    # An adopted session's name is the link's, recorded in local state at the
-    # open; its directory is the project's. Every other session is its
-    # directory.
-    local session_name
-    session_name=$(_read_local_state "$session_dir/.cs/local/state" session_name)
-    [ -n "$session_name" ] || session_name=$(basename "$session_dir")
-    # Only a UUID names a conversation to leave; the launch ignores anything
-    # else in the slot, and so does the rotation record.
-    local old_uuid
-    old_uuid=$(_read_local_state "$session_dir/.cs/local/state" claude_session_id)
-    _is_uuid "$old_uuid" || old_uuid=""
-    local new_uuid
-    new_uuid=$(_alloc_uuid)
-    _set_local_state "$session_dir/.cs/local/state" claude_session_id "$new_uuid"
-    # An encrypted session's handoff name is its topic, so it stays out of
-    # the plaintext timeline and out of claude's argv (visible to ps and in a
-    # terminal title); the SessionStart hook names the file from the vault.
-    local public_handoff="$handoff"
-    if [ -L "$session_dir/.cs/private" ] || [ -e "$session_dir/.cs/private" ]; then
-        public_handoff=""
-    fi
-    [ -z "$old_uuid" ] || _timeline_rotated "$session_dir" "$old_uuid" "$new_uuid" "$reason" "$public_handoff"
-    local session_color
-    session_color=$(_read_local_state "$session_dir/.cs/local/state" claude_session_color)
-    local color_arg=""
-    _is_session_color "$session_color" && color_arg="/color $session_color"
-    # A handoff kick makes the fresh conversation act on its first turn instead of
-    # waiting for the user. It stays a bare trigger on purpose: the SessionStart
-    # hook (which the same r answer arms via the pending-handoff marker) is the
-    # single owner of the how — next-step section, transcript-not-loaded, the
-    # narrative pointers — so the wording lives in one place. A merge kick
-    # outranks a spawn kick, which outranks the handoff, which outranks the
-    # color re-apply; all four ride claude's single prompt slot, so a displaced
-    # color returns on the next open.
-    local handoff_arg=""
-    if [ -n "$public_handoff" ]; then
-        handoff_arg="Continue from the pending rotation handoff: read .cs/handoffs/$handoff first."
-    elif [ -n "$handoff" ]; then
-        handoff_arg="Continue from the pending rotation handoff."
-    fi
-    local launch_prompt="${merge_kick:-${spawn_kick:-${handoff_arg:-$color_arg}}}"
-    export CS_CLAUDE_SESSION_ID="$new_uuid"
-    [ -z "$old_uuid" ] || export CS_FRESH_REBIND=1
-    # shellcheck disable=SC2086
-    exec $CLAUDE_CODE_BIN --name "$session_name" --session-id "$new_uuid" ${launch_prompt:+"$launch_prompt"}
+# A native adapter calls this only after its conversation readiness acknowledgement.
+_timeline_started() {  # session_dir, engine, native_id, source
+    local session_dir="$1" engine="$2" native_id="$3" source="$4"
+    _terminate_jsonl "$session_dir/.cs/timeline.jsonl"
+    { jq -nc --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        --arg engine "$engine" --arg session_id "$native_id" --arg source "$source" \
+        --arg run_id "${CS_RUN_ID:-}" \
+        '{ts:$ts,event:"started",engine:$engine,session_id:$session_id,
+          source:$source,run_id:$run_id}' >> "$session_dir/.cs/timeline.jsonl"; } 2>/dev/null
 }
 
 # Resolve a SPECIFIC session's actor slug from its own dir, bypassing $CS_ACTOR
@@ -400,9 +236,9 @@ session_actor_slug() {  # session_dir
 # Print the resolved actor slug; warn if the pinned local identity disagrees with git.
 cmd_whoami() {
     echo "actor: $(cs_actor_slug)"
-    if [ -n "${CLAUDE_SESSION_META_DIR:-}" ] && [ -f "$CLAUDE_SESSION_META_DIR/local/identity" ]; then
+    if [ -n "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ] && [ -f "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/identity" ]; then
         local file_slug="" git_raw="" git_slug=""
-        file_slug=$(_slugify "$(head -1 "$CLAUDE_SESSION_META_DIR/local/identity")")
+        file_slug=$(_slugify "$(head -1 "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/identity")")
         git_raw=$(git config user.email 2>/dev/null || git config user.name 2>/dev/null || true)
         git_slug=$(_slugify "$git_raw")
         if [ -n "$git_slug" ] && [ "$file_slug" != "$git_slug" ]; then
@@ -414,7 +250,7 @@ cmd_whoami() {
 # Summarize shared memory/narrative contributors from git history (recent
 # activity, by author). Not presence — purely a read over git log.
 cmd_who() {
-    local dir="${CLAUDE_SESSION_DIR:-$PWD}"
+    local dir="${CS_SESSION_DIR:-${CLAUDE_SESSION_DIR:-$PWD}}"
     [ -d "$dir/.cs" ] || error "Not in a cs session (no .cs/ in $dir)"
     git -C "$dir" rev-parse --git-dir >/dev/null 2>&1 || error "Session is not a git repo; nothing to summarize"
     echo "Contributors to shared memory/narrative (recent activity):"

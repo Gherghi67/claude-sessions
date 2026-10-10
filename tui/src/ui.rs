@@ -229,7 +229,7 @@ pub fn render(app: &mut App, frame: &mut Frame) {
     if app.mode == Mode::Merge {
         render_merge(app, frame, chunks[1]);
     } else {
-        match choose_layout(chunks[1], app.show_preview) {
+        match choose_layout(chunks[1], app.show_preview && !app.sessions.is_empty()) {
             PaneLayout::SideBySide => {
                 app.request_preview();
                 let cols = Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)])
@@ -345,6 +345,20 @@ fn render_table(app: &mut App, frame: &mut Frame, area: Rect, preview_open: bool
     let p = app.theme;
 
     app.table_area = area;
+
+    if app.sessions.is_empty() {
+        app.row_hit_spans.clear();
+        app.column_widths.clear();
+        app.visible_sort_columns.clear();
+        let message = Paragraph::new(vec![
+            Line::from("No sessions yet"),
+            Line::from("Press n to create your first session, or q to quit."),
+        ])
+        .style(Style::default().fg(p.faint))
+        .wrap(Wrap { trim: true });
+        frame.render_widget(message, area);
+        return;
+    }
 
     let show_secrets = app.has_secrets();
     let show_todos = app.has_todos();
@@ -930,6 +944,7 @@ fn render_footer(app: &App, frame: &mut Frame, area: Rect) {
         }
     } else {
         match app.mode {
+            Mode::Normal if app.sessions.is_empty() => "n:new session  q:quit  ?:legend",
             Mode::Normal if !app.marked_sessions.is_empty() => {
                 "Space:mark  D:delete marked  Esc:clear marks  q:quit  Enter:open  /:search"
             }
@@ -2329,6 +2344,16 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn empty_picker_shows_how_to_create_the_first_session() {
+        let mut app = App::new(Vec::new());
+        let output = render_at(&mut app, 100, 24);
+        assert!(output.contains("No sessions yet"));
+        assert!(output.contains("Press n to create your first session"));
+        assert!(output.contains("new session"));
+        assert!(!output.contains("No session selected"));
     }
 
     /// Render on a wide terminal (preview + Notes pane both visible) and

@@ -78,7 +78,7 @@ _cache_key() {
 _cache_read() {
     _CACHE_TEXT=""
     _cache_key "$2"; [ -n "$_CACHE_KEY" ] || return 1
-    local f="$HOME/.cache/cs/$1/$_CACHE_KEY" head="" text="" when
+    local f="${CS_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/cs}/$1/$_CACHE_KEY" head="" text="" when
     [ -f "$f" ] || return 1
     # Both lines must be complete (each read succeeds only at a newline): a
     # write caught halfway is a miss, not an empty or partial answer.
@@ -97,7 +97,7 @@ _cache_write() {
     _cache_key "$2"; [ -n "$_CACHE_KEY" ] || return 0
     _sl_now
     [[ "${_NOW:-}" =~ ^[0-9]+$ ]] || return 0
-    local d="$HOME/.cache/cs/$1"
+    local d="${CS_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/cs}/$1"
     [ -d "$d" ] || mkdir -p "$d" 2>/dev/null || return 0
     { printf '%s\t%s\n%s\n' "$_NOW" "$2" "$3" > "$d/$_CACHE_KEY"; } 2>/dev/null || true
 }
@@ -106,7 +106,7 @@ _cache_write() {
 # effort, and it forks: no render path calls it.
 _cache_forget() {
     _cache_key "$2"; [ -n "$_CACHE_KEY" ] || return 0
-    rm -f "$HOME/.cache/cs/$1/$_CACHE_KEY" 2>/dev/null || true
+    rm -f "${CS_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/cs}/$1/$_CACHE_KEY" 2>/dev/null || true
 }
 
 # The process the per-conversation caches are keyed on. Claude Code is the
@@ -330,7 +330,7 @@ _sl_tmux_walk() {  # start-pid server-pid
 # fork a tick, which is why only the detached walker takes this path.
 _sl_ps_table_by_deadline() {
     _PS_TABLE=""
-    local out="$HOME/.cache/cs/tmux-walking/.ps.$$.$RANDOM" pid ticks=$(( $1 * 10 ))
+    local out="${CS_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/cs}/tmux-walking/.ps.$$.$RANDOM" pid ticks=$(( $1 * 10 ))
     ps -ax -o pid=,ppid= > "$out" 2>/dev/null &
     pid=$!
     while [ "$ticks" -gt 0 ] && kill -0 "$pid" 2>/dev/null; do
@@ -440,7 +440,7 @@ _sl_theme_from_client_cache() {
     # Refuse anything that is not a plain device name, so a hostile or garbled
     # client tty cannot reach outside the cache directory.
     case "$key" in ''|*[!A-Za-z0-9._-]*|.|..) return 1 ;; esac
-    local entry="$HOME/.cache/cs/term/$key"
+    local entry="${CS_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/cs}/term/$key"
     [ -f "$entry" ] || return 1
     # tty device names are recycled by the OS: a dark terminal on ttys002
     # closes, a light one opens on the same device, and the entry becomes a
@@ -1276,6 +1276,26 @@ EOF
     rm -f "$tmp" 2>/dev/null
 }
 
+# The Keychain item Claude Code keeps this session's login in. Claude Code
+# (read from 2.1.291) suffixes "Claude Code-credentials" with the first eight
+# hex digits of sha256(config dir) whenever CLAUDE_CONFIG_DIR is set;
+# CLAUDE_SECURESTORAGE_CONFIG_DIR, when set at all, names that dir instead, and
+# empty drops the suffix. Without this, a session on its own config dir (the
+# code-sessions profile, an encrypted session) read the default install's login. Fails
+# when the hash cannot be taken rather than fall back to that default item.
+_claude_credentials_service() {
+    local dir="${CLAUDE_CONFIG_DIR:-}" hash
+    [ -z "${CLAUDE_SECURESTORAGE_CONFIG_DIR+set}" ] || dir="$CLAUDE_SECURESTORAGE_CONFIG_DIR"
+    if [ -z "$dir" ]; then
+        printf '%s\n' "Claude Code-credentials"
+        return 0
+    fi
+    hash=$(printf '%s' "$dir" | shasum -a 256 2>/dev/null) || return 1
+    hash="${hash%% *}"
+    [ "${#hash}" -eq 64 ] || return 1
+    printf '%s\n' "Claude Code-credentials-${hash:0:8}"
+}
+
 # Fetch the Fable weekly window and rewrite the cache. Detached from the render
 # and serialised machine-wide by a mkdir lock, so concurrent sessions cannot
 # stampede the endpoint. Every exit path stamps next_poll_at, including the
@@ -1322,8 +1342,8 @@ _refresh_usage() {
     # buckets are keyed on identities that repeat and stay small.
     local bucket
     for bucket in tmux-client tmux-real tmux-walking tty; do
-        [ -d "$HOME/.cache/cs/$bucket" ] || continue
-        find "$HOME/.cache/cs/$bucket" -maxdepth 1 -type f -mmin +60 -delete 2>/dev/null
+        [ -d "${CS_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/cs}/$bucket" ] || continue
+        find "${CS_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/cs}/$bucket" -maxdepth 1 -type f -mmin +60 -delete 2>/dev/null
     done
 
     local org="" cfg
@@ -1371,8 +1391,8 @@ _refresh_usage() {
     # cannot intercept a credential read. CS_SECURITY_BIN overrides it for the
     # test suite; that is not a weakening, because anyone who can set the
     # environment of this process can already redirect its `curl` and `jq`.
-    local creds="" token="" sec="${CS_SECURITY_BIN:-/usr/bin/security}"
-    if [ -x "$sec" ]; then
+    local creds="" token="" sec="${CS_SECURITY_BIN:-/usr/bin/security}" service
+    if [ -x "$sec" ] && service=$(_claude_credentials_service); then
         # A locked login keychain can put `security` behind a SecurityAgent
         # prompt that never gets answered on a headless or ssh host, and this
         # process holds the machine-wide refresh lock while it waits.
@@ -1383,7 +1403,7 @@ _refresh_usage() {
         # bound would be missing exactly where it is needed. /usr/bin/perl is on
         # every macOS and its alarm() needs no coreutils.
         creds=$(_bounded_capture 5 "$sec" find-generic-password \
-            -a "${USER:-$(id -un 2>/dev/null)}" -s "Claude Code-credentials" -w 2>/dev/null) || creds=""
+            -a "${USER:-$(id -un 2>/dev/null)}" -s "$service" -w 2>/dev/null) || creds=""
     fi
     if [ -z "$creds" ]; then
         # Linux and WSL2 have no Keychain; Claude Code keeps the same document
@@ -2049,7 +2069,7 @@ _bg_shade() {
 # installer asks once and records the answer in the per-machine caps file
 # (`cs -statusline caps` rewrites it). CS_STATUSLINE_CAPS=1/0 in the
 # environment overrides the file either way. Unanswered means square ends.
-CAPS_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/cs/statusline-caps"
+CAPS_FILE="${CS_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/cs}/statusline-caps"
 _caps_wanted() {
     case "${CS_STATUSLINE_CAPS:-}" in
         1) return 0 ;;

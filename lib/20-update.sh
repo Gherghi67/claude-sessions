@@ -24,7 +24,7 @@ verify_checksum() {
 verify_signature() {
     local file="$1" sigfile="$2"
     local ms_bin
-    ms_bin=$(command -v minisign 2>/dev/null) || ms_bin="$HOME/.local/bin/minisign"
+    ms_bin=$(command -v minisign 2>/dev/null) || ms_bin="${CS_INSTALL_DIR:-$HOME/.local/bin}/minisign"
     [ -x "$ms_bin" ] || return 0
     "$ms_bin" -Vm "$file" -P "$CS_SIGN_PUBKEY" -x "$sigfile" >/dev/null 2>&1
 }
@@ -247,6 +247,15 @@ fetch_remote_changelog() {
 }
 
 # Check for updates
+# code-sessions updates from its checkout (setup.sh). Its release URLs are the
+# original cs's, so `cs -update` inside its profile would install the original
+# over it, and -uninstall would take the profile's commands. The launcher
+# exports CODE_SESSIONS_HOME; with it set both refuse.
+refuse_in_code_sessions() {  # verb
+    [ -n "${CODE_SESSIONS_HOME:-}" ] || return 0
+    error "code-sessions updates from its checkout: rerun sh setup.sh there. cs $1 here would act as the original cs."
+}
+
 check_update() {
     local remote_version
     remote_version=$(get_remote_version) || {
@@ -335,11 +344,11 @@ do_update() {
     rm -rf "$tmpdir"
 
     # Clear update cache so notification disappears
-    rm -f "$HOME/.cache/cs/update-check"
+    rm -f "$UPDATE_CACHE"
 
     # Show release notes for the installed version
     local new_version
-    new_version=$(grep '^VERSION=' "$HOME/.local/bin/cs" 2>/dev/null | head -1 | cut -d'"' -f2)
+    new_version=$(grep '^VERSION=' "${CS_INSTALL_DIR:-$HOME/.local/bin}/cs" 2>/dev/null | head -1 | cut -d'"' -f2)
     if [ -n "$new_version" ]; then
         local changelog
         local script_dir
@@ -360,7 +369,7 @@ do_update() {
 }
 
 # Check for updates periodically and notify (non-blocking)
-UPDATE_CACHE="$HOME/.cache/cs/update-check"
+UPDATE_CACHE="${CS_CACHE_DIR:-$HOME/.cache/cs}/update-check"
 UPDATE_CHECK_INTERVAL=3600  # 1 hour in seconds
 UPDATE_AVAILABLE=""  # Set by check_update_notify if update available
 

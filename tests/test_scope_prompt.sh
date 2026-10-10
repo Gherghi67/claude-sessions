@@ -540,8 +540,8 @@ test_stage_trace_records_the_run_in_order() {
 # vault; the trace, launch mark included, goes there and never to .cs/local.
 test_stage_trace_goes_into_the_private_dir() {
     seed_repo "src/api.ts"
-    mkdir -p "$TEST_TMPDIR/vault/private" "$CLAUDE_SESSION_META_DIR/local"
-    ln -s "$TEST_TMPDIR/vault/private" "$CLAUDE_SESSION_META_DIR/private"
+    mkdir -p "$TEST_TMPDIR/vault/private" "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local"
+    ln -s "$TEST_TMPDIR/vault/private" "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/private"
     run_hook "implement a retry wrapper around the fetch call in src/api.ts" >/dev/null 2>&1
     local stages
     stages=$(awk '{print $3}' "$TEST_TMPDIR/vault/private/scope-prompt.trace" 2>/dev/null)
@@ -554,8 +554,8 @@ test_stage_trace_goes_into_the_private_dir() {
 # no trace is written anywhere.
 test_stage_trace_is_skipped_while_the_private_dir_is_locked() {
     seed_repo "src/api.ts"
-    mkdir -p "$CLAUDE_SESSION_META_DIR/local"
-    ln -s "$TEST_TMPDIR/unmounted/private" "$CLAUDE_SESSION_META_DIR/private"
+    mkdir -p "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local"
+    ln -s "$TEST_TMPDIR/unmounted/private" "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/private"
     local rc=0
     run_hook "implement a retry wrapper around the fetch call in src/api.ts" >/dev/null 2>&1 || rc=$?
     assert_eq "0" "$rc" "the hook must not block the prompt" || return 1

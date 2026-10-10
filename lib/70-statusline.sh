@@ -22,7 +22,7 @@ _strip_subagent_statusline_registration() {
 # The installer remembers a declined status-line prompt here so `cs -update`
 # stops asking; enable clears it, disable sets it (KEEP IN SYNC with install.sh).
 _statusline_declined_marker() {
-    echo "${XDG_CONFIG_HOME:-$HOME/.config}/cs/statusline-declined"
+    echo "${CS_CONFIG_DIR:-$HOME/.config/cs}/statusline-declined"
 }
 
 # The rounded capsule caps are the bar's one private-use glyph, so nothing
@@ -30,7 +30,7 @@ _statusline_declined_marker() {
 # here, per machine; bin/cs-statusline reads it before every render (KEEP THE
 # PATH IN SYNC with _caps_file there and with install.sh).
 _statusline_caps_file() {
-    echo "${XDG_CONFIG_HOME:-$HOME/.config}/cs/statusline-caps"
+    echo "${CS_CONFIG_DIR:-$HOME/.config/cs}/statusline-caps"
 }
 
 # Record the answer; guarded like the declined marker so an unwritable config
@@ -58,14 +58,14 @@ _statusline_caps_ask() {
     done
 }
 
-# disable strips only a cs-statusline registration, never a foreign one.
+# disable strips only an cs-statusline registration, never a foreign one.
 run_statusline_cmd() {
     local action="${1:-}"
     local settings="${CS_CLAUDE_DIR:-$HOME/.claude}/settings.json"
     local declined
     declined="$(_statusline_declined_marker)"
-    local bin="$HOME/.local/bin/cs-statusline"
-    local subbin="$HOME/.local/bin/cs-subagent-statusline"
+    local bin="${CS_INSTALL_DIR:-$HOME/.local/bin}/cs-statusline"
+    local subbin="${CS_INSTALL_DIR:-$HOME/.local/bin}/cs-subagent-statusline"
     command -v jq >/dev/null 2>&1 || error "jq is required for cs -statusline"
     case "$action" in
         enable)
@@ -298,7 +298,7 @@ _write_term_cache() {
     [ -n "$tty" ] || return 0
     key=${tty#/dev/}; key=${key//\//-}
     case "$key" in ''|*[!A-Za-z0-9._-]*|.|..) return 0 ;; esac
-    dir="$HOME/.cache/cs/term"
+    dir="${CS_CACHE_DIR:-$HOME/.cache/cs}/term"
     mkdir -p "$dir" 2>/dev/null || return 0
     # `theme rgb epoch`, rgb as `-` when there is none: the render refuses an
     # entry older than twelve hours by that epoch (KEEP IN SYNC with

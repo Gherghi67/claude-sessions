@@ -48,11 +48,11 @@ save_checkpoint() {
         error "Usage: cs -checkpoint \"<label>\"   # from inside a session"
     fi
 
-    if [ -z "${CLAUDE_SESSION_NAME:-}" ] || [ -z "${CLAUDE_SESSION_META_DIR:-}" ] || [ ! -d "${CLAUDE_SESSION_META_DIR}" ]; then
+    if [ -z "${CS_SESSION_NAME:-${CLAUDE_SESSION_NAME:-}}" ] || [ -z "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ] || [ ! -d "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ]; then
         error "cs -checkpoint must be run from inside a cs session"
     fi
 
-    local meta_dir="$CLAUDE_SESSION_META_DIR"
+    local meta_dir="${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}"
     local checkpoints_dir rc=0
     checkpoints_dir=$(_checkpoints_dir "$meta_dir") || rc=$?
     _refuse_checkpoints_dir "$rc" "$meta_dir"
@@ -65,7 +65,7 @@ save_checkpoint() {
     checkpoint_path="$checkpoints_dir/$filename"
 
     # Gather current state
-    local session_dir="${CLAUDE_SESSION_DIR:-$(dirname "$meta_dir")}"
+    local session_dir="${CS_SESSION_DIR:-${CLAUDE_SESSION_DIR:-$(dirname "$meta_dir")}}"
     local git_head git_status_lines
     git_head=$(git -C "$session_dir" rev-parse --short HEAD 2>/dev/null || echo "unknown")
     git_status_lines=$(git -C "$session_dir" status --porcelain 2>/dev/null | head -20 || true)
@@ -75,7 +75,7 @@ save_checkpoint() {
         echo "# Checkpoint: $label"
         echo ""
         echo "**Timestamp:** $(date '+%Y-%m-%d %H:%M:%S')"
-        echo "**Session:** $CLAUDE_SESSION_NAME"
+        echo "**Session:** ${CS_SESSION_NAME:-${CLAUDE_SESSION_NAME:-}}"
         echo "**HEAD:** $git_head"
         echo ""
         if [ -n "$git_status_lines" ]; then
@@ -123,17 +123,17 @@ save_checkpoint() {
 
 # List all checkpoints for the current session
 list_checkpoints() {
-    if [ -z "${CLAUDE_SESSION_META_DIR:-}" ]; then
+    if [ -z "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ]; then
         error "cs -checkpoint list must be run from inside a cs session"
     fi
     local checkpoints_dir rc=0
-    checkpoints_dir=$(_checkpoints_dir "$CLAUDE_SESSION_META_DIR") || rc=$?
-    _refuse_checkpoints_dir "$rc" "$CLAUDE_SESSION_META_DIR"
+    checkpoints_dir=$(_checkpoints_dir "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}") || rc=$?
+    _refuse_checkpoints_dir "$rc" "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}"
     if [ ! -d "$checkpoints_dir" ] || [ -z "$(ls -A "$checkpoints_dir" 2>/dev/null)" ]; then
         info "No checkpoints yet. Save one with: cs -checkpoint \"<label>\""
         return 0
     fi
-    echo "Checkpoints for session: $CLAUDE_SESSION_NAME"
+    echo "Checkpoints for session: ${CS_SESSION_NAME:-${CLAUDE_SESSION_NAME:-}}"
     echo ""
     local f name label
     while IFS= read -r f; do
@@ -150,12 +150,12 @@ show_checkpoint() {
     if [ -z "$name" ]; then
         error "Usage: cs -checkpoint show <checkpoint-name>"
     fi
-    if [ -z "${CLAUDE_SESSION_META_DIR:-}" ]; then
+    if [ -z "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" ]; then
         error "cs -checkpoint show must be run from inside a cs session"
     fi
     local checkpoints_dir rc=0
-    checkpoints_dir=$(_checkpoints_dir "$CLAUDE_SESSION_META_DIR") || rc=$?
-    _refuse_checkpoints_dir "$rc" "$CLAUDE_SESSION_META_DIR"
+    checkpoints_dir=$(_checkpoints_dir "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}") || rc=$?
+    _refuse_checkpoints_dir "$rc" "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}"
     local path="$checkpoints_dir/${name}.md"
     if [ ! -f "$path" ]; then
         error "Checkpoint not found: $name"

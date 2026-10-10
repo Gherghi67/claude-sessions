@@ -356,12 +356,12 @@ test_local_install_prefers_a_freshly_built_picker() {
     # Everything the installer reads, borrowed; only the two picker sources are
     # ours, so the test says nothing about the rest of the tree.
     local e
-    for e in hooks commands skills mods completions docs lib README.md CHANGELOG.md LICENSE build.sh; do
+    for e in hooks skills mods completions docs lib README.md CHANGELOG.md LICENSE build.sh; do
         [ -e "$real/$e" ] && ln -s "$(cd "$real" && pwd)/$e" "$repo/$e"
     done
     cp "$real/install.sh" "$repo/install.sh"
     cp "$real/bin/cs" "$real/bin/cs-secrets" "$real/bin/cs-statusline" \
-       "$real/bin/cs-subagent-statusline" "$repo/bin/" 2>/dev/null || true
+       "$real/bin/cs-subagent-statusline" "$real/bin/cs-codex-thread" "$repo/bin/"
     printf 'STALE PICKER' > "$repo/bin/cs-tui"
     chmod +x "$repo/bin/cs-tui"
     # Distinct mtimes, oldest first: -nt is the whole decision.
@@ -384,12 +384,12 @@ test_local_install_uses_bin_picker_when_nothing_was_built() {
     mkdir -p "$fake_home" "$repo/bin"
     local real="$SCRIPT_DIR/.."
     local e
-    for e in hooks commands skills mods completions docs lib README.md CHANGELOG.md LICENSE build.sh; do
+    for e in hooks skills mods completions docs lib README.md CHANGELOG.md LICENSE build.sh; do
         [ -e "$real/$e" ] && ln -s "$(cd "$real" && pwd)/$e" "$repo/$e"
     done
     cp "$real/install.sh" "$repo/install.sh"
     cp "$real/bin/cs" "$real/bin/cs-secrets" "$real/bin/cs-statusline" \
-       "$real/bin/cs-subagent-statusline" "$repo/bin/" 2>/dev/null || true
+       "$real/bin/cs-subagent-statusline" "$real/bin/cs-codex-thread" "$repo/bin/"
     printf 'ONLY PICKER' > "$repo/bin/cs-tui"
     chmod +x "$repo/bin/cs-tui"
 
@@ -406,6 +406,7 @@ test_local_install_uses_bin_picker_when_nothing_was_built() {
 test_build_generates_the_shared_hook_fragment() {
     local repo="$TEST_TMPDIR/build-repo" real="$SCRIPT_DIR/.."
     mkdir -p "$repo/bin" "$repo/hooks"
+    cp "$real"/bin/cs-{secrets,codex-thread,statusline,subagent-statusline} "$repo/bin/"
     cp -R "$real/lib" "$repo/lib"
     cp "$real/build.sh" "$real/install.sh.in" "$repo/"
     (cd "$repo" && bash build.sh > /dev/null) || { echo "  FAIL: build.sh failed"; return 1; }
@@ -425,6 +426,7 @@ test_build_generates_the_shared_hook_fragment() {
 test_build_generates_install_sh_from_its_template() {
     local repo="$TEST_TMPDIR/build-repo2" real="$SCRIPT_DIR/.."
     mkdir -p "$repo/bin" "$repo/hooks"
+    cp "$real"/bin/cs-{secrets,codex-thread,statusline,subagent-statusline} "$repo/bin/"
     cp -R "$real/lib" "$repo/lib"
     cp "$real/build.sh" "$real/install.sh.in" "$repo/"
     (cd "$repo" && bash build.sh > /dev/null) || { echo "  FAIL: build.sh failed"; return 1; }
@@ -443,6 +445,7 @@ test_build_generates_install_sh_from_its_template() {
 test_build_refuses_a_template_without_the_marker() {
     local repo="$TEST_TMPDIR/build-repo3" real="$SCRIPT_DIR/.."
     mkdir -p "$repo/bin" "$repo/hooks"
+    cp "$real"/bin/cs-{secrets,codex-thread,statusline,subagent-statusline} "$repo/bin/"
     cp -R "$real/lib" "$repo/lib"
     cp "$real/build.sh" "$repo/"
     grep -v '^# @@CS_MANIFESTS@@$' "$real/install.sh.in" > "$repo/install.sh.in"
@@ -460,6 +463,7 @@ test_build_refuses_a_template_without_the_marker() {
 test_build_refuses_a_missing_manifests_source() {
     local repo="$TEST_TMPDIR/build-repo4" real="$SCRIPT_DIR/.."
     mkdir -p "$repo/bin" "$repo/hooks"
+    cp "$real"/bin/cs-{secrets,codex-thread,statusline,subagent-statusline} "$repo/bin/"
     cp -R "$real/lib" "$repo/lib"
     cp "$real/build.sh" "$real/install.sh.in" "$repo/"
     rm "$repo/lib/01-manifests.sh"
@@ -477,11 +481,12 @@ test_build_refuses_a_missing_manifests_source() {
 test_build_outputs_are_world_readable() {
     local repo="$TEST_TMPDIR/build-repo5" real="$SCRIPT_DIR/.."
     mkdir -p "$repo/bin" "$repo/hooks"
+    cp "$real"/bin/cs-{secrets,codex-thread,statusline,subagent-statusline} "$repo/bin/"
     cp -R "$real/lib" "$repo/lib"
     cp "$real/build.sh" "$real/install.sh.in" "$repo/"
     (cd "$repo" && bash build.sh > /dev/null) || { echo "  FAIL: build.sh failed"; return 1; }
     local f mode
-    for f in bin/cs hooks/cs-shared.sh install.sh; do
+    for f in bin/cs bin/cs hooks/cs-shared.sh install.sh; do
         # GNU stat first: its -c is invalid on BSD stat (no output, exit 1), while
         # BSD's -f means "filesystem" to GNU stat and prints a block before failing.
         mode=$(stat -c '%a' "$repo/$f" 2>/dev/null || stat -f '%Lp' "$repo/$f")
@@ -508,7 +513,7 @@ extract_array() {
 
 test_manifest_arrays_in_sync() {
     local arr a b
-    for arr in CS_HOOKS CS_HOOK_LIBS RETIRED_HOOKS CS_COMMANDS CS_SKILLS RETIRED_SKILLS CS_SKILL_FILES CS_MOD_FILES; do
+    for arr in CS_HOOKS CS_HOOK_LIBS RETIRED_HOOKS RETIRED_COMMANDS CS_SKILLS RETIRED_SKILLS CS_SKILL_FILES CS_MOD_FILES; do
         a=$(extract_array "$SCRIPT_DIR/../install.sh" "$arr" | sort)
         b=$(extract_array "$CS_BIN" "$arr" | sort)
         if [ -z "$a" ]; then
@@ -587,14 +592,6 @@ test_manifest_arrays_match_repo_files() {
             return 1
         fi
     done
-
-    listed=$(extract_array "$SCRIPT_DIR/../install.sh" CS_COMMANDS | sort)
-    actual=$(cd "$SCRIPT_DIR/../commands" && ls *.md | sort)
-    if [ "$listed" != "$actual" ]; then
-        echo "  FAIL: CS_COMMANDS does not match commands/*.md"
-        diff <(echo "$listed") <(echo "$actual") | head -10
-        return 1
-    fi
 
     listed=$(extract_array "$SCRIPT_DIR/../install.sh" CS_SKILLS | sort)
     actual=$(cd "$SCRIPT_DIR/../skills" && ls -d ./*/ | sed 's|^\./||; s|/$||' | sort)
@@ -729,11 +726,168 @@ test_skill_files_exist_in_repo() {
             echo "  FAIL: CS_SKILL_FILES entry missing from repo: skills/$entry"
             return 1
         fi
-        if [ ! -x "$SCRIPT_DIR/../skills/$entry" ]; then
-            echo "  FAIL: skill support script not executable: skills/$entry"
-            return 1
-        fi
+        # The installer marks only scripts/ executable on a download; a local
+        # install copies the mode, so the two agree only if the repo does too.
+        case "$entry" in
+            */scripts/*)
+                [ -x "$SCRIPT_DIR/../skills/$entry" ] \
+                    || { echo "  FAIL: skill support script not executable: skills/$entry"; return 1; } ;;
+            *)
+                [ ! -x "$SCRIPT_DIR/../skills/$entry" ] \
+                    || { echo "  FAIL: skill data file is executable: skills/$entry"; return 1; } ;;
+        esac
     done
+}
+
+# Every skill reaches Codex as the same files Claude gets, in Codex's own
+# skills directory, while the mods (Claude Code function hooks) stay Claude's.
+test_install_deploys_skills_for_codex() {
+    local fake_home="$TEST_TMPDIR/codex-skills" skill entry
+    mkdir -p "$fake_home"
+    HOME="$fake_home" bash "$INSTALL_SH" > /dev/null 2>&1 < /dev/null || { echo "  FAIL: install.sh exited non-zero"; return 1; }
+    local codex_skills="$fake_home/.codex/skills"
+    for skill in $(extract_array "$SCRIPT_DIR/../install.sh" CS_SKILLS); do
+        cmp -s "$SCRIPT_DIR/../skills/$skill/SKILL.md" "$codex_skills/$skill/SKILL.md" \
+            || { echo "  FAIL: Codex copy of $skill/SKILL.md missing or different"; return 1; }
+    done
+    for entry in $(extract_array "$SCRIPT_DIR/../install.sh" CS_SKILL_FILES); do
+        cmp -s "$SCRIPT_DIR/../skills/$entry" "$codex_skills/$entry" \
+            || { echo "  FAIL: Codex copy of $entry missing or different"; return 1; }
+    done
+    [ -x "$codex_skills/finish/scripts/finish.sh" ] \
+        || { echo "  FAIL: finish's helper is not executable for Codex"; return 1; }
+    assert_not_exists "$codex_skills/cs" "the Claude mod must not deploy into Codex" || return 1
+    assert_eq 700 "$(_file_mode "$fake_home/.codex")" \
+        "a Codex home the installer creates holds a login later, so it is private" || return 1
+}
+
+# CODEX_HOME is where Codex looks for skills, so the installer follows it.
+test_install_deploys_codex_skills_under_codex_home() {
+    local fake_home="$TEST_TMPDIR/codex-home-var" codex_home="$TEST_TMPDIR/elsewhere/codex"
+    mkdir -p "$fake_home"
+    HOME="$fake_home" CODEX_HOME="$codex_home" CS_INSTALL_ENGINES=codex bash "$INSTALL_SH" > /dev/null 2>&1 < /dev/null \
+        || { echo "  FAIL: install.sh exited non-zero"; return 1; }
+    assert_file_exists "$codex_home/skills/wrap/SKILL.md" || return 1
+    assert_not_exists "$fake_home/.codex" "nothing lands in ~/.codex when CODEX_HOME points elsewhere" || return 1
+}
+
+# Codex skips an untrusted hook without a word, and trusts one only by the
+# sha256 of its normalized definition. A known answer from real Codex 0.160
+# (it recorded this hash for this command when the hook was trusted in its
+# own review): if the formula drifts, the hook silently stops running.
+test_codex_hook_trust_hash_matches_codex() {
+    (
+        source "$SCRIPT_DIR/../lib/01-manifests.sh"
+        assert_eq 33dcaeac540fa4d11ad14b8318305eeb2a7e170e98980b4edf855d5e44bbcb0b \
+            "$(_codex_hook_trust_hash '/private/tmp/claude-501/-Users-bogdan-gherghina-Documents-cs-agent-sessions/253ee472-541b-4427-945c-adc332a35890/scratchpad/phase0/bin/hook-log.sh user-hooks-json')"
+    )
+}
+
+test_install_registers_a_trusted_codex_hook() {
+    local fake_home="$TEST_TMPDIR/codex-hook" cmd hash
+    mkdir -p "$fake_home"
+    HOME="$fake_home" CS_INSTALL_ENGINES=codex bash "$INSTALL_SH" > /dev/null 2>&1 < /dev/null \
+        || { echo "  FAIL: install.sh exited non-zero"; return 1; }
+    cmd="$fake_home/.local/bin/cs -codex-hook session-start"
+    assert_eq "$cmd" "$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$fake_home/.codex/hooks.json")" || return 1
+    assert_eq 1 "$(jq '.hooks.SessionStart | length' "$fake_home/.codex/hooks.json")" || return 1
+    hash=$(jq -ncS --arg c "$cmd" '{event_name:"session_start",hooks:[{async:false,command:$c,timeout:600,type:"command"}]}' \
+        | tr -d '\n' | shasum -a 256 | cut -c1-64)
+    assert_file_contains "$fake_home/.codex/config.toml" \
+        "^\[hooks.state.\"$fake_home/.codex/hooks.json:session_start:0:0\"\]$" "the trust table is keyed by group 0" || return 1
+    assert_file_contains "$fake_home/.codex/config.toml" "^trusted_hash = \"sha256:$hash\"$" || return 1
+    local before_hooks before_config
+    before_hooks=$(cat "$fake_home/.codex/hooks.json"); before_config=$(cat "$fake_home/.codex/config.toml")
+    HOME="$fake_home" CS_INSTALL_ENGINES=codex bash "$INSTALL_SH" > /dev/null 2>&1 < /dev/null || return 1
+    assert_eq "$before_hooks" "$(cat "$fake_home/.codex/hooks.json")" "a reinstall changes nothing" || return 1
+    assert_eq "$before_config" "$(cat "$fake_home/.codex/config.toml")" "nor grows the config" || return 1
+}
+
+# Codex keys trust by a group's position, so cs must never move the user's
+# groups: it appends its own after them, and an uninstall puts both files back.
+test_codex_hook_keeps_the_users_hooks_and_trust() {
+    local fake_home="$TEST_TMPDIR/codex-hook-user" codex
+    codex="$fake_home/.codex"
+    mkdir -p "$codex"
+    jq -n '{hooks: {SessionStart: [{hooks: [{type: "command", command: "/opt/mine/a.sh"}]},
+                                   {matcher: "clear", hooks: [{type: "command", command: "/opt/mine/b.sh"}]}],
+                    Stop: [{hooks: [{type: "command", command: "/opt/mine/stop.sh"}]}]}}' > "$codex/hooks.json"
+    printf 'model = "mine"\n\n[hooks.state."%s:session_start:0:0"]\ntrusted_hash = "sha256:aaaa"\n\n[hooks.state."%s:session_start:1:0"]\ntrusted_hash = "sha256:bbbb"\n' \
+        "$codex/hooks.json" "$codex/hooks.json" > "$codex/config.toml"
+    cp "$codex/hooks.json" "$TEST_TMPDIR/hooks.orig"; cp "$codex/config.toml" "$TEST_TMPDIR/config.orig"
+    HOME="$fake_home" CS_INSTALL_ENGINES=codex bash "$INSTALL_SH" > /dev/null 2>&1 < /dev/null || return 1
+    assert_eq "/opt/mine/a.sh /opt/mine/b.sh $fake_home/.local/bin/cs -codex-hook session-start" \
+        "$(jq -r '[.hooks.SessionStart[].hooks[0].command] | join(" ")' "$codex/hooks.json")" \
+        "the user's groups keep their places; cs's comes after" || return 1
+    assert_eq "/opt/mine/stop.sh" "$(jq -r '.hooks.Stop[0].hooks[0].command' "$codex/hooks.json")" || return 1
+    assert_file_contains "$codex/config.toml" 'trusted_hash = "sha256:aaaa"' || return 1
+    assert_file_contains "$codex/config.toml" 'trusted_hash = "sha256:bbbb"' || return 1
+    assert_file_contains "$codex/config.toml" "session_start:2:0" || return 1
+    printf 'y\nn\n' | HOME="$fake_home" "$fake_home/.local/bin/cs" -uninstall > /dev/null 2>&1 \
+        || { echo "  FAIL: cs -uninstall exited non-zero"; return 1; }
+    assert_eq "$(jq -S . "$TEST_TMPDIR/hooks.orig")" "$(jq -S . "$codex/hooks.json")" "uninstall restores hooks.json" || return 1
+    assert_eq "$(cat "$TEST_TMPDIR/config.orig")" "$(cat "$codex/config.toml")" "and config.toml" || return 1
+}
+
+# A group the user added after cs's moves up when cs's goes, and its trust
+# table has to move with it, or Codex stops running it.
+test_uninstall_renumbers_trust_for_later_codex_hooks() {
+    local fake_home="$TEST_TMPDIR/codex-hook-later" codex
+    codex="$fake_home/.codex"
+    mkdir -p "$fake_home"
+    HOME="$fake_home" CS_INSTALL_ENGINES=codex bash "$INSTALL_SH" > /dev/null 2>&1 < /dev/null || return 1
+    jq '.hooks.SessionStart += [{hooks: [{type: "command", command: "/opt/mine/later.sh"}]}]' "$codex/hooks.json" \
+        > "$TEST_TMPDIR/h" && mv "$TEST_TMPDIR/h" "$codex/hooks.json"
+    printf '\n[hooks.state."%s:session_start:1:0"]\ntrusted_hash = "sha256:cccc"\n' "$codex/hooks.json" >> "$codex/config.toml"
+    printf 'y\nn\n' | HOME="$fake_home" "$fake_home/.local/bin/cs" -uninstall > /dev/null 2>&1 || return 1
+    assert_eq "/opt/mine/later.sh" "$(jq -r '.hooks.SessionStart[0].hooks[0].command' "$codex/hooks.json")" || return 1
+    assert_eq "$(printf '[hooks.state."%s:session_start:0:0"]\ntrusted_hash = "sha256:cccc"' "$codex/hooks.json")" \
+        "$(cat "$codex/config.toml")" "the user's trust follows their group to index 0" || return 1
+}
+
+# A hooks.json that is not JSON is the user's to fix; cs neither rewrites
+# it nor fails the install over it.
+test_install_leaves_an_unreadable_codex_hooks_file_alone() {
+    local fake_home="$TEST_TMPDIR/codex-hook-bad" output status=0
+    mkdir -p "$fake_home/.codex"
+    printf 'not json\n' > "$fake_home/.codex/hooks.json"
+    output=$(HOME="$fake_home" CS_INSTALL_ENGINES=codex bash "$INSTALL_SH" 2>&1 < /dev/null) || status=$?
+    assert_eq 0 "$status" "install must finish: $output" || return 1
+    assert_eq "not json" "$(cat "$fake_home/.codex/hooks.json")" || return 1
+    assert_output_contains "$output" "Could not register the Codex hook" || return 1
+}
+
+test_claude_only_install_leaves_codex_absent() {
+    local fake_home="$TEST_TMPDIR/claude-only"
+    mkdir -p "$fake_home"
+    HOME="$fake_home" CS_INSTALL_ENGINES=claude bash "$INSTALL_SH" > /dev/null 2>&1 < /dev/null \
+        || { echo "  FAIL: install.sh exited non-zero"; return 1; }
+    assert_file_exists "$fake_home/.claude/skills/wrap/SKILL.md" || return 1
+    assert_not_exists "$fake_home/.codex" "a Claude-only install must not create a Codex home" || return 1
+}
+
+# Uninstall removes the names cs ships from Codex's skills directory and
+# nothing else there: Codex keeps its own skills under .system, and the user's
+# skills share the directory, a retired cs name included.
+test_uninstall_removes_only_cs_skills_from_codex() {
+    local fake_home="$TEST_TMPDIR/codex-uninstall" skill
+    mkdir -p "$fake_home/.codex/skills/mine" "$fake_home/.codex/skills/.system/imagegen" \
+        "$fake_home/.codex/skills/merge"
+    echo 'user skill' > "$fake_home/.codex/skills/mine/SKILL.md"
+    echo 'codex skill' > "$fake_home/.codex/skills/.system/imagegen/SKILL.md"
+    echo 'user merge skill' > "$fake_home/.codex/skills/merge/SKILL.md"
+    HOME="$fake_home" CS_INSTALL_ENGINES=codex bash "$INSTALL_SH" > /dev/null 2>&1 < /dev/null \
+        || { echo "  FAIL: install.sh exited non-zero"; return 1; }
+    assert_eq 'user merge skill' "$(cat "$fake_home/.codex/skills/merge/SKILL.md")" \
+        "RETIRED_SKILLS never deployed to Codex, so install leaves that name alone" || return 1
+    printf 'y\nn\n' | HOME="$fake_home" "$fake_home/.local/bin/cs" -uninstall > /dev/null 2>&1 \
+        || { echo "  FAIL: cs -uninstall exited non-zero"; return 1; }
+    for skill in $(extract_array "$SCRIPT_DIR/../install.sh" CS_SKILLS); do
+        assert_not_exists "$fake_home/.codex/skills/$skill" "uninstall must remove the Codex copy of $skill" || return 1
+    done
+    assert_eq 'user skill' "$(cat "$fake_home/.codex/skills/mine/SKILL.md")" || return 1
+    assert_eq 'codex skill' "$(cat "$fake_home/.codex/skills/.system/imagegen/SKILL.md")" || return 1
+    assert_eq 'user merge skill' "$(cat "$fake_home/.codex/skills/merge/SKILL.md")" || return 1
 }
 
 # ============================================================================
@@ -765,6 +919,28 @@ test_install_deploys_hooks_to_cs_subdir() {
     if [ "$cnt" != "1" ]; then
         echo "  FAIL: expected 1 subdir registration for session-start.sh, got $cnt"
         return 1
+    fi
+}
+
+test_install_registers_absolute_hook_paths_on_request() {
+    local fake_home="$TEST_TMPDIR/home"
+    mkdir -p "$fake_home"
+    HOME="$fake_home" CS_HOOK_PATHS=absolute bash "$INSTALL_SH" > /dev/null 2>&1 < /dev/null || {
+        echo "  FAIL: install.sh exited non-zero"; return 1; }
+    local absolute tilde
+    absolute=$(jq --arg p "$fake_home/.claude/hooks/cs/session-start.sh" \
+        '[.hooks[][] | .hooks[]?.command | select(. == $p)] | length' "$fake_home/.claude/settings.json")
+    tilde=$(jq '[.hooks[][] | .hooks[]?.command | select(startswith("~/"))] | length' "$fake_home/.claude/settings.json")
+    if [ "$absolute" != 1 ] || [ "$tilde" != 0 ]; then
+        echo "  FAIL: expected absolute registrations only, got absolute=$absolute tilde=$tilde"; return 1
+    fi
+    # A later default install replaces the absolute spelling instead of adding a second entry.
+    HOME="$fake_home" bash "$INSTALL_SH" > /dev/null 2>&1 < /dev/null || { echo "  FAIL: reinstall exited non-zero"; return 1; }
+    absolute=$(jq --arg p "$fake_home/.claude/hooks/cs/session-start.sh" \
+        '[.hooks[][] | .hooks[]?.command | select(. == $p)] | length' "$fake_home/.claude/settings.json")
+    tilde=$(jq '[.hooks[][] | .hooks[]?.command | select(. == "~/.claude/hooks/cs/session-start.sh")] | length' "$fake_home/.claude/settings.json")
+    if [ "$absolute" != 0 ] || [ "$tilde" != 1 ]; then
+        echo "  FAIL: expected the tilde spelling to replace the absolute one, got absolute=$absolute tilde=$tilde"; return 1
     fi
 }
 
@@ -943,6 +1119,26 @@ test_install_deploys_subagent_statusline_binary() {
         echo "  FAIL: cs-subagent-statusline not deployed executable to ~/.local/bin"
         return 1
     fi
+}
+
+test_install_and_uninstall_codex_thread_helper() {
+    local fake_home="$TEST_TMPDIR/home-codex"
+    mkdir -p "$fake_home"
+    HOME="$fake_home" bash "$INSTALL_SH" > /dev/null 2>&1 < /dev/null || {
+        echo "  FAIL: install.sh exited non-zero"
+        return 1
+    }
+    local helper="$fake_home/.local/bin/cs-codex-thread"
+    [ -x "$helper" ] || { echo "  FAIL: Codex thread helper is not executable"; return 1; }
+    cmp -s "$SCRIPT_DIR/../bin/cs-codex-thread" "$helper" || {
+        echo "  FAIL: installed Codex helper differs from the source"
+        return 1
+    }
+    printf 'y\n' | HOME="$fake_home" "$CS_BIN" -uninstall > /dev/null 2>&1 || {
+        echo "  FAIL: uninstall failed"
+        return 1
+    }
+    [ ! -e "$helper" ] || { echo "  FAIL: Codex helper survived uninstall"; return 1; }
 }
 
 test_install_skips_statusline_noninteractive() {
@@ -1424,11 +1620,106 @@ test_uninstall_removes_update_cache() {
 }
 
 
+test_codex_only_install_and_reinstall_leave_claude_absent() {
+    local fake_home="$TEST_TMPDIR/codex-home" output
+    mkdir -p "$fake_home"
+    output=$(HOME="$fake_home" XDG_CONFIG_HOME="$fake_home/.config" CS_INSTALL_ENGINES=codex bash "$INSTALL_SH" 2>&1) || { echo "$output"; return 1; }
+    assert_file_exists "$fake_home/.local/bin/cs" || return 1
+    assert_file_exists "$fake_home/.local/bin/cs-secrets" || return 1
+    assert_file_exists "$fake_home/.local/bin/cs-codex-thread" || return 1
+    assert_not_exists "$fake_home/.claude" || return 1
+    assert_not_exists "$fake_home/.local/bin/cs-statusline" || return 1
+    assert_eq codex "$(cat "$fake_home/.local/bin/.cs-install-engines")" || return 1
+    assert_file_exists "$fake_home/.codex/skills/finish/agents/openai.yaml" \
+        "a Codex-only install still ships the skills, to Codex" || return 1
+    output=$(env -u CS_INSTALL_ENGINES HOME="$fake_home" XDG_CONFIG_HOME="$fake_home/.config" bash "$INSTALL_SH" 2>&1) || { echo "$output"; return 1; }
+    assert_not_exists "$fake_home/.claude" "reinstall must remember the selected adapter"
+}
+
+test_install_refuses_to_replace_the_original_cs() {
+    local fake_home="$TEST_TMPDIR/reinstall-original"
+    mkdir -p "$fake_home/.local/bin"
+    local name
+    for name in cs cs-secrets cs-codex-thread; do
+        printf '#!/bin/sh\nexit 0\n' > "$fake_home/.local/bin/$name"
+        chmod +x "$fake_home/.local/bin/$name"
+    done
+    printf 'codex\n' > "$fake_home/.local/bin/.cs-install-engines"
+
+    local status=0 output
+    output=$(HOME="$fake_home" XDG_CONFIG_HOME="$fake_home/.config" bash "$INSTALL_SH" 2>&1) || status=$?
+    assert_eq 1 "$status" "a direct install must leave the original cs alone" || return 1
+    assert_output_contains "$output" 'run sh setup.sh' || return 1
+    for name in cs cs-secrets cs-codex-thread; do
+        assert_eq $'#!/bin/sh\nexit 0' "$(cat "$fake_home/.local/bin/$name")" || return 1
+    done
+    assert_eq codex "$(cat "$fake_home/.local/bin/.cs-install-engines")" || return 1
+}
+
+test_install_replaces_its_own_code_sessions_build() {
+    local fake_home="$TEST_TMPDIR/reinstall-own"
+    mkdir -p "$fake_home"
+    HOME="$fake_home" CS_INSTALL_ENGINES=codex bash "$INSTALL_SH" >/dev/null 2>&1 \
+        || { echo "  FAIL: first install failed"; return 1; }
+    printf '\n# an older build\n' >> "$fake_home/.local/bin/cs"
+    HOME="$fake_home" CS_INSTALL_ENGINES=codex bash "$INSTALL_SH" >/dev/null 2>&1 \
+        || { echo "  FAIL: a reinstall over code-sessions' own cs was refused"; return 1; }
+    assert_eq "$(cat "$SCRIPT_DIR/../bin/cs")" "$(cat "$fake_home/.local/bin/cs")" "the reinstall replaced it" || return 1
+}
+
+test_uninstall_removes_the_commands() {
+    local fake_home="$TEST_TMPDIR/uninstall-cs" name
+    mkdir -p "$fake_home"
+    HOME="$fake_home" CS_INSTALL_ENGINES=codex bash "$INSTALL_SH" >/dev/null 2>&1 \
+        || { echo "  FAIL: install failed"; return 1; }
+    printf 'y\n' | HOME="$fake_home" "$fake_home/.local/bin/cs" -uninstall >/dev/null 2>&1 \
+        || { echo "  FAIL: cs -uninstall failed"; return 1; }
+    for name in cs cs-secrets cs-codex-thread; do
+        assert_not_exists "$fake_home/.local/bin/$name" "uninstall must remove $name" || return 1
+    done
+}
+
+test_codex_only_install_preserves_existing_claude_settings() {
+    local fake_home="$TEST_TMPDIR/codex-existing" output
+    mkdir -p "$fake_home/.claude/hooks/cs"
+    printf 'user settings, even malformed\n' > "$fake_home/.claude/settings.json"
+    printf 'user hook\n' > "$fake_home/.claude/hooks/cs/session-start.sh"
+    output=$(HOME="$fake_home" XDG_CONFIG_HOME="$fake_home/.config" CS_INSTALL_ENGINES=codex bash "$INSTALL_SH" 2>&1) || { echo "$output"; return 1; }
+    assert_eq 'user settings, even malformed' "$(cat "$fake_home/.claude/settings.json")" || return 1
+    assert_eq 'user hook' "$(cat "$fake_home/.claude/hooks/cs/session-start.sh")" || return 1
+    assert_not_exists "$fake_home/.claude/commands" || return 1
+    assert_not_exists "$fake_home/.claude/skills" || return 1
+    output=$(printf 'y\nn\nn\n' | HOME="$fake_home" XDG_CONFIG_HOME="$fake_home/.config" "$fake_home/.local/bin/cs" -uninstall 2>&1) || { echo "$output"; return 1; }
+    assert_not_exists "$fake_home/.local/bin/cs" || return 1
+    assert_not_exists "$fake_home/.local/bin/.cs-install-engines" || return 1
+    assert_eq 'user settings, even malformed' "$(cat "$fake_home/.claude/settings.json")" || return 1
+    assert_eq 'user hook' "$(cat "$fake_home/.claude/hooks/cs/session-start.sh")"
+}
+
+test_invalid_install_adapter_selection_fails_before_writes() {
+    local fake_home="$TEST_TMPDIR/invalid-home" output status=0
+    mkdir -p "$fake_home"
+    output=$(HOME="$fake_home" XDG_CONFIG_HOME="$fake_home/.config" CS_INSTALL_ENGINES='codex,unknown' bash "$INSTALL_SH" 2>&1) || status=$?
+    [ "$status" -ne 0 ] || { echo '  FAIL: invalid selection accepted'; return 1; }
+    assert_output_contains "$output" 'CS_INSTALL_ENGINES must be' || return 1
+    assert_not_exists "$fake_home/.local" || return 1
+    assert_not_exists "$fake_home/.claude"
+}
+
 run_test test_install_completes_when_zshrc_has_no_fpath
 run_test test_install_respects_custom_fpath_dir
 run_test test_manifest_arrays_in_sync
 run_test test_manifest_arrays_match_repo_files
 run_test test_skill_files_exist_in_repo
+run_test test_install_deploys_skills_for_codex
+run_test test_install_deploys_codex_skills_under_codex_home
+run_test test_claude_only_install_leaves_codex_absent
+run_test test_codex_hook_trust_hash_matches_codex
+run_test test_install_registers_a_trusted_codex_hook
+run_test test_codex_hook_keeps_the_users_hooks_and_trust
+run_test test_uninstall_renumbers_trust_for_later_codex_hooks
+run_test test_install_leaves_an_unreadable_codex_hooks_file_alone
+run_test test_uninstall_removes_only_cs_skills_from_codex
 run_test test_mod_files_manifest_matches_the_repo
 run_test test_install_deploys_the_rotate_mod_and_uninstall_removes_it
 run_test test_uninstall_removes_the_claude_links
@@ -1438,11 +1729,13 @@ run_test test_uninstall_deletes_session_data_with_no_volume_mounted_inside
 run_test test_install_replaces_a_symlinked_mod_directory
 run_test test_strip_filters_in_sync
 run_test test_install_deploys_hooks_to_cs_subdir
+run_test test_install_registers_absolute_hook_paths_on_request
 run_test test_install_migrates_flat_hook_layout
 run_test test_install_writes_version_stamp
 run_test test_uninstall_strips_hook_registrations
 run_test test_install_deploys_statusline_binary
 run_test test_install_deploys_subagent_statusline_binary
+run_test test_install_and_uninstall_codex_thread_helper
 run_test test_install_skips_statusline_noninteractive
 run_test test_statusline_enable_registers
 run_test test_statusline_disable_strips_only_ours
@@ -1904,6 +2197,12 @@ run_test test_statusline_disable_sets_and_enable_clears_declined_marker
 run_test test_uninstall_removes_declined_marker
 run_test test_install_removes_the_retired_hint_mod
 run_test test_install_removes_the_mod_under_its_old_name
+run_test test_codex_only_install_and_reinstall_leave_claude_absent
+run_test test_install_refuses_to_replace_the_original_cs
+run_test test_install_replaces_its_own_code_sessions_build
+run_test test_uninstall_removes_the_commands
+run_test test_codex_only_install_preserves_existing_claude_settings
+run_test test_invalid_install_adapter_selection_fails_before_writes
 run_test test_rotate_wrap_keys_yes_creates_the_file_with_only_cs_block
 run_test test_rotate_wrap_keys_merge_into_the_existing_global_block
 run_test test_rotate_wrap_keys_never_overwrite_a_user_binding

@@ -614,7 +614,7 @@ test_send_to_a_locked_receiver_is_refused() {
     assert_eq "Error: receiver keeps its mail in encrypted storage that is not mounted (.cs/private points at $meta/vault-mnt/private). Nothing was sent." \
         "$out" "send names the locked vault" || return 1
     assert_not_exists "$(MAILDIR)" "no plaintext mailbox created" || return 1
-    assert_eq "0" "$(_box_count "$CLAUDE_SESSION_META_DIR/local/mail/out")" "no sent copy kept" || return 1
+    assert_eq "0" "$(_box_count "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/mail/out")" "no sent copy kept" || return 1
 }
 
 test_send_to_a_receiver_whose_private_is_a_file_is_refused() {
@@ -640,7 +640,7 @@ test_encrypted_sender_keeps_its_copy_in_the_vault() {
     _make_private sender
     "$CS_BIN" -msg receiver "kept words" >/dev/null 2>&1 || return 1
     assert_eq "1" "$(_box_count "$(PRIV_MAILDIR sender)/out")" "sent copy in the vault" || return 1
-    assert_not_exists "$CLAUDE_SESSION_META_DIR/local/mail" "no plaintext sent copy" || return 1
+    assert_not_exists "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/mail" "no plaintext sent copy" || return 1
 }
 
 test_encrypted_session_reads_log_and_threads_its_vault_mailbox() {

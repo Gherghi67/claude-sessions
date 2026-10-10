@@ -21,6 +21,16 @@ set -euo pipefail
 # under a fake HOME would still read and write the keybindings.json of the
 # config dir the suite was started from.
 unset CLAUDE_PROJECT_DIR CS_ACTOR CLAUDE_CODE_SESSION_ID CS_CLAUDE_SESSION_ID CLAUDE_CONFIG_DIR 2>/dev/null || true
+# A developer's preferred runtime must not turn a legacy Claude fixture into
+# a real Codex launch. Runtime suites set their own isolated overrides.
+# CODEX_HOME goes too: a cs Codex session exports it, and an install under
+# test would deploy into that real Codex home instead of the test HOME.
+unset CS_DEFAULT_ENGINE CODEX_BIN CS_CODEX_THREAD_BIN CODEX_HOME 2>/dev/null || true
+# The session a suite runs inside is not the session under test: a cs
+# session exports these, and a suite that inherits them writes into it (mail
+# copies in its mail/out, a tag in its README).
+unset CS_SESSION_NAME CS_SESSION_DIR CS_SESSION_META_DIR 2>/dev/null || true
+unset CLAUDE_SESSION_NAME CLAUDE_SESSION_DIR CLAUDE_SESSION_META_DIR 2>/dev/null || true
 
 # --- State ---
 TESTS_RUN=0
@@ -33,6 +43,7 @@ SKIPS=()
 # --- Paths ---
 # SCRIPT_DIR must be set by the sourcing test file before calling any helpers
 # CS_BIN is derived from SCRIPT_DIR
+unset CS_BIN
 CS_BIN="${SCRIPT_DIR:?SCRIPT_DIR must be set before sourcing test_lib.sh}/../bin/cs"
 TEST_TMPDIR=""
 
@@ -232,6 +243,13 @@ mkdir -p "$HOME"
 # and uninstall tests at the real data directory, whatever HOME says. Scoped
 # here, at source time, as HOME is.
 unset XDG_DATA_HOME
+# The same goes for the config and cache roots and for the directory overrides
+# the profile launcher exports: tests assert the default placement under their
+# private HOME, so none of these may leak in from the shell that started the run.
+unset XDG_CONFIG_HOME XDG_CACHE_HOME CS_INSTALL_DIR CS_CONFIG_DIR CS_CACHE_DIR CS_DATA_DIR CS_SECRETS_DIR CS_HOOK_PATHS
+# Nor may the launcher's -spawn tmux server and session: the suites pin the
+# default server and 'cs'.
+unset CS_TMUX_SOCKET CS_TMUX_SESSION
 # The scope-prompt hook's own deadline (CS_SCOPE_BUDGET_MS) is off the table
 # for every suite that drives the hook: tests time nothing, and a loaded
 # runner must not turn a scan assertion into a skip. The deadline tests in
@@ -290,6 +308,73 @@ teardown() {
         rm -rf "$TEST_TMPDIR"
     fi
     unset CS_SESSIONS_ROOT CLAUDE_CODE_BIN CS_TRANSCRIPTS_DIR CS_NO_UPDATE_CHECK CS_NO_ITERM2
+    # A fake keychain's directory is gone with TEST_TMPDIR; left on PATH, the
+    # next test's `security` would be the machine's own again.
+    if [[ -n "${FAKE_KEYCHAIN_SAVED_PATH:-}" ]]; then
+        export PATH="$FAKE_KEYCHAIN_SAVED_PATH"
+        unset FAKE_KEYCHAIN_SAVED_PATH FAKE_KEYCHAIN
+    fi
+}
+
+# A keychain for the test: a `security` first on PATH that keeps each item in
+# a file under $FAKE_KEYCHAIN, so nothing a test stores reaches the login
+# keychain of the machine running it. It answers the calls cs-secrets makes:
+# add, find and delete one item by its service name, and dump them all.
+use_fake_keychain() {
+    local bindir="$TEST_TMPDIR/fake-keychain-bin"
+    FAKE_KEYCHAIN="$TEST_TMPDIR/fake-keychain"
+    export FAKE_KEYCHAIN
+    mkdir -p "$bindir" "$FAKE_KEYCHAIN"
+    cat > "$bindir/security" <<'FAKE'
+#!/usr/bin/env bash
+set -u
+sub="${1:-}"
+[ $# -gt 0 ] && shift
+service=""; value=""; have_value=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -s) service="${2:-}"; shift 2 ;;
+        -a) shift 2 ;;
+        -w) if [ $# -ge 2 ] && [ "${2#-}" = "$2" ]; then value="$2"; have_value=1; shift 2; else shift; fi ;;
+        *) shift ;;
+    esac
+done
+slot="$FAKE_KEYCHAIN/$(printf '%s' "$service" | od -An -tx1 | tr -d ' \n')"
+case "$sub" in
+    dump-keychain)
+        for item in "$FAKE_KEYCHAIN"/*; do
+            [ -f "$item" ] || continue
+            printf '    "svce"<blob>="%s"\n' "$(head -n 1 "$item")"
+        done ;;
+    find-generic-password)
+        [ -f "$slot" ] || exit 44
+        tail -n +2 "$slot"; echo ;;
+    add-generic-password)
+        { printf '%s\n' "$service"; [ "$have_value" -eq 0 ] || printf '%s' "$value"; } > "$slot" ;;
+    delete-generic-password)
+        [ -f "$slot" ] || exit 44
+        rm -f "$slot" ;;
+esac
+exit 0
+FAKE
+    chmod +x "$bindir/security"
+    : "${FAKE_KEYCHAIN_SAVED_PATH:=$PATH}"
+    export FAKE_KEYCHAIN_SAVED_PATH PATH="$bindir:$PATH"
+}
+
+# The service names the fake keychain holds, one per line, sorted.
+fake_keychain_items() {
+    local item
+    for item in "$FAKE_KEYCHAIN"/*; do
+        [ -f "$item" ] && head -n 1 "$item"
+    done | LC_ALL=C sort
+}
+
+# cs-secrets picks the keychain on its own only on macOS. Elsewhere a test that
+# leaves the backend to it gets the encrypted store, and the fake keychain
+# holds only what the test put there by naming the backend itself.
+keychain_is_default() {
+    [ "$(uname -s)" = Darwin ]
 }
 
 # --- Test Runner ---

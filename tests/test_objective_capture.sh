@@ -60,11 +60,11 @@ objective_line() {
 # written file.
 test_capture_keeps_the_readmes_mode() {
     make_readme
-    chmod 750 "$CLAUDE_SESSION_META_DIR/README.md"
+    chmod 750 "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/README.md"
     run_hook "we need to fix the CS TUI on light terminal themes" >/dev/null
     assert_eq "we need to fix the CS TUI on light terminal themes" "$(objective_line)" \
         "the objective was captured" || return 1
-    assert_eq "750" "$(_file_mode "$CLAUDE_SESSION_META_DIR/README.md")" "the README keeps its mode" || return 1
+    assert_eq "750" "$(_file_mode "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/README.md")" "the README keeps its mode" || return 1
 }
 
 test_captures_first_substantive_prompt() {
@@ -171,7 +171,7 @@ test_graceful_malformed_input() {
 test_skips_encrypted_session() {
     make_readme
     mkdir -p "$TEST_TMPDIR/vault/private"
-    ln -s "$TEST_TMPDIR/vault/private" "$CLAUDE_SESSION_META_DIR/private"
+    ln -s "$TEST_TMPDIR/vault/private" "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/private"
     run_hook "migrate the ledger into the new vault layout" >/dev/null
     assert_eq "$PLACEHOLDER" "$(objective_line)" \
         "an encrypted session's prompt stays out of the plaintext README"
@@ -179,7 +179,7 @@ test_skips_encrypted_session() {
 
 test_skips_locked_encrypted_session() {
     make_readme
-    ln -s "$TEST_TMPDIR/vault/missing" "$CLAUDE_SESSION_META_DIR/private"
+    ln -s "$TEST_TMPDIR/vault/missing" "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/private"
     run_hook "migrate the ledger into the new vault layout" >/dev/null
     assert_eq "$PLACEHOLDER" "$(objective_line)" \
         "a locked encrypted session's prompt stays out of the plaintext README"

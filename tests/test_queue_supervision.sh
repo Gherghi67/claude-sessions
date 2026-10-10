@@ -44,9 +44,9 @@ test_failure_counter_recovers_from_garbage() {
 # the fixed name failures.tmp does not stop the count.
 test_failure_counter_ignores_a_stale_tmp() {
     _qs_session "fct"
-    mkdir "$CLAUDE_SESSION_META_DIR/local/failures.tmp"
+    mkdir "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/failures.tmp"
     _fail_once || return 1
-    assert_eq "1" "$(cat "$CLAUDE_SESSION_META_DIR/local/failures" 2>/dev/null)" \
+    assert_eq "1" "$(cat "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/failures" 2>/dev/null)" \
         "the failure counts past a stale failures.tmp" || return 1
 }
 
@@ -118,10 +118,10 @@ test_breaker_parks_the_drain_past_a_stale_state_tmp() {
     _qs_session "fbt"
     _arm_queue "will fail" "never reached"
     _stop_turn >/dev/null || return 1              # armed -> draining
-    printf '5\n' > "$CLAUDE_SESSION_META_DIR/local/failures"
-    mkdir "$CLAUDE_SESSION_META_DIR/local/queue.state.tmp"
+    printf '5\n' > "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/failures"
+    mkdir "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/queue.state.tmp"
     _stop_turn >/dev/null || true
-    assert_eq "idle" "$(cat "$CLAUDE_SESSION_META_DIR/local/queue.state")" \
+    assert_eq "idle" "$(cat "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/queue.state")" \
         "the trip parks the queue past a stale queue.state.tmp" || return 1
 }
 
@@ -390,7 +390,7 @@ test_digest_cursor_advances_past_a_stale_tmp_at_prompt() {
     _arm_queue "only task"
     _stop_turn >/dev/null || return 1
     _stop_turn >/dev/null || return 1
-    mkdir "$CLAUDE_SESSION_META_DIR/local/notifications.seen.tmp"
+    mkdir "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/notifications.seen.tmp"
     local out
     out=$(_prompt_turn "hello") || return 1
     assert_output_contains "$out" "while you were away" "digest injected" || return 1
@@ -403,12 +403,12 @@ test_digest_cursor_advances_past_a_stale_tmp_at_session_start() {
     _arm_queue "only task"
     _stop_turn >/dev/null || return 1
     _stop_turn >/dev/null || return 1
-    mkdir "$CLAUDE_SESSION_META_DIR/local/notifications.seen.tmp"
+    mkdir "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/notifications.seen.tmp"
     local out
-    out=$(printf '{"source":"resume","session_id":"s1","cwd":"%s"}' "$CLAUDE_SESSION_DIR" \
+    out=$(printf '{"source":"resume","session_id":"s1","cwd":"%s"}' "${CS_SESSION_DIR:-${CLAUDE_SESSION_DIR:-}}" \
         | bash "$HOOKS_DIR/session-start.sh") || return 1
     assert_output_contains "$out" "while you were away" "resume surfaces the digest" || return 1
-    out=$(printf '{"source":"resume","session_id":"s1","cwd":"%s"}' "$CLAUDE_SESSION_DIR" \
+    out=$(printf '{"source":"resume","session_id":"s1","cwd":"%s"}' "${CS_SESSION_DIR:-${CLAUDE_SESSION_DIR:-}}" \
         | bash "$HOOKS_DIR/session-start.sh") || return 1
     assert_output_not_contains "$out" "while you were away" "second start injects nothing" || return 1
 }
@@ -500,9 +500,9 @@ run_test test_build_digest_fn_in_sync_across_hooks
 # .cs/private; the context and limit readings stay in .cs/local, since they are
 # numbers the status line writes. The drain must read each from its own place.
 _qs_private() {
-    mkdir -p "$TEST_TMPDIR/vault-$CLAUDE_SESSION_NAME/private"
-    ln -s "$TEST_TMPDIR/vault-$CLAUDE_SESSION_NAME/private" "$CLAUDE_SESSION_META_DIR/private"
-    PRIV="$TEST_TMPDIR/vault-$CLAUDE_SESSION_NAME/private"
+    mkdir -p "$TEST_TMPDIR/vault-${CS_SESSION_NAME:-${CLAUDE_SESSION_NAME:-}}/private"
+    ln -s "$TEST_TMPDIR/vault-${CS_SESSION_NAME:-${CLAUDE_SESSION_NAME:-}}/private" "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/private"
+    PRIV="$TEST_TMPDIR/vault-${CS_SESSION_NAME:-${CLAUDE_SESSION_NAME:-}}/private"
 }
 _arm_private_queue() {  # tasks...
     local t i=0
@@ -519,7 +519,7 @@ test_private_failure_counter_counts_in_the_vault() {
     _qs_private
     _fail_once || return 1
     assert_eq "1" "$(cat "$PRIV/failures")" "the counter is in the vault" || return 1
-    assert_not_exists "$CLAUDE_SESSION_META_DIR/local/failures" "no plaintext counter" || return 1
+    assert_not_exists "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/failures" "no plaintext counter" || return 1
 }
 
 test_private_drain_hands_tasks_and_records_in_the_vault() {
@@ -535,7 +535,7 @@ test_private_drain_hands_tasks_and_records_in_the_vault() {
     assert_file_contains "$PRIV/notifications.jsonl" "sealed one" "inbox in the vault" || return 1
     local f
     for f in queue queue.state queue.done notifications.jsonl failures; do
-        assert_not_exists "$CLAUDE_SESSION_META_DIR/local/$f" "no plaintext $f" || return 1
+        assert_not_exists "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/$f" "no plaintext $f" || return 1
     done
 }
 
@@ -544,7 +544,7 @@ test_private_drain_reads_context_from_local() {
     _qs_private
     _arm_private_queue "a" "b"
     _stop_turn >/dev/null || return 1
-    printf '91\n' > "$CLAUDE_SESSION_META_DIR/local/context-pct"
+    printf '91\n' > "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/context-pct"
     local out
     out=$(_stop_turn) || return 1
     assert_output_contains "$out" "circuit breaker" "the context reading in .cs/local trips it" || return 1
@@ -564,21 +564,21 @@ test_private_digest_reads_the_vault_inbox() {
     _arm_private_queue "second"
     _stop_turn >/dev/null || return 1
     _stop_turn >/dev/null || return 1
-    out=$(printf '{"source":"resume","session_id":"s1","cwd":"%s"}' "$CLAUDE_SESSION_DIR" \
+    out=$(printf '{"source":"resume","session_id":"s1","cwd":"%s"}' "${CS_SESSION_DIR:-${CLAUDE_SESSION_DIR:-}}" \
         | bash "$HOOKS_DIR/session-start.sh") || return 1
     assert_output_contains "$out" "while you were away" "the start digest reads the vault" || return 1
-    assert_not_exists "$CLAUDE_SESSION_META_DIR/local/notifications.seen" "no plaintext cursor" || return 1
+    assert_not_exists "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/notifications.seen" "no plaintext cursor" || return 1
 }
 
 test_locked_vault_queue_hooks_write_nothing() {
     _qs_session "plk"
-    ln -s "$TEST_TMPDIR/unmounted-plk/private" "$CLAUDE_SESSION_META_DIR/private"
+    ln -s "$TEST_TMPDIR/unmounted-plk/private" "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/private"
     _fail_once || return 1
     _stop_turn >/dev/null || return 1
     _prompt_turn "hello" >/dev/null || return 1
     local f
     for f in queue queue.state failures notifications.jsonl notifications.seen; do
-        assert_not_exists "$CLAUDE_SESSION_META_DIR/local/$f" "no plaintext $f" || return 1
+        assert_not_exists "${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}/local/$f" "no plaintext $f" || return 1
     done
 }
 

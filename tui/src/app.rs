@@ -2629,6 +2629,20 @@ mod tests {
     }
 
     #[test]
+    fn empty_picker_can_create_its_first_session() {
+        let root = std::env::temp_dir().join(format!("cs-empty-picker-{}", std::process::id()));
+        let _root = session::test_root::scoped(root);
+        let mut app = App::new(Vec::new());
+        assert_eq!(app.table_state.selected(), None);
+        assert!(matches!(app.handle_key(KeyEvent::from(KeyCode::Enter)), Action::None));
+        app.handle_key(KeyEvent::from(KeyCode::Char('n')));
+        assert_eq!(app.mode, Mode::CreateSession);
+        app.create_input.set("first-experimental-session");
+        assert!(matches!(app.handle_key(KeyEvent::from(KeyCode::Enter)),
+            Action::Open(name) if name == "first-experimental-session"));
+    }
+
+    #[test]
     fn open_with_carries_a_session_and_its_argv_words() {
         let a = Action::OpenWith {
             session: "myproj".into(),

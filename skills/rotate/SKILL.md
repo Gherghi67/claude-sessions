@@ -6,14 +6,21 @@ description: Rotate the current cs conversation - write a lineage-stamped handof
 
 Rotation ends this conversation's useful life deliberately: you distill the
 work into a handoff file and arm it, and the next fresh conversation — most
-easily one the user starts with `/clear`, without leaving Claude Code —
+easily one the user starts with `/clear`, without leaving the CLI —
 continues from it. This skill writes the handoff and the pending marker. It
 never ends the conversation and never launches anything.
 
 ## Prerequisites
 
-Only works in a cs session: check that `$CLAUDE_SESSION_NAME` is set. If
+Only works in a cs session: check that `$CS_SESSION_NAME` is set. If
 empty, tell the user rotation needs a cs session and stop.
+
+The engine's adapter has to carry the handoff into the fresh conversation:
+run `cs -engine supports rotation`. If it exits non-zero, print the line it
+printed, tell the user that exiting and answering `r` at the next
+`cs <session-name>` launch is not available either, and stop before writing
+anything. The Claude and Codex adapters both declare `rotation`; steps 10 and
+11 differ between them, so note the `engine:` line `cs -engine` prints.
 
 A rotation needs a purpose — one line describing what the next conversation
 should do. If the user did not give one, take it from the conversation: the
@@ -31,10 +38,11 @@ vault is locked: tell the user to mount it and stop.
 
 ## Process
 
-1. Determine the parent conversation UUID: the `claude_session_id` line of
-   `.cs/local/state`, or if that is missing, `$CS_CLAUDE_SESSION_ID`.
+1. Determine the parent conversation UUID: the `conversation:` line that
+   `cs -engine` prints (under Claude, the `claude_session_id` binding cs
+   keeps in `.cs/local/state`), or if that is empty, `$CS_CLAUDE_SESSION_ID`.
 
-   Take the state file first. `CS_CLAUDE_SESSION_ID` is the *launch* UUID —
+   Take the binding first. `CS_CLAUDE_SESSION_ID` is the *launch* UUID —
    cs exports it once per process and never refreshes it, because the
    SessionStart hook keys its ref-rename guard on that value still naming
    this process's predecessor. The hook rebinds `claude_session_id` on every
@@ -265,7 +273,7 @@ vault is locked: tell the user to mount it and stop.
    Machine-local state — never commit it.
 
    Arming is the final step because an armed marker is fragile in a way a
-   committed file is not. If Claude Code exits before the ritual finishes and
+   committed file is not. If the CLI exits before the ritual finishes and
    the user relaunches, `cs <name>`'s prompt disarms the marker on `Y`, `n`
    or Enter (lib/75-launch.sh), and nothing re-arms it; a later `/clear`
    then opens a bare conversation with this handoff left `unconsumed`. The
@@ -279,6 +287,12 @@ vault is locked: tell the user to mount it and stop.
    couple of seconds after the `/clear` — they do not need to type anything
    to start it, and a message they do send takes precedence over the handoff.
 
+   Under Codex (`engine: codex`) say instead: Codex starts no turn by itself,
+   so after `/clear` they send one message, and `go` is enough. cs's
+   SessionStart hook runs on that first message: it points the session at the
+   new conversation and hands it this handoff, and the reply begins the next
+   step. A message with its own content takes precedence over the handoff.
+
    If they would rather stop for the day, exiting and answering `r` at the
    next `cs <session-name>` launch does the same thing. Answering `Y` or `n`
    there disarms the marker (the handoff itself stays pending, so a later
@@ -289,10 +303,19 @@ vault is locked: tell the user to mount it and stop.
 
    **Run `/clear` now** (or press the capsule above the prompt, or Ctrl+X 1 if you bound it) — this conversation is ready to rotate.
 
+   Under Codex the line is, exactly:
+
+   **Run `/clear` now, then send `go`** — this conversation is ready to rotate.
+
    This is the one step you cannot take for the user. A hook cannot submit
    to Claude Code's command queue (it accepts the TUI's own input only); the
    `cs` mod's button can, and once the marker is armed it reads
-   `/clear and continue from the handoff`. The keystroke is theirs unless
-   they launched with `CS_ROTATE_FORCE_CTX`, when the mod counts twenty
-   seconds down and runs the `/clear` itself — which is why the line must not
-   end up buried under a summary of what you just wrote.
+   `/clear and continue from the handoff`. Forced rotation is on by
+   default (at 80% context), and while it is on, the mod counts twenty
+   seconds down once this turn ends with the handoff armed and runs the
+   `/clear` itself, whether or not the rotation was forced. Only
+   `CS_ROTATE_FORCE_CTX=off` (or `0`) at launch leaves the keystroke to them.
+   A `/clear` they type after the countdown already ran opens a conversation
+   with nothing armed, which is why the line must not end up buried under a
+   summary of what you just wrote. Codex has no capsule and no countdown: the
+   `/clear` and the first message are both theirs.

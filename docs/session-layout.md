@@ -1,7 +1,8 @@
 # Session layout (`.cs/`)
 
-Every cs session is a directory under `~/.claude-sessions/` (override with
-`CS_SESSIONS_ROOT`). The directory itself is the workspace — Claude works on
+Every cs session is a directory under the sessions root:
+`~/.claude-sessions/` by default, `~/.local/share/code-sessions/home/sessions/` in the
+profile setup installs (override either with `CS_SESSIONS_ROOT`). The directory itself is the workspace — the selected engine works on
 project files there. All session *metadata* lives in a single `.cs/`
 subdirectory, and the whole session directory is its own local git repo.
 
@@ -52,7 +53,7 @@ The one distinction that governs everything below is **shared vs machine-local**
 | `.cs/narrative-archive/<actor>/<through-date>-<blob8>.md` | Sections `cs -narrative rotate` moved out of the live narrative, verbatim. Immutable once written; the name is derived from the content, so two machines archiving the same sections produce the same file. | default |
 | `.cs/checkpoints/` | Labelled state snapshots from `/checkpoint` (narrative + changes + git HEAD). | default |
 | `.cs/archived` | Archive marker written by `cs -archive` (date + actor). Tracked so the archived state syncs; removed on open or `cs -unarchive`. | default |
-| `.cs/handoffs/` | Lineage-stamped conversation handoffs written by the `rotate` skill (parent UUID, purpose, continuation plan). Each carries a `status:` field — `unconsumed` while pending, flipped to `consumed` by the SessionStart that rotates into it, to `discarded` by the resume prompt's `d` answer, or to `superseded` when a later rotation retires it. The `rotate` skill also prunes as it goes, deleting `consumed`, `discarded` and `superseded` files older than 30 days by `created:` unless they are among the 10 newest — instructions the skill follows, not a cs command; nothing in cs itself deletes a handoff. An [encrypted session](#encrypted-sessions) keeps them in `.cs/private/handoffs/` instead. | default |
+| `.cs/handoffs/` | Lineage-stamped conversation handoffs written by the `rotate` skill (parent UUID, purpose, continuation plan). Each carries a `status:` field — `unconsumed` while pending, flipped to `consumed` by the SessionStart that rotates into it, to `discarded` by the resume prompt's `d` answer, or to `superseded` when a later rotation retires it. The `rotate` skill also prunes as it goes, deleting `consumed`, `discarded` and `superseded` files older than 30 days by `created:` unless they are among the 10 newest — instructions the skill follows, not a `cs` command; nothing in the cs launcher deletes a handoff. An [encrypted session](#encrypted-sessions) keeps them in `.cs/private/handoffs/` instead. | default |
 | `.cs/plans/` | Design plans and specs kept with the session. | default |
 | `.cs/brief.md` | The brief a `cs -spawn --brief` (or the `feature` skill) handed this session, moved in at launch; the wake-up line sends the session to it first. Written once per spawn, replacing an earlier one. | default |
 | `.cs/age-recipients/*.pub` | age public keys of everyone allowed to decrypt the session's synced secrets. | default |
@@ -81,11 +82,16 @@ in `.cs/private/` instead.
 |------|---------|
 | `session.log` | Human-readable audit trail — bash commands, session lifecycle, autosave notes, UUID rebinds. Per-checkout by nature; the shared structured record is `timeline.jsonl`. |
 | `state` | Session state bound to this checkout: `claude_session_id` (the conversation UUID to resume), `claude_session_color` (the `/color` palette entry), `last_resumed` (last resume date), `session_name` for adopted sessions only (their name lives in the sessions-root symlink, which a hook resolving the directory has no way to read; an ordinary session takes its name from its directory), and, for feature worktrees, `task_branch`, `cs_base` and `cs_mode` (`tracked` when the base repo tracks `.cs/`, `ignored` when it does not; it decides how the worktree's records reach the base when the feature is integrated and retired). Each machine binds its own conversation, so this must not sync. Writers take turns on a `state.lock` directory beside it. `claude_session_id` is one slot, written only by the conversation `cs` launched — see [hooks.md](hooks.md) for how a teammate or walked-in claude is kept out of it. |
+| `run-lease.json` | Current launcher run token, engine, owning process, and registered native child with its process start time; supplements the compatible numeric `.cs/session.lock`. Hooks validate ownership before rebinding. |
+| `run-lease.guard` | Persistent inode for serialized lease replacement, cleanup, and binding acknowledgement. Do not unlink while launches are active. |
+| `pending-binding-<engine>.json` | Candidate conversation ID, previous ID, run token, and transition reason awaiting native acknowledgement. Unacknowledged candidates superseded by retries remain in `.abandoned.*` records for diagnosis. |
+| `codex-thread-id` | Independently bound Codex conversation, committed after the persistent startup helper acknowledges its ID. |
 | `identity` | Overrides the actor name for shared memory/narrative attribution (precedence: `$CS_ACTOR` > `local/identity` > git `user.email` > git `user.name`). |
-| `migrated` | The migration stamp, written when every write an open's migration made succeeded. Line 1: the cs version, the actor and `1` or `0` for an encrypted session, tab separated. Line 2: the files it checked that existed then. See [Migration](#migration). |
+| `migrated` | The migration stamp, written when every write an open's migration made succeeded. Line 1: the cs version, the actor, `1` or `0` for an encrypted session and the engine it was written under (`claude` or `codex`), tab separated. Line 2: the files it checked that existed then. See [Migration](#migration). |
 | `attention` | Status-line attention marker — raised by the `Stop` hook when Claude finishes, cleared on the next prompt. |
 | `presence` | This session's advertised status (`cs -status`): a single line read by `cs -live`. Falls back to the README objective when unset. |
 | `pending-handoff` | Basename of the `.cs/handoffs/` file to rotate into — armed by the `rotate` skill (for `/clear`) or by the `r` answer at the resume prompt. Consumed and cleared by the next SessionStart whose source is `startup` or `clear`; left armed on any other source; disarmed by any other resume-prompt answer. |
+| `pending-switch` | An engine switch waiting for the CLI to exit, written atomically by `cs -switch` (the `switch` skill runs it): `engine=<target>`, `mode=fresh` or `resume`, `handoff=<basename of the armed handoff>` and `run=<CS_RUN_ID>`, one `key=value` per line. Only the run it names takes it, once, when its CLI exits: `cs` removes it, then reopens the session under the target from that handoff while the handoff is still unconsumed. `cs -switch cancel` removes it and leaves the handoff armed; a run that starts and finds one left by an earlier run drops it. While it exists the `cs` mod's countdown runs `/exit` instead of `/clear`. |
 | `rotate-nudged` | Conversation UUID last nudged to rotate by the narrative reminder — keeps the 65%-context nudge to once per conversation. |
 | `cs.heartbeat` | UTC timestamp of the last session start at which the cs mod ran — `cs -doctor` reports the mod from this file, never from the plugin directory being present. |
 | `cs-update.heartbeat` | UTC timestamp of the last session start at which the cs-update mod ran, written by the mod's `session.start` when Claude Code loads it — `cs -doctor` reads it the same way it reads `cs.heartbeat`, never the plugin directory being present. |
@@ -107,7 +113,7 @@ in `.cs/private/` instead.
 | `notifications.seen` | Cursor for that digest, so unseen inbox entries surface at most once. |
 | `finish-progress.json` | The progress of the last `/finish` run, one JSON object that `cs <base> -integrate-feature` and `-retire-feature` replace whole at each step: `id` (one per run), `pid` (the cs process), `task`, `sha` (the captured commit), `step` and `ts` (epoch seconds of the write). `step` runs `started`, `merging`, `gate` (only for a real gate, not `-- true` or a `--ci-green` skip; it adds `gate_started`, kept on later steps), `fast-forward`, then ends at an outcome: `landed` (with `result`, the commit the base landed on), `refused` (with `reason`, the first line of the error) or `retired`. The cs mod reads it to toast `/finish`'s start and outcome and to draw the gate band. A step whose `pid` no longer runs belongs to a run a signal ended, and the mod treats it as over. Advisory: a write that fails costs one warning on stderr and nothing else. |
 | `.advisor-nudge-cooldown` | The narrative reminder's cooldown stamp for its council-advisor nudge: at most one nudge per 30 minutes. |
-| `memory-index.snapshot` | Copy of `.cs/memory/MEMORY.md` that `/sweep` takes before it edits the index; `memory-index-guard.sh check` compares against it and `restore` copies it back. Overwritten by the next sweep. |
+| `memory-index.snapshot` | Copy of `.cs/memory/MEMORY.md` that `/sweep` takes before it edits the index; the sweep skill's `scripts/memory-index-guard.sh check` compares against it and `restore` copies it back. Overwritten by the next sweep. |
 | `ctx-warned` | Conversation UUID already given the one-time 40% context warning (the tier below the rotation nudge). |
 | `context-date/` | One file per conversation, named by its id, holding the `YYYY-MM-DD` that conversation was last told; written at session start and advanced by `scope-prompt` when it emits the date note. Per conversation because a lead and a tmux teammate share this directory and each hears the date on its own. |
 | `scope-prompt.trace` | One line per stage of each `scope-prompt` run, appended as that stage finishes — so a run its timeout killed still names the stage it hung on, a `launch` line written before the hook loads its library (a run killed that early leaves only this line), plus a `budget=<N>` line naming the budget the run settled on. A run that passed `CS_SCOPE_BUDGET_MS` before its scan records a `skip` stage and still exits normally. Opt out with `CS_SCOPE_TRACE_DISABLE=1`. |
@@ -132,7 +138,7 @@ there.
 | `.cs/memory` | Auto-memory and the narratives. |
 | `.cs/plans` | Plans and specs. |
 | `.cs/claude-config` | Claude Code's config dir for this session. cs launches Claude Code with `CLAUDE_CONFIG_DIR` pointing here, so transcripts, prompt history, `.claude.json` and its backups never reach `~/.claude`. `CLAUDE_SECURESTORAGE_CONFIG_DIR` keeps the shell's login (empty selects the default keychain entry). On every launch cs links the shell's `settings.json`, `settings.local.json`, `CLAUDE.md`, `AGENTS.md`, `rules/`, `skills/`, `commands/`, `agents/`, `hooks/`, `plugins/`, `output-styles/`, `keybindings.json` and `vale/` into it, skipping any name the session already has. A setting you change inside the session (`/model`, `/config`) writes through the link into the shell's `settings.json`. The first launch seeds `.claude.json` from the shell's copy with `projects` emptied, since each project entry keeps that project's last prompt. cs reads the session's transcripts from `projects/` here, and the picker does not rename such a session, because its links and transcripts name its path. |
-| `.cs/private` | cs's own content files, which a plain session keeps in `.cs/local/`: `session.log`, `scope-prompt.trace`, `memory-index.snapshot`, `mail/`, the queue files (`queue/`, `queue.tmp/`, `queue.state`, `queue.mode`, `queue.done`, `queue.declined`, `queue.migrating`), `notifications.jsonl`, `notifications.seen`, `failures`, `rewrite.trace`, `finish-progress.json`, the rotation handoffs (`handoffs/`), `pending-handoff`, checkpoints (`checkpoints/`) and, when `.cs/memory` is a link, the rotated narrative sections (`narrative-archive/`). Numbers the status line writes (`context-pct`, `limits`) and ids (`state`, `spawned-by`, `rotate-nudged`, `ctx-warned`) stay in `.cs/local/`. |
+| `.cs/private` | cs's own content files, which a plain session keeps in `.cs/local/`: `session.log`, `scope-prompt.trace`, `memory-index.snapshot`, `mail/`, the queue files (`queue/`, `queue.tmp/`, `queue.state`, `queue.mode`, `queue.done`, `queue.declined`, `queue.migrating`), `notifications.jsonl`, `notifications.seen`, `failures`, `rewrite.trace`, `finish-progress.json`, the rotation handoffs (`handoffs/`), `pending-handoff`, `pending-switch`, checkpoints (`checkpoints/`) and, when `.cs/memory` is a link, the rotated narrative sections (`narrative-archive/`). Numbers the status line writes (`context-pct`, `limits`) and ids (`state`, `spawned-by`, `rotate-nudged`, `ctx-warned`) stay in `.cs/local/`. |
 
 ### Encrypting a session with `cs -encrypt`
 
@@ -140,7 +146,8 @@ On macOS, `cs -encrypt <name>` sets this up for an existing session. Run it
 from a terminal, with the session closed. It:
 
 1. Creates an AES-256 encrypted sparse bundle at
-   `~/.local/share/cs/vaults/<name>.sparsebundle` with `hdiutil`, which asks
+   `~/.local/share/cs/vaults/<name>.sparsebundle` (`$CS_DATA_DIR/vaults/` when
+   that is set, as the code-sessions profile sets it) with `hdiutil`, which asks
    for a new password. The bundle grows as it fills, up to 50 GB. It lives
    outside the session directory, so `cs -rm` never deletes it.
 2. Mounts it at `.cs/vault-mnt` (`hdiutil` asks for the password again) and
@@ -148,7 +155,8 @@ from a terminal, with the session closed. It:
 3. Moves `.cs/memory`, `.cs/plans`, the `.cs/local/` files listed under
    `.cs/private` above, and `.cs/handoffs`, `.cs/checkpoints` and
    `.cs/narrative-archive` into the volume, then links the four names into it.
-4. Writes `.cs/local/pre-open` and `.cs/local/vault` (the bundle's path), tags
+4. Writes `.cs/local/pre-open` and `.cs/local/vault` (the bundle's path, which
+   every later open attaches whatever `CS_DATA_DIR` says), tags
    the session `encrypted`, and unmounts the volume.
 
 From then on every open asks for the password in the terminal. `pre-open`
@@ -288,7 +296,7 @@ left untouched.
 
 A migration whose writes all succeed writes `.cs/local/migrated`, and
 the next open skips the one-time phases while that stamp still holds: same cs
-version, same actor, same encrypted state, every file it listed still there,
+version, same actor, same engine, same encrypted state, every file it listed still there,
 and none of `.gitignore`, `.gitattributes`, `CLAUDE.local.md`, `CLAUDE.md` or
 `.cs/README.md` modified after it, and `merge.ours.driver` still set in a
 checkout cs commits into (cs reads the value: git rewrites `.git/config` on
@@ -299,3 +307,15 @@ that only look for a leftover from an old layout run on every open. `cs -doctor`
 stamp; `rm .cs/local/migrated` forces a full migration on the next open, for
 an edit the stamp cannot see (a file restored with its old modification time,
 or saved within the same second as the stamp).
+
+## Engine-local compatibility records
+
+code-sessions keeps upstream's `.cs/` and default root `~/.claude-sessions/`, and
+never moves the original cs's sessions. Only setup's profile renamed its root, from
+`.claude-sessions/` to `sessions/`; see [Migration](migration.md). `.cs/local/state` stores the selected `engine` and, once Claude has
+been prepared, `claude_session_id` and `claude_session_color`. Codex stores its
+independent exact ID in `.cs/local/codex-thread-id` and refreshes startup context
+in `.cs/local/codex-instructions.md`. These files remain machine-local.
+Codex-only sessions do not require Claude instruction or settings files. Shared
+memory/plans are portable Markdown, while native auto-memory redirection is a
+Claude adapter feature. See [Migration](migration.md).

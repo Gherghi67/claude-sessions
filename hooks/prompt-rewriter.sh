@@ -14,7 +14,7 @@ target="${1:-}"
 # passthrough paths it took — the buffer looks identical for "not a composer
 # file", "disabled", "slash command" and "rewriter declined".
 _trace() {  # stage
-    local dir="${CLAUDE_SESSION_META_DIR:-}" base
+    local dir="${CS_SESSION_META_DIR:-${CLAUDE_SESSION_META_DIR:-}}" base
     [ -n "$dir" ] && [ -d "$dir" ] || return 0
     # An encrypted session keeps its cs files behind .cs/private, and a locked
     # one gets no trace. cs_private_dir's rule, inlined: sourcing the library

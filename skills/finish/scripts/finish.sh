@@ -26,6 +26,15 @@ state_get() {  # dir key
         "$1/.cs/local/state" 2>/dev/null || true
 }
 
+# How the user asks for finish, in the engine a session last ran under: Codex
+# names a skill with $, Claude Code with /.
+finish_word() {  # dir
+    case "$(state_get "$1" engine)" in
+        codex) echo '$finish' ;;
+        *) echo /finish ;;
+    esac
+}
+
 # owner/repo when origin is GitHub (https, ssh, or scp-like); empty otherwise.
 github_repo() {  # dir
     local url
@@ -221,7 +230,7 @@ cmd_prepare() {  # [feature]
         echo "role: feature"
         echo "base: $cs_base"
         echo "task: ${task_branch#cs/}"
-        echo "handoff: run /finish ${task_branch#cs/} in session $cs_base"
+        echo "handoff: run $(finish_word "$sessions_root/$cs_base") ${task_branch#cs/} in session $cs_base"
         return 0
     fi
     echo "role: base"
@@ -277,7 +286,7 @@ cmd_report() {  # base task sha
         if git -C "$session_dir" merge-base --is-ancestor "$tip" HEAD 2>/dev/null; then
             echo "retire: ready"
         else
-            echo "retire: $n_after commit(s) on cs/$task after the captured commit are not integrated; run /finish $task again before retiring"
+            echo "retire: $n_after commit(s) on cs/$task after the captured commit are not integrated; run $(finish_word "$session_dir") $task again before retiring"
         fi
     else
         echo "retire: not-landed"

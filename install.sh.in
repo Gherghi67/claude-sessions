@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ABOUTME: Installation script for cs (Claude Code session manager)
-# ABOUTME: Installs binaries, hooks, commands, skills, and shell completions
+# ABOUTME: Installs binaries, hooks, skills, and shell completions
 # ABOUTME: build.sh splices lib/01-manifests.sh in at the marker to write install.sh.
 
 set -euo pipefail
@@ -58,8 +58,7 @@ installed() {
 }
 
 show_banner() {
-    # Smooth gradient: rust (#e64a19) → gold (#ffc107)
-    local GT='\033[38;2;230;74;25mc\033[38;2;232;83;24ml\033[38;2;234;91;22ma\033[38;2;235;100;21mu\033[38;2;237;108;20md\033[38;2;239;117;19me\033[38;2;241;125;17m-\033[38;2;243;134;16ms\033[38;2;245;142;15me\033[38;2;246;151;14ms\033[38;2;248;159;12ms\033[38;2;250;168;11mi\033[38;2;252;176;10mo\033[38;2;254;185;9mn\033[38;2;255;193;7ms'
+    local GT="${ORANGE}code-sessions"
     echo ""
     echo -e "   ${RUST}╭───────────────────────╮${NC}"
     echo -e "   ${RUST}│${NC}    ${GT}${NC}    ${GOLD}│${NC}"
@@ -69,6 +68,12 @@ show_banner() {
 
 # Configuration
 INSTALL_DIR="${HOME}/.local/bin"
+# A cs already here that is not a code-sessions build is the original cs, and
+# its install is not this installer's to replace. setup.sh deploys code-sessions
+# into its own profile HOME, where the only cs is code-sessions' own.
+if [ -e "$INSTALL_DIR/cs" ] && ! grep -q '^CS_FORK="code-sessions"' "$INSTALL_DIR/cs" 2>/dev/null; then
+    error "The original cs is installed in $INSTALL_DIR. code-sessions installs into its own profile: run sh setup.sh from its checkout."
+fi
 HOOKS_PARENT_DIR="${HOME}/.claude/hooks"
 HOOKS_DIR="${HOOKS_PARENT_DIR}/cs"
 COMMANDS_DIR="${HOME}/.claude/commands"
@@ -83,6 +88,19 @@ if [ -f "$HOME/.zshrc" ]; then
 fi
 CLAUDE_SETTINGS="${HOME}/.claude/settings.json"
 SESSIONS_DIR="${HOME}/.claude-sessions"
+# Omitted selection reuses the previous install; old installs retain both.
+INSTALL_CONFIG="$INSTALL_DIR/.cs-install-engines"
+INSTALL_ENGINES="${CS_INSTALL_ENGINES:-}"
+if [ -z "$INSTALL_ENGINES" ] && [ -f "$INSTALL_CONFIG" ]; then
+    INSTALL_ENGINES=$(cat "$INSTALL_CONFIG")
+fi
+INSTALL_ENGINES="${INSTALL_ENGINES:-claude,codex}"
+case "$INSTALL_ENGINES" in
+    claude|codex|claude,codex|codex,claude) ;;
+    *) error "CS_INSTALL_ENGINES must be claude, codex, or claude,codex" ;;
+esac
+_install_has_engine() { [[ ",$INSTALL_ENGINES," == *,$1,* ]]; }
+
 # Payload ref: `cs -update` pins this to the release tag (v<version>) so the
 # downloaded scripts/hooks match the verified installer; a fresh curl|bash
 # install defaults to main.
@@ -90,6 +108,7 @@ REPO_URL="https://raw.githubusercontent.com/hex/claude-sessions/${CS_INSTALL_REF
 RELEASES_URL="https://github.com/hex/claude-sessions/releases/download"
 CS_URL="${REPO_URL}/bin/cs"
 CS_SECRETS_URL="${REPO_URL}/bin/cs-secrets"
+CS_CODEX_THREAD_URL="${REPO_URL}/bin/cs-codex-thread"
 CS_STATUSLINE_URL="${REPO_URL}/bin/cs-statusline"
 CS_SUBAGENT_STATUSLINE_URL="${REPO_URL}/bin/cs-subagent-statusline"
 
@@ -114,7 +133,6 @@ if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/bin/cs" ]; then
     # Running from cloned repo
     CS_SOURCE="$SCRIPT_DIR/bin/cs"
     HOOKS_SOURCE="$SCRIPT_DIR/hooks"
-    COMMANDS_SOURCE="$SCRIPT_DIR/commands"
     INSTALL_METHOD="local"
 else
     # Running from web (curl | bash)
@@ -122,9 +140,9 @@ else
 fi
 
 # Check for Claude Code
-if ! command -v claude >/dev/null 2>&1; then
+if _install_has_engine claude && ! command -v claude >/dev/null 2>&1; then
     warn "Claude Code (claude) not found in PATH"
-    warn "Please install Claude Code before using cs"
+    warn "Install Claude Code for Claude sessions, or use --engine codex with Codex CLI"
     warn "Visit: https://github.com/anthropics/claude-code"
     echo ""
 fi
@@ -169,6 +187,22 @@ fi
 
 chmod +x "$INSTALL_DIR/cs-secrets"
 
+if _install_has_engine codex; then
+# Install the optional Codex runtime's no-model thread bootstrap helper.
+# Python is required only when a user selects the Codex engine.
+installed "cs-codex-thread" "$INSTALL_DIR/cs-codex-thread"
+if [ "$INSTALL_METHOD" = "local" ]; then
+    cp "$SCRIPT_DIR/bin/cs-codex-thread" "$INSTALL_DIR/cs-codex-thread"
+elif command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$CS_CODEX_THREAD_URL" -o "$INSTALL_DIR/cs-codex-thread" || error "Failed to download cs-codex-thread"
+else
+    wget -q "$CS_CODEX_THREAD_URL" -O "$INSTALL_DIR/cs-codex-thread" || error "Failed to download cs-codex-thread"
+fi
+chmod +x "$INSTALL_DIR/cs-codex-thread"
+
+fi
+
+if _install_has_engine claude; then
 # Install cs-statusline (Claude Code status line)
 installed "cs-statusline" "$INSTALL_DIR/cs-statusline"
 
@@ -199,6 +233,8 @@ else
 fi
 
 chmod +x "$INSTALL_DIR/cs-subagent-statusline"
+
+fi
 
 # Install cs-tui (interactive session manager).
 #
@@ -300,6 +336,39 @@ fi
 # name this platform installs.
 rm -f "$INSTALL_DIR/cs-tui.exe"
 
+# Deploy every shipped skill into one engine's skills directory: each
+# SKILL.md, then the support files listed in CS_SKILL_FILES. Claude and Codex
+# get identical copies.
+_deploy_skills() {
+    local dest="$1" skill skill_file
+    for skill in "${CS_SKILLS[@]}"; do
+        mkdir -p "$dest/$skill"
+        if [ "$INSTALL_METHOD" = "local" ]; then
+            cp "$SCRIPT_DIR/skills/$skill/SKILL.md" "$dest/$skill/"
+        elif command -v curl >/dev/null 2>&1; then
+            curl -fsSL "$REPO_URL/skills/$skill/SKILL.md" -o "$dest/$skill/SKILL.md" || error "Failed to download $skill skill"
+        elif command -v wget >/dev/null 2>&1; then
+            wget -q "$REPO_URL/skills/$skill/SKILL.md" -O "$dest/$skill/SKILL.md" || error "Failed to download $skill skill"
+        fi
+    done
+    for skill_file in "${CS_SKILL_FILES[@]}"; do
+        mkdir -p "$dest/$(dirname "$skill_file")"
+        if [ "$INSTALL_METHOD" = "local" ]; then
+            cp -p "$SCRIPT_DIR/skills/$skill_file" "$dest/$skill_file"
+            continue
+        elif command -v curl >/dev/null 2>&1; then
+            curl -fsSL "$REPO_URL/skills/$skill_file" -o "$dest/$skill_file" || error "Failed to download $skill_file"
+        elif command -v wget >/dev/null 2>&1; then
+            wget -q "$REPO_URL/skills/$skill_file" -O "$dest/$skill_file" || error "Failed to download $skill_file"
+        fi
+        # A download carries no mode; only the helper scripts run.
+        case "$skill_file" in
+            */scripts/*) chmod +x "$dest/$skill_file" ;;
+        esac
+    done
+}
+
+if _install_has_engine claude; then
 # Install hooks
 installed "${#CS_HOOKS[@]} hooks" "$HOOKS_DIR/"
 mkdir -p "$HOOKS_DIR"
@@ -346,29 +415,18 @@ fi
 chmod +x "$HOOKS_DIR"/*.sh
 
 
-# Install commands
-installed "commands" "$COMMANDS_DIR/"
-mkdir -p "$COMMANDS_DIR"
-
-if [ "$INSTALL_METHOD" = "local" ]; then
-    for cmd in "${CS_COMMANDS[@]}"; do
-        cp "$COMMANDS_SOURCE/$cmd" "$COMMANDS_DIR/"
-    done
-else
-    if command -v curl >/dev/null 2>&1; then
-        for cmd in "${CS_COMMANDS[@]}"; do
-            curl -fsSL "$REPO_URL/commands/$cmd" -o "$COMMANDS_DIR/$cmd" || error "Failed to download $cmd"
-        done
-    elif command -v wget >/dev/null 2>&1; then
-        for cmd in "${CS_COMMANDS[@]}"; do
-            wget -q "$REPO_URL/commands/$cmd" -O "$COMMANDS_DIR/$cmd" || error "Failed to download $cmd"
-        done
+# cs ships no slash commands now: each became a skill of the same name. A
+# command file left from an earlier install would answer the same /name as
+# its skill, so drop the ones cs itself deployed and nothing else.
+for retired in "${RETIRED_COMMANDS[@]}"; do
+    if [ -f "$COMMANDS_DIR/$retired" ]; then
+        rm "$COMMANDS_DIR/$retired"
+        info "  Removed retired command: $COMMANDS_DIR/$retired (now a skill)"
     fi
-fi
+done
 
 # Install skills
 SKILLS_DIR="$HOME/.claude/skills"
-SKILLS_SOURCE="$SCRIPT_DIR/skills"
 MODS_SOURCE="$SCRIPT_DIR/mods"
 installed "skills" "$SKILLS_DIR/"
 
@@ -382,9 +440,7 @@ for retired in "${RETIRED_SKILLS[@]}"; do
     fi
 done
 
-for skill in "${CS_SKILLS[@]}"; do
-    mkdir -p "$SKILLS_DIR/$skill"
-done
+_deploy_skills "$SKILLS_DIR"
 
 # A symlink anywhere on a mod file's deploy path (an earlier opt-in had the
 # person link the whole directory at the checkout) is replaced by a real
@@ -401,49 +457,41 @@ _mod_path_real() {
     done
 }
 
-if [ "$INSTALL_METHOD" = "local" ]; then
-    for skill in "${CS_SKILLS[@]}"; do
-        cp "$SKILLS_SOURCE/$skill/SKILL.md" "$SKILLS_DIR/$skill/"
-    done
-    for skill_file in "${CS_SKILL_FILES[@]}"; do
-        mkdir -p "$SKILLS_DIR/$(dirname "$skill_file")"
-        cp -p "$SKILLS_SOURCE/$skill_file" "$SKILLS_DIR/$skill_file"
-    done
-    for mod_file in "${CS_MOD_FILES[@]}"; do
-        _mod_path_real "$mod_file"
-        mkdir -p "$SKILLS_DIR/$(dirname "$mod_file")"
+for mod_file in "${CS_MOD_FILES[@]}"; do
+    _mod_path_real "$mod_file"
+    mkdir -p "$SKILLS_DIR/$(dirname "$mod_file")"
+    if [ "$INSTALL_METHOD" = "local" ]; then
         cp -p "$MODS_SOURCE/$mod_file" "$SKILLS_DIR/$mod_file"
-    done
-else
-    if command -v curl >/dev/null 2>&1; then
-        for skill in "${CS_SKILLS[@]}"; do
-            curl -fsSL "$REPO_URL/skills/$skill/SKILL.md" -o "$SKILLS_DIR/$skill/SKILL.md" || error "Failed to download $skill skill"
-        done
-        for skill_file in "${CS_SKILL_FILES[@]}"; do
-            mkdir -p "$SKILLS_DIR/$(dirname "$skill_file")"
-            curl -fsSL "$REPO_URL/skills/$skill_file" -o "$SKILLS_DIR/$skill_file" || error "Failed to download $skill_file"
-            chmod +x "$SKILLS_DIR/$skill_file"
-        done
-        for mod_file in "${CS_MOD_FILES[@]}"; do
-            _mod_path_real "$mod_file"
-            mkdir -p "$SKILLS_DIR/$(dirname "$mod_file")"
-            curl -fsSL "$REPO_URL/mods/$mod_file" -o "$SKILLS_DIR/$mod_file" || error "Failed to download $mod_file"
-        done
+    elif command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$REPO_URL/mods/$mod_file" -o "$SKILLS_DIR/$mod_file" || error "Failed to download $mod_file"
     elif command -v wget >/dev/null 2>&1; then
-        for skill in "${CS_SKILLS[@]}"; do
-            wget -q "$REPO_URL/skills/$skill/SKILL.md" -O "$SKILLS_DIR/$skill/SKILL.md" || error "Failed to download $skill skill"
-        done
-        for skill_file in "${CS_SKILL_FILES[@]}"; do
-            mkdir -p "$SKILLS_DIR/$(dirname "$skill_file")"
-            wget -q "$REPO_URL/skills/$skill_file" -O "$SKILLS_DIR/$skill_file" || error "Failed to download $skill_file"
-            chmod +x "$SKILLS_DIR/$skill_file"
-        done
-        for mod_file in "${CS_MOD_FILES[@]}"; do
-            _mod_path_real "$mod_file"
-            mkdir -p "$SKILLS_DIR/$(dirname "$mod_file")"
-            wget -q "$REPO_URL/mods/$mod_file" -O "$SKILLS_DIR/$mod_file" || error "Failed to download $mod_file"
-        done
+        wget -q "$REPO_URL/mods/$mod_file" -O "$SKILLS_DIR/$mod_file" || error "Failed to download $mod_file"
     fi
+done
+
+fi
+
+if _install_has_engine codex; then
+# Codex reads the same skills from its own home, so each engine registers one
+# payload natively. CODEX_HOME is where Codex itself looks (setup.sh points it
+# at the profile). Mods stay with Claude: they are Claude Code function hooks.
+CODEX_DIR="${CODEX_HOME:-$HOME/.codex}"
+CODEX_SKILLS_DIR="$CODEX_DIR/skills"
+installed "Codex skills" "$CODEX_SKILLS_DIR/"
+# Codex keeps its login in this directory; a first install creates it private.
+[ -d "$CODEX_DIR" ] || { mkdir -p "$CODEX_DIR" && chmod 700 "$CODEX_DIR"; }
+_deploy_skills "$CODEX_SKILLS_DIR"
+
+# One SessionStart hook: after /clear it rebinds the session to the new
+# thread and loads an armed rotation handoff. Codex skips a hook nobody has
+# trusted, so the registration writes its trust hash too.
+if command -v jq >/dev/null 2>&1; then
+    installed "Codex hook" "$CODEX_DIR/hooks.json"
+    _codex_hooks_register "$CODEX_DIR" "$(_codex_hook_command "$INSTALL_DIR/cs")" \
+        || warn "Could not register the Codex hook in $CODEX_DIR/hooks.json; rotation after /clear needs it"
+else
+    warn "jq not found - the Codex hook (rotation after /clear) was not registered."
+fi
 fi
 
 # Install shell completions
@@ -477,6 +525,7 @@ else
     fi
 fi
 
+if _install_has_engine claude; then
 # Configure Claude Code settings
 installed "hook config" "~/.claude/settings.json"
 
@@ -503,6 +552,15 @@ else
 
     # Tilde spelling of HOOKS_DIR (settings.json entries use ~ instead of $HOME)
     HOOKS_TILDE_DIR="~/.claude/hooks/cs"
+    # Hook commands are registered with the tilde spelling so a settings.json
+    # carried between machines keeps working. The profile launcher leaves HOME
+    # as the user's own, so a tilde there would run the stable install's hooks
+    # instead of the profile's; setup.sh asks for the absolute spelling.
+    case "${CS_HOOK_PATHS:-tilde}" in
+        tilde) HOOK_COMMAND_DIR="$HOOKS_TILDE_DIR" ;;
+        absolute) HOOK_COMMAND_DIR="$HOOKS_DIR" ;;
+        *) error "CS_HOOK_PATHS must be tilde or absolute" ;;
+    esac
 
     # Strip retired hooks from any event in settings.json (event-agnostic since
     # we don't know which event the old version registered them under). Covers
@@ -539,7 +597,7 @@ else
     # filter shape via _install_merge_filter — keep them aligned.
     _merge_cs_hook() {
         local event="$1" file="$2" timeout="$3" matcher="${4:-}" async="${5:-}" rewake="${6:-}"
-        local path="$HOOKS_DIR/$file" tilde="$HOOKS_TILDE_DIR/$file"
+        local path="$HOOKS_DIR/$file" tilde="$HOOKS_TILDE_DIR/$file" registered="$HOOK_COMMAND_DIR/$file"
         local append
         # asyncRewake makes a hook's exit 2 wake the model with its stderr,
         # wrapped in a system-reminder under the rewakeMessage prefix. It
@@ -553,7 +611,7 @@ else
         # is; a label claiming "mail" would tell the user the wrong story about
         # what started the turn, and was doing exactly that until it was caught
         # in a live rotation.
-        append=$(jq -n --arg cmd "$tilde" --argjson timeout "$timeout" \
+        append=$(jq -n --arg cmd "$registered" --argjson timeout "$timeout" \
             --arg matcher "$matcher" --arg async "$async" --arg rewake "$rewake" '
             (if $matcher != "" then {matcher: $matcher} else {} end)
             + {hooks: [
@@ -616,7 +674,7 @@ else
     # A "no" is remembered here so `cs -update` (which re-runs this installer)
     # stops asking on every release. `cs -statusline enable` clears it,
     # `cs -statusline disable` sets it (KEEP IN SYNC with lib/70-statusline.sh).
-    _statusline_declined="${XDG_CONFIG_HOME:-$HOME/.config}/cs/statusline-declined"
+    _statusline_declined="${CS_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/cs}/statusline-declined"
     # A preference memo must never take the install down with it. Both writes
     # below run under errexit and `touch` ends the && list, so a failure — an
     # unwritable ~/.config/cs, which an earlier root-run install leaves behind —
@@ -933,6 +991,8 @@ else
     fi
 fi
 
+fi
+
 # Check if ~/.local/bin is in PATH
 if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
     echo ""
@@ -947,9 +1007,21 @@ CS_VERSION=$(grep -m1 "^VERSION=" "$INSTALL_DIR/cs" 2>/dev/null | cut -d'"' -f2 
 
 # Stamp the deployed-hooks version so cs -doctor can flag installs whose
 # deployed artifacts lag behind the running cs binary.
-if [ "$CS_VERSION" != "unknown" ]; then
+if _install_has_engine claude && [ "$CS_VERSION" != "unknown" ]; then
     echo "$CS_VERSION" > "$HOOKS_DIR/.version"
 fi
+
+# Union with prior installed adapters: deselection does not uninstall them.
+# Updates must keep maintaining an adapter that remains deployed on disk.
+_previous_engines=$(cat "$INSTALL_CONFIG" 2>/dev/null) || _previous_engines=""
+case "$_previous_engines" in
+    claude|codex|claude,codex|codex,claude)
+        if [ "$_previous_engines" != "$INSTALL_ENGINES" ]; then
+            INSTALL_ENGINES=claude,codex
+        fi ;;
+esac
+mkdir -p "$(dirname "$INSTALL_CONFIG")"
+printf '%s\n' "$INSTALL_ENGINES" > "$INSTALL_CONFIG"
 
 echo ""
 echo -e "   ${GREEN}✓${NC} ${ORANGE}Installation complete${NC} ${COMMENT}(${CS_VERSION})${NC}"
@@ -984,6 +1056,6 @@ echo ""
 
 echo ""
 echo "   Getting started:"
-echo "     cs my-first-session    # Create your first session"
+echo "     cs my-first-session --engine ${INSTALL_ENGINES%%,*}    # Create your first session"
 echo "     cs -help               # See all commands"
 echo "     cs -version            # Verify installation"

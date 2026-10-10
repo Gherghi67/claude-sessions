@@ -172,7 +172,9 @@ _tui_bin() {
         # script.
         local _self_dir
         _self_dir="$(dirname "$0")"
-        if [ -x "$_self_dir/cs-tui" ]; then bin="$_self_dir/cs-tui"; fi
+        if [ -x "$_self_dir/cs-tui" ]; then
+            bin="$_self_dir/cs-tui"
+        fi
     fi
     [ -n "$bin" ] && [ -x "$bin" ] || return 1
     printf '%s\n' "$bin"
@@ -253,10 +255,15 @@ list_sessions() {
     fi
 
     # Dump the keychain once; per-session counts are computed inline in the
-    # display loop. No associative array — bash 3.2 lacks `local -A`.
-    local keychain_dump=""
-    if command -v cs-secrets >/dev/null 2>&1; then
-        keychain_dump=$(security dump-keychain 2>/dev/null | grep -o '"svce"<blob>="cs:[^"]*"' || true)
+    # display loop. No associative array — bash 3.2 lacks `local -A`. Only
+    # when the keychain is the store cs-secrets uses: under any other
+    # CS_SECRETS_BACKEND it holds another install's secrets, and counting the
+    # encrypted file would take a decrypt per session, so no count shows.
+    # Items are named <prefix>:<session>:<name>, and code-sessions files its
+    # own under a prefix of its own (see cs-secrets).
+    local keychain_dump="" keychain_prefix="${CS_SECRETS_KEYCHAIN_PREFIX:-cs}"
+    if [ "${CS_SECRETS_BACKEND:-keychain}" = keychain ] && find_secrets_script >/dev/null 2>&1; then
+        keychain_dump=$(security dump-keychain 2>/dev/null | grep -o "\"svce\"<blob>=\"${keychain_prefix}:[^\"]*\"" || true)
     fi
 
     # Find max session name length for column alignment
@@ -313,7 +320,7 @@ list_sessions() {
         # session names with '.'/'-' are matched literally.
         local secret_count=0
         if [ -n "$keychain_dump" ]; then
-            secret_count=$(printf '%s\n' "$keychain_dump" | grep -cF "\"cs:${session}:" || true)
+            secret_count=$(printf '%s\n' "$keychain_dump" | grep -cF "\"${keychain_prefix}:${session}:" || true)
         fi
 
         # Build secret indicator (accounts for display width in padding)
@@ -615,7 +622,7 @@ cmd_live() {
     fi
     local now current others=0
     now="$(date +%s)"
-    current="${CLAUDE_SESSION_NAME:-}"
+    current="${CS_SESSION_NAME:-${CLAUDE_SESSION_NAME:-}}"
 
     local dir name meta actor up agent status states
     states="$(agent_states)"

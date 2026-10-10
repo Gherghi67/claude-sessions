@@ -140,14 +140,15 @@ test_stamp_from_another_version_reruns_the_migration() {
     local dir="$CS_SESSIONS_ROOT/upgraded" version
     version=$("$CS_BIN" -version)
     version=${version#cs }
+    version=${version%% *}
     _stamped_session upgraded || return 1
-    _rewrite_stamp_line1 "$dir" "$(printf '2000.1.1\talice\t0')"
+    _rewrite_stamp_line1 "$dir" "$(printf '2000.1.1\talice\t0\tclaude')"
     _drop_line "$dir/.gitignore" ".obsidian/"
     _age_session "$dir"
     _open upgraded > /dev/null || { echo "  FAIL: the reopen failed"; return 1; }
     assert_file_contains "$dir/.gitignore" '^\.obsidian/$' \
         "a stamp from another cs version runs the full migration" || return 1
-    assert_eq "$(printf '%s\talice\t0' "$version")" "$(sed -n 1p "$dir/.cs/local/migrated")" \
+    assert_eq "$(printf '%s\talice\t0\tclaude' "$version")" "$(sed -n 1p "$dir/.cs/local/migrated")" \
         "the migration restamps with this cs version" || return 1
 }
 
@@ -212,9 +213,10 @@ test_unusable_stamp_reruns_the_migration_quietly() {
     local dir="$CS_SESSIONS_ROOT/torn" version out rc content
     version=$("$CS_BIN" -version)
     version=${version#cs }
+    version=${version%% *}
     _stamped_session torn || return 1
-    for content in "" "garbage" "$(printf '%s\talice\t0\n' "$version")" \
-        "$(printf '%s\talice\t0\n.gitignore\tCLAUDE.loc' "$version")"; do
+    for content in "" "garbage" "$(printf '%s\talice\t0\tclaude\n' "$version")" \
+        "$(printf '%s\talice\t0\tclaude\n.gitignore\tCLAUDE.loc' "$version")"; do
         printf '%s' "$content" > "$dir/.cs/local/migrated"
         _drop_line "$dir/.gitignore" ".obsidian/"
         _age_session "$dir"
@@ -225,7 +227,7 @@ test_unusable_stamp_reruns_the_migration_quietly() {
         assert_output_not_contains "$out" "line [0-9][0-9]*: " "stamp '$content' trips no shell error" || return 1
         assert_file_contains "$dir/.gitignore" '^\.obsidian/$' \
             "stamp '$content' runs the full migration" || return 1
-        assert_eq "$(printf '%s\talice\t0' "$version")" "$(sed -n 1p "$dir/.cs/local/migrated")" \
+        assert_eq "$(printf '%s\talice\t0\tclaude' "$version")" "$(sed -n 1p "$dir/.cs/local/migrated")" \
             "stamp '$content' is replaced by a whole one" || return 1
     done
 }
@@ -279,6 +281,97 @@ test_stamp_that_cannot_be_written_does_not_stop_the_open() {
     assert_dir "$dir/.cs/local/migrated" "the open leaves what it could not replace" || return 1
 }
 
+# cs -switch reopens a session under the other engine. A Codex open runs none
+# of Claude's phases, so a stamp written under Codex vouches for nothing a
+# Claude open needs: the .obsidian/ line (the full migration's) and the memory
+# note (Claude's Phase 9) both come back. The positive control is
+# test_fresh_stamp_skips_the_one_time_phases: the same drops under a stamp
+# written for Claude stay dropped.
+test_stamp_from_another_engine_reruns_the_migration() {
+    local dir="$CS_SESSIONS_ROOT/switched" version out
+    version=$("$CS_BIN" -version)
+    version=${version#cs }
+    version=${version%% *}
+    _stamped_session switched || return 1
+    _rewrite_stamp_line1 "$dir" "$(printf '%s\talice\t0\tcodex' "$version")"
+    _drop_line "$dir/.gitignore" ".obsidian/"
+    _drop_line "$dir/CLAUDE.local.md" "<!-- cs:memory-note -->"
+    _age_session "$dir"
+    # Outside an open the doctor judges the stamp for the engine the next open
+    # would pick, here the claude the last run recorded.
+    mkdir -p "$TEST_TMPDIR/claude"
+    out=$(CS_CLAUDE_DIR="$TEST_TMPDIR/claude" CS_SESSION_DIR="$dir" CS_SESSION_META_DIR="$dir/.cs" \
+        CS_ACTOR=alice "$CS_BIN" -doctor 2>&1) || true
+    assert_output_contains "$out" "Migration stamp: stale (written for another engine)" \
+        "the doctor calls a stamp written under Codex stale for Claude" || return 1
+    _open switched > /dev/null || { echo "  FAIL: the reopen failed"; return 1; }
+    assert_file_contains "$dir/.gitignore" '^\.obsidian/$' \
+        "a stamp written under Codex runs the full migration for Claude" || return 1
+    assert_file_contains "$dir/CLAUDE.local.md" '<!-- cs:memory-note -->' \
+        "including Claude's own one-time phases" || return 1
+    assert_eq "$(printf '%s\talice\t0\tclaude' "$version")" "$(sed -n 1p "$dir/.cs/local/migrated")" \
+        "the migration restamps for Claude" || return 1
+}
+
+# Upstream cs writes a stamp without the engine field. It vouches for no
+# engine of cs's, so the open runs the full migration and restamps.
+test_stamp_naming_no_engine_reruns_the_migration() {
+    local dir="$CS_SESSIONS_ROOT/unnamed" version
+    version=$("$CS_BIN" -version)
+    version=${version#cs }
+    version=${version%% *}
+    _stamped_session unnamed || return 1
+    _rewrite_stamp_line1 "$dir" "$(printf '%s\talice\t0' "$version")"
+    _drop_line "$dir/.gitignore" ".obsidian/"
+    _age_session "$dir"
+    _open unnamed > /dev/null || { echo "  FAIL: the reopen failed"; return 1; }
+    assert_file_contains "$dir/.gitignore" '^\.obsidian/$' \
+        "a stamp naming no engine runs the full migration" || return 1
+    assert_eq "$(printf '%s\talice\t0\tclaude' "$version")" "$(sed -n 1p "$dir/.cs/local/migrated")" \
+        "the migration restamps with the engine" || return 1
+}
+
+# Open a session under Codex as alice, with a stub codex and thread helper.
+_open_codex() {  # name, stub_dir
+    CS_ACTOR=alice CODEX_BIN="$2/codex" CS_CODEX_THREAD_BIN="$2/codex-thread" \
+        "$CS_BIN" "$1" --engine codex <<< "" 2>&1
+}
+
+# The switch through real opens: a session stamped for Claude, opened under
+# Codex, restamps for Codex; a Codex reopen trusts that stamp; the next Claude
+# open does not, and repairs Claude's own phases as well.
+test_switching_engines_restamps_for_each() {
+    local dir="$CS_SESSIONS_ROOT/both" stub="$TEST_TMPDIR/stub" version out
+    version=$("$CS_BIN" -version)
+    version=${version#cs }
+    version=${version%% *}
+    mkdir -p "$stub"
+    printf '#!/bin/sh\nexit 0\n' > "$stub/codex"
+    printf '#!/bin/sh\necho 12345678-1234-1234-1234-123456789abc\n' > "$stub/codex-thread"
+    chmod +x "$stub/codex" "$stub/codex-thread"
+    _stamped_session both || return 1
+
+    out=$(_open_codex both "$stub") || { echo "  FAIL: the Codex open failed: $out"; return 1; }
+    assert_eq "$(printf '%s\talice\t0\tcodex' "$version")" "$(sed -n 1p "$dir/.cs/local/migrated")" \
+        "a Codex open replaces the Claude stamp with its own" || return 1
+
+    _drop_line "$dir/.gitignore" ".obsidian/"
+    _drop_line "$dir/CLAUDE.local.md" "<!-- cs:memory-note -->"
+    _age_session "$dir"
+    out=$(_open_codex both "$stub") || { echo "  FAIL: the Codex reopen failed: $out"; return 1; }
+    assert_file_not_contains "$dir/.gitignore" '^\.obsidian/$' \
+        "a Codex reopen trusts the stamp a Codex open wrote" || return 1
+
+    out=$(CS_ACTOR=alice "$CS_BIN" both --engine claude <<< "" 2>&1) \
+        || { echo "  FAIL: the Claude open failed: $out"; return 1; }
+    assert_file_contains "$dir/.gitignore" '^\.obsidian/$' \
+        "the Claude open after Codex runs the full migration" || return 1
+    assert_file_contains "$dir/CLAUDE.local.md" '<!-- cs:memory-note -->' \
+        "and Claude's own one-time phases" || return 1
+    assert_eq "$(printf '%s\talice\t0\tclaude' "$version")" "$(sed -n 1p "$dir/.cs/local/migrated")" \
+        "and restamps for Claude" || return 1
+}
+
 run_test test_fresh_stamp_skips_the_one_time_phases
 run_test test_gitignore_edited_after_the_stamp_is_repaired
 run_test test_deleted_claude_local_md_is_regenerated
@@ -292,5 +385,8 @@ run_test test_unusable_stamp_reruns_the_migration_quietly
 run_test test_committed_stamp_is_refused
 run_test test_memory_index_edit_reruns_only_the_narrative_check
 run_test test_stamp_that_cannot_be_written_does_not_stop_the_open
+run_test test_stamp_from_another_engine_reruns_the_migration
+run_test test_stamp_naming_no_engine_reruns_the_migration
+run_test test_switching_engines_restamps_for_each
 
 report_results

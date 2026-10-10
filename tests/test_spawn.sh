@@ -34,7 +34,9 @@ setup() {
 #   show-option  -> prints contents of $FAKE_TMUX_DIR/managed (if any)
 #   list-windows -> prints lines of $FAKE_TMUX_DIR/windows (if any)
 #   new-window   -> with -P prints @7
+# A leading '-L <socket>' is logged with the call and otherwise ignored.
 printf '%s\n' "$*" >> "$FAKE_TMUX_DIR/log"
+[ "$1" = -L ] && shift 2
 case "$1" in
     has-session)  [ -f "$FAKE_TMUX_DIR/session-exists" ]; exit $? ;;
     new-session)  # real tmux rejects a duplicate -s name; model that too
@@ -43,10 +45,10 @@ case "$1" in
                   case "$*" in *" -P "*) echo '@0';; esac ;;
     # tmux 3.6a rejects '='-anchored targets on the options commands (verified
     # live 2026-07-18: "no such session: =cs"); model that so the suite pins
-    # the plain-target requirement for these two.
-    set-option)   case "$*" in *"-t =cs"*) echo "no such session: =cs" >&2; exit 1;; esac
+    # the plain-target requirement for these two, whatever the session's name.
+    set-option)   case "$*" in *"-t ="*) echo "no such session: =cs" >&2; exit 1;; esac
                   printf '1\n' > "$FAKE_TMUX_DIR/managed" ;;
-    show-option)  case "$*" in *"-t =cs"*) echo "no such session: =cs" >&2; exit 1;; esac
+    show-option)  case "$*" in *"-t ="*) echo "no such session: =cs" >&2; exit 1;; esac
                   [ -f "$FAKE_TMUX_DIR/managed" ] && cat "$FAKE_TMUX_DIR/managed" ;;
     list-windows) [ -f "$FAKE_TMUX_DIR/windows" ] && cat "$FAKE_TMUX_DIR/windows" ;;
     new-window)   case "$*" in *" -P "*) echo '@7';; esac ;;
@@ -101,6 +103,105 @@ test_spawn_tmux_targets_are_exact_match_anchored() {
     grep -F -- '-t =cs' "$FAKE_TMUX_DIR/log" >/dev/null || { echo "  no anchored resolver target"; return 1; }
     ! grep -E -- '^(set-option|show-option) .*-t =cs' "$FAKE_TMUX_DIR/log" >/dev/null \
         || { echo "  anchored options-command target found"; return 1; }
+}
+
+# CS_TMUX_SESSION names the spawner's tmux session, so a second install on the
+# same tmux server (the code-sessions profile sets code-sessions) never opens windows in cs's.
+test_spawn_creates_the_configured_tmux_session() {
+    local out
+    out=$(CS_TMUX_SESSION=code-sessions "$CS_BIN" -spawn worker 2>&1) || return 1
+    assert_file_contains "$FAKE_TMUX_DIR/log" "has-session -t =code-sessions" "precheck looks for code-sessions" || return 1
+    assert_file_contains "$FAKE_TMUX_DIR/log" "new-session -d -s code-sessions" "created code-sessions session" || return 1
+    assert_file_contains "$FAKE_TMUX_DIR/log" "set-option -t code-sessions @cs_managed 1" "ownership stamped on code-sessions" || return 1
+    assert_output_contains "$out" "tmux attach -t code-sessions" "attach hint names code-sessions" || return 1
+    ! grep -E -- '-[st] =?cs( |$)' "$FAKE_TMUX_DIR/log" >/dev/null \
+        || { echo "  a tmux call still named cs"; return 1; }
+}
+
+test_spawn_adds_windows_to_the_configured_tmux_session() {
+    touch "$FAKE_TMUX_DIR/session-exists"
+    printf '1\n' > "$FAKE_TMUX_DIR/managed"
+    local out
+    out=$(CS_TMUX_SESSION=code-sessions TMUX="/tmp/tmux-1000/default,1234,0" "$CS_BIN" -spawn worker 2>&1) || return 1
+    assert_file_contains "$FAKE_TMUX_DIR/log" "show-option -t code-sessions -v @cs_managed" "ownership read from code-sessions" || return 1
+    assert_file_contains "$FAKE_TMUX_DIR/log" "list-windows -t =code-sessions" "windows listed in code-sessions" || return 1
+    assert_file_contains "$FAKE_TMUX_DIR/log" "new-window -t =code-sessions" "window added to code-sessions" || return 1
+    assert_output_contains "$out" "tmux switch-client -t code-sessions" "switch-client hint names code-sessions" || return 1
+}
+
+# A tmux window runs with its server's environment, not the spawner's. On a
+# server stable cs or the user started, a profile's spawned cs would run with
+# none of the profile's variables, and a server the profile started would hand
+# them to stable's windows; CS_TMUX_SOCKET gives the spawner a server of its own.
+test_spawn_runs_every_tmux_call_on_the_configured_server() {
+    local out
+    out=$(CS_TMUX_SOCKET=code-sessions CS_TMUX_SESSION=code-sessions "$CS_BIN" -spawn worker 2>&1) || return 1
+    assert_file_contains "$FAKE_TMUX_DIR/log" "^-L code-sessions new-session -d -s code-sessions" "the session is made on the code-sessions server" || return 1
+    assert_file_contains "$FAKE_TMUX_DIR/log" "^-L code-sessions set-option -t code-sessions @cs_managed 1" "stamped there" || return 1
+    ! grep -v -- '^-L code-sessions ' "$FAKE_TMUX_DIR/log" >/dev/null \
+        || { echo "  a tmux call left the code-sessions server:"; grep -v -- '^-L code-sessions ' "$FAKE_TMUX_DIR/log"; return 1; }
+    assert_output_contains "$out" "Attach: tmux -L code-sessions attach -t code-sessions" "the hint names the server" || return 1
+    # A second spawn finds the session there and adds its window there.
+    CS_TMUX_SOCKET=code-sessions CS_TMUX_SESSION=code-sessions "$CS_BIN" -spawn helper >/dev/null 2>&1 || return 1
+    assert_file_contains "$FAKE_TMUX_DIR/log" "^-L code-sessions show-option -t code-sessions -v @cs_managed" "ownership read there" || return 1
+    assert_file_contains "$FAKE_TMUX_DIR/log" "^-L code-sessions list-windows -t =code-sessions" "windows listed there" || return 1
+    assert_file_contains "$FAKE_TMUX_DIR/log" "^-L code-sessions new-window -t =code-sessions -n helper" "window added there" || return 1
+}
+
+# A plain install keeps the default server: no call names a socket.
+test_spawn_uses_the_default_tmux_server_without_a_socket() {
+    "$CS_BIN" -spawn worker >/dev/null 2>&1 || return 1
+    "$CS_BIN" -spawn helper >/dev/null 2>&1 || return 1
+    ! grep -F -- '-L' "$FAKE_TMUX_DIR/log" >/dev/null \
+        || { echo "  a tmux call named a socket:"; cat "$FAKE_TMUX_DIR/log"; return 1; }
+}
+
+# switch-client stays on the server $TMUX names: from inside the spawner's own
+# server it switches, from any other tmux it attaches to the spawner's.
+test_spawn_attach_hint_switches_only_on_the_configured_server() {
+    local out
+    out=$(CS_TMUX_SOCKET=code-sessions CS_TMUX_SESSION=code-sessions TMUX="/private/tmp/tmux-501/default,1234,0" \
+        "$CS_BIN" -spawn worker 2>&1) || return 1
+    assert_output_contains "$out" "Attach: tmux -L code-sessions attach -t code-sessions" "another server's pane attaches" || return 1
+    out=$(CS_TMUX_SOCKET=code-sessions CS_TMUX_SESSION=code-sessions TMUX="/private/tmp/tmux-501/code-sessions,4321,0" \
+        "$CS_BIN" -spawn helper 2>&1) || return 1
+    assert_output_contains "$out" "Attach: tmux -L code-sessions switch-client -t code-sessions" "the code-sessions server's own pane switches" || return 1
+}
+
+# The hint is a line to paste, so a session name with a space stays one word.
+test_spawn_attach_hint_quotes_the_session_name() {
+    local out
+    out=$(CS_TMUX_SESSION="my agents" "$CS_BIN" -spawn worker 2>&1) || return 1
+    assert_output_contains "$out" 'Attach: tmux attach -t my\\ agents' "the name is shell-quoted" || return 1
+}
+
+# Both refusals name the session that is in the way, not a hardcoded cs.
+test_spawn_refusals_name_the_configured_tmux_session() {
+    local err rc=0
+    touch "$FAKE_TMUX_DIR/session-exists"
+    err=$(CS_TMUX_SESSION=code-sessions "$CS_BIN" -spawn worker 2>&1) || rc=$?
+    [ "$rc" != 0 ] || { echo "  an unmanaged code-sessions session was reused"; return 1; }
+    assert_output_contains "$err" "A tmux session named 'code-sessions' exists but was not created by cs" "names code-sessions" || return 1
+    printf '1\n' > "$FAKE_TMUX_DIR/managed"
+    printf 'worker\n' > "$FAKE_TMUX_DIR/windows"
+    rc=0
+    err=$(CS_TMUX_SESSION=code-sessions "$CS_BIN" -spawn worker 2>&1) || rc=$?
+    [ "$rc" != 0 ] || { echo "  a duplicate window was opened"; return 1; }
+    assert_output_contains "$err" "A window named worker already exists in tmux session code-sessions" "names code-sessions" || return 1
+}
+
+# tmux will not keep ':' or '.' in a session name, so every later '-t' would
+# miss the session; the name is refused before tmux is asked anything.
+test_spawn_refuses_a_tmux_session_name_with_colon_or_dot() {
+    local bad err rc
+    for bad in "a.b" "a:b"; do
+        rc=0
+        err=$(CS_TMUX_SESSION="$bad" "$CS_BIN" -spawn worker --task "t" 2>&1) || rc=$?
+        [ "$rc" != 0 ] || { echo "  CS_TMUX_SESSION=$bad was accepted"; return 1; }
+        assert_output_contains "$err" "CS_TMUX_SESSION" "the refusal names the variable" || return 1
+    done
+    [ ! -f "$FAKE_TMUX_DIR/log" ] || { echo "  tmux was called before the refusal"; return 1; }
+    [ ! -f "$(SEED)" ] || { echo "  seed staged on a refused session name"; return 1; }
 }
 
 test_spawn_empty_spawner_writes_blank_first_line() {
@@ -349,6 +450,14 @@ test_launch_publishes_the_users_truecolor_value() {
         "a preset value is published as given" || return 1
 }
 
+# The spawner's socket is for its own calls: a launch publishes into the server
+# its pane runs on, which $TMUX names, even with CS_TMUX_SOCKET set.
+test_launch_publishes_truecolor_to_its_own_server_whatever_the_socket() {
+    CS_TMUX_SOCKET=code-sessions _launch_worker_in_tmux || true
+    assert_file_contains "$FAKE_TMUX_DIR/log" "^set-environment CLAUDE_CODE_TMUX_TRUECOLOR 1$" \
+        "set-environment goes to the \$TMUX server, not the spawner's socket" || return 1
+}
+
 test_launch_outside_tmux_touches_no_tmux_environment() {
     _launch_worker > /dev/null 2>&1 || true
     if [ -f "$FAKE_TMUX_DIR/log" ] && grep -q "set-environment" "$FAKE_TMUX_DIR/log"; then
@@ -522,9 +631,18 @@ run_test test_spawn_accepts_worktree_name
 run_test test_spawn_new_session_race_falls_through_to_new_window
 run_test test_spawn_tmux_targets_are_exact_match_anchored
 run_test test_spawn_empty_spawner_writes_blank_first_line
+run_test test_spawn_creates_the_configured_tmux_session
+run_test test_spawn_adds_windows_to_the_configured_tmux_session
+run_test test_spawn_refuses_a_tmux_session_name_with_colon_or_dot
+run_test test_spawn_runs_every_tmux_call_on_the_configured_server
+run_test test_spawn_uses_the_default_tmux_server_without_a_socket
+run_test test_spawn_attach_hint_switches_only_on_the_configured_server
+run_test test_spawn_attach_hint_quotes_the_session_name
+run_test test_spawn_refusals_name_the_configured_tmux_session
 run_test test_launch_consumes_seed_queues_arms_and_kicks
 run_test test_launch_publishes_truecolor_to_the_tmux_session
 run_test test_launch_publishes_the_users_truecolor_value
+run_test test_launch_publishes_truecolor_to_its_own_server_whatever_the_socket
 run_test test_launch_outside_tmux_touches_no_tmux_environment
 run_test test_launch_empty_spawner_gets_no_reply_wiring
 run_test test_launch_without_seed_keeps_color_behavior

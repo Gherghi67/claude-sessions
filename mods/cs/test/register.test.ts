@@ -1,12 +1,13 @@
 // ABOUTME: Unit tests for the cs mod against a fake engine `$`.
 // ABOUTME: Covers the band's gate (crit, working, survey), the three presses and the wrap key's two-press guard, the armed handoff, the heartbeat, /queue, and the /finish toasts and gate band.
+// ABOUTME: And a pending engine switch: the armed key and the count run /exit instead of /clear, only for the record of this run and the armed handoff.
 import { test, expect, beforeEach } from 'bun:test'
 
 // The plugin realm provides `h` and `Fragment` as globals; the test does the same.
 ;(globalThis as any).h = (type: any, props: any, ...children: any[]) => ({ type, props: props ?? {}, children })
 ;(globalThis as any).Fragment = 'Fragment'
 
-import { register, DEFAULT_PERCENT, GRACE_SECONDS, PREVIEW_PANE, WRAP_QUESTION, WRAP_YES, QUEUE_START, QUEUE_COMPACT, QUEUE_KICK, QUEUE_MODE_QUESTION, QUEUE_HERE, QUEUE_SUBAGENTS, QUEUE_WORKFLOWS, MARKDOWN_LIMIT, nextStep, surfaceColor, isUnconsumed } from '../hooks/register.tsx'
+import { register, DEFAULT_PERCENT, GRACE_SECONDS, PREVIEW_PANE, WRAP_QUESTION, WRAP_YES, QUEUE_START, QUEUE_COMPACT, QUEUE_KICK, QUEUE_MODE_QUESTION, QUEUE_HERE, QUEUE_SUBAGENTS, QUEUE_WORKFLOWS, MARKDOWN_LIMIT, nextStep, surfaceColor, isUnconsumed, switchFields, countVerb } from '../hooks/register.tsx'
 
 type Hook = ($: any, e: any, next: (e: any) => Promise<any>) => Promise<any>
 const hooks: Record<string, Hook> = {}
@@ -785,6 +786,221 @@ test('a rejected /clear at zero shows a toast and clears nothing else', async ()
   expect(ran).toEqual([])
 })
 
+// A switch to the other engine: the switch skill arms its handoff as rotate
+// does, then `cs -switch` records the move. The mod runs only under Claude,
+// so a pending switch means leaving it: /exit, after which cs reopens the
+// session under the target. A /clear would hand the handoff to Claude again.
+// cs carries out only the record of the run that just ended, and only while
+// the handoff it names is unconsumed, so the mod reads the record the same way.
+const SWITCH = '/work/.cs/local/pending-switch'
+const PRIVATE_SWITCH = '/work/.cs/private/pending-switch'
+const RUN = 'run-0001'
+const SWITCH_RECORD = `engine=codex\nmode=fresh\nhandoff=2026-09-15-next-step.md\nrun=${RUN}\n`
+// Recorded the way `cs -switch` leaves it, inside the run the mod belongs to.
+const recordSwitch = (text = SWITCH_RECORD, at = SWITCH) => { files[at] = text; envVars.CS_RUN_ID = RUN }
+const EXIT = { command: 'exit', args: '' }
+
+test('a pending switch turns the armed key into the exit key, naming the target engine', async () => {
+  arm(); recordSwitch(); percent = 3
+  const tree = await band()
+  expect(buttons(tree)).toHaveLength(1)
+  const button = findButton(tree)
+  expect(button.props.action).toBe('strip:jump1')
+  expect(button.props.plain).toBe(true)
+  expect(button.props.label).toBe('/exit and continue in codex')
+  await button.props.onPress()
+  expect(ran).toEqual([EXIT])
+  expect(filled).toEqual([])
+  // the press consumes nothing: the marker and the record are cs's
+  expect(files[MARKER]).toBe('2026-09-15-next-step.md\n')
+  expect(files[SWITCH]).toBe(SWITCH_RECORD)
+})
+
+test('with no switch pending the armed key and the count keep their /clear', async () => {
+  envVars.CS_ROTATE_FORCE_CTX = '70'
+  envVars.CS_RUN_ID = RUN
+  arm(); percent = 80
+  expect(findButton(await band()).props.label).toBe('/clear and continue from the handoff')
+  await turnComplete()
+  expect(JSON.stringify(await band())).toContain(`/clear in ${GRACE_SECONDS}s`)
+  await tick(GRACE_SECONDS)
+  expect(ran).toEqual([{ command: 'clear', args: '' }])
+})
+
+test('with a switch pending the count reads /exit and runs /exit at zero, once', async () => {
+  envVars.CS_ROTATE_FORCE_CTX = '70'
+  arm(); recordSwitch(); percent = 80
+  await band()
+  await turnComplete()
+  const t = ticker()!
+  const json = JSON.stringify(await band())
+  expect(json).toContain(`/exit in ${GRACE_SECONDS}s`)
+  expect(json).not.toContain('/clear')
+  await tick(3)
+  expect(texts(await band()).some(n => textOf(n) === `/exit in ${GRACE_SECONDS - 3}s`)).toBe(true)
+  await tick(GRACE_SECONDS - 3)
+  expect(ran).toEqual([EXIT])
+  expect(t.cancelled).toBe(true)
+  expect(JSON.stringify(await band())).not.toContain('/exit in')
+})
+
+test('the pane counts down to the /exit and says where the session goes', async () => {
+  envVars.CS_ROTATE_FORCE_CTX = '70'
+  arm(); files[HANDOFF] = HANDOFF_WITH_STEP; recordSwitch(); percent = 80
+  await band(); await turnComplete(); await fireAfter()
+  const body = JSON.stringify(await pane())
+  expect(body).toContain('Run the secrets suites solo.')
+  expect(body).toContain(`/exit in ${GRACE_SECONDS}s`)
+  expect(body).toContain('press 1 to exit now and continue in codex, or send a prompt to stay')
+  expect(body).not.toContain('/clear')
+})
+
+test('a prompt stops a switch\'s count as it stops a rotation\'s, and nothing exits', async () => {
+  envVars.CS_ROTATE_FORCE_CTX = '70'
+  arm(); recordSwitch(); percent = 80
+  await band(); await turnComplete()
+  await tick(2)
+  const t = ticker()!
+  expect(await promptSubmit('one more thing')).toEqual({ text: 'one more thing' })
+  expect(t.cancelled).toBe(true)
+  expect(JSON.stringify(await band())).not.toContain('/exit in')
+  expect(ran).toEqual([])
+})
+
+test('pressing the exit key mid-countdown stops the ticker before it exits', async () => {
+  envVars.CS_ROTATE_FORCE_CTX = '70'
+  arm(); recordSwitch(); percent = 80
+  await band(); await turnComplete()
+  await tick(2)
+  const t = ticker()!
+  await findButton(await band()).props.onPress()
+  expect(t.cancelled).toBe(true)
+  expect(ran).toEqual([EXIT])
+})
+
+test('a switch recorded or cancelled mid-count decides the action at zero', async () => {
+  envVars.CS_ROTATE_FORCE_CTX = '70'
+  arm(); percent = 80
+  await band(); await turnComplete()
+  await tick(5)
+  recordSwitch()
+  await tick(GRACE_SECONDS - 5)
+  expect(ran).toEqual([EXIT])
+
+  // cancelled (`cs -switch cancel` removes the record): the /clear is back
+  register(on as any); ran = []
+  arm(); recordSwitch()
+  await band(); await turnComplete()
+  await tick(5)
+  delete files[SWITCH]
+  await tick(GRACE_SECONDS - 5)
+  expect(ran).toEqual([{ command: 'clear', args: '' }])
+})
+
+test('a switch count reaching zero while a turn runs exits nothing and stops', async () => {
+  envVars.CS_ROTATE_FORCE_CTX = '70'
+  arm(); recordSwitch(); percent = 80
+  await band(); await turnComplete()
+  const t = ticker()!
+  await band({ isWorking: true })
+  await tick(GRACE_SECONDS)
+  expect(ran).toEqual([])
+  expect(t.cancelled).toBe(true)
+})
+
+test('a rejected /exit at zero shows a toast and runs nothing else', async () => {
+  envVars.CS_ROTATE_FORCE_CTX = '70'
+  arm(); recordSwitch(); percent = 80
+  await band(); await turnComplete(); await fireAfter()
+  $.command.run = async () => { throw new Error('no session') }
+  try {
+    await tick(GRACE_SECONDS)
+  } finally {
+    $.command.run = async (args: any) => { ran.push(args); return { text: '' } }
+  }
+  expect(toasts).toEqual(['cs: /exit did not run: Error: no session'])
+  expect(ran).toEqual([])
+})
+
+test('with the forcing off a pending switch starts no count, and the key still exits', async () => {
+  envVars.CS_ROTATE_FORCE_CTX = 'off'
+  arm(); recordSwitch(); percent = 80
+  await turnComplete()
+  expect(timers).toEqual([])
+  await findButton(await band()).props.onPress()
+  expect(ran).toEqual([EXIT])
+})
+
+test('a teammate conversation gets no exit key either', async () => {
+  arm(); recordSwitch(); percent = 90
+  sessionId = 'uuid-teammate'
+  expect(await band()).toBe(DRAWN)
+})
+
+test('a record of another run, another handoff, or no usable engine leaves the /clear', async () => {
+  arm(); percent = 3
+  const label = async () => findButton(await band()).props.label
+  const CLEAR = '/clear and continue from the handoff'
+  // another run's record: cs would not carry it out after this one
+  recordSwitch(SWITCH_RECORD.replace(`run=${RUN}`, 'run=run-older'))
+  expect(await label()).toBe(CLEAR)
+  // no run id to compare with: nothing proves the record is this run's
+  recordSwitch(); delete envVars.CS_RUN_ID
+  expect(await label()).toBe(CLEAR)
+  recordSwitch(SWITCH_RECORD.replace(`run=${RUN}\n`, ''))
+  expect(await label()).toBe(CLEAR)
+  // neither side naming a run is no match either
+  recordSwitch(SWITCH_RECORD.replace(`run=${RUN}\n`, '')); delete envVars.CS_RUN_ID
+  expect(await label()).toBe(CLEAR)
+  // a handoff other than the armed one
+  recordSwitch(SWITCH_RECORD.replace('handoff=2026-09-15-next-step.md', 'handoff=2026-09-14-older.md'))
+  expect(await label()).toBe(CLEAR)
+  // no engine, an empty one, or one that is not a name
+  for (const engine of ['', 'engine=\n', 'engine=co dex\n', 'engine=../x\n', 'engine=Codex\n', 'engine=codex \n', ' engine=codex\n']) {
+    recordSwitch(SWITCH_RECORD.replace('engine=codex\n', engine))
+    expect(await label()).toBe(CLEAR)
+  }
+  // and the record back as written: the exit key
+  recordSwitch()
+  expect(await label()).toBe('/exit and continue in codex')
+})
+
+test('a pending switch without an armed handoff draws nothing of its own', async () => {
+  recordSwitch(); percent = 39
+  expect(await band()).toBe(DRAWN)
+  percent = 40
+  expect(findButton(await band()).props.label).toBe('rotate this conversation')
+  // the marker naming a consumed handoff arms nothing, record or not
+  arm(); files[HANDOFF] = UNCONSUMED.replace('status: unconsumed', 'status: consumed')
+  expect(findButton(await band()).props.label).toBe('rotate this conversation')
+})
+
+test('an encrypted session reads its switch behind .cs/private, beside its marker, never across stores', async () => {
+  files[PRIVATE_HANDOFF] = UNCONSUMED; files[PRIVATE_MARKER] = '2026-09-15-next-step.md\n'
+  recordSwitch(SWITCH_RECORD, PRIVATE_SWITCH); percent = 3
+  expect(findButton(await band()).props.label).toBe('/exit and continue in codex')
+  // a private record never pairs with the plaintext marker
+  delete files[PRIVATE_MARKER]; delete files[PRIVATE_HANDOFF]
+  arm()
+  expect(findButton(await band()).props.label).toBe('/clear and continue from the handoff')
+  // nor a plaintext record with the vault's marker
+  delete files[PRIVATE_SWITCH]; delete files[MARKER]; delete files[HANDOFF]
+  files[PRIVATE_HANDOFF] = UNCONSUMED; files[PRIVATE_MARKER] = '2026-09-15-next-step.md\n'
+  recordSwitch(SWITCH_RECORD, SWITCH)
+  expect(findButton(await band()).props.label).toBe('/clear and continue from the handoff')
+})
+
+// cs's own reader (_switch_field in lib/78-switch.sh): the key from the first
+// column, the value verbatim after the first `=`, the first line of a key.
+test('switchFields reads key=value lines as cs does: the first of a key wins, values verbatim', () => {
+  expect(switchFields(SWITCH_RECORD)).toEqual({ engine: 'codex', mode: 'fresh', handoff: '2026-09-15-next-step.md', run: RUN })
+  expect(switchFields('engine=claude\nengine=codex\n=x\nnoise\nmode=resume\n')).toEqual({ engine: 'claude', mode: 'resume' })
+  expect(switchFields('handoff=a=b.md\nengine=codex \n mode=fresh\n')).toEqual({ handoff: 'a=b.md', engine: 'codex ', ' mode': 'fresh' })
+  expect(switchFields('')).toEqual({})
+  expect(countVerb(undefined)).toBe('/clear')
+  expect(countVerb('codex')).toBe('/exit')
+})
+
 // The SessionStart hook's own rule (_handoff_is_unconsumed): the frontmatter
 // must close, and the status must sit inside it.
 test('isUnconsumed follows the hook: unclosed frontmatter, or a status after it, is not armed', () => {
@@ -1321,6 +1537,7 @@ test('the mod registers /queue at load, to run at once even mid-turn', async () 
   await startSession()
   expect(commands).toHaveLength(1)
   expect(commands[0]).toMatchObject({ name: 'queue', immediate: true, argumentHint: '[task]' })
+  expect(commands[0].description).toBe("Add a task to this cs session's walk-away queue, or list it.")
 })
 
 test('/queue with a task runs cs -queue add with the task as one argument and says it is queued', async () => {
@@ -1496,7 +1713,7 @@ test('a start cs refuses, or one that cannot run, says so and sends no prompt', 
   await settle()
   await queue('')
   await settle()
-  expect(toasts).toEqual(['cs: cs -queue start exited 1: Error: the queue is locked', 'cs: cs -queue start did not run: spawn ENOENT'])
+  expect(toasts).toEqual(['cs -queue start exited 1: Error: the queue is locked', 'cs -queue start did not run: spawn ENOENT'])
   expect(submitted).toEqual([])
 })
 
