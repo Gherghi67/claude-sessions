@@ -479,7 +479,7 @@ CODEX_DIR="${CODEX_HOME:-$HOME/.codex}"
 CODEX_SKILLS_DIR="$CODEX_DIR/skills"
 installed "Codex skills" "$CODEX_SKILLS_DIR/"
 # Codex keeps its login in this directory; a first install creates it private.
-[ -d "$CODEX_DIR" ] || mkdir -m 700 -p "$CODEX_DIR"
+[ -d "$CODEX_DIR" ] || { mkdir -p "$CODEX_DIR" && chmod 700 "$CODEX_DIR"; }
 _deploy_skills "$CODEX_SKILLS_DIR"
 
 # One SessionStart hook: after /clear it rebinds the session to the new

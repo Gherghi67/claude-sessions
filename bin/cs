@@ -9,6 +9,7 @@ VERSION="2026.10.7"
 # This build is code-sessions, a fork of cs. It runs as cs inside its own
 # profile; outside, the code-sessions (ccs) launcher starts it and cs is the
 # original. install.sh greps this line to tell its own build from the original.
+# shellcheck disable=SC2034  # read by cs -version in lib/99-main.sh
 CS_FORK="code-sessions"
 SESSIONS_ROOT="${CS_SESSIONS_ROOT:-$HOME/.claude-sessions}"
 CLAUDE_CODE_BIN="${CLAUDE_CODE_BIN:-claude}"
@@ -8134,7 +8135,7 @@ _doctor_check_statusline() {
         return
     fi
     case "$cmd" in
-        */cs-statusline|*/cs-statusline)
+        */cs-statusline)
             local bin="${cmd/#\~/$HOME}"
             if [ -x "$bin" ]; then
                 _doctor_ok "Statusline: cs-statusline registered and executable"
@@ -8243,7 +8244,7 @@ _doctor_check_subagent_statusline() {
         return
     fi
     case "$cmd" in
-        */cs-subagent-statusline|*/cs-subagent-statusline)
+        */cs-subagent-statusline)
             local bin="${cmd/#\~/$HOME}"
             if [ -x "$bin" ]; then
                 _doctor_ok "Subagent statusline: cs-subagent-statusline registered and executable"
@@ -11692,6 +11693,7 @@ _switch_relaunch() {  # session_name
             esac
         done
         for _cs_sw_entry in ${_cs_switch_env[@]+"${_cs_switch_env[@]}"}; do
+            # shellcheck disable=SC2163  # each entry is NAME=value, exported as it is
             export "$_cs_sw_entry" 2>/dev/null || true
         done
         # Even when the shell that started this launch carried them (cs run
@@ -12504,7 +12506,7 @@ run_uninstall() {
     local skill
     for skill in "${CS_SKILLS[@]}"; do
         if [ -d "$codex_skills_dir/$skill" ]; then
-            rm -rf "$codex_skills_dir/$skill"
+            rm -rf "${codex_skills_dir:?}/$skill"
             info "Removed $codex_skills_dir/$skill/"
         fi
     done
@@ -12519,21 +12521,17 @@ run_uninstall() {
     fi
 
     # Remove shell completions
-    for _completion in cs.bash; do
-        if [ -f "$bash_completion_dir/$_completion" ] || [ -L "$bash_completion_dir/$_completion" ]; then
-            rm -f "$bash_completion_dir/$_completion"
-            info "Removed $bash_completion_dir/$_completion"
-        fi
-    done
+    if [ -f "$bash_completion_dir/cs.bash" ] || [ -L "$bash_completion_dir/cs.bash" ]; then
+        rm -f "$bash_completion_dir/cs.bash"
+        info "Removed $bash_completion_dir/cs.bash"
+    fi
 
     local zsh_dir
     for zsh_dir in "${zsh_completion_dirs[@]}"; do
-        for _completion in _cs; do
-            if [ -f "$zsh_dir/$_completion" ] || [ -L "$zsh_dir/$_completion" ]; then
-                rm -f "$zsh_dir/$_completion"
-                info "Removed $zsh_dir/$_completion"
-            fi
-        done
+        if [ -f "$zsh_dir/_cs" ] || [ -L "$zsh_dir/_cs" ]; then
+            rm -f "$zsh_dir/_cs"
+            info "Removed $zsh_dir/_cs"
+        fi
     done
 
     if [ -d "$update_cache_dir" ]; then

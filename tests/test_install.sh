@@ -757,7 +757,7 @@ test_install_deploys_skills_for_codex() {
     [ -x "$codex_skills/finish/scripts/finish.sh" ] \
         || { echo "  FAIL: finish's helper is not executable for Codex"; return 1; }
     assert_not_exists "$codex_skills/cs" "the Claude mod must not deploy into Codex" || return 1
-    assert_eq 700 "$(stat -f '%Lp' "$fake_home/.codex" 2>/dev/null || stat -c '%a' "$fake_home/.codex")" \
+    assert_eq 700 "$(_file_mode "$fake_home/.codex")" \
         "a Codex home the installer creates holds a login later, so it is private" || return 1
 }
 

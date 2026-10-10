@@ -17,14 +17,12 @@ test_codex_finds_the_thread_helper_beside_cs() {
 }
 
 test_statusline_cleanup_removes_cs_and_preserves_foreign() {
-    local prefix file="$TEST_TMPDIR/settings.json"
-    for prefix in cs; do
-        jq -n --arg sl "/bin/$prefix-statusline" --arg sub "/bin/$prefix-subagent-statusline" \
-            '{statusLine: {command: $sl}, subagentStatusLine: {command: $sub}, keep: true}' > "$file"
-        _strip_statusline_registration "$file" || return 1
-        _strip_subagent_statusline_registration "$file" || return 1
-        assert_eq true "$(jq -r '.keep and (has("statusLine") | not) and (has("subagentStatusLine") | not)' "$file")" || return 1
-    done
+    local file="$TEST_TMPDIR/settings.json"
+    jq -n --arg sl "/bin/cs-statusline" --arg sub "/bin/cs-subagent-statusline" \
+        '{statusLine: {command: $sl}, subagentStatusLine: {command: $sub}, keep: true}' > "$file"
+    _strip_statusline_registration "$file" || return 1
+    _strip_subagent_statusline_registration "$file" || return 1
+    assert_eq true "$(jq -r '.keep and (has("statusLine") | not) and (has("subagentStatusLine") | not)' "$file")" || return 1
     printf '%s\n' '{"statusLine":{"command":"/bin/custom-statusline"},"keep":true}' > "$file"
     local before status=0
     before="$(cat "$file")"

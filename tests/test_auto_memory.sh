@@ -163,7 +163,7 @@ EOF
     assert_eq "stable install memory" "$(cat "$decoy_dir/MEMORY.md")" \
         "the stable install's memory must be neither migrated nor deleted" || return 1
 
-    rm -rf "$CS_TRANSCRIPTS_DIR/${encoded_path}" "$HOME/.claude/projects/${encoded_path}" 2>/dev/null || true
+    rm -rf "${CS_TRANSCRIPTS_DIR:?}/${encoded_path}" "$HOME/.claude/projects/${encoded_path}" 2>/dev/null || true
 }
 
 # ============================================================================

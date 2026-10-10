@@ -9,6 +9,7 @@ VERSION="2026.10.7"
 # This build is code-sessions, a fork of cs. It runs as cs inside its own
 # profile; outside, the code-sessions (ccs) launcher starts it and cs is the
 # original. install.sh greps this line to tell its own build from the original.
+# shellcheck disable=SC2034  # read by cs -version in lib/99-main.sh
 CS_FORK="code-sessions"
 SESSIONS_ROOT="${CS_SESSIONS_ROOT:-$HOME/.claude-sessions}"
 CLAUDE_CODE_BIN="${CLAUDE_CODE_BIN:-claude}"

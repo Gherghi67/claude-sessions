@@ -339,6 +339,7 @@ _switch_relaunch() {  # session_name
             esac
         done
         for _cs_sw_entry in ${_cs_switch_env[@]+"${_cs_switch_env[@]}"}; do
+            # shellcheck disable=SC2163  # each entry is NAME=value, exported as it is
             export "$_cs_sw_entry" 2>/dev/null || true
         done
         # Even when the shell that started this launch carried them (cs run

@@ -370,6 +370,13 @@ fake_keychain_items() {
     done | LC_ALL=C sort
 }
 
+# cs-secrets picks the keychain on its own only on macOS. Elsewhere a test that
+# leaves the backend to it gets the encrypted store, and the fake keychain
+# holds only what the test put there by naming the backend itself.
+keychain_is_default() {
+    [ "$(uname -s)" = Darwin ]
+}
+
 # --- Test Runner ---
 
 # Status 77 is "skipped", not "passed": a test whose fixture the machine cannot

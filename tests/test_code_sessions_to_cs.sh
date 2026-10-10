@@ -224,13 +224,19 @@ test_apply_copies_sessions_conversations_and_secrets() {
     assert_file_exists "$CLAUDE/projects/$BETA_CS_KEY/$BETA_ID/subagents/agent-1.jsonl" || return 1
     assert_file_exists "$CLAUDE/file-history/$ALPHA_ID/snap@v1" || return 1
 
-    # Secrets come out of the profile's keychain items (code-sessions:<session>)
-    # and reach cs-secrets on stdin, under the cs name, without the profile's prefix.
+    # Secrets come out of the profile's keychain items (code-sessions:<session>),
+    # or its encrypted store where there is no keychain, and reach cs-secrets on
+    # stdin, under the cs name, without the profile's prefix.
     assert_eq 12 "$(wc -c < "$STUB_STORE/beta/TOKEN" | tr -d ' ')" || return 1
     assert_eq "s3cret-value" "$(cat "$STUB_STORE/beta/TOKEN")" || return 1
     assert_file_not_contains "$STUB_STORE/argv.log" 's3cret' "the value reached argv" || return 1
     assert_file_not_contains "$STUB_STORE/argv.log" 'prefix=code-sessions' "cs-secrets got the code-sessions prefix" || return 1
-    assert_eq "code-sessions:beta:TOKEN" "$(fake_keychain_items)" "the profile's keychain items changed" || return 1
+    if keychain_is_default; then
+        assert_eq "code-sessions:beta:TOKEN" "$(fake_keychain_items)" "the profile's keychain items changed" || return 1
+    else
+        assert_eq "" "$(fake_keychain_items)" "a secret reached a keychain this platform does not use" || return 1
+        assert_file_exists "$PROFILE/.cs-secrets/beta.enc" || return 1
+    fi
 
     assert_output_contains "$OUT" "cs alpha-ccs resumes conversation $ALPHA_ID" || return 1
     assert_eq "$before" "$(profile_fingerprint)" "the profile changed"

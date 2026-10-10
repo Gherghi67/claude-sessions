@@ -104,7 +104,6 @@ make_fixture() {
     git -C "$FEAT" update-ref refs/worktree/cs/session/autosave HEAD
 
     add_feature fix wap-fix "$FIX_ID"
-    FIX_OLD=$(physical "$CSROOT/wap@fix")
     # Links into the project by absolute path, as some features have them.
     mkdir -p "$PROJECT/node_modules/pkg"
     printf 'pkg\n' > "$PROJECT/node_modules/pkg/index.js"
@@ -300,11 +299,17 @@ test_apply_copies_the_session_and_leaves_cs_as_it_is() {
 
     # Secrets reach the profile's cs-secrets on stdin; argv never carries a value.
     # They land in the keychain under code-sessions:<session>, never under the
-    # original's cs:<session>, which the stable cs-secrets reads.
+    # original's cs:<session>, which the stable cs-secrets reads. Where there is
+    # no keychain they land in the profile's encrypted store.
     assert_eq "s3cret-value" "$(ccs_secret wap TOKEN)" || return 1
     assert_file_not_contains "$STUB_STORE/argv.log" 's3cret' "the value reached argv" || return 1
     assert_file_not_contains "$STUB_STORE/argv.log" 'prefix=code-sessions' "cs-secrets got the code-sessions prefix" || return 1
-    assert_eq "code-sessions:wap:TOKEN" "$(fake_keychain_items)" || return 1
+    if keychain_is_default; then
+        assert_eq "code-sessions:wap:TOKEN" "$(fake_keychain_items)" || return 1
+    else
+        assert_eq "" "$(fake_keychain_items)" "a secret reached a keychain this platform does not use" || return 1
+        assert_file_exists "$PROFILE/.cs-secrets/wap.enc" || return 1
+    fi
 
     jq -e 'select(.action == "copied-feature" and .session == "wap@feat")' "$PROFILE/.cs-to-code-sessions/log.jsonl" >/dev/null \
         || { echo "  FAIL: the copy is not in the log"; return 1; }

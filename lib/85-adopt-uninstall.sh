@@ -623,7 +623,7 @@ run_uninstall() {
     local skill
     for skill in "${CS_SKILLS[@]}"; do
         if [ -d "$codex_skills_dir/$skill" ]; then
-            rm -rf "$codex_skills_dir/$skill"
+            rm -rf "${codex_skills_dir:?}/$skill"
             info "Removed $codex_skills_dir/$skill/"
         fi
     done
@@ -638,21 +638,17 @@ run_uninstall() {
     fi
 
     # Remove shell completions
-    for _completion in cs.bash; do
-        if [ -f "$bash_completion_dir/$_completion" ] || [ -L "$bash_completion_dir/$_completion" ]; then
-            rm -f "$bash_completion_dir/$_completion"
-            info "Removed $bash_completion_dir/$_completion"
-        fi
-    done
+    if [ -f "$bash_completion_dir/cs.bash" ] || [ -L "$bash_completion_dir/cs.bash" ]; then
+        rm -f "$bash_completion_dir/cs.bash"
+        info "Removed $bash_completion_dir/cs.bash"
+    fi
 
     local zsh_dir
     for zsh_dir in "${zsh_completion_dirs[@]}"; do
-        for _completion in _cs; do
-            if [ -f "$zsh_dir/$_completion" ] || [ -L "$zsh_dir/$_completion" ]; then
-                rm -f "$zsh_dir/$_completion"
-                info "Removed $zsh_dir/$_completion"
-            fi
-        done
+        if [ -f "$zsh_dir/_cs" ] || [ -L "$zsh_dir/_cs" ]; then
+            rm -f "$zsh_dir/_cs"
+            info "Removed $zsh_dir/_cs"
+        fi
     done
 
     if [ -d "$update_cache_dir" ]; then

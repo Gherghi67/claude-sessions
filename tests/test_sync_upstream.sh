@@ -126,7 +126,7 @@ make_fixture() {
 }
 
 sync_start() {
-    (cd "$FORK" && python3 "$SYNC" start --skip-tests "$@") > "$TEST_TMPDIR/sync.log" 2>&1
+    (cd "$FORK" && python3 "$SYNC" start --skip-tests) > "$TEST_TMPDIR/sync.log" 2>&1
 }
 
 sync_continue() {

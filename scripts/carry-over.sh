@@ -844,6 +844,7 @@ _codex_hooks() {  # working copy of the profile's config.toml (updated in place)
         [ "$(_trusted_hash "$config" "$pkey")" != "$want" ] || continue
         if [ "$(_trusted_hash "$user_codex/config.toml" "$ukey")" != "$want" ]; then
             if [ "$dry" -eq 1 ] || [ "$hooks_changed" -eq 1 ]; then
+                # shellcheck disable=SC2088  # a message: the literal ~ is meant
                 _note "~/.codex does not trust Codex hook $ev:$pgi:$phi as the profile holds it; Codex skips it until you trust it in a cs Codex session"
             fi
             continue

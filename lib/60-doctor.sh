@@ -501,7 +501,7 @@ _doctor_check_statusline() {
         return
     fi
     case "$cmd" in
-        */cs-statusline|*/cs-statusline)
+        */cs-statusline)
             local bin="${cmd/#\~/$HOME}"
             if [ -x "$bin" ]; then
                 _doctor_ok "Statusline: cs-statusline registered and executable"
@@ -610,7 +610,7 @@ _doctor_check_subagent_statusline() {
         return
     fi
     case "$cmd" in
-        */cs-subagent-statusline|*/cs-subagent-statusline)
+        */cs-subagent-statusline)
             local bin="${cmd/#\~/$HOME}"
             if [ -x "$bin" ]; then
                 _doctor_ok "Subagent statusline: cs-subagent-statusline registered and executable"

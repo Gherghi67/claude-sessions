@@ -68,7 +68,7 @@ test_setup_builds_and_installs_both_engines_from_any_directory() {
     jq -e 'has("tui") | not' "$PROFILE/.claude/settings.json" >/dev/null || return 1
     # The launcher points CODEX_HOME here, and Codex refuses one that does not exist.
     [ -d "$PROFILE/.codex" ] || { echo "  FAIL: no profile CODEX_HOME"; return 1; }
-    assert_eq 700 "$(stat -f '%Lp' "$PROFILE/.codex" 2>/dev/null || stat -c '%a' "$PROFILE/.codex")" || return 1
+    assert_eq 700 "$(_file_mode "$PROFILE/.codex")" || return 1
     assert_file_exists "$PROFILE/.codex/skills/finish/agents/openai.yaml" || return 1
     assert_file_exists "$PROFILE/.claude/skills/finish/agents/openai.yaml" || return 1
     assert_not_exists "$HOME/user-codex" "setup deploys into the profile's CODEX_HOME, not the caller's" || return 1
@@ -244,7 +244,7 @@ EOF
 test_setup_moves_the_profiles_secrets_into_the_keychain() {
     stage_checkout
     use_fake_keychain
-    local secrets="$REPO/bin/cs-secrets" store="$PROFILE/.cs-secrets" dead
+    local secrets="$REPO/bin/cs-secrets" store="$PROFILE/.cs-secrets" dead session
     enc_set() {  # session name value
         printf '%s' "$3" | CS_SECRETS_BACKEND=encrypted CS_SECRETS_DIR="$store" \
             "$secrets" --session "$1" set "$2" >/dev/null
@@ -267,6 +267,16 @@ test_setup_moves_the_profiles_secrets_into_the_keychain() {
     printf '%s\n' "$$" > "$PROFILE/sessions/busy@feature/.cs/session.lock"
 
     run_setup --skip-tui-build || return 1
+    # Where cs-secrets does not pick the keychain, the files are the store.
+    if ! keychain_is_default; then
+        assert_eq "code-sessions:clash:API_KEY"$'\n'"cs:ask:API_KEY" "$(fake_keychain_items)" \
+            "setup moved secrets into a keychain this platform does not use" || return 1
+        for session in ask gone busy clash; do
+            assert_file_exists "$store/$session.enc" || return 1
+        done
+        assert_file_not_contains "$TEST_TMPDIR/setup.log" 'Moved the secrets' || return 1
+        return 0
+    fi
     assert_eq "code-sessions:ask:API_KEY"$'\n'"code-sessions:ask:TOKEN"$'\n'"code-sessions:clash:API_KEY"$'\n'"code-sessions:gone:OLD"$'\n'"cs:ask:API_KEY" \
         "$(fake_keychain_items)" || return 1
     assert_eq 'ask key' "$(kc_get code-sessions ask API_KEY)" || return 1
